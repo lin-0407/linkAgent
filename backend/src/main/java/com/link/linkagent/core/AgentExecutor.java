@@ -42,69 +42,60 @@ public class AgentExecutor {
 
     /**
      * 执行 ReAct 循环，返回最终答案及完整步骤追踪。
+     * <p>
+     * ReAct 算法核心流程：
+     * <pre>
+     * while (未终止) {
+     *     1. 检查迭代上限 → 兜底终止
+     *     2. LLM 思考 → 生成 Thought (+ Action + Action Input)
+     *     3. 解析到 "Final Answer" → 成功终止
+     *     4. 解析到 "Action" → 执行工具 → 拼接 Observation → 回到步骤 2
+     *     5. 解析不到任何结构化输出 → 兜底终止
+     * }
+     * </pre>
+     *
+     * @param userMessage 用户原始输入
+     * @return 最终答案 + 步骤追踪
      */
     public AgentChatResponse run(String userMessage) {
+        // ---- 1. 构建系统提示词（包含工具列表） ----
         String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
 
-        // ReAct 循环状态
-        StringBuilder conversation = new StringBuilder();
-        conversation.append("Human: ").append(userMessage).append("\n");
-        List<AgentStep> steps = new ArrayList<>();
-        int iteration = 0;
-        String finalAnswer = null;
-        String stopReason = null;
+        // ---- 2. TODO(human): 初始化循环状态变量 ----
+        // 你需要声明:
+        //   - conversation (StringBuilder): 累积对话上下文，格式为 "Human: ...\nAI: ...\nObservation: ...\n"
+        //   - steps (List<AgentStep>): 收集每一步记录
+        //   - iteration (int): 当前迭代次数，初始 0
+        //   - finalAnswer / stopReason: 最终结果，初始 null
 
-        while (true) {
-            // --- 最大迭代兜底 ---
-            if (iteration >= MAX_ITERATIONS) {
-                // TODO(human): 达到最大迭代次数时如何终止？
-                // 方案A — 返回固定错误提示
-                // 方案B — 强制再调一次 LLM，要求给出 Final Answer
-                // 方案C — 返回当前 conversation 中已获得的部分信息
-                //
-                // 请你选择并实现其中一种（或你自己想到的更优方案），
-                // 然后删除这段 TODO 注释。
-                break;
-            }
+        // ---- 3. TODO(human): 实现 ReAct 主循环 ----
+        // while 循环中按顺序处理以下情况:
+        //
+        // 情况A — iteration >= MAX_ITERATIONS
+        //   你选的终止策略是什么？(A/B/C 或自定义)
+        //   实现它，然后 break
+        //
+        // 情况B — parseFinalAnswer(llmResponse) 返回非 null
+        //   记录 step，break
+        //
+        // 情况C — parseAction(llmResponse) 返回非 null ToolCall
+        //   调用 executeTool(toolCall) 得到 Observation
+        //   把 Observation 拼入 conversation
+        //   记录 step，iteration++
+        //
+        // 情况D — 既无 Final Answer 也无合法 Action
+        //   LLM 返回的非结构化文本就当最终回复
+        //
+        // 可用方法:
+        //   llmService.chat(systemPrompt, conversation.toString())
+        //   parseFinalAnswer(text)   → String | null
+        //   parseThought(text)       → String (可能为空)
+        //   parseAction(text)        → ToolCall | null
+        //   executeTool(toolCall)    → Observation
 
-            // 1. 调用 LLM
-            String llmResponse = llmService.chat(systemPrompt, conversation.toString());
-            conversation.append("AI: ").append(llmResponse).append("\n");
-
-            // 2. 解析 LLM 响应
-            String answer = parseFinalAnswer(llmResponse);
-            String thought = parseThought(llmResponse);
-
-            if (answer != null) {
-                finalAnswer = answer;
-                stopReason = "final_answer_found";
-                steps.add(new AgentStep(iteration, thought, null, null, null));
-                break;
-            }
-
-            ToolCall toolCall = parseAction(llmResponse);
-            if (toolCall != null) {
-                // 3. 执行工具
-                Observation observation = executeTool(toolCall);
-                conversation.append("Observation: ")
-                        .append(observation.toolName()).append(" → ")
-                        .append(observation.result()).append("\n");
-
-                steps.add(new AgentStep(iteration, thought,
-                        toolCall.name(), toolCall.arguments(),
-                        observation.result()));
-                iteration++;
-                continue;
-            }
-
-            // 既无 Final Answer 也无合法 Action → 整段视为最终回复
-            finalAnswer = llmResponse;
-            stopReason = "unparseable_response";
-            steps.add(new AgentStep(iteration, thought, null, null, null));
-            break;
-        }
-
-        return new AgentChatResponse(finalAnswer, stopReason, steps.size(), steps);
+        // ---- 4. TODO(human): 返回结果 ----
+        // new AgentChatResponse(finalAnswer, stopReason, steps.size(), steps)
+        return null;
     }
 
     /**
