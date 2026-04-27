@@ -1,9 +1,11 @@
 package com.link.linkagent.core;
 
+import ch.qos.logback.core.util.StringUtil;
 import com.link.linkagent.api.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolRegistry;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -19,6 +21,7 @@ import java.util.stream.Collectors;
  * 核心设计：经典 ReAct 文本解析（非模型原生 Tool Calling），模型无关。
  */
 @Component
+@Slf4j
 public class AgentExecutor {
 
     private final LLMService llmService;
@@ -26,12 +29,29 @@ public class AgentExecutor {
 
     private static final int MAX_ITERATIONS = 10;
 
+    /**
+     * 匹配 "Final Answer: 正文" 整行，捕获冒号后的所有文本（跨行）。
+     * Pattern.DOTALL: . 匹配换行符，保证多行答案被完整捕获。
+     */
     private static final Pattern FINAL_ANSWER = Pattern.compile(
             "Final Answer:\\s*(.*)", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 匹配 "Action: tool_name"，捕获工具名（字母/数字/下划线）。
+     */
     private static final Pattern ACTION = Pattern.compile(
             "Action:\\s*(\\w+)", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 匹配 "Action Input: 参数"，捕获到行尾的第一个非贪婪内容。
+     * .+? 非贪婪 → 只拿第一个参数值，不跨行。
+     */
     private static final Pattern ACTION_INPUT = Pattern.compile(
             "Action Input:\\s*(.+?)(?:\\n|$)", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 匹配 "Thought: 思考内容"，捕获本行冒号后的文本。
+     */
     private static final Pattern THOUGHT = Pattern.compile(
             "Thought:\\s*(.*?)(?:\\n|$)", Pattern.CASE_INSENSITIVE);
 
@@ -58,44 +78,65 @@ public class AgentExecutor {
      * @return 最终答案 + 步骤追踪
      */
     public AgentChatResponse run(String userMessage) {
-        // ---- 1. 构建系统提示词（包含工具列表） ----
         String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
 
-        // ---- 2. TODO(human): 初始化循环状态变量 ----
-        // 你需要声明:
-        //   - conversation (StringBuilder): 累积对话上下文，格式为 "Human: ...\nAI: ...\nObservation: ...\n"
-        //   - steps (List<AgentStep>): 收集每一步记录
-        //   - iteration (int): 当前迭代次数，初始 0
-        //   - finalAnswer / stopReason: 最终结果，初始 null
+        StringBuilder conversation = new StringBuilder();
+        String finalAnswer = null;
+        int iteration = 0;
+        List<AgentStep> steps = new ArrayList<>();
 
-        // ---- 3. TODO(human): 实现 ReAct 主循环 ----
-        // while 循环中按顺序处理以下情况:
-        //
-        // 情况A — iteration >= MAX_ITERATIONS
-        //   你选的终止策略是什么？(A/B/C 或自定义)
-        //   实现它，然后 break
-        //
-        // 情况B — parseFinalAnswer(llmResponse) 返回非 null
-        //   记录 step，break
-        //
-        // 情况C — parseAction(llmResponse) 返回非 null ToolCall
-        //   调用 executeTool(toolCall) 得到 Observation
-        //   把 Observation 拼入 conversation
-        //   记录 step，iteration++
-        //
-        // 情况D — 既无 Final Answer 也无合法 Action
-        //   LLM 返回的非结构化文本就当最终回复
-        //
-        // 可用方法:
-        //   llmService.chat(systemPrompt, conversation.toString())
-        //   parseFinalAnswer(text)   → String | null
-        //   parseThought(text)       → String (可能为空)
-        //   parseAction(text)        → ToolCall | null
-        //   executeTool(toolCall)    → Observation
+        // 拼接用户输入作为对话起点，格式与系统提示词约定一致
+        conversation.append("Human:").append(userMessage).append("\n\n");
+        while(true){
+            iteration++;
 
-        // ---- 4. TODO(human): 返回结果 ----
-        // new AgentChatResponse(finalAnswer, stopReason, steps.size(), steps)
-        return null;
+            // 迭代上限兜底：防止无限循环耗尽资源
+            if(iteration > MAX_ITERATIONS){
+                return new AgentChatResponse(finalAnswer, "迭代次数超过上限", steps.size(), steps);
+            }
+
+            log.info("正在进行第{}轮ReAct迭代...", iteration);
+
+            // 1. 调用LLM，传入完整对话历史
+            String llmAnswer = llmService.chat(systemPrompt, conversation.toString());
+
+            // 2. 提取 Thought — 必须存在，否则说明LLM未按格式输出
+            String thought = parseThought(llmAnswer);
+            if(StringUtil.isNullOrEmpty(thought)){
+                log.error("LLM思考返回结果为空！");
+                return new AgentChatResponse(finalAnswer, "LLM思考返回结果为空", steps.size(), steps);
+            }
+
+            // 3. 优先检测 Final Answer（即使同时存在 Action 也以 Final Answer 为准）
+            finalAnswer = parseFinalAnswer(llmAnswer);
+            if(!StringUtil.isNullOrEmpty(finalAnswer)){
+                return new AgentChatResponse(finalAnswer, null, steps.size(), steps);
+            }
+
+            // 4. 尝试解析 Action + Action Input
+            ToolCall action = parseAction(llmAnswer);
+            if(action == null){
+                // LLM 既未给出 Final Answer 也未给出合法 Action，反馈错误让 LLM 重试
+                steps.add(new AgentStep(iteration, thought, null, null, null));
+                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                continue;
+            }
+
+            // 5. 执行工具，得到 Observation
+            Observation observation = executeTool(action);
+            steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
+
+            // 6. 将本轮的 Thought/Action/Observation 拼回对话，供下一轮 LLM 参考
+            conversation.append("AI:\n").append("Thought:")
+                    .append(thought).append("\n")
+                    .append("Action:").append(action.name()).append("\n")
+                    .append("Action Input:").append(action.arguments()).append("\n")
+                    .append("Observation:")
+                    .append(observation.toolName())
+                    .append(":")
+                    .append(observation.result())
+                    .append("\n\n");
+        }
     }
 
     /**
@@ -142,26 +183,26 @@ public class AgentExecutor {
                 .collect(Collectors.joining("\n"));
 
         return """
-                You are a helpful assistant with access to the following tools:
-
-                %s
-
-                Use the following format to respond:
-
-                Thought: your reasoning about what to do next
-                Action: tool_name
-                Action Input: input for the tool
-
-                Or when you have the final answer:
-
-                Thought: I now have the information needed
-                Final Answer: your final response to the human
-
-                Rules:
-                - Only use one tool per response.
-                - Always start with "Thought:" to explain your reasoning.
-                - When using a tool, you MUST include BOTH "Action:" and "Action Input:".
-                - When you have enough information, output "Final Answer:".
-                """.formatted(toolDescriptions);
+            你是一个乐于助人的助手，可以使用以下工具:
+        
+            %s
+        
+            请使用以下格式回复:
+        
+            Thought:你对接下来要做什么的推理
+            Action:工具名称
+            Action Input:工具的输入内容
+        
+            或者当你已经获得最终答案时:
+        
+            Thought:我现在已经掌握了所需信息
+            Final Answer:你对Human的最终回复
+        
+            规则:
+            - 每次只使用一个工具。
+            - 始终以"Thought:"开头来解释你的推理。
+            - 使用工具时，必须同时包含"Action:"和"Action Input:"。
+            - 当你掌握了足够的信息，就输出"Final Answer:"。
+        """.formatted(toolDescriptions);
     }
 }
