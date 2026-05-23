@@ -1,13 +1,15 @@
 package com.link.linkagent.memory;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.ListOperations;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -76,8 +78,15 @@ public class RedisShortTermMemoryStore implements ShortTermMemoryStore {
     }
 
     private List<String> scanKeys() {
-        Set<String> keys = redisTemplate.keys(KEY_PREFIX + "*");
-        return keys == null ? List.of() : List.copyOf(keys);
+        List<String> keys = new ArrayList<>();
+        ScanOptions options = ScanOptions.scanOptions()
+                .match(KEY_PREFIX + "*")
+                .count(100)
+                .build();
+        try (Cursor<String> cursor = redisTemplate.scan(options)) {
+            cursor.forEachRemaining(keys::add);
+        }
+        return keys;
     }
 
     private SessionInfo toSessionInfo(String key) {
