@@ -1,7 +1,7 @@
 package com.link.linkagent.memory;
 
 /**
- * One message stored in short-term conversation memory.
+ * 短期对话记忆中的单条消息。
  */
 public record MemoryMessage(
         String role,

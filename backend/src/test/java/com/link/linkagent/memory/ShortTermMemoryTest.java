@@ -10,7 +10,7 @@ class ShortTermMemoryTest {
 
     @Test
     void shouldKeepRecentMessagesInAppendOrder() {
-        ShortTermMemory memory = new ShortTermMemory();
+        ShortTermMemory memory = new ShortTermMemory(new InMemoryShortTermMemoryStore());
 
         memory.append("session-1", "Human", "first");
         memory.append("session-1", "AI", "second");
@@ -24,7 +24,7 @@ class ShortTermMemoryTest {
 
     @Test
     void shouldDropOldestMessagesWhenWindowIsFull() {
-        ShortTermMemory memory = new ShortTermMemory();
+        ShortTermMemory memory = new ShortTermMemory(new InMemoryShortTermMemoryStore());
 
         for (int i = 1; i <= 12; i++) {
             memory.append("session-1", "Human", "message-" + i);

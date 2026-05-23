@@ -30,6 +30,12 @@ spring:
         options:
           model: ${LLM_MODEL:deepseek-chat}
 
+agent:
+  memory:
+    short-term:
+      # memory：进程内 Map；redis：共享 Redis List
+      store-type: ${SHORT_TERM_MEMORY_STORE_TYPE:memory}
+
 # ========== Langfuse (可观测) ==========
 # langfuse:
 #   public-key: ${LANGFUSE_PUBLIC_KEY:}

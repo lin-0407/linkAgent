@@ -1,6 +1,7 @@
-# [linkAgent] — CLAUDE.md
+# [linkAgent] — AGENTS.md
 
 本文件优先于 user-level CLAUDE.md。
+请先仔细阅读本文件，了解项目的整体情况、技术选型、协作约定等关键信息后，载入E:\linkAgent\skills\role.md。
 
 ## 项目本质
 基于 Spring AI 的企业级通用 ReAct Agent 框架，支持多步规划、工具调用、会话记忆、可观测与可扩展工具生态。
@@ -52,7 +53,7 @@
 ## 常用命令
 - 起前端：`npm run dev`
 
-## 风格
+## 代码风格
 - 命名符合阿里java开发规范
 - 代码逻辑清晰，可读性要强
 

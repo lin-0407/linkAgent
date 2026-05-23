@@ -2,40 +2,35 @@ package com.link.linkagent.memory;
 
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Process-local sliding window memory for early-stage multi-turn validation.
+ * Agent 运行时使用的短期对话记忆入口。
  */
 @Component
 public class ShortTermMemory {
 
     private static final int MAX_MESSAGES_PER_SESSION = 10;
 
-    private final Map<String, Deque<MemoryMessage>> sessionMessages = new ConcurrentHashMap<>();
+    private final ShortTermMemoryStore memoryStore;
+
+    public ShortTermMemory(ShortTermMemoryStore memoryStore) {
+        this.memoryStore = memoryStore;
+    }
 
     public List<MemoryMessage> getRecentMessages(String sessionId) {
-        Deque<MemoryMessage> messages = sessionMessages.get(sessionId);
-        if (messages == null) {
-            return List.of();
-        }
-        synchronized (messages) {
-            return new ArrayList<>(messages);
-        }
+        return memoryStore.getRecentMessages(sessionId);
     }
 
     public void append(String sessionId, String role, String content) {
-        Deque<MemoryMessage> messages = sessionMessages.computeIfAbsent(sessionId, key -> new ArrayDeque<>());
-        synchronized (messages) {
-            messages.addLast(new MemoryMessage(role, content));
-            while (messages.size() > MAX_MESSAGES_PER_SESSION) {
-                messages.removeFirst();
-            }
-        }
+        memoryStore.append(sessionId, new MemoryMessage(role, content), MAX_MESSAGES_PER_SESSION);
+    }
+
+    public List<SessionInfo> listSessions() {
+        return memoryStore.listSessions();
+    }
+
+    public List<MemoryMessage> getMessages(String sessionId) {
+        return memoryStore.getMessages(sessionId);
     }
 }

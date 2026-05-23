@@ -7,7 +7,6 @@ import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolRegistry;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -17,6 +16,8 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * ReAct 主循环 —— 驱动 Thought → Action → Observation 迭代。
@@ -24,8 +25,9 @@ import java.util.stream.Collectors;
  * 核心设计：经典 ReAct 文本解析（非模型原生 Tool Calling），模型无关。
  */
 @Component
-@Slf4j
 public class AgentExecutor {
+
+    private static final Logger log = LoggerFactory.getLogger(AgentExecutor.class);
 
     private final LLMService llmService;
     private final ToolRegistry toolRegistry;
