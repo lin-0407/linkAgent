@@ -3,6 +3,8 @@ package com.link.linkagent.core;
 import ch.qos.logback.core.util.StringUtil;
 import com.link.linkagent.api.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.memory.MemoryMessage;
+import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -26,6 +29,7 @@ public class AgentExecutor {
 
     private final LLMService llmService;
     private final ToolRegistry toolRegistry;
+    private final ShortTermMemory shortTermMemory;
 
     private static final int MAX_ITERATIONS = 10;
 
@@ -55,9 +59,10 @@ public class AgentExecutor {
     private static final Pattern THOUGHT = Pattern.compile(
             "Thought:\\s*(.*?)(?:\\n|$)", Pattern.CASE_INSENSITIVE);
 
-    public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry) {
+    public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ShortTermMemory shortTermMemory) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
+        this.shortTermMemory = shortTermMemory;
     }
 
     /**
@@ -77,7 +82,8 @@ public class AgentExecutor {
      * @param userMessage 用户原始输入
      * @return 最终答案 + 步骤追踪
      */
-    public AgentChatResponse run(String userMessage) {
+    public AgentChatResponse run(String sessionId, String userMessage) {
+        String resolvedSessionId = resolveSessionId(sessionId);
         String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
 
         StringBuilder conversation = new StringBuilder();
@@ -86,44 +92,53 @@ public class AgentExecutor {
         List<AgentStep> steps = new ArrayList<>();
 
         // 拼接用户输入作为对话起点，格式与系统提示词约定一致
+        appendMemory(conversation, shortTermMemory.getRecentMessages(resolvedSessionId));
         conversation.append("Human:").append(userMessage).append("\n\n");
         while(true){
             iteration++;
 
             // 迭代上限兜底：防止无限循环耗尽资源
             if(iteration > MAX_ITERATIONS){
-                return new AgentChatResponse(finalAnswer, "迭代次数超过上限", steps.size(), steps);
+                return new AgentChatResponse(resolvedSessionId, finalAnswer, "迭代次数超过上限", steps.size(), steps);
             }
 
             log.info("正在进行第{}轮ReAct迭代...", iteration);
 
             // 1. 调用LLM，传入完整对话历史
             String llmAnswer = llmService.chat(systemPrompt, conversation.toString());
+            log.info("第{}轮LLM原始响应:\n{}", iteration, llmAnswer);
 
-            // 2. 提取 Thought — 必须存在，否则说明LLM未按格式输出
+            // 2. 优先检测 Final Answer（即使同时存在 Action 也以 Final Answer 为准）
+            finalAnswer = parseFinalAnswer(llmAnswer);
+            if(!StringUtil.isNullOrEmpty(finalAnswer)){
+                log.info("第{}轮解析结果: thought={}, finalAnswer={}", iteration, parseThought(llmAnswer), finalAnswer);
+                shortTermMemory.append(resolvedSessionId, "Human", userMessage);
+                shortTermMemory.append(resolvedSessionId, "AI", finalAnswer);
+                return new AgentChatResponse(resolvedSessionId, finalAnswer, null, steps.size(), steps);
+            }
+
+            // 3. 提取 Thought — 必须存在，否则说明LLM未按格式输出
             String thought = parseThought(llmAnswer);
             if(StringUtil.isNullOrEmpty(thought)){
                 log.error("LLM思考返回结果为空！");
-                return new AgentChatResponse(finalAnswer, "LLM思考返回结果为空", steps.size(), steps);
+                return new AgentChatResponse(resolvedSessionId, finalAnswer, "LLM思考返回结果为空", steps.size(), steps);
             }
-
-            // 3. 优先检测 Final Answer（即使同时存在 Action 也以 Final Answer 为准）
-            finalAnswer = parseFinalAnswer(llmAnswer);
-            if(!StringUtil.isNullOrEmpty(finalAnswer)){
-                return new AgentChatResponse(finalAnswer, null, steps.size(), steps);
-            }
+            log.info("第{}轮解析到 Thought: {}", iteration, thought);
 
             // 4. 尝试解析 Action + Action Input
             ToolCall action = parseAction(llmAnswer);
             if(action == null){
                 // LLM 既未给出 Final Answer 也未给出合法 Action，反馈错误让 LLM 重试
+                log.warn("第{}轮未解析到合法 Action，rawResponse={}", iteration, llmAnswer);
                 steps.add(new AgentStep(iteration, thought, null, null, null));
                 conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
                 continue;
             }
+            log.info("第{}轮解析到 Action: {}, Action Input: {}", iteration, action.name(), action.arguments());
 
             // 5. 执行工具，得到 Observation
             Observation observation = executeTool(action);
+            log.info("第{}轮工具执行结果: tool={}, observation={}", iteration, observation.toolName(), observation.result());
             steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
 
             // 6. 将本轮的 Thought/Action/Observation 拼回对话，供下一轮 LLM 参考
@@ -137,6 +152,27 @@ public class AgentExecutor {
                     .append(observation.result())
                     .append("\n\n");
         }
+    }
+
+    private String resolveSessionId(String sessionId) {
+        if (StringUtil.isNullOrEmpty(sessionId) || StringUtil.isNullOrEmpty(sessionId.trim())) {
+            return UUID.randomUUID().toString();
+        }
+        return sessionId.trim();
+    }
+
+    private void appendMemory(StringBuilder conversation, List<MemoryMessage> messages) {
+        if (messages.isEmpty()) {
+            return;
+        }
+        conversation.append("Recent conversation:\n");
+        for (MemoryMessage message : messages) {
+            conversation.append(message.role())
+                    .append(":")
+                    .append(message.content())
+                    .append("\n");
+        }
+        conversation.append("\n");
     }
 
     /**
@@ -183,9 +219,9 @@ public class AgentExecutor {
                 .collect(Collectors.joining("\n"));
 
         return """
-            你是一个乐于助人的助手，可以使用以下工具:
+            你是LinkAgent，可以使用以下工具:
         
-            %s
+        %s
         
             请使用以下格式回复:
         

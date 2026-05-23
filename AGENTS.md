@@ -20,6 +20,7 @@
 | 部署   | Docker Compose + 阿里云轻量服务器 |
 
 ## 关键约束
+- 本项目参照E:\linkAgent\docs下文档进行开发。
 - 所有对外 API 必须有入参校验（Jakarta Validation @Valid / @NotBlank 等）
 - 禁止引入额外的第三方 validation 库（Spring Boot 自带的 Jakarta + Hibernate Validator 已足够）
 - 数据库 Schema 统一维护在 `sql/` 目录下，直接修改脚本文件，暂不引入迁移框架

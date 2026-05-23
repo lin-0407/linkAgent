@@ -1,0 +1,42 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: link-agent
+
+  # ========== MySQL ==========
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/link_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${DB_USERNAME:link_agent}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # ========== Redis ==========
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+  # ========== Spring AI / LLM ==========
+  ai:
+    vectorstore:
+      type: ${VECTOR_STORE_TYPE:none}
+    openai:
+      api-key: ${LLM_API_KEY:missing}
+      base-url: ${LLM_BASE_URL:https://api.deepseek.com}
+      chat:
+        options:
+          model: ${LLM_MODEL:deepseek-chat}
+
+# ========== Langfuse (可观测) ==========
+# langfuse:
+#   public-key: ${LANGFUSE_PUBLIC_KEY:}
+#   secret-key: ${LANGFUSE_SECRET_KEY:}
+#   host: ${LANGFUSE_HOST:http://localhost:3000}
+
+# ========== Milvus (向量库) ==========
+# milvus:
+#   host: ${MILVUS_HOST:localhost}
+#   port: ${MILVUS_PORT:19530}

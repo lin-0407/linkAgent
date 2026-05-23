@@ -24,6 +24,6 @@ public class AgentController {
 
     @PostMapping("/chat")
     public AgentChatResponse chat(@Valid @RequestBody AgentChatRequest request) {
-        return agentExecutor.run(request.message());
+        return agentExecutor.run(request.sessionId(), request.message());
     }
 }

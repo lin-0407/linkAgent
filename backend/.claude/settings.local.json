@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mvn compile *)",
+      "Bash(/d/JDK/bin/java *)",
+      "Bash(C:\\\\Users\\\\Nascent\\\\.jdks\\\\ms-21.0.10\\\\bin\\\\java *)",
+      "Bash(./mvnw compile *)",
+      "Bash(curl -s \"https://repo1.maven.org/maven2/org/springframework/ai/spring-ai-bom/1.1.4/spring-ai-bom-1.1.4.pom\")",
+      "Bash(curl -s \"https://repo1.maven.org/maven2/org/springframework/ai/spring-ai-openai-spring-boot-autoconfigure/1.1.4/spring-ai-openai-spring-boot-autoconfigure-1.1.4.pom\")",
+      "Bash(curl -s \"https://repo1.maven.org/maven2/org/springframework/ai/spring-ai-core/1.1.4/spring-ai-core-1.1.4.pom\")",
+      "Bash(curl -sL \"https://repo1.maven.org/maven2/org/springframework/ai/spring-ai-core/1.1.4/spring-ai-core-1.1.4.pom\")",
+      "Bash(curl -s \"https://repo1.maven.org/maven2/org/springframework/ai/spring-ai-starter-model-openai/1.1.4/spring-ai-starter-model-openai-1.1.4.pom\")",
+      "Bash(curl -s \"https://repo1.maven.org/maven2/org/springframework/ai/spring-ai-bom/maven-metadata.xml\")",
+      "Bash(curl -s \"https://repo1.maven.org/maven2/org/springframework/ai/spring-ai-starter-model-openai/2.0.0-M4/spring-ai-starter-model-openai-2.0.0-M4.pom\")",
+      "Bash(curl -s \"https://repo1.maven.org/maven2/org/mybatis/spring/boot/mybatis-spring-boot-starter/maven-metadata.xml\")",
+      "Bash(jar tf *)",
+      "Bash(cd /tmp)",
+      "Bash(jar xf *)",
+      "Bash(javap -p /tmp/org/springframework/ai/vectorstore/milvus/autoconfigure/MilvusVectorStoreAutoConfiguration.class)",
+      "Bash(javap -verbose /tmp/org/springframework/ai/vectorstore/milvus/autoconfigure/MilvusVectorStoreAutoConfiguration.class)",
+      "Bash(curl -s \"https://repo1.maven.org/maven2/me/paulschwarz/spring-dotenv/maven-metadata.xml\")",
+      "Bash(del *)",
+      "Bash(cmd *)",
+      "Bash(ls /bin/rm*)",
+      "Read(//usr/**)",
+      "Bash(where.exe rm *)",
+      "Bash(/c/Windows/System32/cmd.exe /c \"del /f C:\\\\Users\\\\Nascent\\\\IdeaProjects\\\\linkAgent\\\\backend\\\\src\\\\main\\\\java\\\\com\\\\link\\\\linkagent\\\\core\\\\ReActPrompt.java\")",
+      "Bash(/mnt/c/Windows/System32/cmd.exe /c \"del /f C:\\\\Users\\\\Nascent\\\\IdeaProjects\\\\linkAgent\\\\backend\\\\src\\\\main\\\\java\\\\com\\\\link\\\\linkagent\\\\core\\\\ReActPrompt.java\")",
+      "Bash(/c/Windows/System32/cmd.exe *)"
+    ]
+  }
+}

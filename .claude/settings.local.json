@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/Nascent/.claude/projects/C--Users-Nascent-IdeaProjects-linkAgent/memory//**)",
+      "Read(//c/Users/Nascent/.claude/projects/C--Users-Nascent-IdeaProjects-linkAgent/memory/**)",
+      "WebFetch(domain:api-docs.deepseek.com)",
+      "WebSearch"
+    ]
+  }
+}
