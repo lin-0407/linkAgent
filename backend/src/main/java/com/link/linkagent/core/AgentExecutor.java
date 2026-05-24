@@ -11,6 +11,7 @@ import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.memory.SummaryMemory;
 import com.link.linkagent.tool.Tool;
+import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
 
@@ -36,6 +37,7 @@ public class AgentExecutor {
 
     private final LLMService llmService;
     private final ToolRegistry toolRegistry;
+    private final ToolExecutor toolExecutor;
     private final ShortTermMemory shortTermMemory;
     private final SummaryMemory summaryMemory;
     private final LongTermMemory longTermMemory;
@@ -69,11 +71,13 @@ public class AgentExecutor {
     private static final Pattern THOUGHT = Pattern.compile(
             "Thought:\\s*(.*?)(?:\\n|$)", Pattern.CASE_INSENSITIVE);
 
-    public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ShortTermMemory shortTermMemory,
+    public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
+                         ShortTermMemory shortTermMemory,
                          SummaryMemory summaryMemory, LongTermMemory longTermMemory,
                          LongTermMemoryExtractor longTermMemoryExtractor) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
+        this.toolExecutor = toolExecutor;
         this.shortTermMemory = shortTermMemory;
         this.summaryMemory = summaryMemory;
         this.longTermMemory = longTermMemory;
@@ -167,7 +171,7 @@ public class AgentExecutor {
             log.info("第{}轮解析到 Action: {}, Action Input: {}", iteration, action.name(), action.arguments());
 
             // 5. 执行工具，得到 Observation
-            Observation observation = executeTool(action);
+            Observation observation = toolExecutor.execute(action);
             log.info("第{}轮工具执行结果: tool={}, observation={}", iteration, observation.toolName(), observation.result());
             steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
 
@@ -274,19 +278,6 @@ public class AgentExecutor {
     private String parseThought(String text) {
         Matcher m = THOUGHT.matcher(text);
         return m.find() ? m.group(1).trim() : "";
-    }
-
-    private Observation executeTool(ToolCall toolCall) {
-        Tool tool = toolRegistry.getTool(toolCall.name());
-        if (tool == null) {
-            return new Observation(toolCall.name(), "Error: tool '" + toolCall.name() + "' not found");
-        }
-        try {
-            String result = tool.execute(toolCall.arguments());
-            return new Observation(toolCall.name(), result);
-        } catch (Exception e) {
-            return new Observation(toolCall.name(), "Error: " + e.getMessage());
-        }
     }
 
     private String buildSystemPrompt(Collection<Tool> tools) {

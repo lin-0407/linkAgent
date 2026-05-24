@@ -1,373 +1,112 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
-import MarkdownIt from 'markdown-it'
-import markdownItKatex from 'markdown-it-katex'
+import { nextTick, ref } from 'vue'
 import 'katex/dist/katex.min.css'
+import AgentSidebar from '@/components/AgentSidebar.vue'
+import ChatComposer from '@/components/ChatComposer.vue'
+import ErrorNotice from '@/components/ErrorNotice.vue'
+import MessageList from '@/components/MessageList.vue'
+import TopBar from '@/components/TopBar.vue'
+import { useAgentChat } from '@/composables/useAgentChat'
 
-type AgentStep = {
-  stepNumber: number
-  thought: string
-  action: string | null
-  actionInput: string | null
-  observation: string | null
-}
+const promptExamples = [
+  '我叫 Link，请记住这个信息。稍后我会问你。',
+  '请用 ReAct 思路帮我拆解一个 Spring AI 学习计划。',
+  '帮我计算 128 * 37，并告诉我你是否调用了工具。',
+]
+const capabilityTags = ['短期记忆', '工具调用', 'ReAct 轨迹', 'Markdown / 公式']
+const composerRef = ref<InstanceType<typeof ChatComposer> | null>(null)
 
-type AgentChatResponse = {
-  sessionId: string
-  finalAnswer: string | null
-  stopReason: string | null
-  totalSteps: number
-  steps: AgentStep[]
-}
+const {
+  activeSessionLabel,
+  assistantMessageCount,
+  canSend,
+  errorMessage,
+  inputMessage,
+  isLoading,
+  isSessionsLoading,
+  isSessionsOpen,
+  latestStepCount,
+  messageListRef,
+  messages,
+  openSession,
+  sendMessage,
+  sessionId,
+  sessions,
+  sessionsError,
+  startNewSession,
+  userMessageCount,
+} = useAgentChat()
 
-type SessionListItem = {
-  sessionId: string
-  preview: string
-  messageCount: number
-}
-
-type SessionMessageItem = {
-  role: 'user' | 'assistant' | string
-  content: string
-}
-
-type ChatMessage = {
-  id: number
-  role: 'user' | 'assistant'
-  content: string
-  steps?: AgentStep[]
-  stopReason?: string | null
-}
-
-const inputMessage = ref('')
-const sessionId = ref('')
-const sessions = ref<SessionListItem[]>([])
-const messages = ref<ChatMessage[]>([])
-const isLoading = ref(false)
-const isSessionsLoading = ref(false)
-const isSessionsOpen = ref(false)
-const errorMessage = ref('')
-const sessionsError = ref('')
-const messageListRef = ref<HTMLElement | null>(null)
-const selectedSessionKey = 'link-agent-session-id'
-
-const canSend = computed(() => inputMessage.value.trim().length > 0 && !isLoading.value)
-const activeSessionLabel = computed(() => sessionId.value || 'new session')
-
-const markdown = new MarkdownIt({
-  breaks: true,
-  html: false,
-  linkify: true,
-})
-
-markdown.use(markdownItKatex, {
-  throwOnError: false,
-  errorColor: '#b43c2d',
-})
-
-loadPersistedSession()
-void loadSessions()
-
-watch(
-  () => messages.value.length,
-  async () => {
-    await scrollToBottom()
-  },
-)
-
-async function sendMessage() {
-  const message = inputMessage.value.trim()
-  if (!message || isLoading.value) {
-    return
-  }
-
-  errorMessage.value = ''
-  inputMessage.value = ''
-  messages.value.push({
-    id: Date.now(),
-    role: 'user',
-    content: message,
+function usePromptExample(example: string) {
+  inputMessage.value = example
+  void nextTick(() => {
+    composerRef.value?.adjustInputHeight()
+    composerRef.value?.focusInput()
   })
-
-  await scrollToBottom()
-  isLoading.value = true
-
-  try {
-    const response = await fetch('/api/agent/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        sessionId: sessionId.value || undefined,
-        message,
-      }),
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    const data = (await response.json()) as AgentChatResponse
-    sessionId.value = data.sessionId
-    persistSessionId(data.sessionId)
-    await loadSessions()
-    messages.value.push({
-      id: Date.now() + 1,
-      role: 'assistant',
-      content: data.finalAnswer || data.stopReason || 'Agent 没有返回内容',
-      steps: data.steps,
-      stopReason: data.stopReason,
-    })
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '请求失败'
-  } finally {
-    isLoading.value = false
-    await scrollToBottom()
-  }
-}
-
-function startNewSession() {
-  sessionId.value = ''
-  messages.value = []
-  errorMessage.value = ''
-  inputMessage.value = ''
-  clearPersistedSession()
-}
-
-async function loadSessions() {
-  isSessionsLoading.value = true
-  sessionsError.value = ''
-  try {
-    const response = await fetch('/api/agent/sessions')
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-    sessions.value = (await response.json()) as SessionListItem[]
-  } catch (error) {
-    sessions.value = []
-    sessionsError.value = error instanceof Error ? error.message : 'Failed to load sessions'
-  } finally {
-    isSessionsLoading.value = false
-  }
-}
-
-async function openSession(session: SessionListItem) {
-  sessionId.value = session.sessionId
-  persistSessionId(session.sessionId)
-  errorMessage.value = ''
-  isSessionsOpen.value = false
-  await loadSessionMessages(session.sessionId)
-  await loadSessions()
-}
-
-async function loadSessionMessages(targetSessionId: string) {
-  try {
-    const response = await fetch(`/api/agent/sessions/${encodeURIComponent(targetSessionId)}`)
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-    const data = (await response.json()) as SessionMessageItem[]
-    messages.value = data.map((item, index) => ({
-      id: Date.now() + index,
-      role: normalizeRole(item.role),
-      content: item.content,
-    }))
-  } catch (error) {
-    messages.value = []
-    errorMessage.value = error instanceof Error ? error.message : 'Failed to load session messages'
-  }
-}
-
-function persistSessionId(value: string) {
-  localStorage.setItem(selectedSessionKey, value)
-}
-
-function clearPersistedSession() {
-  localStorage.removeItem(selectedSessionKey)
-}
-
-function loadPersistedSession() {
-  const saved = localStorage.getItem(selectedSessionKey)
-  if (saved) {
-    sessionId.value = saved
-    void loadSessionMessages(saved)
-  }
-}
-
-async function scrollToBottom() {
-  await nextTick()
-  const el = messageListRef.value
-  if (!el) {
-    return
-  }
-
-  el.scrollTo({
-    top: el.scrollHeight,
-    behavior: 'smooth',
-  })
-}
-
-function renderAssistantContent(content: string) {
-  return markdown.render(normalizeMathSyntax(content))
-}
-
-function normalizeMathSyntax(content: string) {
-  return content
-    .replace(/\r\n/g, '\n')
-    .replace(/\\\[((?:.|\n)*?)\\\]/g, (_, formula: string) => `\n$$\n${formula.trim()}\n$$\n`)
-    .replace(/\\\(((?:.|\n)*?)\\\)/g, (_, formula: string) => `$${formula.trim()}$`)
-}
-
-function shortSessionId(value: string) {
-  return value.length <= 12 ? value : `${value.slice(0, 6)}...${value.slice(-4)}`
-}
-
-function normalizeRole(role: string) {
-  const normalized = role.trim().toLowerCase()
-  if (normalized === 'assistant' || normalized === 'ai' || normalized === 'bot') {
-    return 'assistant'
-  }
-  return 'user'
 }
 </script>
 
 <template>
   <main class="app-shell">
-    <aside class="sidebar">
-      <div>
-        <p class="eyebrow">Link Agent</p>
-        <h1>ReAct Console</h1>
-      </div>
-
-      <section class="panel">
-        <span class="label">Session</span>
-        <code>{{ activeSessionLabel }}</code>
-        <div class="sidebar-actions">
-          <button type="button" class="secondary-button" @click="isSessionsOpen = !isSessionsOpen">
-            Sessions
-          </button>
-          <button type="button" class="secondary-button" @click="startNewSession">New</button>
-        </div>
-        <div v-if="isSessionsOpen" class="session-list">
-          <button v-if="isSessionsLoading" type="button" class="session-item muted" disabled>
-            Loading sessions...
-          </button>
-          <template v-else>
-            <button
-              v-for="item in sessions"
-              :key="item.sessionId"
-              type="button"
-              class="session-item"
-              :class="{ active: item.sessionId === sessionId }"
-              @click="openSession(item)"
-            >
-              <strong>{{ shortSessionId(item.sessionId) }}</strong>
-              <span>{{ item.preview }}</span>
-              <small>{{ item.messageCount }} messages</small>
-            </button>
-            <p v-if="sessions.length === 0" class="empty-sessions">No saved sessions yet</p>
-          </template>
-          <p v-if="sessionsError" class="session-error">{{ sessionsError }}</p>
-        </div>
-      </section>
-
-      <section class="panel">
-        <span class="label">Status</span>
-        <strong>{{ isLoading ? 'Running' : 'Ready' }}</strong>
-        <p>{{ messages.length }} messages</p>
-      </section>
-    </aside>
+    <AgentSidebar
+      :active-session-label="activeSessionLabel"
+      :is-loading="isLoading"
+      :is-sessions-loading="isSessionsLoading"
+      :is-sessions-open="isSessionsOpen"
+      :latest-step-count="latestStepCount"
+      :message-count="messages.length"
+      :session-id="sessionId"
+      :sessions="sessions"
+      :sessions-error="sessionsError"
+      @open-session="openSession"
+      @start-new-session="startNewSession"
+      @toggle-sessions="isSessionsOpen = !isSessionsOpen"
+    />
 
     <section class="workspace">
-      <header class="topbar">
-        <div>
-          <h2>Agent Chat</h2>
-          <p>多轮会话会自动复用当前 session 的短期记忆。</p>
-        </div>
-      </header>
+      <TopBar
+        :assistant-message-count="assistantMessageCount"
+        :user-message-count="userMessageCount"
+      />
 
-      <div ref="messageListRef" class="message-list">
-        <div v-if="messages.length === 0" class="empty-state">
-          <h3>开始一次 Agent 调用</h3>
-          <p>可以先告诉它“我叫 Link”，再追问“我叫什么？”验证短期记忆。</p>
-        </div>
+      <MessageList
+        ref="messageListRef"
+        :capability-tags="capabilityTags"
+        :is-loading="isLoading"
+        :messages="messages"
+        :prompt-examples="promptExamples"
+        @use-prompt-example="usePromptExample"
+      />
 
-        <article
-          v-for="message in messages"
-          :key="message.id"
-          class="message"
-          :class="message.role"
-        >
-          <div class="avatar">{{ message.role === 'user' ? 'U' : 'A' }}</div>
-          <div class="bubble">
-            <template v-if="message.role === 'assistant'">
-              <div class="markdown-body" v-html="renderAssistantContent(message.content)"></div>
-            </template>
-            <p v-else>{{ message.content }}</p>
+      <ErrorNotice :error-message="errorMessage" />
 
-            <details v-if="message.steps?.length" class="steps">
-              <summary>ReAct steps {{ message.steps.length }}</summary>
-              <ol>
-                <li v-for="step in message.steps" :key="step.stepNumber">
-                  <strong>#{{ step.stepNumber }}</strong>
-                  <span>{{ step.thought }}</span>
-                  <code v-if="step.action">{{ step.action }}({{ step.actionInput }})</code>
-                  <small v-if="step.observation">{{ step.observation }}</small>
-                </li>
-              </ol>
-            </details>
-
-            <small v-if="message.stopReason" class="stop-reason">{{ message.stopReason }}</small>
-          </div>
-        </article>
-
-        <div v-if="isLoading" class="message assistant">
-          <div class="avatar">A</div>
-          <div class="bubble loading animated" aria-label="Thinking">
-            <span class="thinking-text">Thinking</span>
-            <span class="thinking-dots" aria-hidden="true">
-              <i></i>
-              <i></i>
-              <i></i>
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-
-      <form class="composer" @submit.prevent="sendMessage">
-        <textarea
-          v-model="inputMessage"
-          rows="3"
-          placeholder="Ask Link Agent..."
-          @keydown.enter.exact.prevent="sendMessage"
-        />
-        <button type="submit" :disabled="!canSend">
-          {{ isLoading ? 'Running' : 'Send' }}
-        </button>
-      </form>
+      <ChatComposer
+        ref="composerRef"
+        v-model="inputMessage"
+        :can-send="canSend"
+        :is-loading="isLoading"
+        @send-message="sendMessage"
+      />
     </section>
   </main>
 </template>
 
-<style scoped>
-:global(*) {
+<style>
+* {
   box-sizing: border-box;
 }
 
-:global(body) {
+body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  color: #d9e2ea;
+  color: #23313d;
   background:
-    radial-gradient(circle at top left, rgba(90, 140, 255, 0.18), transparent 34%),
-    radial-gradient(circle at top right, rgba(61, 208, 175, 0.1), transparent 28%),
-    linear-gradient(180deg, #09131b 0%, #0d1720 46%, #101b25 100%);
+    radial-gradient(circle at 12% 12%, rgba(90, 176, 156, 0.2), transparent 28%),
+    radial-gradient(circle at 88% 18%, rgba(226, 128, 87, 0.2), transparent 25%),
+    linear-gradient(135deg, #f7f3ea 0%, #edf4f1 45%, #f8efe7 100%);
   font-family:
-    'Aptos', 'Segoe UI Variable', 'Inter', ui-sans-serif, system-ui, -apple-system,
+    'Aptos', 'Segoe UI Variable', 'Microsoft YaHei UI', ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, sans-serif;
 }
 
@@ -378,7 +117,7 @@ textarea {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 320px minmax(0, 1fr);
   min-height: 100vh;
   position: relative;
 }
@@ -387,19 +126,39 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 24px 20px;
-  color: #eef5fa;
+  padding: 28px 22px;
+  color: #f9fbf8;
   background:
-    linear-gradient(180deg, rgba(11, 19, 26, 0.96), rgba(11, 19, 26, 0.9)),
-    linear-gradient(180deg, #101923 0%, #0c141c 100%);
-  border-right: 1px solid rgba(189, 214, 230, 0.08);
-  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.16);
+    linear-gradient(160deg, rgba(22, 48, 46, 0.98), rgba(32, 43, 54, 0.96)),
+    linear-gradient(180deg, #17312f 0%, #1e2a36 100%);
+  border-right: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 18px 0 50px rgba(44, 63, 66, 0.18);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 2px 16px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-radius: 14px;
+  color: #1d3734;
+  background: linear-gradient(145deg, #eaf8e8, #f6d2a8);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.22);
+  font-weight: 900;
 }
 
 .eyebrow,
 .label {
   margin: 0 0 8px;
-  color: #87a1b6;
+  color: rgba(239, 247, 243, 0.7);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.14em;
@@ -415,39 +174,40 @@ p {
 
 h1 {
   margin-bottom: 0;
-  font-size: 31px;
-  line-height: 1.02;
-  letter-spacing: -0.04em;
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: 0;
 }
 
 .panel {
   display: grid;
   gap: 12px;
-  padding: 16px;
-  border: 1px solid rgba(193, 216, 232, 0.12);
+  padding: 17px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 18px;
   background:
-    linear-gradient(180deg, rgba(18, 28, 38, 0.88), rgba(15, 23, 32, 0.92));
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.07));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 16px 40px rgba(0, 0, 0, 0.16);
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 18px 38px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(16px);
 }
 
 .panel code {
   overflow-wrap: anywhere;
-  color: #f8fbfd;
+  color: #f9fbf8;
   font-size: 13px;
   line-height: 1.55;
   padding: 10px 12px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .panel p,
 .empty-sessions {
   margin-bottom: 0;
-  color: #9db0bf;
+  color: rgba(239, 247, 243, 0.72);
 }
 
 .session-error {
@@ -461,11 +221,11 @@ h1 {
   min-width: 88px;
   min-height: 44px;
   padding: 0 14px;
-  border: 1px solid rgba(141, 179, 205, 0.22);
-  border-radius: 12px;
-  color: #edf5fb;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  color: #f9fbf8;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.07));
   cursor: pointer;
   transition:
     background-color 180ms ease,
@@ -476,9 +236,16 @@ h1 {
 }
 
 .secondary-button:hover {
-  border-color: rgba(112, 171, 215, 0.45);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  border-color: rgba(246, 210, 168, 0.75);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
   transform: translateY(-1px);
+}
+
+.primary-lite {
+  color: #1f3b37;
+  background: linear-gradient(180deg, #f9d9ad, #efb36f);
+  border-color: rgba(255, 222, 178, 0.8);
+  font-weight: 800;
 }
 
 .secondary-button:focus-visible,
@@ -507,10 +274,10 @@ textarea:focus-visible {
   display: grid;
   gap: 6px;
   padding: 12px 14px;
-  border: 1px solid rgba(193, 216, 232, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
-  color: #f7fbfe;
-  background: rgba(255, 255, 255, 0.04);
+  color: #f7fbf8;
+  background: rgba(255, 255, 255, 0.08);
   text-align: left;
   cursor: pointer;
   transition:
@@ -526,22 +293,39 @@ textarea:focus-visible {
   display: block;
 }
 
+.session-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-title small {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #193b35;
+  background: #f6d2a8;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .session-item span,
 .session-item small {
-  color: #98adbd;
+  color: rgba(239, 247, 243, 0.68);
 }
 
 .session-item:hover {
   transform: translateY(-1px);
-  border-color: rgba(106, 172, 226, 0.28);
-  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(246, 210, 168, 0.48);
+  background: rgba(255, 255, 255, 0.12);
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.14);
 }
 
 .session-item.active {
-  border-color: rgba(93, 176, 255, 0.62);
+  border-color: rgba(246, 210, 168, 0.72);
   background:
-    linear-gradient(180deg, rgba(52, 104, 164, 0.46), rgba(31, 61, 95, 0.32));
+    linear-gradient(180deg, rgba(246, 210, 168, 0.24), rgba(255, 255, 255, 0.1));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 16px 30px rgba(0, 0, 0, 0.14);
@@ -551,36 +335,108 @@ textarea:focus-visible {
   cursor: default;
 }
 
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9ee6b9;
+  box-shadow: 0 0 0 6px rgba(158, 230, 185, 0.12);
+}
+
+.status-dot.running {
+  background: #f3bd6b;
+  box-shadow: 0 0 0 6px rgba(243, 189, 107, 0.16);
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.metrics div {
+  padding: 10px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.metrics dt {
+  color: rgba(239, 247, 243, 0.65);
+  font-size: 11px;
+}
+
+.metrics dd {
+  margin: 4px 0 0;
+  color: #fbfff9;
+  font-size: 20px;
+  font-weight: 800;
+}
+
 .workspace {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   min-width: 0;
   height: 100vh;
   background:
-    radial-gradient(circle at top right, rgba(63, 117, 193, 0.06), transparent 24%),
-    linear-gradient(180deg, rgba(10, 17, 24, 0.92), rgba(12, 20, 29, 0.96));
+    linear-gradient(90deg, rgba(28, 59, 54, 0.035) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(28, 59, 54, 0.028) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 253, 247, 0.9), rgba(239, 246, 242, 0.86));
+  background-size:
+    34px 34px,
+    34px 34px,
+    auto;
 }
 
 .topbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 18px;
   min-height: 82px;
   padding: 18px 28px;
-  border-bottom: 1px solid rgba(189, 216, 232, 0.1);
-  background: rgba(8, 14, 20, 0.58);
-  backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(50, 72, 70, 0.1);
+  background: rgba(255, 253, 247, 0.76);
+  backdrop-filter: blur(18px);
 }
 
 .topbar h2 {
   margin-bottom: 4px;
   font-size: 20px;
-  color: #f7fbfe;
-  letter-spacing: -0.03em;
+  color: #1e332f;
+  letter-spacing: 0;
 }
 
 .topbar p {
   margin-bottom: 0;
-  color: #9bb0c0;
+  color: #657771;
+}
+
+.topbar-stats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.topbar-stats span {
+  min-width: 76px;
+  padding: 8px 10px;
+  border: 1px solid rgba(37, 72, 66, 0.12);
+  border-radius: 999px;
+  color: #36544f;
+  background: rgba(255, 255, 255, 0.72);
+  text-align: center;
+  font-size: 13px;
+  box-shadow: 0 10px 24px rgba(48, 72, 70, 0.08);
 }
 
 .message-list {
@@ -588,70 +444,186 @@ textarea:focus-visible {
   flex-direction: column;
   gap: 18px;
   min-height: 0;
-  padding: 28px;
+  padding: 32px;
   overflow-y: auto;
-  scrollbar-color: rgba(142, 180, 210, 0.38) transparent;
+  scrollbar-color: rgba(67, 104, 95, 0.3) transparent;
 }
 
 .empty-state {
-  max-width: 560px;
+  width: min(720px, 100%);
   margin: auto;
-  text-align: center;
+  text-align: left;
+  padding: 34px;
+  border: 1px solid rgba(37, 72, 66, 0.1);
+  border-radius: 28px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(255, 248, 238, 0.72)),
+    rgba(255, 255, 255, 0.7);
+  box-shadow: 0 28px 80px rgba(54, 82, 76, 0.16);
+}
+
+.empty-hero {
+  position: relative;
+  min-height: 142px;
+  padding-right: 150px;
+}
+
+.empty-orbit {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 120px;
+  height: 120px;
+  border: 1px solid rgba(44, 114, 98, 0.18);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, #2d7766 0, #2d7766 10px, transparent 11px),
+    radial-gradient(circle at 80% 25%, #eda969 0, #eda969 8px, transparent 9px),
+    radial-gradient(circle at 24% 76%, #8fc9ad 0, #8fc9ad 7px, transparent 8px);
+  box-shadow:
+    inset 0 0 0 18px rgba(45, 119, 102, 0.05),
+    inset 0 0 0 42px rgba(237, 169, 105, 0.06);
+  animation: orbit-breathe 4s ease-in-out infinite;
 }
 
 .empty-state h3 {
   margin-bottom: 8px;
-  font-size: 24px;
-  color: #f7fbfe;
-  letter-spacing: -0.03em;
+  font-size: 34px;
+  color: #1f3732;
+  letter-spacing: 0;
 }
 
 .empty-state p {
-  color: #a0b2c0;
+  color: #657771;
+  line-height: 1.7;
+}
+
+.capability-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.capability-tags span {
+  padding: 6px 10px;
+  border: 1px solid rgba(47, 138, 114, 0.12);
+  border-radius: 999px;
+  color: #2f6258;
+  background: rgba(232, 244, 237, 0.74);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.prompt-examples {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.prompt-examples button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid rgba(37, 72, 66, 0.1);
+  border-radius: 16px;
+  color: #2b423e;
+  background: rgba(255, 255, 255, 0.7);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(54, 82, 76, 0.07);
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.prompt-examples button span {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #1f473f;
+  background: #e8f4ed;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.prompt-examples button:hover {
+  transform: translateY(-2px);
+  border-color: rgba(45, 119, 102, 0.28);
+  background: #ffffff;
+  box-shadow: 0 16px 30px rgba(54, 82, 76, 0.12);
 }
 
 .message {
   display: grid;
-  grid-template-columns: 36px minmax(0, 760px);
+  grid-template-columns: 40px minmax(0, 760px);
   gap: 12px;
   align-items: start;
 }
 
 .message.user {
   justify-content: end;
+  grid-template-columns: minmax(0, 560px) 40px;
+}
+
+.message.user .avatar {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .message.user .bubble {
-  color: #ffffff;
-  background: linear-gradient(180deg, #2c73d7, #245eb0);
-  border-color: rgba(108, 164, 238, 0.26);
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.message.user .bubble {
+  color: #f8fffb;
+  background: linear-gradient(160deg, #2f8a72, #216556);
+  border-color: rgba(45, 119, 102, 0.16);
 }
 
 .avatar {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   place-items: center;
-  border-radius: 50%;
+  border-radius: 14px;
   color: #ffffff;
-  background: linear-gradient(180deg, #33485c, #273746);
+  background: linear-gradient(160deg, #eaa86d, #b96d4d);
+  box-shadow: 0 12px 24px rgba(89, 76, 63, 0.16);
   font-size: 13px;
   font-weight: 800;
 }
 
 .message.user .avatar {
-  background: linear-gradient(180deg, #2e6fd0, #1d4f99);
+  background: linear-gradient(160deg, #2f8a72, #216556);
 }
 
 .bubble {
   min-width: 0;
-  padding: 14px 16px;
-  border: 1px solid rgba(193, 216, 232, 0.1);
-  border-radius: 18px;
-  background: rgba(15, 22, 30, 0.88);
+  padding: 16px 18px;
+  border: 1px solid rgba(37, 72, 66, 0.08);
+  border-radius: 20px;
+  color: #2b3a36;
+  background: rgba(255, 255, 255, 0.82);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 14px 34px rgba(0, 0, 0, 0.18);
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 16px 38px rgba(54, 82, 76, 0.11);
+}
+
+.markdown-body {
+  color: #263a35;
+  font-family:
+    'LXGW WenKai Screen', '霞鹜文楷', 'Microsoft YaHei UI', 'PingFang SC',
+    'Hiragino Sans GB', sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.82;
+  letter-spacing: 0;
 }
 
 .bubble p {
@@ -659,66 +631,145 @@ textarea:focus-visible {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.65;
-  color: #eff4f8;
+  color: inherit;
 }
 
-.markdown-body :deep(p) {
-  margin: 0 0 10px;
+.markdown-body p {
+  margin: 0 0 12px;
   white-space: normal;
 }
 
-.markdown-body :deep(p:last-child) {
+.markdown-body p:last-child {
   margin-bottom: 0;
 }
 
-.markdown-body :deep(code) {
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 18px 0 10px;
+  color: #18342f;
+  font-family:
+    'Aptos Display', 'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB',
+    sans-serif;
+  font-weight: 760;
+  line-height: 1.35;
 }
 
-.markdown-body :deep(pre) {
-  margin: 10px 0 0;
-  padding: 12px;
-  border-radius: 6px;
+.markdown-body h1:first-child,
+.markdown-body h2:first-child,
+.markdown-body h3:first-child,
+.markdown-body h4:first-child {
+  margin-top: 0;
+}
+
+.markdown-body h1 {
+  font-size: 24px;
+}
+
+.markdown-body h2 {
+  font-size: 21px;
+}
+
+.markdown-body h3 {
+  font-size: 18px;
+}
+
+.markdown-body strong {
+  color: #173a33;
+  font-weight: 700;
+}
+
+.markdown-body code {
+  padding: 2px 6px;
+  border-radius: 7px;
+  color: #28675b;
+  background: rgba(47, 138, 114, 0.08);
+  font-family:
+    'Cascadia Code', 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.88em;
+  font-weight: 500;
+}
+
+.markdown-body pre {
+  margin: 12px 0 0;
+  padding: 14px;
+  border-radius: 14px;
   overflow-x: auto;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(30, 51, 47, 0.055);
 }
 
-.markdown-body :deep(pre code) {
+.markdown-body pre code {
   padding: 0;
   background: transparent;
 }
 
-.markdown-body :deep(blockquote) {
+.markdown-body blockquote {
+  margin: 12px 0 0;
+  padding: 8px 0 8px 14px;
+  border-left: 3px solid rgba(47, 138, 114, 0.26);
+  color: #667b74;
+}
+
+.markdown-body a {
+  color: #1f7b69;
+}
+
+.markdown-body ul,
+.markdown-body ol {
   margin: 10px 0 0;
-  padding-left: 12px;
-  border-left: 4px solid rgba(91, 165, 247, 0.5);
-  color: #c0ced9;
+  padding-left: 24px;
 }
 
-.markdown-body :deep(a) {
-  color: #8fc0ff;
+.markdown-body li {
+  margin: 5px 0;
 }
 
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
-  margin: 8px 0 0;
-  padding-left: 22px;
+.markdown-body hr {
+  height: 1px;
+  margin: 18px 0;
+  border: 0;
+  background: rgba(37, 72, 66, 0.12);
 }
 
-.markdown-body :deep(.katex-display) {
+.markdown-body table {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 9px 10px;
+  border: 1px solid rgba(37, 72, 66, 0.1);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-body th {
+  color: #1f473f;
+  background: rgba(232, 244, 237, 0.72);
+  font-weight: 800;
+}
+
+.markdown-body td {
+  background: rgba(255, 255, 255, 0.44);
+}
+
+.markdown-body .katex-display {
   margin: 10px 0;
   overflow-x: auto;
   overflow-y: hidden;
 }
 
-.markdown-body :deep(.katex) {
+.markdown-body .katex {
   font-size: 1.06em;
 }
 
 .loading {
-  color: #c1cfda;
+  color: #60736d;
 }
 
 .loading.animated {
@@ -744,7 +795,7 @@ textarea:focus-visible {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: currentColor;
+  background: #2f8a72;
   opacity: 0.35;
   animation: dot-bounce 1.05s ease-in-out infinite;
 }
@@ -758,65 +809,148 @@ textarea:focus-visible {
 }
 
 .steps {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(193, 216, 232, 0.12);
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(37, 72, 66, 0.1);
 }
 
 .steps summary {
   cursor: pointer;
-  color: inherit;
+  color: #2c6258;
   font-weight: 700;
+  list-style-position: outside;
 }
 
-.steps ol {
+.step-timeline {
   display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
   gap: 10px;
-  margin: 12px 0 0;
-  padding-left: 20px;
 }
 
-.steps li {
-  line-height: 1.5;
+.timeline-item:not(:last-child)::after {
+  position: absolute;
+  top: 32px;
+  bottom: -12px;
+  left: 14px;
+  width: 1px;
+  background: rgba(47, 138, 114, 0.18);
+  content: '';
 }
 
-.steps span,
-.steps code,
-.steps small {
+.timeline-index {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(47, 138, 114, 0.2);
+  border-radius: 50%;
+  color: #246657;
+  background: #f3faf5;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.timeline-content {
+  padding: 11px 12px;
+  border: 1px solid rgba(47, 138, 114, 0.1);
+  border-radius: 16px;
+  background: rgba(247, 253, 249, 0.68);
+}
+
+.timeline-content strong {
   display: block;
-  margin-top: 4px;
-  overflow-wrap: anywhere;
+  margin-bottom: 6px;
+  color: #1e4f45;
+  font-size: 14px;
 }
 
-.steps code {
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.07);
+.step-block b {
+  display: block;
+  margin-bottom: 2px;
+  color: #2d7766;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.step-block {
+  display: block;
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+code.step-block {
+  padding: 8px 10px;
+  border-radius: 12px;
+  color: #244c45;
+  background: rgba(47, 138, 114, 0.08);
+  font-family:
+    'Cascadia Code', 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 13px;
+}
+
+small.step-block {
+  color: #667b74;
 }
 
 .stop-reason {
   display: block;
   margin-top: 10px;
-  color: #ff8f8f;
+  color: #c4584f;
 }
 
 .error {
-  margin: 0 28px 12px;
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 160, 160, 0.22);
-  border-radius: 12px;
-  color: #ffd1d1;
-  background: rgba(142, 45, 45, 0.16);
+  display: grid;
+  gap: 6px;
+  margin: 0 32px 12px;
+  padding: 13px 15px;
+  border: 1px solid rgba(190, 83, 73, 0.18);
+  border-radius: 16px;
+  color: #9b352f;
+  background: rgba(255, 235, 229, 0.8);
+  box-shadow: 0 14px 32px rgba(150, 78, 66, 0.12);
+}
+
+.error strong {
+  color: #803029;
+}
+
+.error span {
+  color: #8f514b;
+  line-height: 1.55;
+}
+
+.error code {
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 8px;
+  color: #8a3730;
+  background: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
 }
 
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 112px;
   gap: 12px;
-  padding: 18px 28px 24px;
-  border-top: 1px solid rgba(189, 216, 232, 0.1);
-  background: rgba(8, 14, 20, 0.68);
-  backdrop-filter: blur(14px);
+  padding: 18px 32px 26px;
+  border-top: 1px solid rgba(37, 72, 66, 0.1);
+  background: rgba(255, 253, 247, 0.78);
+  backdrop-filter: blur(18px);
+}
+
+.input-wrap {
+  position: relative;
+  min-width: 0;
 }
 
 textarea {
@@ -824,44 +958,56 @@ textarea {
   min-height: 72px;
   max-height: 180px;
   resize: vertical;
-  border: 1px solid rgba(193, 216, 232, 0.16);
-  border-radius: 16px;
-  padding: 12px 14px;
-  color: #eff4f8;
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(37, 72, 66, 0.12);
+  border-radius: 20px;
+  padding: 12px 14px 28px;
+  color: #243833;
+  background: rgba(255, 255, 255, 0.86);
   outline: none;
+  box-shadow: 0 12px 32px rgba(54, 82, 76, 0.08);
+}
+
+.input-wrap span {
+  position: absolute;
+  right: 12px;
+  bottom: 9px;
+  color: #7a8b85;
+  font-size: 12px;
+  pointer-events: none;
 }
 
 textarea:focus {
-  border-color: rgba(104, 171, 255, 0.6);
-  box-shadow: 0 0 0 3px rgba(104, 171, 255, 0.16);
+  border-color: rgba(47, 138, 114, 0.42);
+  box-shadow:
+    0 0 0 4px rgba(47, 138, 114, 0.12),
+    0 16px 36px rgba(54, 82, 76, 0.1);
 }
 
 .composer button {
   min-height: 72px;
   border: 0;
-  border-radius: 16px;
+  border-radius: 20px;
   color: #ffffff;
-  background: linear-gradient(180deg, #2c8f72, #1f6d57);
+  background: linear-gradient(160deg, #2f8a72, #226b5b);
   font-weight: 800;
   letter-spacing: 0.01em;
   cursor: pointer;
-  box-shadow: 0 16px 28px rgba(19, 90, 70, 0.25);
+  box-shadow: 0 16px 28px rgba(47, 138, 114, 0.22);
   transition:
     transform 180ms ease,
     box-shadow 180ms ease,
     filter 180ms ease;
 }
 
-.composer button:hover {
+.composer button:hover:not(:disabled) {
   transform: translateY(-1px);
   filter: brightness(1.04);
-  box-shadow: 0 18px 32px rgba(19, 90, 70, 0.34);
+  box-shadow: 0 20px 36px rgba(47, 138, 114, 0.3);
 }
 
 .composer button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.62;
   box-shadow: none;
   transform: none;
 }
@@ -887,13 +1033,56 @@ textarea:focus {
     padding-left: 18px;
   }
 
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topbar-stats {
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .topbar-stats span {
+    flex: 1;
+  }
+
   .message {
     grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .message.user {
+    grid-template-columns: minmax(0, 1fr) 32px;
   }
 
   .avatar {
     width: 32px;
     height: 32px;
+    border-radius: 11px;
+  }
+
+  .empty-state {
+    padding: 22px;
+    border-radius: 22px;
+  }
+
+  .empty-hero {
+    min-height: 0;
+    padding-right: 0;
+  }
+
+  .empty-orbit {
+    position: relative;
+    display: block;
+    top: auto;
+    right: auto;
+    width: 86px;
+    height: 86px;
+    margin-bottom: 18px;
+  }
+
+  .empty-state h3 {
+    font-size: 27px;
   }
 
   .composer {
@@ -902,6 +1091,17 @@ textarea:focus {
 
   .composer button {
     min-height: 48px;
+  }
+}
+
+@keyframes orbit-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+
+  50% {
+    transform: translateY(-4px) scale(1.03);
   }
 }
 
@@ -927,6 +1127,17 @@ textarea:focus {
 
   50% {
     transform: translateY(-1px);
+  }
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.18);
   }
 }
 </style>

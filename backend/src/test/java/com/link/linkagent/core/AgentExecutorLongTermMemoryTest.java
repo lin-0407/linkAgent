@@ -10,6 +10,8 @@ import com.link.linkagent.memory.LongTermMemoryRecord;
 import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.memory.SummaryMemory;
 import com.link.linkagent.memory.SummaryMemoryProperties;
+import com.link.linkagent.tool.ToolExecutionProperties;
+import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -30,6 +32,7 @@ class AgentExecutorLongTermMemoryTest {
         AgentExecutor executor = new AgentExecutor(
                 llmService,
                 new ToolRegistry(List.of()),
+                emptyToolExecutor(),
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
                 new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of())),
                 new LongTermMemory(mapper),
@@ -52,6 +55,7 @@ class AgentExecutorLongTermMemoryTest {
         AgentExecutor executor = new AgentExecutor(
                 llmService,
                 new ToolRegistry(List.of()),
+                emptyToolExecutor(),
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
                 new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of())),
                 new LongTermMemory(mapper),
@@ -70,6 +74,7 @@ class AgentExecutorLongTermMemoryTest {
         AgentExecutor executor = new AgentExecutor(
                 llmService,
                 new ToolRegistry(List.of()),
+                emptyToolExecutor(),
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
                 new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of())),
                 new LongTermMemory(mapper),
@@ -100,6 +105,10 @@ class AgentExecutorLongTermMemoryTest {
                     Final Answer:好的
                     """;
         }
+    }
+
+    private ToolExecutor emptyToolExecutor() {
+        return new ToolExecutor(new ToolRegistry(List.of()), new ToolExecutionProperties(10));
     }
 
     private static class FakeLongTermMemoryMapper implements LongTermMemoryMapper {

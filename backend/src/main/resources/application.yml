@@ -31,6 +31,9 @@ spring:
           model: ${LLM_MODEL:deepseek-chat}
 
 agent:
+  tool:
+    execution:
+      timeout-seconds: ${TOOL_EXECUTION_TIMEOUT_SECONDS:10}
   memory:
     short-term:
       # memory：进程内 Map；redis：共享 Redis List
