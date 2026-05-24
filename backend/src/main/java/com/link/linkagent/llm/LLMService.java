@@ -1,6 +1,7 @@
 package com.link.linkagent.llm;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -18,6 +19,7 @@ public class LLMService {
         this.chatClient = null;
     }
 
+    @Autowired
     public LLMService(ChatClient.Builder builder) {
         this.chatClient = builder.build();
     }

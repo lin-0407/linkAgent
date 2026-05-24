@@ -3,6 +3,8 @@ package com.link.linkagent.core;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.memory.InMemoryShortTermMemoryStore;
 import com.link.linkagent.memory.LongTermMemory;
+import com.link.linkagent.memory.LongTermMemoryCandidate;
+import com.link.linkagent.memory.LongTermMemoryExtractor;
 import com.link.linkagent.memory.LongTermMemoryMapper;
 import com.link.linkagent.memory.LongTermMemoryRecord;
 import com.link.linkagent.memory.ShortTermMemory;
@@ -30,7 +32,8 @@ class AgentExecutorLongTermMemoryTest {
                 new ToolRegistry(List.of()),
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
                 new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of())),
-                new LongTermMemory(mapper)
+                new LongTermMemory(mapper),
+                new NoopLongTermMemoryExtractor()
         );
 
         executor.run("session-1", "请根据我的偏好回答");
@@ -51,12 +54,34 @@ class AgentExecutorLongTermMemoryTest {
                 new ToolRegistry(List.of()),
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
                 new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of())),
-                new LongTermMemory(mapper)
+                new LongTermMemory(mapper),
+                new NoopLongTermMemoryExtractor()
         );
 
         executor.run("session-1", " user-1 ", "hello");
 
         assertThat(mapper.listUserId).isEqualTo("user-1");
+    }
+
+    @Test
+    void shouldExtractAndSaveLongTermMemoryAfterFinalAnswer() {
+        CapturingLlmService llmService = new CapturingLlmService();
+        FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
+        AgentExecutor executor = new AgentExecutor(
+                llmService,
+                new ToolRegistry(List.of()),
+                new ShortTermMemory(new InMemoryShortTermMemoryStore()),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of())),
+                new LongTermMemory(mapper),
+                new FixedLongTermMemoryExtractor()
+        );
+
+        executor.run("session-1", "user-1", "以后请优先用 Java 举例");
+
+        assertThat(mapper.savedRecord.getUserId()).isEqualTo("user-1");
+        assertThat(mapper.savedRecord.getMemoryKey()).isEqualTo("user.preference.language");
+        assertThat(mapper.savedRecord.getContent()).isEqualTo("用户希望后续回答优先使用 Java 示例");
+        assertThat(mapper.savedRecord.getSourceSessionId()).isEqualTo("session-1");
     }
 
     private static class CapturingLlmService extends LLMService {
@@ -80,9 +105,11 @@ class AgentExecutorLongTermMemoryTest {
     private static class FakeLongTermMemoryMapper implements LongTermMemoryMapper {
 
         private String listUserId;
+        private LongTermMemoryRecord savedRecord;
 
         @Override
         public int upsert(LongTermMemoryRecord record) {
+            this.savedRecord = record;
             return 1;
         }
 
@@ -99,6 +126,34 @@ class AgentExecutorLongTermMemoryTest {
             record.setMemoryKey("user.preference.language");
             record.setContent("用户偏好使用 Java");
             return List.of(record);
+        }
+    }
+
+    private static class NoopLongTermMemoryExtractor extends LongTermMemoryExtractor {
+
+        NoopLongTermMemoryExtractor() {
+            super(new CapturingLlmService());
+        }
+
+        @Override
+        public Optional<LongTermMemoryCandidate> extract(String userMessage, String finalAnswer) {
+            return Optional.empty();
+        }
+    }
+
+    private static class FixedLongTermMemoryExtractor extends LongTermMemoryExtractor {
+
+        FixedLongTermMemoryExtractor() {
+            super(new CapturingLlmService());
+        }
+
+        @Override
+        public Optional<LongTermMemoryCandidate> extract(String userMessage, String finalAnswer) {
+            return Optional.of(new LongTermMemoryCandidate(
+                    true,
+                    "user.preference.language",
+                    "用户希望后续回答优先使用 Java 示例"
+            ));
         }
     }
 }

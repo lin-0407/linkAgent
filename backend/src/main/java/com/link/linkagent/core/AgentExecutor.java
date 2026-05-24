@@ -4,6 +4,8 @@ import ch.qos.logback.core.util.StringUtil;
 import com.link.linkagent.api.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.memory.LongTermMemory;
+import com.link.linkagent.memory.LongTermMemoryCandidate;
+import com.link.linkagent.memory.LongTermMemoryExtractor;
 import com.link.linkagent.memory.LongTermMemoryRecord;
 import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;
@@ -37,6 +39,7 @@ public class AgentExecutor {
     private final ShortTermMemory shortTermMemory;
     private final SummaryMemory summaryMemory;
     private final LongTermMemory longTermMemory;
+    private final LongTermMemoryExtractor longTermMemoryExtractor;
 
     private static final int MAX_ITERATIONS = 10;
 
@@ -67,12 +70,14 @@ public class AgentExecutor {
             "Thought:\\s*(.*?)(?:\\n|$)", Pattern.CASE_INSENSITIVE);
 
     public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ShortTermMemory shortTermMemory,
-                         SummaryMemory summaryMemory, LongTermMemory longTermMemory) {
+                         SummaryMemory summaryMemory, LongTermMemory longTermMemory,
+                         LongTermMemoryExtractor longTermMemoryExtractor) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
         this.shortTermMemory = shortTermMemory;
         this.summaryMemory = summaryMemory;
         this.longTermMemory = longTermMemory;
+        this.longTermMemoryExtractor = longTermMemoryExtractor;
     }
 
     /**
@@ -136,6 +141,7 @@ public class AgentExecutor {
                     shortTermMemory.keepRecentMessages(resolvedSessionId, summaryMemory.getRetainedMessageCount());
                     log.info("摘要记忆已达到触发条件，sessionId={}", resolvedSessionId);
                 }
+                tryExtractAndSaveLongTermMemory(resolvedUserId, resolvedSessionId, userMessage, finalAnswer);
                 return new AgentChatResponse(resolvedSessionId, finalAnswer, null, steps.size(), steps);
             }
 
@@ -219,6 +225,21 @@ public class AgentExecutor {
                     .append("\n");
         }
         conversation.append("\n");
+    }
+
+    private void tryExtractAndSaveLongTermMemory(String userId, String sessionId, String userMessage, String finalAnswer) {
+        longTermMemoryExtractor.extract(userMessage, finalAnswer)
+                .ifPresent(candidate -> saveLongTermMemory(userId, sessionId, candidate));
+    }
+
+    private void saveLongTermMemory(String userId, String sessionId, LongTermMemoryCandidate candidate) {
+        try {
+            longTermMemory.save(userId, candidate.memoryKey(), candidate.content(), sessionId);
+            log.info("长期记忆已自动保存，userId={}, memoryKey={}", userId, candidate.memoryKey());
+        } catch (Exception exception) {
+            log.warn("长期记忆保存失败，userId={}, memoryKey={}, error={}",
+                    userId, candidate.memoryKey(), exception.getMessage());
+        }
     }
 
     private void appendSummary(StringBuilder conversation, String summary) {

@@ -18,9 +18,23 @@ class LongTermMemoryTest {
         memory.save(" user-1 ", " user.preference.language ", " Java ", " session-1 ");
 
         assertThat(mapper.savedRecord.getUserId()).isEqualTo("user-1");
-        assertThat(mapper.savedRecord.getMemoryKey()).isEqualTo("user.preference.language");
+        assertThat(mapper.savedRecord.getMemoryKey()).isEqualTo("user.preference.example_language");
         assertThat(mapper.savedRecord.getContent()).isEqualTo("Java");
         assertThat(mapper.savedRecord.getSourceSessionId()).isEqualTo("session-1");
+    }
+
+    @Test
+    void shouldNormalizeSimilarPreferenceKeysToSameMemoryKey() {
+        FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
+        LongTermMemory memory = new LongTermMemory(mapper);
+
+        memory.save("user-1", "user.preference.programming_language", "C++", null);
+
+        assertThat(mapper.savedRecord.getMemoryKey()).isEqualTo("user.preference.example_language");
+
+        memory.save("user-1", "user.preference.example", "Java", null);
+
+        assertThat(mapper.savedRecord.getMemoryKey()).isEqualTo("user.preference.example_language");
     }
 
     @Test
