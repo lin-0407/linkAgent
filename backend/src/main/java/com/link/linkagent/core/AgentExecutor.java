@@ -3,6 +3,8 @@ package com.link.linkagent.core;
 import ch.qos.logback.core.util.StringUtil;
 import com.link.linkagent.api.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.memory.LongTermMemory;
+import com.link.linkagent.memory.LongTermMemoryRecord;
 import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.memory.SummaryMemory;
@@ -34,6 +36,7 @@ public class AgentExecutor {
     private final ToolRegistry toolRegistry;
     private final ShortTermMemory shortTermMemory;
     private final SummaryMemory summaryMemory;
+    private final LongTermMemory longTermMemory;
 
     private static final int MAX_ITERATIONS = 10;
 
@@ -64,11 +67,12 @@ public class AgentExecutor {
             "Thought:\\s*(.*?)(?:\\n|$)", Pattern.CASE_INSENSITIVE);
 
     public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ShortTermMemory shortTermMemory,
-                         SummaryMemory summaryMemory) {
+                         SummaryMemory summaryMemory, LongTermMemory longTermMemory) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
         this.shortTermMemory = shortTermMemory;
         this.summaryMemory = summaryMemory;
+        this.longTermMemory = longTermMemory;
     }
 
     /**
@@ -89,7 +93,12 @@ public class AgentExecutor {
      * @return 最终答案 + 步骤追踪
      */
     public AgentChatResponse run(String sessionId, String userMessage) {
+        return run(sessionId, "default", userMessage);
+    }
+
+    public AgentChatResponse run(String sessionId, String userId, String userMessage) {
         String resolvedSessionId = resolveSessionId(sessionId);
+        String resolvedUserId = resolveUserId(userId);
         String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
 
         StringBuilder conversation = new StringBuilder();
@@ -98,6 +107,7 @@ public class AgentExecutor {
         List<AgentStep> steps = new ArrayList<>();
 
         // 拼接用户输入作为对话起点，格式与系统提示词约定一致
+        appendLongTermMemory(conversation, longTermMemory.listByUser(resolvedUserId, 10));
         appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
         List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
         appendMemory(conversation, recentMessages);
@@ -173,6 +183,28 @@ public class AgentExecutor {
             return UUID.randomUUID().toString();
         }
         return sessionId.trim();
+    }
+
+    private String resolveUserId(String userId) {
+        if (StringUtil.isNullOrEmpty(userId) || StringUtil.isNullOrEmpty(userId.trim())) {
+            return "default";
+        }
+        return userId.trim();
+    }
+
+    private void appendLongTermMemory(StringBuilder conversation, List<LongTermMemoryRecord> memories) {
+        if (memories.isEmpty()) {
+            return;
+        }
+        conversation.append("Long-term memory:\n");
+        for (LongTermMemoryRecord memory : memories) {
+            conversation.append("- ")
+                    .append(memory.getMemoryKey())
+                    .append(": ")
+                    .append(memory.getContent())
+                    .append("\n");
+        }
+        conversation.append("\n");
     }
 
     private void appendMemory(StringBuilder conversation, List<MemoryMessage> messages) {

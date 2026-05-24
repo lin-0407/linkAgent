@@ -75,3 +75,5 @@
 | 阶段 2.2 - Redis短期记忆存储 | `/docs/develop/阶段2.2-Redis短期记忆存储.md` |
 | 阶段 2.3 - 摘要记忆触发策略骨架 | `/docs/develop/阶段2.3-摘要记忆触发策略骨架.md` |
 | 阶段 2.4 - 摘要后短期记忆裁剪 | `/docs/develop/阶段2.4-摘要后短期记忆裁剪.md` |
+| 阶段 2.5 - 长期记忆MySQL读写骨架 | `/docs/develop/阶段2.5-长期记忆MySQL读写骨架.md` |
+| 阶段 2.6 - Agent读取长期记忆上下文 | `/docs/develop/阶段2.6-Agent读取长期记忆上下文.md` |

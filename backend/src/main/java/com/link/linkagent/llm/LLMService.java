@@ -14,6 +14,10 @@ public class LLMService {
 
     private final ChatClient chatClient;
 
+    protected LLMService() {
+        this.chatClient = null;
+    }
+
     public LLMService(ChatClient.Builder builder) {
         this.chatClient = builder.build();
     }

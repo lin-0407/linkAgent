@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS t_long_term_memory
     update_time  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted   TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
     KEY idx_user_id (user_id),
-    KEY idx_memory_key (user_id, memory_key)
+    UNIQUE KEY uk_user_memory_key (user_id, memory_key)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '长期记忆表';
