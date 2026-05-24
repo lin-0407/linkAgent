@@ -36,4 +36,29 @@ class ShortTermMemoryTest {
         assertThat(messages.getFirst().content()).isEqualTo("message-3");
         assertThat(messages.getLast().content()).isEqualTo("message-12");
     }
+
+    @Test
+    void shouldKeepOnlyConfiguredRecentMessages() {
+        ShortTermMemory memory = new ShortTermMemory(new InMemoryShortTermMemoryStore());
+
+        memory.append("session-1", "Human", "first");
+        memory.append("session-1", "AI", "second");
+        memory.append("session-1", "Human", "third");
+
+        memory.keepRecentMessages("session-1", 2);
+
+        assertThat(memory.getRecentMessages("session-1"))
+                .extracting(MemoryMessage::content)
+                .containsExactly("second", "third");
+    }
+
+    @Test
+    void shouldClearMessagesWhenRetainedCountIsNegative() {
+        ShortTermMemory memory = new ShortTermMemory(new InMemoryShortTermMemoryStore());
+
+        memory.append("session-1", "Human", "first");
+        memory.keepRecentMessages("session-1", -1);
+
+        assertThat(memory.getRecentMessages("session-1")).isEmpty();
+    }
 }

@@ -72,3 +72,6 @@
 | 阶段 1 - ReAct 最小闭环 | `/docs/develop/阶段1-ReAct最小闭环.md` |
 | 阶段 1.1 - 配置安全基线 | `/docs/develop/阶段1.1-配置安全基线.md` |
 | 阶段 2.1 - 短期记忆滑动窗口 | `/docs/develop/阶段2.1-短期记忆滑动窗口.md` |
+| 阶段 2.2 - Redis短期记忆存储 | `/docs/develop/阶段2.2-Redis短期记忆存储.md` |
+| 阶段 2.3 - 摘要记忆触发策略骨架 | `/docs/develop/阶段2.3-摘要记忆触发策略骨架.md` |
+| 阶段 2.4 - 摘要后短期记忆裁剪 | `/docs/develop/阶段2.4-摘要后短期记忆裁剪.md` |

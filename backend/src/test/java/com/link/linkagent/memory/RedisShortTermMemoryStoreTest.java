@@ -119,6 +119,17 @@ class RedisShortTermMemoryStoreTest {
     }
 
     @Test
+    void shouldReplaceMessages() {
+        store.append("session-1", new MemoryMessage("Human", "first"), 10);
+        store.append("session-1", new MemoryMessage("AI", "second"), 10);
+
+        store.replaceMessages("session-1", List.of(new MemoryMessage("Human", "latest")));
+
+        assertThat(store.getRecentMessages("session-1"))
+                .containsExactly(new MemoryMessage("Human", "latest"));
+    }
+
+    @Test
     void shouldListSessionsWithLatestPreviewAndMessageCount() {
         store.append("session-short", new MemoryMessage("Human", "hello"), 10);
         store.append("session-long", new MemoryMessage("Human", "first"), 10);

@@ -5,6 +5,7 @@ import com.link.linkagent.api.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;
+import com.link.linkagent.memory.SummaryMemory;
 import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolRegistry;
 import org.springframework.stereotype.Component;
@@ -32,6 +33,7 @@ public class AgentExecutor {
     private final LLMService llmService;
     private final ToolRegistry toolRegistry;
     private final ShortTermMemory shortTermMemory;
+    private final SummaryMemory summaryMemory;
 
     private static final int MAX_ITERATIONS = 10;
 
@@ -61,10 +63,12 @@ public class AgentExecutor {
     private static final Pattern THOUGHT = Pattern.compile(
             "Thought:\\s*(.*?)(?:\\n|$)", Pattern.CASE_INSENSITIVE);
 
-    public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ShortTermMemory shortTermMemory) {
+    public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ShortTermMemory shortTermMemory,
+                         SummaryMemory summaryMemory) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
         this.shortTermMemory = shortTermMemory;
+        this.summaryMemory = summaryMemory;
     }
 
     /**
@@ -94,7 +98,9 @@ public class AgentExecutor {
         List<AgentStep> steps = new ArrayList<>();
 
         // 拼接用户输入作为对话起点，格式与系统提示词约定一致
-        appendMemory(conversation, shortTermMemory.getRecentMessages(resolvedSessionId));
+        appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
+        List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
+        appendMemory(conversation, recentMessages);
         conversation.append("Human:").append(userMessage).append("\n\n");
         while(true){
             iteration++;
@@ -116,14 +122,20 @@ public class AgentExecutor {
                 log.info("第{}轮解析结果: thought={}, finalAnswer={}", iteration, parseThought(llmAnswer), finalAnswer);
                 shortTermMemory.append(resolvedSessionId, "Human", userMessage);
                 shortTermMemory.append(resolvedSessionId, "AI", finalAnswer);
+                if (summaryMemory.shouldSummarize(resolvedSessionId, shortTermMemory.getRecentMessages(resolvedSessionId))) {
+                    shortTermMemory.keepRecentMessages(resolvedSessionId, summaryMemory.getRetainedMessageCount());
+                    log.info("摘要记忆已达到触发条件，sessionId={}", resolvedSessionId);
+                }
                 return new AgentChatResponse(resolvedSessionId, finalAnswer, null, steps.size(), steps);
             }
 
             // 3. 提取 Thought — 必须存在，否则说明LLM未按格式输出
             String thought = parseThought(llmAnswer);
             if(StringUtil.isNullOrEmpty(thought)){
-                log.error("LLM思考返回结果为空！");
-                return new AgentChatResponse(resolvedSessionId, finalAnswer, "LLM思考返回结果为空", steps.size(), steps);
+                // LLM 既未给出 Final Answer 也未给出合法 Thought，反馈错误让 LLM 重试
+                log.warn("第{}轮未解析到合法 Thought，rawResponse={}", iteration, llmAnswer);
+                steps.add(new AgentStep(iteration, null, null, null, null));
+                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
             }
             log.info("第{}轮解析到 Thought: {}", iteration, thought);
 
@@ -175,6 +187,15 @@ public class AgentExecutor {
                     .append("\n");
         }
         conversation.append("\n");
+    }
+
+    private void appendSummary(StringBuilder conversation, String summary) {
+        if (StringUtil.isNullOrEmpty(summary) || StringUtil.isNullOrEmpty(summary.trim())) {
+            return;
+        }
+        conversation.append("Conversation summary:\n")
+                .append(summary.trim())
+                .append("\n\n");
     }
 
     /**

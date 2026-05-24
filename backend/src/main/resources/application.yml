@@ -35,6 +35,10 @@ agent:
     short-term:
       # memory：进程内 Map；redis：共享 Redis List
       store-type: ${SHORT_TERM_MEMORY_STORE_TYPE:memory}
+    summary:
+      enabled: ${SUMMARY_MEMORY_ENABLED:false}
+      trigger-message-count: ${SUMMARY_MEMORY_TRIGGER_MESSAGE_COUNT:8}
+      retained-message-count: ${SUMMARY_MEMORY_RETAINED_MESSAGE_COUNT:2}
 
 # ========== Langfuse (可观测) ==========
 # langfuse:

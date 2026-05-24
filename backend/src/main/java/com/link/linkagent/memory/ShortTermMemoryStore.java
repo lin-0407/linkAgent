@@ -11,6 +11,8 @@ public interface ShortTermMemoryStore {
 
     void append(String sessionId, MemoryMessage message, int maxMessages);
 
+    void replaceMessages(String sessionId, List<MemoryMessage> messages);
+
     List<SessionInfo> listSessions();
 
     List<MemoryMessage> getMessages(String sessionId);

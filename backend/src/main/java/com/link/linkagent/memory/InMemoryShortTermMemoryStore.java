@@ -43,6 +43,12 @@ public class InMemoryShortTermMemoryStore implements ShortTermMemoryStore {
     }
 
     @Override
+    public void replaceMessages(String sessionId, List<MemoryMessage> messages) {
+        Deque<MemoryMessage> newMessages = new ArrayDeque<>(messages);
+        sessionMessages.put(sessionId, newMessages);
+    }
+
+    @Override
     public List<SessionInfo> listSessions() {
         return sessionMessages.entrySet().stream()
                 .map(entry -> {

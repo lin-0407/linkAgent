@@ -26,6 +26,16 @@ public class ShortTermMemory {
         memoryStore.append(sessionId, new MemoryMessage(role, content), MAX_MESSAGES_PER_SESSION);
     }
 
+    public void keepRecentMessages(String sessionId, int retainedMessageCount) {
+        List<MemoryMessage> messages = memoryStore.getRecentMessages(sessionId);
+        int safeRetainedMessageCount = Math.max(0, retainedMessageCount);
+        if (messages.size() <= safeRetainedMessageCount) {
+            return;
+        }
+        int fromIndex = Math.max(0, messages.size() - safeRetainedMessageCount);
+        memoryStore.replaceMessages(sessionId, messages.subList(fromIndex, messages.size()));
+    }
+
     public List<SessionInfo> listSessions() {
         return memoryStore.listSessions();
     }

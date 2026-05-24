@@ -49,6 +49,19 @@ public class RedisShortTermMemoryStore implements ShortTermMemoryStore {
     }
 
     @Override
+    public void replaceMessages(String sessionId, List<MemoryMessage> messages) {
+        String key = buildKey(sessionId);
+        redisTemplate.delete(key);
+        if (messages.isEmpty()) {
+            return;
+        }
+        List<String> values = messages.stream()
+                .map(this::serialize)
+                .toList();
+        redisTemplate.opsForList().rightPushAll(key, values);
+    }
+
+    @Override
     public List<SessionInfo> listSessions() {
         List<String> keys = scanKeys();
         if (keys.isEmpty()) {

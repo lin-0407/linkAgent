@@ -22,4 +22,15 @@ class InMemoryShortTermMemoryStoreTest {
                 .extracting(MemoryMessage::content)
                 .containsExactly("second", "third");
     }
+
+    @Test
+    void shouldReplaceMessages() {
+        InMemoryShortTermMemoryStore store = new InMemoryShortTermMemoryStore();
+
+        store.append("session-1", new MemoryMessage("Human", "first"), 10);
+        store.replaceMessages("session-1", List.of(new MemoryMessage("AI", "summary tail")));
+
+        assertThat(store.getRecentMessages("session-1"))
+                .containsExactly(new MemoryMessage("AI", "summary tail"));
+    }
 }
