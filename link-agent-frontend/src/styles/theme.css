@@ -529,6 +529,57 @@ textarea:focus-visible,
   border-bottom: 1px solid var(--color-line);
 }
 
+.topbar.compact {
+  min-height: 78px;
+  padding-top: 18px;
+  padding-bottom: 14px;
+  align-items: center;
+}
+
+.topbar.compact .topbar-copy {
+  display: none;
+}
+
+.topbar-actions {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.topbar.compact .topbar-actions {
+  align-items: center;
+}
+
+.panel-toggle {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  color: var(--color-ink);
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(231, 45, 72, 0.16);
+  border-radius: 12px;
+  box-shadow: 8px 8px 0 rgba(231, 45, 72, 0.08);
+  cursor: pointer;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+
+.panel-toggle span {
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.panel-toggle:hover {
+  border-color: rgba(231, 45, 72, 0.34);
+  box-shadow: 10px 10px 0 rgba(231, 45, 72, 0.11);
+  transform: translate(-1px, -1px);
+}
+
 .topbar h2 {
   max-width: 680px;
   margin-bottom: 8px;
@@ -584,6 +635,22 @@ textarea:focus-visible,
 
 .topbar-stats .session-chip {
   grid-column: span 3;
+}
+
+.topbar.compact .topbar-stats {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.topbar.compact .topbar-stats span {
+  padding: 8px 10px;
+}
+
+.topbar.compact .topbar-stats strong {
+  font-size: 16px;
+}
+
+.topbar.compact .topbar-stats .session-chip {
+  grid-column: span 2;
 }
 
 .message-list {
@@ -1267,6 +1334,10 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .topbar-actions {
+    grid-template-columns: 1fr;
+  }
+
   .topbar-stats {
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
@@ -1337,6 +1408,10 @@ textarea:focus {
   .topbar {
     min-height: auto;
     padding-top: 22px;
+  }
+
+  .topbar.compact {
+    min-height: 66px;
   }
 
   .topbar-stats {

@@ -1,9 +1,13 @@
 package com.link.linkagent.tool;
 
+import com.link.linkagent.tool.mcp.SpringAiToolCallbackAdapter;
 import jakarta.annotation.PostConstruct;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -20,15 +24,27 @@ import java.util.Map;
 public class ToolRegistry {
 
     private final List<Tool> tools;
+    private final List<ToolCallbackProvider> toolCallbackProviders;
     private final Map<String, Tool> toolMap = new LinkedHashMap<>();
 
     public ToolRegistry(List<Tool> tools) {
+        this(tools, List.of());
+    }
+
+    public ToolRegistry(List<Tool> tools, List<ToolCallbackProvider> toolCallbackProviders) {
         this.tools = tools;
+        this.toolCallbackProviders = toolCallbackProviders;
     }
 
     @PostConstruct
     void init() {
-        tools.stream()
+        List<Tool> allTools = new ArrayList<>(tools);
+        toolCallbackProviders.stream()
+                .flatMap(provider -> Arrays.stream(provider.getToolCallbacks()))
+                .map(SpringAiToolCallbackAdapter::new)
+                .forEach(allTools::add);
+
+        allTools.stream()
                 // 工具列表进入系统提示词，稳定排序能让日志、测试和问题复现更容易。
                 .sorted(Comparator.comparing(tool -> resolveToolName(tool)))
                 .forEach(tool -> {

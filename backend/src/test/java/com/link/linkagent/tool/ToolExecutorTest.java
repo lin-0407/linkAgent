@@ -28,7 +28,6 @@ class ToolExecutorTest {
         ToolRegistry registry = new ToolRegistry(List.of());
         registry.init();
         ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10, 0));
-
         Observation observation = executor.execute(new ToolCall("unknown", "input"));
 
         assertThat(observation.toolName()).isEqualTo("unknown");

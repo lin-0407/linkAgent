@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import 'katex/dist/katex.min.css'
 import AgentSidebar from '@/components/AgentSidebar.vue'
 import ChatComposer from '@/components/ChatComposer.vue'
@@ -15,6 +15,7 @@ const promptExamples = [
 ]
 const capabilityTags = ['短期记忆', '工具调用', 'ReAct 轨迹', 'Markdown / 公式']
 const composerRef = ref<InstanceType<typeof ChatComposer> | null>(null)
+const isHeroCollapsed = ref(false)
 
 const {
   activeSessionLabel,
@@ -37,12 +38,30 @@ const {
   userMessageCount,
 } = useAgentChat()
 
+watch(
+  () => messages.value.length,
+  (currentLength, previousLength) => {
+    if (previousLength === 0 && currentLength > 0) {
+      isHeroCollapsed.value = true
+    }
+  },
+)
+
 function usePromptExample(example: string) {
   inputMessage.value = example
   void nextTick(() => {
     composerRef.value?.adjustInputHeight()
     composerRef.value?.focusInput()
   })
+}
+
+function toggleHeroPanel() {
+  isHeroCollapsed.value = !isHeroCollapsed.value
+}
+
+function startNewConversation() {
+  startNewSession()
+  isHeroCollapsed.value = false
 }
 </script>
 
@@ -59,7 +78,7 @@ function usePromptExample(example: string) {
       :sessions="sessions"
       :sessions-error="sessionsError"
       @open-session="openSession"
-      @start-new-session="startNewSession"
+      @start-new-session="startNewConversation"
       @toggle-sessions="isSessionsOpen = !isSessionsOpen"
     />
 
@@ -68,11 +87,13 @@ function usePromptExample(example: string) {
         :assistant-message-count="assistantMessageCount"
         :active-session-label="activeSessionLabel"
         :is-loading="isLoading"
+        :is-compact="isHeroCollapsed"
         :latest-step-count="latestStepCount"
         :message-count="messages.length"
         :session-count="sessions.length"
         :session-id="sessionId"
         :user-message-count="userMessageCount"
+        @toggle-panel="toggleHeroPanel"
       />
 
       <MessageList
