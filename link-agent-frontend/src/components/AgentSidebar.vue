@@ -36,7 +36,11 @@ function formatSessionPreview(value: string) {
   <aside class="sidebar">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">
-        <i></i>
+        <i class="brand-link link-a"></i>
+        <i class="brand-link link-b"></i>
+        <i class="brand-node node-a"></i>
+        <i class="brand-node node-b"></i>
+        <i class="brand-cut"></i>
         <b>LA</b>
       </span>
       <div>

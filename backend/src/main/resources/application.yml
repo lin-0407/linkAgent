@@ -29,6 +29,34 @@ spring:
       chat:
         options:
           model: ${LLM_MODEL:deepseek-chat}
+    mcp:
+      client:
+        enabled: ${MCP_CLIENT_ENABLED:false}
+        name: ${MCP_CLIENT_NAME:link-agent}
+        version: ${MCP_CLIENT_VERSION:0.0.1}
+        initialized: ${MCP_CLIENT_INITIALIZED:true}
+        request-timeout: ${MCP_CLIENT_REQUEST_TIMEOUT:30s}
+        type: ${MCP_CLIENT_TYPE:sync}
+        root-change-notification: ${MCP_CLIENT_ROOT_CHANGE_NOTIFICATION:false}
+        toolcallback:
+          enabled: ${MCP_TOOLCALLBACK_ENABLED:true}
+        stdio:
+          # servers-configuration: ${MCP_STDIO_SERVERS_CONFIGURATION:classpath:mcp-servers.json}
+          # connections:
+          #   例子：
+          #   github:
+          #     command: npx
+          #     args:
+          #       - -y
+          #       - @modelcontextprotocol/server-github
+          #     env:
+          #       GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_TOKEN:}
+        streamable-http:
+          # connections:
+          #   例子：
+          #   docs:
+          #     url: http://localhost:3001
+          #     endpoint: /mcp
 
 agent:
   tool:

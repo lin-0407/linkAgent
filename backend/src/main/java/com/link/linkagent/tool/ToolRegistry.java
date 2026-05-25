@@ -3,6 +3,7 @@ package com.link.linkagent.tool;
 import com.link.linkagent.tool.mcp.SpringAiToolCallbackAdapter;
 import jakarta.annotation.PostConstruct;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -31,6 +32,7 @@ public class ToolRegistry {
         this(tools, List.of());
     }
 
+    @Autowired
     public ToolRegistry(List<Tool> tools, List<ToolCallbackProvider> toolCallbackProviders) {
         this.tools = tools;
         this.toolCallbackProviders = toolCallbackProviders;

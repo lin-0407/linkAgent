@@ -2,6 +2,8 @@
 defineProps<{
   activeSessionLabel: string
   assistantMessageCount: number
+  canUseFullscreen: boolean
+  isFullscreen: boolean
   isLoading: boolean
   isCompact: boolean
   latestStepCount: number
@@ -12,6 +14,7 @@ defineProps<{
 }>()
 
 defineEmits<{
+  toggleFullscreen: []
   togglePanel: []
 }>()
 </script>
@@ -24,14 +27,28 @@ defineEmits<{
       <p>会话、记忆、工具调用和观察结果在同一个工作台里展开。</p>
     </div>
     <div class="topbar-actions">
-      <button
-        type="button"
-        class="panel-toggle"
-        :aria-label="isCompact ? '展开主视觉' : '收起主视觉'"
-        @click="$emit('togglePanel')"
-      >
-        <span aria-hidden="true">{{ isCompact ? '⌃' : '⌄' }}</span>
-      </button>
+      <div class="topbar-tools" aria-label="Workspace controls">
+        <button
+          type="button"
+          class="tool-button panel-toggle"
+          :aria-label="isCompact ? '展开主视觉' : '收起主视觉'"
+          title="展开或收起主视觉"
+          @click="$emit('togglePanel')"
+        >
+          <span aria-hidden="true">{{ isCompact ? '⌃' : '⌄' }}</span>
+        </button>
+        <button
+          type="button"
+          class="tool-button fullscreen-toggle"
+          :class="{ active: isFullscreen }"
+          :disabled="!canUseFullscreen"
+          :aria-label="isFullscreen ? '退出全屏专注模式' : '进入全屏专注模式'"
+          :title="isFullscreen ? '退出全屏' : '全屏专注'"
+          @click="$emit('toggleFullscreen')"
+        >
+          <span class="fullscreen-glyph" aria-hidden="true"></span>
+        </button>
+      </div>
       <div class="topbar-stats" aria-label="Message statistics">
         <span>
           <strong>{{ isLoading ? 'RUN' : 'IDLE' }}</strong>

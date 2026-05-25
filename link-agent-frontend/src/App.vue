@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import 'katex/dist/katex.min.css'
 import AgentSidebar from '@/components/AgentSidebar.vue'
 import ChatComposer from '@/components/ChatComposer.vue'
@@ -16,6 +16,8 @@ const promptExamples = [
 const capabilityTags = ['短期记忆', '工具调用', 'ReAct 轨迹', 'Markdown / 公式']
 const composerRef = ref<InstanceType<typeof ChatComposer> | null>(null)
 const isHeroCollapsed = ref(false)
+const canUseFullscreen = ref(false)
+const isFullscreen = ref(false)
 
 const {
   activeSessionLabel,
@@ -47,6 +49,16 @@ watch(
   },
 )
 
+onMounted(() => {
+  canUseFullscreen.value = document.fullscreenEnabled
+  syncFullscreenState()
+  document.addEventListener('fullscreenchange', syncFullscreenState)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('fullscreenchange', syncFullscreenState)
+})
+
 function usePromptExample(example: string) {
   inputMessage.value = example
   void nextTick(() => {
@@ -59,14 +71,36 @@ function toggleHeroPanel() {
   isHeroCollapsed.value = !isHeroCollapsed.value
 }
 
+async function toggleFullscreen() {
+  if (!canUseFullscreen.value) {
+    return
+  }
+
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen()
+      return
+    }
+
+    isHeroCollapsed.value = true
+    await document.documentElement.requestFullscreen()
+  } catch {
+    // 浏览器拒绝时保持当前布局，不打断正在进行的对话。
+  }
+}
+
 function startNewConversation() {
   startNewSession()
   isHeroCollapsed.value = false
 }
+
+function syncFullscreenState() {
+  isFullscreen.value = Boolean(document.fullscreenElement)
+}
 </script>
 
 <template>
-  <main class="app-shell">
+  <main class="app-shell" :class="{ fullscreen: isFullscreen }">
     <AgentSidebar
       :active-session-label="activeSessionLabel"
       :is-loading="isLoading"
@@ -88,12 +122,15 @@ function startNewConversation() {
         :active-session-label="activeSessionLabel"
         :is-loading="isLoading"
         :is-compact="isHeroCollapsed"
+        :is-fullscreen="isFullscreen"
+        :can-use-fullscreen="canUseFullscreen"
         :latest-step-count="latestStepCount"
         :message-count="messages.length"
         :session-count="sessions.length"
         :session-id="sessionId"
         :user-message-count="userMessageCount"
         @toggle-panel="toggleHeroPanel"
+        @toggle-fullscreen="toggleFullscreen"
       />
 
       <MessageList

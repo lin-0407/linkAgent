@@ -88,3 +88,6 @@
 | 阶段 3.3 - 工具执行重试保护 | `/docs/develop/阶段3.3-工具执行重试保护.md` |
 | 阶段 3.4 - 并发工具调用骨架 | `/docs/develop/阶段3.4-并发工具调用骨架.md` |
 | 阶段 3.5 - MCP工具适配骨架 | `/docs/develop/阶段3.5-MCP工具适配骨架.md` |
+| 阶段 3.6 - MCP客户端接入配置骨架 | `/docs/develop/阶段3.6-MCP客户端接入配置骨架.md` |
+| 阶段 3.7 - MCP客户端配置入口 | `/docs/develop/阶段3.7-MCP客户端配置入口.md` |
+| 阶段 3 - MCP配置踩坑记录 | `/docs/error/阶段3-MCP配置踩坑记录.md` |

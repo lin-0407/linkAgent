@@ -84,7 +84,7 @@ class AgentExecutorLongTermMemoryTest {
         executor.run("session-1", "user-1", "以后请优先用 Java 举例");
 
         assertThat(mapper.savedRecord.getUserId()).isEqualTo("user-1");
-        assertThat(mapper.savedRecord.getMemoryKey()).isEqualTo("user.preference.language");
+        assertThat(mapper.savedRecord.getMemoryKey()).isEqualTo("user.preference.example_language");
         assertThat(mapper.savedRecord.getContent()).isEqualTo("用户希望后续回答优先使用 Java 示例");
         assertThat(mapper.savedRecord.getSourceSessionId()).isEqualTo("session-1");
     }
@@ -160,7 +160,7 @@ class AgentExecutorLongTermMemoryTest {
         public Optional<LongTermMemoryCandidate> extract(String userMessage, String finalAnswer) {
             return Optional.of(new LongTermMemoryCandidate(
                     true,
-                    "user.preference.language",
+                    "user.preference.example_language",
                     "用户希望后续回答优先使用 Java 示例"
             ));
         }
