@@ -35,12 +35,20 @@ function formatSessionPreview(value: string) {
 <template>
   <aside class="sidebar">
     <div class="brand">
-      <span class="brand-mark">LA</span>
+      <span class="brand-mark" aria-hidden="true">
+        <i></i>
+        <b>LA</b>
+      </span>
       <div>
         <p class="eyebrow">Link Agent</p>
-        <h1>Agent Studio</h1>
+        <h1>ReAct Atelier</h1>
       </div>
     </div>
+
+    <section class="sidebar-manifesto">
+      <span>Qwen / DeepSeek / Claude</span>
+      <strong>把后端 Agent 的推理现场，做成作品集里最醒目的主入口。</strong>
+    </section>
 
     <section class="panel">
       <span class="label">Session</span>

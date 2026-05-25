@@ -43,7 +43,7 @@ defineExpose({
         ref="inputRef"
         v-model="inputMessage"
         rows="3"
-        placeholder="把问题交给 Link Agent，例如：帮我拆解这个功能的实现步骤..."
+        placeholder="输入一个能暴露推理过程的问题，例如：帮我拆解这个功能的实现步骤..."
         @keydown.enter.exact.prevent="$emit('sendMessage')"
         @input="adjustInputHeight"
       />

@@ -12,10 +12,15 @@ defineEmits<{
 <template>
   <div class="empty-state">
     <div class="empty-hero">
-      <span class="empty-orbit"></span>
+      <div class="empty-art" aria-hidden="true">
+        <span class="empty-art-core"></span>
+        <span class="empty-art-grid"></span>
+        <span class="empty-art-line line-a"></span>
+        <span class="empty-art-line line-b"></span>
+      </div>
       <p class="eyebrow">Agent Playground</p>
-      <h3>从一个小问题开始</h3>
-      <p>你可以先验证记忆，再观察它如何拆解任务、选择工具、形成最终回答。</p>
+      <h3>先点燃一个问题</h3>
+      <p>用一个问题验证记忆、工具、推理轨迹和最终回答，观察 Agent 怎么一步步把不确定性压缩成答案。</p>
       <div class="capability-tags">
         <span v-for="tag in capabilityTags" :key="tag">{{ tag }}</span>
       </div>

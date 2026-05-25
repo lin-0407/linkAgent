@@ -4,6 +4,7 @@ import com.link.linkagent.core.Observation;
 import com.link.linkagent.core.ToolCall;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -24,6 +25,19 @@ public class ToolExecutor {
     }
 
     public Observation execute(ToolCall toolCall) {
+        return executeInternal(toolCall);
+    }
+
+    public List<Observation> executeAll(List<ToolCall> toolCalls) {
+        List<CompletableFuture<Observation>> futures = toolCalls.stream()
+                .map(toolCall -> CompletableFuture.supplyAsync(() -> executeInternal(toolCall)))
+                .toList();
+        return futures.stream()
+                .map(CompletableFuture::join)
+                .toList();
+    }
+
+    private Observation executeInternal(ToolCall toolCall) {
         Tool tool = toolRegistry.getTool(toolCall.name());
         if (tool == null) {
             return new Observation(toolCall.name(), "Error: tool '" + toolCall.name() + "' not found");

@@ -1,19 +1,48 @@
 <script setup lang="ts">
 defineProps<{
+  activeSessionLabel: string
   assistantMessageCount: number
+  isLoading: boolean
+  latestStepCount: number
+  messageCount: number
+  sessionCount: number
+  sessionId: string
   userMessageCount: number
 }>()
 </script>
 
 <template>
   <header class="topbar">
-    <div>
-      <h2>和你的 Agent 一起推理</h2>
-      <p>每一次回答都能展开查看思考、工具调用和观察结果。</p>
+    <div class="topbar-copy">
+      <p class="eyebrow">ReAct Control Surface</p>
+      <h2>让推理过程直接撞上屏幕</h2>
+      <p>会话、记忆、工具调用和观察结果在同一个工作台里展开。</p>
     </div>
     <div class="topbar-stats" aria-label="Message statistics">
-      <span>{{ userMessageCount }} 次提问</span>
-      <span>{{ assistantMessageCount }} 次回答</span>
+      <span>
+        <strong>{{ isLoading ? 'RUN' : 'IDLE' }}</strong>
+        状态
+      </span>
+      <span>
+        <strong>{{ userMessageCount }}/{{ assistantMessageCount }}</strong>
+        问答
+      </span>
+      <span>
+        <strong>{{ messageCount }}</strong>
+        消息
+      </span>
+      <span>
+        <strong>{{ latestStepCount }}</strong>
+        ReAct
+      </span>
+      <span>
+        <strong>{{ sessionCount }}</strong>
+        会话
+      </span>
+      <span class="session-chip">
+        <strong>{{ sessionId ? 'LIVE' : 'NEW' }}</strong>
+        {{ activeSessionLabel }}
+      </span>
     </div>
   </header>
 </template>
