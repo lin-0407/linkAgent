@@ -34,6 +34,7 @@ agent:
   tool:
     execution:
       timeout-seconds: ${TOOL_EXECUTION_TIMEOUT_SECONDS:10}
+      max-retries: ${TOOL_EXECUTION_MAX_RETRIES:0}
   memory:
     short-term:
       # memory：进程内 Map；redis：共享 Redis List

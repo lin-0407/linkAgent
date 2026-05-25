@@ -28,15 +28,23 @@ public class ToolExecutor {
         if (tool == null) {
             return new Observation(toolCall.name(), "Error: tool '" + toolCall.name() + "' not found");
         }
-        try {
-            String result = CompletableFuture
-                    .supplyAsync(() -> tool.execute(toolCall.arguments()))
-                    .orTimeout(properties.timeoutSeconds(), TimeUnit.SECONDS)
-                    .join();
-            return new Observation(toolCall.name(), result);
-        } catch (Exception exception) {
-            return new Observation(toolCall.name(), "Error: " + resolveErrorMessage(exception));
+        Exception lastException = null;
+        for (int attempt = 0; attempt <= properties.maxRetries(); attempt++) {
+            try {
+                String result = executeOnce(tool, toolCall);
+                return new Observation(toolCall.name(), result);
+            } catch (Exception exception) {
+                lastException = exception;
+            }
         }
+        return new Observation(toolCall.name(), "Error: " + resolveErrorMessage(lastException));
+    }
+
+    private String executeOnce(Tool tool, ToolCall toolCall) {
+        return CompletableFuture
+                .supplyAsync(() -> tool.execute(toolCall.arguments()))
+                .orTimeout(properties.timeoutSeconds(), TimeUnit.SECONDS)
+                .join();
     }
 
     private String resolveErrorMessage(Exception exception) {

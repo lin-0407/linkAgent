@@ -5,6 +5,7 @@ import com.link.linkagent.core.ToolCall;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -14,7 +15,7 @@ class ToolExecutorTest {
     void shouldExecuteRegisteredTool() {
         ToolRegistry registry = new ToolRegistry(List.of(new FixedTool("calculator", "42")));
         registry.init();
-        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10));
+        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10, 0));
 
         Observation observation = executor.execute(new ToolCall("calculator", "6 * 7"));
 
@@ -26,7 +27,7 @@ class ToolExecutorTest {
     void shouldReturnErrorWhenToolNotFound() {
         ToolRegistry registry = new ToolRegistry(List.of());
         registry.init();
-        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10));
+        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10, 0));
 
         Observation observation = executor.execute(new ToolCall("unknown", "input"));
 
@@ -38,7 +39,7 @@ class ToolExecutorTest {
     void shouldReturnErrorWhenToolThrowsException() {
         ToolRegistry registry = new ToolRegistry(List.of(new BrokenTool("broken")));
         registry.init();
-        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10));
+        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10, 0));
 
         Observation observation = executor.execute(new ToolCall("broken", "input"));
 
@@ -50,12 +51,36 @@ class ToolExecutorTest {
     void shouldReturnErrorWhenToolExecutionTimeout() {
         ToolRegistry registry = new ToolRegistry(List.of(new SlowTool("slow")));
         registry.init();
-        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(1));
+        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(1, 0));
 
         Observation observation = executor.execute(new ToolCall("slow", "input"));
 
         assertThat(observation.toolName()).isEqualTo("slow");
         assertThat(observation.result()).contains("Error:");
+    }
+
+    @Test
+    void shouldRetryWhenToolFailsOnceAndThenSucceeds() {
+        ToolRegistry registry = new ToolRegistry(List.of(new FlakyTool("flaky")));
+        registry.init();
+        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10, 1));
+
+        Observation observation = executor.execute(new ToolCall("flaky", "input"));
+
+        assertThat(observation.toolName()).isEqualTo("flaky");
+        assertThat(observation.result()).isEqualTo("recovered");
+    }
+
+    @Test
+    void shouldReturnErrorWhenRetriesAreExhausted() {
+        ToolRegistry registry = new ToolRegistry(List.of(new AlwaysBrokenTool("broken")));
+        registry.init();
+        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10, 1));
+
+        Observation observation = executor.execute(new ToolCall("broken", "input"));
+
+        assertThat(observation.toolName()).isEqualTo("broken");
+        assertThat(observation.result()).contains("Error: tool failed");
     }
 
     private record FixedTool(String name, String result) implements Tool {
@@ -114,6 +139,52 @@ class ToolExecutorTest {
                 Thread.currentThread().interrupt();
             }
             return "too late";
+        }
+    }
+
+    private static class FlakyTool implements Tool {
+
+        private final String name;
+        private final AtomicInteger attempts = new AtomicInteger();
+
+        private FlakyTool(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+
+        @Override
+        public String getDescription() {
+            return "测试偶发失败工具";
+        }
+
+        @Override
+        public String execute(String input) {
+            if (attempts.getAndIncrement() == 0) {
+                throw new IllegalStateException("temporary error");
+            }
+            return "recovered";
+        }
+    }
+
+    private record AlwaysBrokenTool(String name) implements Tool {
+
+        @Override
+        public String getName() {
+            return name;
+        }
+
+        @Override
+        public String getDescription() {
+            return "测试持续失败工具";
+        }
+
+        @Override
+        public String execute(String input) {
+            throw new IllegalStateException("tool failed");
         }
     }
 }

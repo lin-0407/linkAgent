@@ -12,12 +12,19 @@ import org.springframework.stereotype.Component;
 public class ToolExecutionProperties {
 
     private final long timeoutSeconds;
+    private final int maxRetries;
 
-    public ToolExecutionProperties(@Value("${agent.tool.execution.timeout-seconds:10}") long timeoutSeconds) {
+    public ToolExecutionProperties(@Value("${agent.tool.execution.timeout-seconds:10}") long timeoutSeconds,
+                                   @Value("${agent.tool.execution.max-retries:0}") int maxRetries) {
         this.timeoutSeconds = timeoutSeconds;
+        this.maxRetries = maxRetries;
     }
 
     public long timeoutSeconds() {
         return Math.max(1, timeoutSeconds);
+    }
+
+    public int maxRetries() {
+        return Math.max(0, maxRetries);
     }
 }

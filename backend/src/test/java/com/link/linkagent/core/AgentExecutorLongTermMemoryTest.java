@@ -108,7 +108,7 @@ class AgentExecutorLongTermMemoryTest {
     }
 
     private ToolExecutor emptyToolExecutor() {
-        return new ToolExecutor(new ToolRegistry(List.of()), new ToolExecutionProperties(10));
+        return new ToolExecutor(new ToolRegistry(List.of()), new ToolExecutionProperties(10, 0));
     }
 
     private static class FakeLongTermMemoryMapper implements LongTermMemoryMapper {
