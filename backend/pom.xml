@@ -13,7 +13,7 @@
     <artifactId>linkAgent</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>linkAgent</name>
-    <description>基于 Spring AI 的企业级通用 ReAct Agent 框架</description>
+    <description>基于 Spring AI 的视频创作者智能工作台</description>
 
     <properties>
         <java.version>21</java.version>

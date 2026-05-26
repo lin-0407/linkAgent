@@ -1,0 +1,146 @@
+package com.link.linkagent.creator.suggestion.model;
+
+import java.time.LocalDateTime;
+
+/**
+ * 发布前优化建议数据库记录。
+ * 列表字段先以 JSON 字符串保存，是为了避免在 MVP 阶段引入复杂子表。
+ */
+public class CreatorSuggestionRecord {
+
+    private Long id;
+    private String suggestionId;
+    private String taskId;
+    private String contentSummary;
+    private String audienceProfile;
+    private String sellingPoints;
+    private String riskPoints;
+    private String titleSuggestions;
+    private String descriptionSuggestion;
+    private String tagSuggestions;
+    private String partitionSuggestion;
+    private String rawOutput;
+    private String parseStatus;
+    private LocalDateTime createTime;
+    private LocalDateTime updateTime;
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getSuggestionId() {
+        return suggestionId;
+    }
+
+    public void setSuggestionId(String suggestionId) {
+        this.suggestionId = suggestionId;
+    }
+
+    public String getTaskId() {
+        return taskId;
+    }
+
+    public void setTaskId(String taskId) {
+        this.taskId = taskId;
+    }
+
+    public String getContentSummary() {
+        return contentSummary;
+    }
+
+    public void setContentSummary(String contentSummary) {
+        this.contentSummary = contentSummary;
+    }
+
+    public String getAudienceProfile() {
+        return audienceProfile;
+    }
+
+    public void setAudienceProfile(String audienceProfile) {
+        this.audienceProfile = audienceProfile;
+    }
+
+    public String getSellingPoints() {
+        return sellingPoints;
+    }
+
+    public void setSellingPoints(String sellingPoints) {
+        this.sellingPoints = sellingPoints;
+    }
+
+    public String getRiskPoints() {
+        return riskPoints;
+    }
+
+    public void setRiskPoints(String riskPoints) {
+        this.riskPoints = riskPoints;
+    }
+
+    public String getTitleSuggestions() {
+        return titleSuggestions;
+    }
+
+    public void setTitleSuggestions(String titleSuggestions) {
+        this.titleSuggestions = titleSuggestions;
+    }
+
+    public String getDescriptionSuggestion() {
+        return descriptionSuggestion;
+    }
+
+    public void setDescriptionSuggestion(String descriptionSuggestion) {
+        this.descriptionSuggestion = descriptionSuggestion;
+    }
+
+    public String getTagSuggestions() {
+        return tagSuggestions;
+    }
+
+    public void setTagSuggestions(String tagSuggestions) {
+        this.tagSuggestions = tagSuggestions;
+    }
+
+    public String getPartitionSuggestion() {
+        return partitionSuggestion;
+    }
+
+    public void setPartitionSuggestion(String partitionSuggestion) {
+        this.partitionSuggestion = partitionSuggestion;
+    }
+
+    public String getRawOutput() {
+        return rawOutput;
+    }
+
+    public void setRawOutput(String rawOutput) {
+        this.rawOutput = rawOutput;
+    }
+
+    public String getParseStatus() {
+        return parseStatus;
+    }
+
+    public void setParseStatus(String parseStatus) {
+        this.parseStatus = parseStatus;
+    }
+
+    public LocalDateTime getCreateTime() {
+        return createTime;
+    }
+
+    public void setCreateTime(LocalDateTime createTime) {
+        this.createTime = createTime;
+    }
+
+    public LocalDateTime getUpdateTime() {
+        return updateTime;
+    }
+
+    public void setUpdateTime(LocalDateTime updateTime) {
+        this.updateTime = updateTime;
+    }
+}

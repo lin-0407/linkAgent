@@ -1,7 +1,7 @@
-package com.link.linkagent.api.controller;
+package com.link.linkagent.controller;
 
-import com.link.linkagent.api.dto.LongTermMemoryResponse;
-import com.link.linkagent.api.dto.LongTermMemorySaveRequest;
+import com.link.linkagent.dto.LongTermMemoryResponse;
+import com.link.linkagent.dto.LongTermMemorySaveRequest;
 import com.link.linkagent.memory.LongTermMemory;
 import com.link.linkagent.memory.LongTermMemoryRecord;
 import jakarta.validation.Valid;

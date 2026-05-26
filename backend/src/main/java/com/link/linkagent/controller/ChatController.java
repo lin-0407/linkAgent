@@ -1,7 +1,7 @@
-package com.link.linkagent.api.controller;
+package com.link.linkagent.controller;
 
-import com.link.linkagent.api.dto.ChatRequest;
-import com.link.linkagent.api.dto.ChatResponse;
+import com.link.linkagent.dto.ChatRequest;
+import com.link.linkagent.dto.ChatResponse;
 import com.link.linkagent.llm.LLMService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;

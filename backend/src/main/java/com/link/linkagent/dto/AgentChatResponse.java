@@ -1,4 +1,4 @@
-package com.link.linkagent.api.dto;
+package com.link.linkagent.dto;
 
 import com.link.linkagent.core.AgentStep;
 

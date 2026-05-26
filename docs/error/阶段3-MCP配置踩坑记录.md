@@ -95,7 +95,7 @@ Spring 在存在多个构造器时没有明确注入目标，导致 Bean 实例�
 在双参数构造器上显式添加 `@Autowired`，让 Spring 使用包含 `ToolCallbackProvider` 的构造器；单参数构造器继续保留给单元测试快速构造。
 
 ## 问题：长期记忆 key 测试未同步协议变更
-
+    
 ### 错误表现
 
 `AgentExecutorLongTermMemoryTest.shouldExtractAndSaveLongTermMemoryAfterFinalAnswer` 期望：

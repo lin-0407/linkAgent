@@ -114,3 +114,72 @@ CREATE TABLE IF NOT EXISTS t_agent_step
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = 'Agent 执行步骤表';
+
+-- ------------------------------------------------------------
+-- 6. 创作任务表
+--    作为 UP 主智能工作台的业务主表，后续发布前分析、反馈分析、复盘报告都挂在任务下
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_task
+(
+    id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    task_id     VARCHAR(64)  NOT NULL COMMENT '创作任务唯一标识（UUID）',
+    user_id     VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识，第一版允许默认用户方便本地演示',
+    task_name   VARCHAR(128) NOT NULL COMMENT '任务名称，用于列表页快速识别本次创作',
+    status      VARCHAR(32)  NOT NULL DEFAULT 'DRAFT' COMMENT '任务状态：DRAFT=草稿，PRE_PUBLISH_ANALYZED=已完成发布前分析，ANALYZED=已分析，ARCHIVED=已归档',
+    create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted  TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_task_id (task_id),
+    KEY idx_user_id (user_id),
+    KEY idx_user_update_time (user_id, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作任务表';
+
+-- ------------------------------------------------------------
+-- 7. 创作材料表
+--    存储用户主动输入的字幕、文稿、标题草稿和简介草稿，第一版不做平台爬取
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_material
+(
+    id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    task_id       VARCHAR(64) NOT NULL COMMENT '关联 creator_task.task_id',
+    material_type VARCHAR(32) NOT NULL COMMENT '材料类型：TITLE_DRAFT / DESCRIPTION_DRAFT / MANUSCRIPT / SUBTITLE',
+    content       LONGTEXT    NOT NULL COMMENT '用户主动输入的材料内容',
+    create_time   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time   DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted    TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_task_material_type (task_id, material_type),
+    KEY idx_task_id (task_id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作材料表';
+
+-- ------------------------------------------------------------
+-- 8. 发布前优化建议表
+--    保存 LLM 基于创作材料生成的标题、简介、标签和风险建议，便于后续复盘与评测
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_suggestion
+(
+    id                     BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    suggestion_id          VARCHAR(64)  NOT NULL COMMENT '建议唯一标识（UUID）',
+    task_id                VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id',
+    content_summary        TEXT                  DEFAULT NULL COMMENT '内容摘要',
+    audience_profile       TEXT                  DEFAULT NULL COMMENT '目标受众判断',
+    selling_points         TEXT                  DEFAULT NULL COMMENT '核心卖点列表 JSON',
+    risk_points            TEXT                  DEFAULT NULL COMMENT '风险点列表 JSON',
+    title_suggestions      TEXT                  DEFAULT NULL COMMENT '标题建议列表 JSON',
+    description_suggestion TEXT                  DEFAULT NULL COMMENT '简介建议',
+    tag_suggestions        TEXT                  DEFAULT NULL COMMENT '标签建议列表 JSON',
+    partition_suggestion   VARCHAR(128)          DEFAULT NULL COMMENT '分区建议',
+    raw_output             LONGTEXT     NOT NULL COMMENT 'LLM 原始输出，用于失败回放和人工检查',
+    parse_status           VARCHAR(32)  NOT NULL DEFAULT 'PARSED' COMMENT '解析状态：PARSED=已解析，RAW_ONLY=仅保存原文',
+    create_time            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted             TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_suggestion_id (suggestion_id),
+    UNIQUE KEY uk_task_id (task_id),
+    KEY idx_task_update_time (task_id, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '发布前优化建议表';

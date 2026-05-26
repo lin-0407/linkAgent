@@ -1,7 +1,7 @@
 package com.link.linkagent.core;
 
 import ch.qos.logback.core.util.StringUtil;
-import com.link.linkagent.api.dto.AgentChatResponse;
+import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.memory.LongTermMemory;
 import com.link.linkagent.memory.LongTermMemoryCandidate;

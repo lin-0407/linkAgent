@@ -1,9 +1,9 @@
-package com.link.linkagent.api.controller;
+package com.link.linkagent.controller;
 
-import com.link.linkagent.api.dto.AgentChatRequest;
-import com.link.linkagent.api.dto.AgentChatResponse;
-import com.link.linkagent.api.dto.SessionListItem;
-import com.link.linkagent.api.dto.SessionMessageItem;
+import com.link.linkagent.dto.AgentChatRequest;
+import com.link.linkagent.dto.AgentChatResponse;
+import com.link.linkagent.dto.SessionListItem;
+import com.link.linkagent.dto.SessionMessageItem;
 import com.link.linkagent.core.AgentExecutor;
 import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;

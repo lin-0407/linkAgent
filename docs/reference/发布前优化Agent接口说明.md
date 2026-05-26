@@ -1,0 +1,102 @@
+# 发布前优化 Agent 接口说明
+
+## 功能定位
+
+发布前优化 Agent 是创作者在发稿前使用的辅助模块。
+
+它基于阶段 4.1 保存的创作任务和材料，生成：
+
+1. 内容摘要。
+2. 目标受众判断。
+3. 核心卖点。
+4. 风险点。
+5. 标题建议。
+6. 简介建议。
+7. 标签建议。
+8. 分区建议。
+
+第一版不接入真实平台数据，不做评论分析，不做自动投稿。
+
+## 表结构
+
+### creator_suggestion
+
+用途：保存一次发布前优化结果。
+
+关键字段：
+
+| 字段 | 说明 |
+|---|---|
+| suggestion_id | 建议唯一标识 |
+| task_id | 关联创作任务 |
+| content_summary | 内容摘要 |
+| audience_profile | 目标受众判断 |
+| selling_points | 核心卖点 JSON |
+| risk_points | 风险点 JSON |
+| title_suggestions | 标题建议 JSON |
+| description_suggestion | 简介建议 |
+| tag_suggestions | 标签建议 JSON |
+| partition_suggestion | 分区建议 |
+| raw_output | LLM 原始输出 |
+| parse_status | 解析状态 |
+
+当前只保留每个任务一份最新建议。
+
+## API
+
+### 发布前分析
+
+```http
+POST /api/creator/tasks/{taskId}/pre-publish/analyze
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "creatorPreference": "偏好理性一点的表达，不要太夸张",
+  "titleStyle": "偏经验分享和结果导向",
+  "extraRequirement": "标题尽量短，简介要清楚"
+}
+```
+
+说明：
+
+1. 主要材料从任务里读取，不需要重复提交。
+2. 三个补充字段都是可选项。
+3. 任务没有材料时返回 400。
+
+### 查询建议
+
+```http
+GET /api/creator/tasks/{taskId}/pre-publish/suggestions
+```
+
+说明：
+
+1. 任务不存在时返回 404。
+2. 没有建议时返回 404。
+3. 返回中同时包含结构化字段和 `rawOutput`，便于人工检查。
+
+## 设计取舍
+
+本阶段没有上 SSE。
+
+原因是当前目标是先把“任务材料 -> LLM 建议 -> 数据库存档”这条线跑通。SSE 更适合放在下一步做过程可视化，不应该把它和建议生成逻辑混在一起。
+
+本阶段没有拆多个建议子表。
+
+原因是 MVP 先要简单。结构化字段先放一个表里，足够支撑演示和简历展示；等后面真的出现版本管理、人工批注、多轮对比，再拆更细。
+
+本阶段保留 `rawOutput`。
+
+原因是 LLM 输出不稳定，保留原文可以做失败回放，也能方便调 Prompt。
+
+## 后续接入点
+
+阶段 4.3 会新增评论弹幕输入和分析接口。
+
+阶段 4.4 会把发布前建议、反馈分析和复盘报告串成完整闭环。
+
+阶段 4.6 会用 `rawOutput`、耗时、token 和人工评分做评测集。
