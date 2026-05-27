@@ -1,6 +1,5 @@
 package com.link.linkagent.core;
 
-import ch.qos.logback.core.util.StringUtil;
 import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.memory.LongTermMemory;
@@ -13,6 +12,7 @@ import com.link.linkagent.memory.SummaryMemory;
 import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
+import com.link.linkagent.util.TextUtil;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -137,7 +137,7 @@ public class AgentExecutor {
 
             // 2. 优先检测 Final Answer（即使同时存在 Action 也以 Final Answer 为准）
             finalAnswer = parseFinalAnswer(llmAnswer);
-            if(!StringUtil.isNullOrEmpty(finalAnswer)){
+            if (TextUtil.hasText(finalAnswer)) {
                 log.info("第{}轮解析结果: thought={}, finalAnswer={}", iteration, parseThought(llmAnswer), finalAnswer);
                 shortTermMemory.append(resolvedSessionId, "Human", userMessage);
                 shortTermMemory.append(resolvedSessionId, "AI", finalAnswer);
@@ -151,7 +151,7 @@ public class AgentExecutor {
 
             // 3. 提取 Thought — 必须存在，否则说明LLM未按格式输出
             String thought = parseThought(llmAnswer);
-            if(StringUtil.isNullOrEmpty(thought)){
+            if (TextUtil.isBlank(thought)) {
                 // LLM 既未给出 Final Answer 也未给出合法 Thought，反馈错误让 LLM 重试
                 log.warn("第{}轮未解析到合法 Thought，rawResponse={}", iteration, llmAnswer);
                 steps.add(new AgentStep(iteration, null, null, null, null));
@@ -189,14 +189,14 @@ public class AgentExecutor {
     }
 
     private String resolveSessionId(String sessionId) {
-        if (StringUtil.isNullOrEmpty(sessionId) || StringUtil.isNullOrEmpty(sessionId.trim())) {
+        if (TextUtil.isBlank(sessionId)) {
             return UUID.randomUUID().toString();
         }
         return sessionId.trim();
     }
 
     private String resolveUserId(String userId) {
-        if (StringUtil.isNullOrEmpty(userId) || StringUtil.isNullOrEmpty(userId.trim())) {
+        if (TextUtil.isBlank(userId)) {
             return "default";
         }
         return userId.trim();
@@ -247,7 +247,7 @@ public class AgentExecutor {
     }
 
     private void appendSummary(StringBuilder conversation, String summary) {
-        if (StringUtil.isNullOrEmpty(summary) || StringUtil.isNullOrEmpty(summary.trim())) {
+        if (TextUtil.isBlank(summary)) {
             return;
         }
         conversation.append("Conversation summary:\n")

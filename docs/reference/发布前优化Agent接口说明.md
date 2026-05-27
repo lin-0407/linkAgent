@@ -55,6 +55,7 @@ Content-Type: application/json
 
 ```json
 {
+  "customGuidance": "可选，标题语气、建议风格和分析顺序等业务指导",
   "creatorPreference": "偏好理性一点的表达，不要太夸张",
   "titleStyle": "偏经验分享和结果导向",
   "extraRequirement": "标题尽量短，简介要清楚"
@@ -64,8 +65,10 @@ Content-Type: application/json
 说明：
 
 1. 主要材料从任务里读取，不需要重复提交。
-2. 三个补充字段都是可选项。
-3. 任务没有材料时返回 400。
+2. `customGuidance` 为空时不添加本次业务指导，最长 2000 个字符。
+3. 后端系统提示词固定维护角色、平台数据边界和 JSON 输出结构，前端不能覆盖。
+4. 三个补充字段都是可选项。
+5. 任务没有材料时返回 400。
 
 ### 查询建议
 
@@ -91,7 +94,7 @@ GET /api/creator/tasks/{taskId}/pre-publish/suggestions
 
 本阶段保留 `rawOutput`。
 
-原因是 LLM 输出不稳定，保留原文可以做失败回放，也能方便调 Prompt。
+原因是 LLM 输出不稳定，保留原文可以做失败回放，也能方便调整业务指导。
 
 ## 后续接入点
 

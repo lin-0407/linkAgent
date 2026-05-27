@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS creator_task
     task_id     VARCHAR(64)  NOT NULL COMMENT '创作任务唯一标识（UUID）',
     user_id     VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识，第一版允许默认用户方便本地演示',
     task_name   VARCHAR(128) NOT NULL COMMENT '任务名称，用于列表页快速识别本次创作',
-    status      VARCHAR(32)  NOT NULL DEFAULT 'DRAFT' COMMENT '任务状态：DRAFT=草稿，PRE_PUBLISH_ANALYZED=已完成发布前分析，ANALYZED=已分析，ARCHIVED=已归档',
+    status      VARCHAR(32)  NOT NULL DEFAULT 'DRAFT' COMMENT '任务状态：DRAFT=草稿，PRE_PUBLISH_ANALYZED=已完成发布前分析，FEEDBACK_ANALYZED=已完成反馈分析，ANALYZED=已分析，ARCHIVED=已归档',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted  TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
@@ -183,3 +183,53 @@ CREATE TABLE IF NOT EXISTS creator_suggestion
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '发布前优化建议表';
+
+-- ------------------------------------------------------------
+-- 9. 评论弹幕样例表
+--    保存用户主动粘贴的评论和弹幕样例，第一版不做平台爬取
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_user_feedback_detail
+(
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    feedback_id     VARCHAR(64) NOT NULL COMMENT '反馈样例唯一标识（UUID）',
+    task_id         VARCHAR(64) NOT NULL COMMENT '关联 creator_task.task_id',
+    comment_samples LONGTEXT             DEFAULT NULL COMMENT '用户主动粘贴的评论样例',
+    danmaku_samples LONGTEXT             DEFAULT NULL COMMENT '用户主动粘贴的弹幕样例',
+    extra_context   VARCHAR(500)         DEFAULT NULL COMMENT '用户补充的反馈背景，例如发布时间或视频表现',
+    create_time     DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time     DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted      TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_feedback_id (feedback_id),
+    UNIQUE KEY uk_task_id (task_id),
+    KEY idx_task_update_time (task_id, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '评论弹幕样例表';
+
+-- ------------------------------------------------------------
+-- 10. 评论弹幕分析报告表
+--     保存 LLM 对评论弹幕样例的结构化分析结果，供后续复盘报告汇总
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_llm_feedback_report
+(
+    id                       BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    report_id                VARCHAR(64) NOT NULL COMMENT '反馈分析报告唯一标识（UUID）',
+    task_id                  VARCHAR(64) NOT NULL COMMENT '关联 creator_task.task_id',
+    feedback_summary         TEXT                 DEFAULT NULL COMMENT '观众整体反馈摘要',
+    hot_topics               TEXT                 DEFAULT NULL COMMENT '高频观点列表 JSON',
+    sentiment_summary        TEXT                 DEFAULT NULL COMMENT '情绪倾向总结',
+    controversy_points       TEXT                 DEFAULT NULL COMMENT '争议点列表 JSON',
+    misunderstanding_points  TEXT                 DEFAULT NULL COMMENT '误解点列表 JSON',
+    next_content_suggestions TEXT                 DEFAULT NULL COMMENT '下一期内容建议列表 JSON',
+    interaction_suggestions  TEXT                 DEFAULT NULL COMMENT '互动回应建议列表 JSON',
+    raw_output               LONGTEXT    NOT NULL COMMENT 'LLM 原始输出，用于失败回放和人工检查',
+    parse_status             VARCHAR(32) NOT NULL DEFAULT 'PARSED' COMMENT '解析状态：PARSED=已解析，RAW_ONLY=仅保存原文',
+    create_time              DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time              DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted               TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_report_id (report_id),
+    UNIQUE KEY uk_task_id (task_id),
+    KEY idx_task_update_time (task_id, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '评论弹幕分析报告表';

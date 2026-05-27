@@ -10,6 +10,8 @@ import com.link.linkagent.creator.task.model.CreatorTaskResponse;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskSummaryResponse;
+import com.link.linkagent.util.NumberUtil;
+import com.link.linkagent.util.TextUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,7 +59,11 @@ public class CreatorTaskService {
     }
 
     public List<CreatorTaskSummaryResponse> listTasks(String userId, Integer limit) {
-        return creatorTaskMapper.listTasksByUser(normalizeUserId(userId), normalizeLimit(limit)).stream()
+        return creatorTaskMapper.listTasksByUser(
+                        normalizeUserId(userId),
+                        NumberUtil.limitOrDefault(limit, DEFAULT_LIMIT, MAX_LIMIT)
+                )
+                .stream()
                 .map(this::toTaskSummaryResponse)
                 .toList();
     }
@@ -84,7 +90,7 @@ public class CreatorTaskService {
                              String taskId,
                              CreatorMaterialType materialType,
                              String content) {
-        if (content == null || content.isBlank()) {
+        if (TextUtil.isBlank(content)) {
             return;
         }
         CreatorMaterialRecord record = new CreatorMaterialRecord();
@@ -131,33 +137,16 @@ public class CreatorTaskService {
     }
 
     private String normalizeUserId(String userId) {
-        if (userId == null || userId.isBlank()) {
-            return DEFAULT_USER_ID;
-        }
-        return userId.trim();
+        return TextUtil.trimToDefault(userId, DEFAULT_USER_ID);
     }
 
     private String normalizeTaskName(String taskName, String titleDraft) {
-        if (taskName != null && !taskName.isBlank()) {
+        if (TextUtil.hasText(taskName)) {
             return taskName.trim();
         }
-        if (titleDraft != null && !titleDraft.isBlank()) {
-            return abbreviate(titleDraft.trim(), 40);
+        if (TextUtil.hasText(titleDraft)) {
+            return TextUtil.abbreviate(titleDraft.trim(), 40);
         }
         return "未命名创作任务";
-    }
-
-    private String abbreviate(String value, int maxLength) {
-        if (value.length() <= maxLength) {
-            return value;
-        }
-        return value.substring(0, maxLength);
-    }
-
-    private int normalizeLimit(Integer limit) {
-        if (limit == null || limit <= 0) {
-            return DEFAULT_LIMIT;
-        }
-        return Math.min(limit, MAX_LIMIT);
     }
 }

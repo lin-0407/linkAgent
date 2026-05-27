@@ -1,5 +1,6 @@
 package com.link.linkagent.memory;
 
+import com.link.linkagent.util.TextUtil;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.ListOperations;
@@ -116,15 +117,7 @@ public class RedisShortTermMemoryStore implements ShortTermMemoryStore {
         }
         String sessionId = key.substring(KEY_PREFIX.length());
         MemoryMessage latest = messages.get(messages.size() - 1);
-        return new SessionInfo(sessionId, buildPreview(latest), messages.size());
-    }
-
-    private String buildPreview(MemoryMessage latest) {
-        if (latest == null || latest.content() == null || latest.content().isBlank()) {
-            return "Empty session";
-        }
-        String content = latest.content().replaceAll("\\s+", " ").trim();
-        return content.length() <= 48 ? content : content.substring(0, 48) + "...";
+        return new SessionInfo(sessionId, TextUtil.preview(latest.content(), 48, "Empty session"), messages.size());
     }
 
     private String serialize(MemoryMessage message) {

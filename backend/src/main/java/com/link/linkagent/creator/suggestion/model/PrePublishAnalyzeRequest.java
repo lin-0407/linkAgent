@@ -4,9 +4,12 @@ import jakarta.validation.constraints.Size;
 
 /**
  * 发布前优化分析请求。
- * 核心材料从任务中读取，这里只接收用户本次想补充的偏好，避免重复提交长文稿。
+ * 核心材料从任务中读取，这里只接收用户本次想补充的创作偏好，避免暴露系统规则。
  */
 public record PrePublishAnalyzeRequest(
+        @Size(max = 2000, message = "自定义创作指导长度不能超过2000个字符")
+        String customGuidance,
+
         @Size(max = 500, message = "创作者偏好长度不能超过500个字符")
         String creatorPreference,
 

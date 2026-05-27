@@ -1,9 +1,9 @@
 package com.link.linkagent.tool.mcp;
 
 import com.link.linkagent.tool.Tool;
+import com.link.linkagent.util.TextUtil;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
-import org.springframework.util.StringUtils;
 
 /**
  * Spring AI ToolCallback 适配器。
@@ -30,7 +30,7 @@ public class SpringAiToolCallbackAdapter implements Tool {
     public String getDescription() {
         String description = toolDefinition.description();
         String inputSchema = toolDefinition.inputSchema();
-        if (!StringUtils.hasText(inputSchema)) {
+        if (TextUtil.isBlank(inputSchema)) {
             return description;
         }
         return description + " Input schema: " + inputSchema;

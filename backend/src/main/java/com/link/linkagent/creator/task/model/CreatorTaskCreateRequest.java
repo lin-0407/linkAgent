@@ -1,5 +1,6 @@
 package com.link.linkagent.creator.task.model;
 
+import com.link.linkagent.util.TextUtil;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Size;
 
@@ -29,13 +30,9 @@ public record CreatorTaskCreateRequest(
 
     @AssertTrue(message = "标题草稿、简介草稿、文稿、字幕至少填写一项")
     public boolean isAnyMaterialProvided() {
-        return hasText(titleDraft)
-                || hasText(descriptionDraft)
-                || hasText(manuscript)
-                || hasText(subtitle);
-    }
-
-    private boolean hasText(String value) {
-        return value != null && !value.isBlank();
+        return TextUtil.hasText(titleDraft)
+                || TextUtil.hasText(descriptionDraft)
+                || TextUtil.hasText(manuscript)
+                || TextUtil.hasText(subtitle);
     }
 }

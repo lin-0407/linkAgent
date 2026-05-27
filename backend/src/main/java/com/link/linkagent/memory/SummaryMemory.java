@@ -1,5 +1,6 @@
 package com.link.linkagent.memory;
 
+import com.link.linkagent.util.TextUtil;
 import org.springframework.ai.chat.model.ChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,7 +66,7 @@ public class SummaryMemory {
     }
 
     public void saveSummary(String sessionId, String summary) {
-        if (!properties.enabled() || summary == null || summary.isBlank()) {
+        if (!properties.enabled() || TextUtil.isBlank(summary)) {
             return;
         }
         sessionSummaries.put(sessionId, summary.trim());

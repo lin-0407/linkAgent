@@ -1,11 +1,11 @@
 package com.link.linkagent.tool;
 
 import com.link.linkagent.tool.mcp.SpringAiToolCallbackAdapter;
+import com.link.linkagent.util.TextUtil;
 import jakarta.annotation.PostConstruct;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -68,7 +68,7 @@ public class ToolRegistry {
 
     private String resolveToolName(Tool tool) {
         String toolName = tool.getName();
-        if (!StringUtils.hasText(toolName)) {
+        if (TextUtil.isBlank(toolName)) {
             throw new IllegalStateException("Tool name must not be blank: " + tool.getClass().getName());
         }
         return toolName.trim();

@@ -7,39 +7,39 @@ spring:
 
   # ========== MySQL ==========
   datasource:
-    url: ${DB_URL:jdbc:mysql://localhost:3306/link_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
-    username: ${DB_USERNAME:link_agent}
-    password: ${DB_PASSWORD:}
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   # ========== Redis ==========
   data:
     redis:
-      host: ${REDIS_HOST:127.0.0.1}
-      port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:}
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
 
   # ========== Spring AI / LLM ==========
   ai:
     vectorstore:
-      type: ${VECTOR_STORE_TYPE:none}
+      type: none
     openai:
-      api-key: ${LLM_API_KEY:missing}
-      base-url: ${LLM_BASE_URL:https://api.deepseek.com}
+      api-key: ${LLM_API_KEY}
+      base-url: ${LLM_BASE_URL}
       chat:
         options:
-          model: ${LLM_MODEL:deepseek-chat}
+          model: ${LLM_MODEL}
     mcp:
       client:
-        enabled: ${MCP_CLIENT_ENABLED:false}
-        name: ${MCP_CLIENT_NAME:link-agent}
-        version: ${MCP_CLIENT_VERSION:0.0.1}
-        initialized: ${MCP_CLIENT_INITIALIZED:true}
-        request-timeout: ${MCP_CLIENT_REQUEST_TIMEOUT:30s}
-        type: ${MCP_CLIENT_TYPE:sync}
-        root-change-notification: ${MCP_CLIENT_ROOT_CHANGE_NOTIFICATION:false}
+        enabled: false
+        name: link-agent
+        version: 0.0.1
+        initialized: true
+        request-timeout: 30s
+        type: sync
+        root-change-notification: false
         toolcallback:
-          enabled: ${MCP_TOOLCALLBACK_ENABLED:true}
+          enabled: true
         stdio:
           # servers-configuration: ${MCP_STDIO_SERVERS_CONFIGURATION:classpath:mcp-servers.json}
           # connections:

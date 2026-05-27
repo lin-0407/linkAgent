@@ -8,6 +8,7 @@ public enum CreatorTaskStatus {
 
     DRAFT,
     PRE_PUBLISH_ANALYZED,
+    FEEDBACK_ANALYZED,
     ANALYZED,
     ARCHIVED
 }

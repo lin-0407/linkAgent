@@ -1,5 +1,6 @@
 package com.link.linkagent.memory;
 
+import com.link.linkagent.util.TextUtil;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -57,7 +58,7 @@ public class InMemoryShortTermMemoryStore implements ShortTermMemoryStore {
                         MemoryMessage latest = messages.peekLast();
                         return new SessionInfo(
                                 entry.getKey(),
-                                buildPreview(latest),
+                                TextUtil.preview(latest == null ? null : latest.content(), 48, "Empty session"),
                                 messages.size()
                         );
                     }
@@ -69,13 +70,5 @@ public class InMemoryShortTermMemoryStore implements ShortTermMemoryStore {
     @Override
     public List<MemoryMessage> getMessages(String sessionId) {
         return getRecentMessages(sessionId);
-    }
-
-    private String buildPreview(MemoryMessage latest) {
-        if (latest == null || latest.content() == null || latest.content().isBlank()) {
-            return "Empty session";
-        }
-        String content = latest.content().replaceAll("\\s+", " ").trim();
-        return content.length() <= 48 ? content : content.substring(0, 48) + "...";
     }
 }

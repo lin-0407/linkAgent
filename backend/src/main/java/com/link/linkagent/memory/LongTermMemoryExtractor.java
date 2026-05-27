@@ -1,6 +1,7 @@
 package com.link.linkagent.memory;
 
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -100,6 +101,6 @@ public class LongTermMemoryExtractor {
         if (!matcher.find()) {
             return "";
         }
-        return matcher.group(1).trim();
+        return TextUtil.trimToDefault(matcher.group(1), "");
     }
 }

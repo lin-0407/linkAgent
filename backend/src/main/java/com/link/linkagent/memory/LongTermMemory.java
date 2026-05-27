@@ -1,5 +1,7 @@
 package com.link.linkagent.memory;
 
+import com.link.linkagent.util.NumberUtil;
+import com.link.linkagent.util.TextUtil;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -31,7 +33,7 @@ public class LongTermMemory {
         record.setUserId(userId.trim());
         record.setMemoryKey(normalizeMemoryKey(memoryKey));
         record.setContent(content.trim());
-        record.setSourceSessionId(normalizeBlank(sourceSessionId));
+        record.setSourceSessionId(TextUtil.trimToNull(sourceSessionId));
         longTermMemoryMapper.upsert(record);
     }
 
@@ -40,22 +42,8 @@ public class LongTermMemory {
     }
 
     public List<LongTermMemoryRecord> listByUser(String userId, Integer limit) {
-        int safeLimit = normalizeLimit(limit);
+        int safeLimit = NumberUtil.limitOrDefault(limit, DEFAULT_LIMIT, MAX_LIMIT);
         return longTermMemoryMapper.listByUser(userId.trim(), safeLimit);
-    }
-
-    private int normalizeLimit(Integer limit) {
-        if (limit == null || limit <= 0) {
-            return DEFAULT_LIMIT;
-        }
-        return Math.min(limit, MAX_LIMIT);
-    }
-
-    private String normalizeBlank(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return value.trim();
     }
 
     private String normalizeMemoryKey(String memoryKey) {
