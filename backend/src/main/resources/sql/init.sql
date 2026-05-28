@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS creator_task
     task_id     VARCHAR(64)  NOT NULL COMMENT '创作任务唯一标识（UUID）',
     user_id     VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识，第一版允许默认用户方便本地演示',
     task_name   VARCHAR(128) NOT NULL COMMENT '任务名称，用于列表页快速识别本次创作',
-    status      VARCHAR(32)  NOT NULL DEFAULT 'DRAFT' COMMENT '任务状态：DRAFT=草稿，PRE_PUBLISH_ANALYZED=已完成发布前分析，FEEDBACK_ANALYZED=已完成反馈分析，ANALYZED=已分析，ARCHIVED=已归档',
+    status      VARCHAR(32)  NOT NULL DEFAULT 'DRAFT' COMMENT '任务状态：DRAFT=草稿，PRE_PUBLISH_ANALYZED=已完成发布前分析，FEEDBACK_ANALYZED=已完成反馈分析，COMPETITOR_ANALYZED=已完成竞品分析，ANALYZED=已完成复盘，ARCHIVED=已归档',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted  TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
@@ -233,3 +233,141 @@ CREATE TABLE IF NOT EXISTS creator_llm_feedback_report
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '评论弹幕分析报告表';
+
+-- ------------------------------------------------------------
+-- 11. 同类型视频竞品样例表
+--     保存用户主动整理的同类视频信息，第一版不做平台抓取
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_competitor_sample
+(
+    id                 BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    competitor_bv_id   VARCHAR(12)  NOT NULL COMMENT '竞品视频 BV 号',
+    competitor_video_name VARCHAR(200) NOT NULL COMMENT '竞品视频名称',
+    task_id            VARCHAR(64) NOT NULL COMMENT '关联 creator_task.task_id',
+    category           VARCHAR(128)         DEFAULT NULL COMMENT '同类型视频分类，例如 AI 工具教程、剪辑技巧、游戏实况',
+    competitor_samples LONGTEXT    NOT NULL COMMENT '用户主动整理的竞品分析文本',
+    compare_dimension  VARCHAR(500)         DEFAULT NULL COMMENT '用户希望重点对比的维度',
+    extra_context      VARCHAR(500)         DEFAULT NULL COMMENT '补充背景，例如样例来源或选择原因',
+    create_time        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted         TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_task_id (task_id),
+    KEY idx_competitor_bv_id (competitor_bv_id),
+    KEY idx_task_update_time (task_id, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '同类型视频竞品样例表';
+
+-- 已建过旧版 creator_competitor_sample 的本地库需要补齐 BV 号和视频名称字段，并把旧 sample_id 改成可空，避免新代码插入时报错。
+SET @add_competitor_bv_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_competitor_sample ADD COLUMN competitor_bv_id VARCHAR(12) DEFAULT NULL COMMENT ''竞品视频 BV 号'' AFTER id',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_competitor_sample'
+      AND COLUMN_NAME = 'competitor_bv_id'
+);
+PREPARE add_competitor_bv_stmt FROM @add_competitor_bv_sql;
+EXECUTE add_competitor_bv_stmt;
+DEALLOCATE PREPARE add_competitor_bv_stmt;
+
+SET @add_competitor_name_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_competitor_sample ADD COLUMN competitor_video_name VARCHAR(200) DEFAULT NULL COMMENT ''竞品视频名称'' AFTER competitor_bv_id',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_competitor_sample'
+      AND COLUMN_NAME = 'competitor_video_name'
+);
+PREPARE add_competitor_name_stmt FROM @add_competitor_name_sql;
+EXECUTE add_competitor_name_stmt;
+DEALLOCATE PREPARE add_competitor_name_stmt;
+
+SET @compat_sample_id_sql = (
+    SELECT IF(COUNT(*) > 0,
+              'ALTER TABLE creator_competitor_sample MODIFY COLUMN sample_id VARCHAR(64) NULL DEFAULT NULL COMMENT ''竞品样例兼容字段（旧 UUID，已停用）''',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_competitor_sample'
+      AND COLUMN_NAME = 'sample_id'
+);
+PREPARE compat_sample_id_stmt FROM @compat_sample_id_sql;
+EXECUTE compat_sample_id_stmt;
+DEALLOCATE PREPARE compat_sample_id_stmt;
+
+-- ------------------------------------------------------------
+-- 12. 同类型视频竞品分析报告表
+--     基于用户主动提供的同类视频样例，保存本视频相对竞品的优劣势分析
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_competitor_report
+(
+    id                       BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    report_id                VARCHAR(64) NOT NULL COMMENT '竞品分析报告唯一标识（UUID）',
+    task_id                  VARCHAR(64) NOT NULL COMMENT '关联 creator_task.task_id',
+    competitor_summary       TEXT                 DEFAULT NULL COMMENT '同类型视频整体打法总结',
+    competitor_advantages    TEXT                 DEFAULT NULL COMMENT '竞品优势列表 JSON',
+    own_advantages           TEXT                 DEFAULT NULL COMMENT '本视频相对优势 JSON',
+    own_disadvantages        TEXT                 DEFAULT NULL COMMENT '本视频相对短板 JSON',
+    gap_analysis             TEXT                 DEFAULT NULL COMMENT '差距分析 JSON',
+    improvement_suggestions  TEXT                 DEFAULT NULL COMMENT '改进建议 JSON',
+    differentiation_strategy TEXT                 DEFAULT NULL COMMENT '差异化定位建议',
+    raw_output               LONGTEXT    NOT NULL COMMENT 'LLM 原始输出，用于失败回放和人工检查',
+    parse_status             VARCHAR(32) NOT NULL DEFAULT 'PARSED' COMMENT '解析状态：PARSED=已解析，RAW_ONLY=仅保存原文',
+    create_time              DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time              DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted               TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_report_id (report_id),
+    UNIQUE KEY uk_task_id (task_id),
+    KEY idx_task_update_time (task_id, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '同类型视频竞品分析报告表';
+
+-- ------------------------------------------------------------
+-- 13. 创作复盘报告表
+--     汇总发布前优化建议和评论弹幕分析结果，形成任务级的最终复盘产物
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_report
+(
+    id                         BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    report_id                  VARCHAR(64)  NOT NULL COMMENT '复盘报告唯一标识（UUID）',
+    task_id                    VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id',
+    content_summary            TEXT                  DEFAULT NULL COMMENT '内容摘要',
+    core_selling_points        TEXT                  DEFAULT NULL COMMENT '核心卖点列表 JSON',
+    title_description_review   TEXT                  DEFAULT NULL COMMENT '标题、简介、标签和分区复盘 JSON',
+    audience_feedback_summary  TEXT                  DEFAULT NULL COMMENT '观众反馈摘要',
+    competitor_comparison      TEXT                  DEFAULT NULL COMMENT '竞品对照结论 JSON',
+    controversy_and_misunderstanding TEXT             DEFAULT NULL COMMENT '争议和误解点 JSON',
+    next_action_suggestions    TEXT                  DEFAULT NULL COMMENT '下一步动作建议 JSON',
+    creator_preference_insight TEXT                   DEFAULT NULL COMMENT '创作者偏好洞察 JSON',
+    overall_conclusion         TEXT                  DEFAULT NULL COMMENT '复盘总判断',
+    raw_output                 LONGTEXT     NOT NULL COMMENT 'LLM 原始输出，用于失败回放和人工检查',
+    parse_status               VARCHAR(32)  NOT NULL DEFAULT 'PARSED' COMMENT '解析状态：PARSED=已解析，RAW_ONLY=仅保存原文',
+    create_time                DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time                DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted                 TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_report_id (report_id),
+    UNIQUE KEY uk_task_id (task_id),
+    KEY idx_task_update_time (task_id, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作复盘报告表';
+
+-- 已建过旧版 creator_report 的本地库需要补齐竞品对照字段，使用 information_schema 避免重复执行时报错。
+SET @add_competitor_comparison_sql = (
+    SELECT IF(
+        COUNT(*) = 0,
+        'ALTER TABLE creator_report ADD COLUMN competitor_comparison TEXT DEFAULT NULL COMMENT ''竞品对照结论 JSON'' AFTER audience_feedback_summary',
+        'SELECT 1'
+    )
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_report'
+      AND COLUMN_NAME = 'competitor_comparison'
+);
+PREPARE add_competitor_comparison_stmt FROM @add_competitor_comparison_sql;
+EXECUTE add_competitor_comparison_stmt;
+DEALLOCATE PREPARE add_competitor_comparison_stmt;

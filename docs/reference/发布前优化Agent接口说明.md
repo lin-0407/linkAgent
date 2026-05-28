@@ -4,6 +4,8 @@
 
 发布前优化 Agent 是创作者在发稿前使用的辅助模块。
 
+当前接口是阶段 4.2 的同步 LLM 基线，负责把任务材料生成结构化建议并保存。阶段 4.4.1 会在此基础上新增工作流会话、SSE 消息流和用户确认机制。
+
 它基于阶段 4.1 保存的创作任务和材料，生成：
 
 1. 内容摘要。
@@ -84,9 +86,17 @@ GET /api/creator/tasks/{taskId}/pre-publish/suggestions
 
 ## 设计取舍
 
-本阶段没有上 SSE。
+当前同步基线没有上 SSE。
 
 原因是当前目标是先把“任务材料 -> LLM 建议 -> 数据库存档”这条线跑通。SSE 更适合放在下一步做过程可视化，不应该把它和建议生成逻辑混在一起。
+
+阶段 4.4.1 的升级方式：
+
+1. 当前 `POST /pre-publish/analyze` 保留为简单联调入口。
+2. 新增 `/workflow/pre-publish/start` 创建或恢复任务级工作流会话。
+3. 新增 `/workflow/sessions/{sessionId}/events` 通过 SSE 推送上下文装载、步骤执行和结果生成事件。
+4. 新增 `/workflow/sessions/{sessionId}/pre-publish/confirm`，用户确认后再推进阶段状态。
+5. 工作流消息和步骤会落库，SSE 断开后前端可以恢复历史消息。
 
 本阶段没有拆多个建议子表。
 
@@ -101,5 +111,7 @@ GET /api/creator/tasks/{taskId}/pre-publish/suggestions
 阶段 4.3 会新增评论弹幕输入和分析接口。
 
 阶段 4.4 会把发布前建议、反馈分析和复盘报告串成完整闭环。
+
+阶段 4.4.1 会把同步建议生成升级为 Agent 工作流消息流和建议确认。
 
 阶段 4.6 会用 `rawOutput`、耗时、token 和人工评分做评测集。

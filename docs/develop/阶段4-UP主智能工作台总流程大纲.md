@@ -56,9 +56,11 @@ LinkAgent Creator Copilot
 |---|---|---|---|
 | 创作任务 | 标题草稿、视频字幕、视频简介 | 任务记录 | REST API、参数校验、MySQL |
 | 稿件分析 | 字幕/文稿 | 内容摘要、受众判断、风险点 | Prompt 模板、LLM 调用 |
-| 发布前优化 | 字幕、标题草稿、创作者偏好 | 标题、简介、标签、分区建议 | Agent 工具调用、结构化输出 |
-| 评论弹幕分析 | 评论样例、弹幕样例 | 高频观点、情绪倾向、争议点 | 文本聚类、LLM 总结 |
-| 复盘报告 | 稿件分析 + 评论弹幕分析 | 完整创作复盘报告 | 报告生成、历史存储 |
+| 发布前优化 | 字幕、标题草稿、创作者偏好 | 标题、简介、标签、分区建议 | 同步 LLM 基线，后续升级为工作流 Agent + SSE |
+| 评论弹幕分析 | 评论样例、弹幕样例、用户主动导入的样例文件 | 高频观点、情绪倾向、争议点 | 同步 LLM 基线，后续补充清洗、分类、图表和追问 |
+| 竞品分析 | 用户主动整理的同类型视频样例 | 相对竞品的优势、短板、差距 | 对照分析、结构化输出 |
+| 复盘报告 | 稿件分析 + 评论弹幕分析 + 竞品分析 | 完整创作复盘报告 | 报告生成、历史存储 |
+| Agent 工作流融合 | 任务上下文、用户补充资料、分析阶段事件 | 可追踪消息流、步骤记录、确认状态 | 工作流会话、SSE、消息落库 |
 | 流式过程 | Agent 执行步骤 | 前端实时展示中间过程 | SSE |
 | 执行观测 | 工具调用、耗时、异常 | Trace / 日志 / 失败原因 | 可观测、排障 |
 
@@ -81,10 +83,13 @@ LinkAgent Creator Copilot
 ```text
 创建创作任务
   -> 输入字幕/文稿/标题草稿
-  -> Agent 分析内容卖点和风险
-  -> 生成标题、简介、标签建议
+  -> 发布前优化同步基线生成建议
+  -> 工作流消息流展示任务上下文和 Agent 分析过程
+  -> 用户确认标题、简介、标签建议
   -> 输入评论/弹幕样例
-  -> Agent 分析观众反馈
+  -> 评论弹幕同步基线生成反馈报告
+  -> 输入同类型视频样例
+  -> 生成竞品对照报告
   -> 生成复盘报告
   -> 保存任务历史和创作者偏好
   -> 下一次任务读取历史偏好继续优化
@@ -96,7 +101,7 @@ LinkAgent Creator Copilot
 任务列表页
   -> 新建任务页
   -> 创作分析页
-  -> 流式执行页
+  -> Agent 工作流消息页
   -> 复盘报告页
   -> 历史任务页
 ```
@@ -126,6 +131,8 @@ com.link.linkagent.creator
 ├── manuscript    # 稿件材料：字幕、文稿、标题草稿、简介草稿
 ├── suggestion    # 发布前建议：标题、简介、标签、分区建议
 ├── feedback      # 评论弹幕分析：观点聚类、情绪倾向、争议点
+├── competitor    # 同类型视频竞品分析：样例、优劣势、差距
+├── workflow      # 创作者业务工作流：会话、消息、步骤、SSE
 ├── report        # 复盘报告：生成、保存、查询
 └── preference    # 创作者偏好：标题风格、内容领域、历史偏好
 ```
@@ -141,6 +148,7 @@ com.link.linkagent.creator
 1. 用户手动粘贴字幕、文稿、评论、弹幕。
 2. 项目内置样例数据。
 3. 用户上传本地文本文件。
+4. 用户主动运行脚本后导入的评论弹幕 JSON/TXT 样例文件。
 
 暂不自动抓取 B 站页面数据，暂不接入 B 站开放平台真实账号授权。
 
@@ -198,7 +206,7 @@ GET  /api/creator/tasks/{taskId}
 1. 基于字幕/文稿生成内容摘要。
 2. 生成标题、简介、标签建议。
 3. 输出每条建议的理由和风险。
-4. 支持 SSE 流式展示分析过程。
+4. 保留 `rawOutput` 和结构化结果，为后续 SSE 工作流展示提供基础数据。
 
 预期接口：
 
@@ -210,6 +218,7 @@ GET  /api/creator/tasks/{taskId}/pre-publish/suggestions
 预留扩展：
 
 ```text
+待补充：阶段 4.4.1 承接 SSE 工作流展示和建议确认
 待补充：标题风格模板
 待补充：不同分区的提示词模板
 待补充：标题质量评分规则
@@ -243,10 +252,12 @@ GET  /api/creator/tasks/{taskId}/feedback/report
 
 目标：
 
-1. 汇总发布前分析和评论弹幕分析。
-2. 生成一份结构化复盘报告。
-3. 将报告保存到 MySQL。
-4. 支持历史报告查询。
+1. 支持保存用户主动整理的同类型视频样例。
+2. 基于样例生成同类型视频竞品分析。
+3. 汇总发布前分析、评论弹幕分析和竞品分析。
+4. 生成一份结构化复盘报告。
+5. 将报告保存到 MySQL。
+6. 支持历史报告查询。
 
 报告结构：
 
@@ -255,6 +266,7 @@ GET  /api/creator/tasks/{taskId}/feedback/report
 核心卖点
 标题与简介建议
 观众关注点
+竞品对照结论
 争议与误解
 下一期选题建议
 创作者偏好沉淀
@@ -266,6 +278,38 @@ GET  /api/creator/tasks/{taskId}/feedback/report
 待补充：PDF/Markdown 导出
 待补充：报告版本管理
 待补充：多人协作批注
+```
+
+### 阶段 4.4.1：创作工作台 Agent 工作流融合
+
+目标：
+
+1. 将发布前优化从“表单触发同步 LLM”升级为“任务驱动的 Agent 消息流”。
+2. 新增工作流会话、消息、步骤和附件设计，支撑 SSE 流式展示和失败回放。
+3. 为发布前优化增加用户确认机制，避免 AI 自动推进业务阶段。
+4. 将评论弹幕分析扩展为导入、清洗、分类、图表、追问的可解释流程。
+5. 保持平台数据边界：第一版只处理用户主动提供或脚本导出的样例数据。
+
+预期接口：
+
+```text
+POST /api/creator/tasks/{taskId}/workflow/pre-publish/start
+GET  /api/creator/tasks/{taskId}/workflow/sessions/{sessionId}/events
+POST /api/creator/tasks/{taskId}/workflow/sessions/{sessionId}/messages
+POST /api/creator/tasks/{taskId}/workflow/sessions/{sessionId}/pre-publish/analyze
+POST /api/creator/tasks/{taskId}/workflow/sessions/{sessionId}/pre-publish/confirm
+POST /api/creator/tasks/{taskId}/feedback/import
+GET  /api/creator/tasks/{taskId}/feedback/dashboard
+POST /api/creator/tasks/{taskId}/feedback/chat
+```
+
+实施顺序：
+
+```text
+发布前优化消息流
+  -> SSE 与建议确认
+  -> 评论弹幕导入与仪表盘
+  -> 反馈追问与 RAG 预留
 ```
 
 ### 阶段 4.5：创作者偏好记忆
@@ -339,9 +383,17 @@ GET  /api/creator/tasks/{taskId}/feedback/report
 | creator_task | 创作任务主表 | 阶段 4.1 |
 | creator_material | 字幕、文稿、标题草稿等输入材料 | 阶段 4.1 |
 | creator_suggestion | 标题、简介、标签等发布前建议 | 阶段 4.2 |
-| creator_feedback | 评论、弹幕原始样例 | 阶段 4.3 |
-| creator_feedback_report | 评论弹幕分析结果 | 阶段 4.3 |
+| creator_user_feedback_detail | 评论、弹幕原始样例 | 阶段 4.3 |
+| creator_llm_feedback_report | 评论弹幕分析结果 | 阶段 4.3 |
+| creator_competitor_sample | 同类型视频竞品样例 | 阶段 4.4 |
+| creator_competitor_report | 同类型视频竞品分析结果 | 阶段 4.4 |
 | creator_report | 最终复盘报告 | 阶段 4.4 |
+| creator_workflow_session | 创作者业务工作流会话 | 阶段 4.4.1 |
+| creator_workflow_message | 工作流消息流 | 阶段 4.4.1 |
+| creator_workflow_step | Agent 分析步骤和失败回放 | 阶段 4.4.1 |
+| creator_workflow_attachment | 用户主动上传的补充资料 | 阶段 4.4.1 |
+| creator_feedback_item | 单条评论/弹幕明细与分类结果 | 阶段 4.4.1 |
+| creator_feedback_metric | 用户主动导入的视频基础指标 | 阶段 4.4.1 |
 | creator_preference | 创作者长期偏好 | 阶段 4.5 |
 
 预留扩展表：
@@ -425,4 +477,3 @@ LinkAgent Creator Copilot：基于 Spring AI 的视频创作者智能工作台
 5. 所有数据库变更都维护在 `backend/src/main/resources/sql/`。
 6. 不主动爬取真实平台数据，优先使用用户主动输入和样例数据。
 7. 任何 Agent 能力都必须能解释它服务了哪个创作者场景。
-
