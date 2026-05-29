@@ -5,6 +5,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
+import org.apache.ibatis.annotations.ResultMap;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 
@@ -102,4 +103,28 @@ public interface CreatorSuggestionMapper {
             @Result(column = "update_time", property = "updateTime")
     })
     Optional<CreatorSuggestionRecord> findByTaskId(@Param("taskId") String taskId);
+
+    @Select("""
+            SELECT id,
+                   suggestion_id,
+                   task_id,
+                   content_summary,
+                   audience_profile,
+                   selling_points,
+                   risk_points,
+                   title_suggestions,
+                   description_suggestion,
+                   tag_suggestions,
+                   partition_suggestion,
+                   raw_output,
+                   parse_status,
+                   create_time,
+                   update_time
+            FROM creator_suggestion
+            WHERE suggestion_id = #{suggestionId}
+              AND is_deleted = 0
+            LIMIT 1
+            """)
+    @ResultMap("CreatorSuggestionRecordMap")
+    Optional<CreatorSuggestionRecord> findBySuggestionId(@Param("suggestionId") String suggestionId);
 }

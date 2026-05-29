@@ -14,11 +14,9 @@
   --shadow-crimson: 0 30px 90px rgba(184, 18, 49, 0.22);
   --shadow-soft: 0 18px 50px rgba(94, 34, 48, 0.13);
   --font-display:
-    'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC',
-    sans-serif;
+    'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', sans-serif;
   --font-body:
-    'LXGW WenKai Screen', 'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB',
-    sans-serif;
+    'LXGW WenKai Screen', 'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
   --font-code: 'Cascadia Code', 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
 }
 
@@ -64,10 +62,34 @@ body::after {
   opacity: 0.46;
   pointer-events: none;
   background-image:
-    linear-gradient(30deg, rgba(31, 23, 32, 0.045) 12%, transparent 12.5%, transparent 87%, rgba(31, 23, 32, 0.045) 87.5%),
-    linear-gradient(150deg, rgba(31, 23, 32, 0.045) 12%, transparent 12.5%, transparent 87%, rgba(31, 23, 32, 0.045) 87.5%),
-    linear-gradient(30deg, rgba(255, 255, 255, 0.18) 12%, transparent 12.5%, transparent 87%, rgba(255, 255, 255, 0.18) 87.5%),
-    linear-gradient(150deg, rgba(255, 255, 255, 0.18) 12%, transparent 12.5%, transparent 87%, rgba(255, 255, 255, 0.18) 87.5%);
+    linear-gradient(
+      30deg,
+      rgba(31, 23, 32, 0.045) 12%,
+      transparent 12.5%,
+      transparent 87%,
+      rgba(31, 23, 32, 0.045) 87.5%
+    ),
+    linear-gradient(
+      150deg,
+      rgba(31, 23, 32, 0.045) 12%,
+      transparent 12.5%,
+      transparent 87%,
+      rgba(31, 23, 32, 0.045) 87.5%
+    ),
+    linear-gradient(
+      30deg,
+      rgba(255, 255, 255, 0.18) 12%,
+      transparent 12.5%,
+      transparent 87%,
+      rgba(255, 255, 255, 0.18) 87.5%
+    ),
+    linear-gradient(
+      150deg,
+      rgba(255, 255, 255, 0.18) 12%,
+      transparent 12.5%,
+      transparent 87%,
+      rgba(255, 255, 255, 0.18) 87.5%
+    );
   background-position:
     0 0,
     0 0,
@@ -178,8 +200,7 @@ p {
   color: var(--color-paper);
   overflow: hidden auto;
   background:
-    linear-gradient(145deg, rgba(31, 23, 32, 0.92), rgba(116, 22, 44, 0.88)),
-    var(--color-ink);
+    linear-gradient(145deg, rgba(31, 23, 32, 0.92), rgba(116, 22, 44, 0.88)), var(--color-ink);
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-right: 0;
   border-radius: 28px 0 0 28px;
@@ -193,11 +214,7 @@ p {
   pointer-events: none;
   background:
     linear-gradient(120deg, transparent 0 36%, rgba(231, 45, 72, 0.48) 36% 52%, transparent 52%),
-    repeating-linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.07) 0 1px,
-      transparent 1px 16px
-    );
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.07) 0 1px, transparent 1px 16px);
   content: '';
 }
 
@@ -247,11 +264,7 @@ p {
   position: absolute;
   inset: 0;
   opacity: 0.34;
-  background: repeating-linear-gradient(
-    135deg,
-    rgba(231, 45, 72, 0.18) 0 1px,
-    transparent 1px 8px
-  );
+  background: repeating-linear-gradient(135deg, rgba(231, 45, 72, 0.18) 0 1px, transparent 1px 8px);
   content: '';
 }
 
@@ -413,8 +426,7 @@ h1 {
   min-height: 42px;
   padding: 0 14px;
   color: var(--color-paper);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.07));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.07));
   border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 9px;
   cursor: pointer;
@@ -518,8 +530,7 @@ textarea:focus-visible,
 }
 
 .session-item.active {
-  background:
-    linear-gradient(135deg, rgba(241, 221, 223, 0.36), rgba(255, 255, 255, 0.1));
+  background: linear-gradient(135deg, rgba(241, 221, 223, 0.36), rgba(255, 255, 255, 0.1));
   border-color: rgba(241, 221, 223, 0.72);
 }
 
@@ -619,8 +630,21 @@ textarea:focus-visible,
   opacity: 0.18;
   pointer-events: none;
   background:
-    conic-gradient(from 30deg, transparent 0 20%, var(--color-ink) 20% 25%, transparent 25% 45%, var(--color-ink) 45% 51%, transparent 51%),
-    repeating-radial-gradient(circle, transparent 0 15px, rgba(31, 23, 32, 0.5) 16px 17px);
+    conic-gradient(
+      from 30deg,
+      transparent 0 20%,
+      var(--color-ink) 20% 25%,
+      transparent 25% 45%,
+      var(--color-ink) 45% 51%,
+      transparent 51%
+    ),
+    repeating-radial-gradient(
+      circle,
+      transparent 0,
+      transparent 15px,
+      rgba(31, 23, 32, 0.5) 16px,
+      rgba(31, 23, 32, 0.5) 17px
+    );
   border-radius: 50%;
   content: '';
 }
@@ -726,16 +750,12 @@ textarea:focus-visible,
 
 .fullscreen-toggle {
   color: #fff8f8;
-  background:
-    linear-gradient(145deg, var(--color-ink), var(--color-ember)),
-    var(--color-ink);
+  background: linear-gradient(145deg, var(--color-ink), var(--color-ember)), var(--color-ink);
 }
 
 .fullscreen-toggle.active {
   color: var(--color-ember);
-  background:
-    linear-gradient(145deg, var(--color-peach-fog), #fff8f8),
-    var(--color-peach-fog);
+  background: linear-gradient(145deg, var(--color-peach-fog), #fff8f8), var(--color-peach-fog);
   border-color: rgba(231, 45, 72, 0.32);
 }
 
@@ -888,8 +908,11 @@ textarea:focus-visible,
   margin: auto;
   overflow: hidden;
   text-align: left;
-  background:
-    linear-gradient(112deg, var(--color-peach-fog) 0 52%, var(--color-pomegranate) 52% 100%);
+  background: linear-gradient(
+    112deg,
+    var(--color-peach-fog) 0 52%,
+    var(--color-pomegranate) 52% 100%
+  );
   border: 1px solid rgba(255, 255, 255, 0.62);
   border-radius: 26px;
   box-shadow:
@@ -1522,8 +1545,7 @@ textarea:focus {
   color: #fff8f8;
   cursor: pointer;
   background:
-    linear-gradient(145deg, var(--color-pomegranate), var(--color-ember)),
-    var(--color-pomegranate);
+    linear-gradient(145deg, var(--color-pomegranate), var(--color-ember)), var(--color-pomegranate);
   border: 0;
   border-radius: 16px;
   box-shadow: 10px 10px 0 rgba(31, 23, 32, 0.16);
@@ -1588,8 +1610,11 @@ textarea:focus {
 
 @media (max-width: 760px) {
   body {
-    background:
-      linear-gradient(180deg, var(--color-peach-fog) 0 42%, var(--color-pomegranate) 42% 100%);
+    background: linear-gradient(
+      180deg,
+      var(--color-peach-fog) 0 42%,
+      var(--color-pomegranate) 42% 100%
+    );
   }
 
   .app-shell {
@@ -1810,8 +1835,7 @@ textarea:focus {
 .surface-switch button.active {
   color: #fff;
   background:
-    linear-gradient(145deg, var(--color-pomegranate), var(--color-ember)),
-    var(--color-pomegranate);
+    linear-gradient(145deg, var(--color-pomegranate), var(--color-ember)), var(--color-pomegranate);
   border-color: rgba(231, 45, 72, 0.72);
 }
 
@@ -1835,7 +1859,12 @@ textarea:focus {
   background:
     linear-gradient(90deg, rgba(0, 174, 236, 0.08) 1px, transparent 1px),
     linear-gradient(180deg, rgba(231, 45, 72, 0.07) 1px, transparent 1px),
-    linear-gradient(112deg, rgba(255, 248, 248, 0.98) 0%, rgba(241, 221, 223, 0.92) 52%, rgba(0, 174, 236, 0.16) 100%);
+    linear-gradient(
+      112deg,
+      rgba(255, 248, 248, 0.98) 0%,
+      rgba(241, 221, 223, 0.92) 52%,
+      rgba(0, 174, 236, 0.16) 100%
+    );
   background-size:
     36px 36px,
     36px 36px,
@@ -2013,8 +2042,7 @@ textarea:focus {
 .creator-primary-button {
   color: #fff;
   background:
-    linear-gradient(145deg, var(--color-pomegranate), var(--color-ember)),
-    var(--color-pomegranate);
+    linear-gradient(145deg, var(--color-pomegranate), var(--color-ember)), var(--color-pomegranate);
   border: 1px solid rgba(231, 45, 72, 0.9);
   box-shadow: 8px 8px 0 rgba(31, 23, 32, 0.13);
 }
@@ -2034,10 +2062,12 @@ textarea:focus {
 .creator-secondary-action:focus-visible,
 .creator-primary-button:focus-visible,
 .creator-task-item:focus-visible,
+.creator-workflow-message:focus-visible,
 .creator-tabs button:focus-visible,
 .surface-switch button:focus-visible,
 .creator-form-grid input:focus,
 .creator-form-grid textarea:focus,
+.creator-workflow-composer textarea:focus,
 .creator-prompt-field textarea:focus {
   outline: 3px solid rgba(0, 174, 236, 0.22);
   outline-offset: 2px;
@@ -2078,9 +2108,7 @@ textarea:focus {
 
 .creator-task-item:hover,
 .creator-task-item.active {
-  background:
-    linear-gradient(135deg, rgba(255, 240, 245, 0.92), rgba(229, 248, 255, 0.92)),
-    #fff;
+  background: linear-gradient(135deg, rgba(255, 240, 245, 0.92), rgba(229, 248, 255, 0.92)), #fff;
   border-color: rgba(0, 174, 236, 0.34);
   box-shadow:
     inset 4px 0 0 var(--creator-bili-blue),
@@ -2169,9 +2197,7 @@ textarea:focus {
 
 .creator-tabs button.active {
   color: #fff;
-  background:
-    linear-gradient(145deg, var(--color-ink), var(--color-ember)),
-    var(--color-ink);
+  background: linear-gradient(145deg, var(--color-ink), var(--color-ember)), var(--color-ink);
   border-color: rgba(231, 45, 72, 0.38);
   box-shadow: inset 0 -3px 0 var(--creator-bili-pink);
 }
@@ -2360,6 +2386,251 @@ textarea:focus {
   color: rgba(63, 38, 49, 0.72);
 }
 
+.creator-workflow-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(280px, 0.92fr);
+  gap: 14px;
+}
+
+.creator-workflow-stream,
+.creator-workflow-detail,
+.creator-workflow-composer {
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(231, 45, 72, 0.13);
+  border-radius: 8px;
+}
+
+.creator-workflow-stream,
+.creator-workflow-detail {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 14px;
+}
+
+.creator-workflow-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.creator-workflow-head h4 {
+  margin: 0;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+.creator-workflow-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.creator-workflow-head-actions > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 11px;
+  color: #005f85;
+  background: var(--creator-bili-blue-soft);
+  border: 1px solid rgba(0, 174, 236, 0.24);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.creator-workflow-head-actions > .creator-sse-status {
+  color: #7c1d29;
+  background: var(--creator-bili-pink-soft);
+  border-color: rgba(251, 114, 153, 0.24);
+}
+
+.creator-workflow-head-actions > .creator-sse-status.active {
+  color: #005f85;
+  background: var(--creator-bili-blue-soft);
+  border-color: rgba(0, 174, 236, 0.28);
+}
+
+.creator-workflow-message-list {
+  display: grid;
+  max-height: 360px;
+  gap: 10px;
+  overflow: auto;
+}
+
+.creator-workflow-message {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  color: var(--color-ink);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(231, 45, 72, 0.12);
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.creator-workflow-message:hover,
+.creator-workflow-message.active {
+  background: linear-gradient(135deg, rgba(255, 240, 245, 0.92), rgba(229, 248, 255, 0.92)), #fff;
+  border-color: rgba(0, 174, 236, 0.34);
+  box-shadow: inset 4px 0 0 var(--creator-bili-blue);
+}
+
+.creator-workflow-message.role-user.active,
+.creator-workflow-message.role-user:hover {
+  box-shadow: inset 4px 0 0 var(--creator-bili-pink);
+}
+
+.creator-workflow-message.role-system span {
+  background: rgba(0, 174, 236, 0.1);
+}
+
+.creator-workflow-message.role-user span {
+  background: rgba(251, 114, 153, 0.1);
+}
+
+.creator-workflow-message.role-agent span {
+  background: rgba(231, 45, 72, 0.08);
+}
+
+.creator-workflow-message small,
+.creator-workflow-message span,
+.creator-workflow-detail-body small {
+  color: rgba(63, 38, 49, 0.56);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.creator-workflow-message strong {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.creator-workflow-message span {
+  justify-self: start;
+  padding: 4px 8px;
+  background: rgba(0, 174, 236, 0.08);
+  border: 1px solid rgba(0, 174, 236, 0.12);
+  border-radius: 8px;
+  font-weight: 850;
+}
+
+.creator-workflow-detail-body {
+  display: grid;
+  gap: 9px;
+}
+
+.creator-workflow-detail-body strong {
+  color: var(--color-ink);
+  font-size: 15px;
+}
+
+.creator-workflow-detail-body p {
+  margin: 0;
+  color: rgba(63, 38, 49, 0.66);
+  line-height: 1.58;
+}
+
+.creator-workflow-detail-body pre {
+  min-height: 220px;
+  max-height: 420px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(31, 23, 32, 0.88);
+  background: rgba(255, 248, 248, 0.82);
+  border: 1px solid rgba(231, 45, 72, 0.12);
+  border-radius: 8px;
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+.creator-workflow-composer {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 12px;
+}
+
+.creator-workflow-composer textarea {
+  width: 100%;
+  min-height: 74px;
+  max-height: 180px;
+  padding: 11px 12px;
+  color: var(--color-ink);
+  resize: vertical;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(231, 45, 72, 0.17);
+  border-radius: 8px;
+  outline: none;
+  line-height: 1.55;
+}
+
+.creator-workflow-composer textarea:focus {
+  border-color: rgba(0, 174, 236, 0.58);
+  box-shadow:
+    0 0 0 4px rgba(0, 174, 236, 0.12),
+    8px 8px 0 rgba(251, 114, 153, 0.07);
+}
+
+.creator-workflow-composer textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.creator-confirm-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(229, 248, 255, 0.9), rgba(255, 240, 245, 0.88)),
+    rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(0, 174, 236, 0.18);
+  border-radius: 8px;
+}
+
+.creator-confirm-panel div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.creator-confirm-panel span {
+  color: rgba(63, 38, 49, 0.62);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.creator-confirm-panel strong {
+  color: var(--color-ink);
+  font-size: 15px;
+}
+
+.creator-confirm-panel p {
+  margin: 0;
+  color: rgba(63, 38, 49, 0.72);
+  line-height: 1.55;
+}
+
 .creator-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -2379,9 +2650,7 @@ textarea:focus {
   padding: 18px;
   overflow: auto;
   color: var(--color-ink);
-  background:
-    linear-gradient(180deg, rgba(255, 248, 248, 0.98), rgba(255, 255, 255, 0.96)),
-    #fff;
+  background: linear-gradient(180deg, rgba(255, 248, 248, 0.98), rgba(255, 255, 255, 0.96)), #fff;
   border: 1px solid rgba(231, 45, 72, 0.18);
   border-radius: 8px;
   box-shadow: 0 28px 80px rgba(31, 23, 32, 0.32);
@@ -2481,7 +2750,9 @@ textarea:focus {
 
   .creator-task-rail,
   .creator-form-grid,
-  .creator-result-grid {
+  .creator-result-grid,
+  .creator-workflow-grid,
+  .creator-workflow-composer {
     grid-template-columns: 1fr;
   }
 
@@ -2491,6 +2762,10 @@ textarea:focus {
   }
 
   .creator-section-head {
+    display: grid;
+  }
+
+  .creator-confirm-panel {
     display: grid;
   }
 

@@ -59,10 +59,12 @@ public class CreatorTaskService {
     }
 
     public List<CreatorTaskSummaryResponse> listTasks(String userId, Integer limit) {
-        return creatorTaskMapper.listTasksByUser(
-                        normalizeUserId(userId),
-                        NumberUtil.limitOrDefault(limit, DEFAULT_LIMIT, MAX_LIMIT)
-                )
+        int safeLimit = NumberUtil.limitOrDefault(limit, DEFAULT_LIMIT, MAX_LIMIT);
+        List<CreatorTaskSummaryRecord> records = TextUtil.hasText(userId)
+                // userId 只作为未来多人隔离的兼容能力；当前单人工作台默认不应该被它过滤。
+                ? creatorTaskMapper.listTasksByUser(userId.trim(), safeLimit)
+                : creatorTaskMapper.listRecentTasks(safeLimit);
+        return records
                 .stream()
                 .map(this::toTaskSummaryResponse)
                 .toList();

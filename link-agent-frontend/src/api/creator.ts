@@ -7,6 +7,11 @@ import type {
   CreatorTask,
   CreatorTaskCreatePayload,
   CreatorTaskSummary,
+  CreatorWorkflowConfirmPayload,
+  CreatorWorkflowMessage,
+  CreatorWorkflowMessagePayload,
+  CreatorWorkflowSession,
+  CreatorWorkflowStartPayload,
   PrePublishAnalyzePayload,
 } from '@/types/creator'
 
@@ -54,9 +59,8 @@ export function createCreatorTask(payload: CreatorTaskCreatePayload) {
   })
 }
 
-export function listCreatorTasks(userId = 'default', limit = 20) {
+export function listCreatorTasks(limit = 20) {
   const params = new URLSearchParams({
-    userId,
     limit: String(limit),
   })
   return requestJson<CreatorTaskSummary[]>(`/api/creator/tasks?${params.toString()}`)
@@ -79,6 +83,73 @@ export function analyzePrePublish(taskId: string, payload: PrePublishAnalyzePayl
 export function getPrePublishSuggestion(taskId: string) {
   return requestJson<CreatorSuggestion>(
     `/api/creator/tasks/${encodeURIComponent(taskId)}/pre-publish/suggestions`,
+  )
+}
+
+export function startPrePublishWorkflow(
+  taskId: string,
+  payload: CreatorWorkflowStartPayload = { resumeLatest: true },
+) {
+  return requestJson<CreatorWorkflowSession>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/pre-publish/start`,
+    {
+      method: 'POST',
+      body: JSON.stringify(cleanPayload(payload)),
+    },
+  )
+}
+
+export function listWorkflowMessages(taskId: string, sessionId: string) {
+  return requestJson<CreatorWorkflowMessage[]>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/messages`,
+  )
+}
+
+export function createWorkflowEventSource(taskId: string, sessionId: string) {
+  return new EventSource(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/events`,
+  )
+}
+
+export function sendWorkflowMessage(
+  taskId: string,
+  sessionId: string,
+  payload: CreatorWorkflowMessagePayload,
+) {
+  return requestJson<CreatorWorkflowMessage>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/messages`,
+    {
+      method: 'POST',
+      body: JSON.stringify(cleanPayload(payload)),
+    },
+  )
+}
+
+export function analyzePrePublishWorkflow(
+  taskId: string,
+  sessionId: string,
+  payload: PrePublishAnalyzePayload,
+) {
+  return requestJson<CreatorSuggestion>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/analyze`,
+    {
+      method: 'POST',
+      body: JSON.stringify(cleanPayload(payload)),
+    },
+  )
+}
+
+export function confirmWorkflowPrePublishSuggestion(
+  taskId: string,
+  sessionId: string,
+  payload: CreatorWorkflowConfirmPayload,
+) {
+  return requestJson<CreatorWorkflowSession>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/confirm`,
+    {
+      method: 'POST',
+      body: JSON.stringify(cleanPayload(payload)),
+    },
   )
 }
 

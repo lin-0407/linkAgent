@@ -3,13 +3,7 @@ package com.link.linkagent.creator.task.mapper;
 import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Result;
-import org.apache.ibatis.annotations.Results;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.*;
 
 import java.util.List;
 import java.util.Optional;
@@ -102,6 +96,27 @@ public interface CreatorTaskMapper {
             @Result(column = "update_time", property = "updateTime")
     })
     List<CreatorTaskSummaryRecord> listTasksByUser(@Param("userId") String userId, @Param("limit") int limit);
+
+    @Select("""
+            SELECT task.id,
+                   task.task_id,
+                   task.user_id,
+                   task.task_name,
+                   task.status,
+                   COUNT(material.id) AS material_count,
+                   task.create_time,
+                   task.update_time
+            FROM creator_task task
+            LEFT JOIN creator_material material
+                   ON task.task_id = material.task_id
+                  AND material.is_deleted = 0
+            WHERE task.is_deleted = 0
+            GROUP BY task.id, task.task_id, task.user_id, task.task_name, task.status, task.create_time, task.update_time
+            ORDER BY task.update_time DESC, task.id DESC
+            LIMIT #{limit}
+            """)
+    @ResultMap("CreatorTaskSummaryRecordMap")
+    List<CreatorTaskSummaryRecord> listRecentTasks(@Param("limit") int limit);
 
     @Update("""
             UPDATE creator_task

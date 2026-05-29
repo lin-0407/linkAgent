@@ -98,6 +98,8 @@ GET /api/creator/tasks/{taskId}/pre-publish/suggestions
 4. 新增 `/workflow/sessions/{sessionId}/pre-publish/confirm`，用户确认后再推进阶段状态。
 5. 工作流消息和步骤会落库，SSE 断开后前端可以恢复历史消息。
 
+阶段 4.4.1.2 已完成第 3、4、5 点。工作流分析接口会复用发布前优化生成逻辑，但不会直接更新任务状态；确认接口才会把任务推进到 `PRE_PUBLISH_ANALYZED`。
+
 本阶段没有拆多个建议子表。
 
 原因是 MVP 先要简单。结构化字段先放一个表里，足够支撑演示和简历展示；等后面真的出现版本管理、人工批注、多轮对比，再拆更细。

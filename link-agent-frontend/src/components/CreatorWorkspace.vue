@@ -1,15 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
   analyzeCreatorFeedback,
-  analyzePrePublish,
+  analyzePrePublishWorkflow,
+  confirmWorkflowPrePublishSuggestion,
   createCreatorTask,
+  createWorkflowEventSource,
   getCreatorFeedback,
   getCreatorFeedbackReport,
   getCreatorTask,
   getPrePublishSuggestion,
   listCreatorTasks,
+  listWorkflowMessages,
   saveCreatorFeedback,
+  sendWorkflowMessage,
+  startPrePublishWorkflow,
 } from '@/api/creator'
 import type {
   CreatorFeedback,
@@ -17,20 +22,27 @@ import type {
   CreatorSuggestion,
   CreatorTask,
   CreatorTaskSummary,
+  CreatorWorkflowEvent,
+  CreatorWorkflowMessage,
+  CreatorWorkflowSession,
+  CreatorWorkflowStatus,
 } from '@/types/creator'
 
 type UnknownRecord = Record<string, unknown>
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
+type CreatorWorkspaceState = {
+  taskId?: string | null
+}
 
 const guidanceStorageKey = 'link-agent-creator-guidance'
 const legacyPromptStorageKey = 'link-agent-creator-system-prompts'
+const workspaceStorageKey = 'link-agent-creator-workspace'
 const defaultPrePublishGuidance =
   '标题表达克制、具体，优先说明视频能解决的问题；先总结核心卖点，再给出优化建议；避免夸张措辞。'
 const defaultFeedbackGuidance =
   '先归纳观众最关注的问题，再分析争议和误解；建议应能直接转化为下一期选题或互动动作。'
 
 const taskForm = reactive({
-  userId: '',
   taskName: '',
   titleDraft: '',
   descriptionDraft: '',
@@ -62,10 +74,20 @@ const selectedTask = ref<CreatorTask | null>(null)
 const suggestion = ref<CreatorSuggestion | null>(null)
 const feedback = ref<CreatorFeedback | null>(null)
 const feedbackReport = ref<CreatorFeedbackReport | null>(null)
+const workflowSession = ref<CreatorWorkflowSession | null>(null)
+const workflowMessages = ref<CreatorWorkflowMessage[]>([])
+const workflowMessageDraft = ref('')
+const workflowEventSource = ref<EventSource | null>(null)
+const workflowSseText = ref('未连接')
+const selectedWorkflowMessageId = ref('')
+const restoredTaskId = ref('')
 const activeStep = ref('task')
 const isLoadingTasks = ref(false)
 const isCreatingTask = ref(false)
 const isAnalyzingPrePublish = ref(false)
+const isConfirmingPrePublish = ref(false)
+const isLoadingWorkflow = ref(false)
+const isSendingWorkflowMessage = ref(false)
 const isSavingFeedback = ref(false)
 const isAnalyzingFeedback = ref(false)
 const guidanceEditorTarget = ref<GuidanceEditorTarget | null>(null)
@@ -75,6 +97,7 @@ const successMessage = ref('')
 
 const selectedTaskId = computed(() => selectedTask.value?.taskId ?? '')
 const hasSelectedTask = computed(() => selectedTaskId.value.length > 0)
+const hasSelectedTaskMaterials = computed(() => (selectedTask.value?.materials.length ?? 0) > 0)
 const hasTaskMaterialInput = computed(
   () =>
     hasText(taskForm.titleDraft) ||
@@ -84,6 +107,39 @@ const hasTaskMaterialInput = computed(
 )
 const hasFeedbackSampleInput = computed(
   () => hasText(feedbackForm.commentSamples) || hasText(feedbackForm.danmakuSamples),
+)
+const hasConfirmedPrePublish = computed(() => {
+  if (workflowSession.value?.status === 'CONFIRMED') {
+    return true
+  }
+  return selectedTask.value ? hasPrePublishResult(selectedTask.value.status) : false
+})
+const canEnterFeedback = computed(() => hasSelectedTask.value && hasConfirmedPrePublish.value)
+const canSendWorkflowMessage = computed(() => {
+  const status = workflowSession.value?.status
+  return Boolean(
+    workflowSession.value &&
+    status !== 'RUNNING' &&
+    status !== 'CONFIRMED' &&
+    status !== 'CANCELLED',
+  )
+})
+const canRunPrePublishAnalyze = computed(() => {
+  const status = workflowSession.value?.status
+  return Boolean(
+    hasSelectedTask.value &&
+    hasSelectedTaskMaterials.value &&
+    workflowSession.value &&
+    status !== 'RUNNING' &&
+    status !== 'CONFIRMED' &&
+    status !== 'CANCELLED',
+  )
+})
+const canConfirmPrePublish = computed(
+  () =>
+    Boolean(suggestion.value?.suggestionId) &&
+    workflowSession.value?.status === 'WAITING_CONFIRMATION' &&
+    !isConfirmingPrePublish.value,
 )
 const materialPreview = computed(() => {
   if (!selectedTask.value) {
@@ -110,6 +166,36 @@ const nextContentSuggestions = computed(() =>
 const interactionSuggestions = computed(() =>
   parseJsonArray(feedbackReport.value?.interactionSuggestions),
 )
+const selectedWorkflowMessage = computed(() => {
+  if (workflowMessages.value.length === 0) {
+    return null
+  }
+  return (
+    workflowMessages.value.find((item) => item.messageId === selectedWorkflowMessageId.value) ??
+    workflowMessages.value[0] ??
+    null
+  )
+})
+const selectedWorkflowMaterial = computed(() => {
+  const message = selectedWorkflowMessage.value
+  if (
+    !message ||
+    message.detailRefType !== 'MATERIAL' ||
+    !selectedTask.value ||
+    !message.detailRefId
+  ) {
+    return null
+  }
+  return (
+    selectedTask.value.materials.find((item) => String(item.id) === message.detailRefId) ?? null
+  )
+})
+const workflowStatusText = computed(() => {
+  if (!workflowSession.value) {
+    return '未创建'
+  }
+  return workflowSessionLabel(workflowSession.value.status)
+})
 const guidanceEditorTitle = computed(() => {
   if (guidanceEditorTarget.value === 'prePublish') {
     return '发布前优化指导'
@@ -122,17 +208,27 @@ const guidanceEditorTitle = computed(() => {
 
 onMounted(() => {
   loadGuidanceSettings()
+  loadWorkspaceState()
   void refreshTasks()
+})
+
+onBeforeUnmount(() => {
+  closeWorkflowEventSource()
 })
 
 async function refreshTasks() {
   isLoadingTasks.value = true
   errorMessage.value = ''
   try {
-    tasks.value = await listCreatorTasks(taskForm.userId || 'default', 20)
-    const firstTask = tasks.value[0]
-    if (!selectedTask.value && firstTask) {
-      await selectTask(firstTask.taskId)
+    tasks.value = await listCreatorTasks(20)
+    const targetTask = resolveRefreshTargetTask()
+    if (!targetTask) {
+      resetSelectedWorkspace()
+      persistWorkspaceState({ taskId: null })
+      return
+    }
+    if (targetTask.taskId !== selectedTask.value?.taskId) {
+      await selectTask(targetTask.taskId)
     }
   } catch (error) {
     showError(error)
@@ -147,7 +243,6 @@ async function submitTask() {
   successMessage.value = ''
   try {
     const task = await createCreatorTask({
-      userId: taskForm.userId,
       taskName: taskForm.taskName,
       titleDraft: taskForm.titleDraft,
       descriptionDraft: taskForm.descriptionDraft,
@@ -159,6 +254,8 @@ async function submitTask() {
     suggestion.value = null
     feedback.value = null
     feedbackReport.value = null
+    persistWorkspaceState({ taskId: task.taskId })
+    await loadPrePublishWorkflow(task.taskId)
     successMessage.value = '创作任务已创建，可以继续做发布前优化。'
     await refreshTasks()
   } catch (error) {
@@ -172,38 +269,120 @@ async function selectTask(taskId: string) {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    selectedTask.value = await getCreatorTask(taskId)
+    const task = await getCreatorTask(taskId)
+    selectedTask.value = task
     activeStep.value = 'prePublish'
-    await loadOptionalResults(taskId)
+    persistWorkspaceState({ taskId: task.taskId })
+    await loadOptionalResults(task)
+    await loadPrePublishWorkflow(taskId)
   } catch (error) {
     showError(error)
   }
 }
 
-async function loadOptionalResults(taskId: string) {
-  suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
-  feedback.value = await optionalRequest(() => getCreatorFeedback(taskId))
-  feedbackReport.value = await optionalRequest(() => getCreatorFeedbackReport(taskId))
+async function loadOptionalResults(task: CreatorTask) {
+  suggestion.value = null
+  feedback.value = null
+  feedbackReport.value = null
+
+  if (hasPrePublishResult(task.status)) {
+    suggestion.value = await optionalRequest(() => getPrePublishSuggestion(task.taskId))
+  }
+
+  if (hasFeedbackResult(task.status)) {
+    feedback.value = await optionalRequest(() => getCreatorFeedback(task.taskId))
+    feedbackReport.value = await optionalRequest(() => getCreatorFeedbackReport(task.taskId))
+  }
+}
+
+async function loadPrePublishWorkflow(taskId: string) {
+  isLoadingWorkflow.value = true
+  closeWorkflowEventSource()
+  workflowSession.value = null
+  workflowMessages.value = []
+  workflowMessageDraft.value = ''
+  selectedWorkflowMessageId.value = ''
+  if (!hasSelectedTaskMaterials.value) {
+    errorMessage.value = '当前任务没有可加载材料，请重新创建包含标题、简介、文稿或字幕的任务。'
+    isLoadingWorkflow.value = false
+    return
+  }
+  try {
+    workflowSession.value = await startPrePublishWorkflow(taskId, {
+      userId: selectedTask.value?.userId,
+      resumeLatest: true,
+    })
+    workflowMessages.value = workflowSession.value.messages ?? []
+    if (!suggestion.value && isPrePublishSuggestionVisible(workflowSession.value.status)) {
+      suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
+    }
+    syncWorkflowSelection()
+    connectWorkflowEvents(taskId, workflowSession.value.sessionId)
+  } catch (error) {
+    showError(error)
+  } finally {
+    isLoadingWorkflow.value = false
+  }
+}
+
+async function refreshPrePublishWorkflowMessages() {
+  if (!selectedTaskId.value) {
+    return
+  }
+  if (!workflowSession.value) {
+    await loadPrePublishWorkflow(selectedTaskId.value)
+    return
+  }
+
+  isLoadingWorkflow.value = true
+  errorMessage.value = ''
+  try {
+    workflowMessages.value = await listWorkflowMessages(
+      selectedTaskId.value,
+      workflowSession.value.sessionId,
+    )
+    syncWorkflowSelection()
+  } catch (error) {
+    showError(error)
+  } finally {
+    isLoadingWorkflow.value = false
+  }
 }
 
 async function runPrePublishAnalyze() {
   if (!selectedTaskId.value) {
     return
   }
+  if (!hasSelectedTaskMaterials.value) {
+    errorMessage.value = '当前任务没有可分析材料，请重新创建包含标题、简介、文稿或字幕的任务。'
+    return
+  }
+  if (!workflowSession.value) {
+    await loadPrePublishWorkflow(selectedTaskId.value)
+  }
+  if (!workflowSession.value || !canRunPrePublishAnalyze.value) {
+    return
+  }
   isAnalyzingPrePublish.value = true
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    suggestion.value = await analyzePrePublish(selectedTaskId.value, {
-      customGuidance: prePublishForm.customGuidance,
-      creatorPreference: prePublishForm.creatorPreference,
-      titleStyle: prePublishForm.titleStyle,
-      extraRequirement: prePublishForm.extraRequirement,
-    })
-    selectedTask.value = await getCreatorTask(selectedTaskId.value)
-    activeStep.value = 'feedback'
-    successMessage.value = '发布前优化完成，已保存标题、简介和标签建议。'
-    await refreshTasks()
+    suggestion.value = await analyzePrePublishWorkflow(
+      selectedTaskId.value,
+      workflowSession.value.sessionId,
+      {
+        customGuidance: prePublishForm.customGuidance,
+        creatorPreference: prePublishForm.creatorPreference,
+        titleStyle: prePublishForm.titleStyle,
+        extraRequirement: prePublishForm.extraRequirement,
+      },
+    )
+    workflowSession.value = {
+      ...workflowSession.value,
+      status: 'WAITING_CONFIRMATION' as CreatorWorkflowStatus,
+    }
+    await refreshPrePublishWorkflowMessages()
+    successMessage.value = '发布前优化建议已生成，请确认采用后再进入评论弹幕分析。'
   } catch (error) {
     showError(error)
   } finally {
@@ -211,8 +390,67 @@ async function runPrePublishAnalyze() {
   }
 }
 
+async function confirmPrePublishResult() {
+  if (!selectedTaskId.value || !workflowSession.value || !suggestion.value?.suggestionId) {
+    return
+  }
+  isConfirmingPrePublish.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    workflowSession.value = await confirmWorkflowPrePublishSuggestion(
+      selectedTaskId.value,
+      workflowSession.value.sessionId,
+      {
+        suggestionId: suggestion.value.suggestionId,
+      },
+    )
+    workflowMessages.value = workflowSession.value.messages ?? workflowMessages.value
+    selectedTask.value = await getCreatorTask(selectedTaskId.value)
+    syncWorkflowSelection()
+    activeStep.value = 'feedback'
+    successMessage.value = '已采用本轮发布前优化建议，可以继续导入评论弹幕样例。'
+    await refreshTasks()
+  } catch (error) {
+    showError(error)
+  } finally {
+    isConfirmingPrePublish.value = false
+  }
+}
+
+async function sendWorkflowSupplement() {
+  if (
+    !selectedTaskId.value ||
+    !workflowSession.value ||
+    !canSendWorkflowMessage.value ||
+    !hasText(workflowMessageDraft.value)
+  ) {
+    return
+  }
+  isSendingWorkflowMessage.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const message = await sendWorkflowMessage(
+      selectedTaskId.value,
+      workflowSession.value.sessionId,
+      {
+        content: workflowMessageDraft.value,
+      },
+    )
+    upsertWorkflowMessage(message)
+    workflowMessageDraft.value = ''
+    syncWorkflowSelection(message.messageId)
+    successMessage.value = '补充要求已写入工作流消息流。'
+  } catch (error) {
+    showError(error)
+  } finally {
+    isSendingWorkflowMessage.value = false
+  }
+}
+
 async function submitFeedback() {
-  if (!selectedTaskId.value) {
+  if (!selectedTaskId.value || !canEnterFeedback.value) {
     return
   }
   isSavingFeedback.value = true
@@ -234,7 +472,7 @@ async function submitFeedback() {
 }
 
 async function runFeedbackAnalyze() {
-  if (!selectedTaskId.value) {
+  if (!selectedTaskId.value || !canEnterFeedback.value) {
     return
   }
   isAnalyzingFeedback.value = true
@@ -264,6 +502,186 @@ async function optionalRequest<T>(request: () => Promise<T>) {
     // 查询历史结果允许 404，因为新任务通常还没有分析产物。
     return null
   }
+}
+
+function resolveRefreshTargetTask() {
+  const currentTaskId = selectedTask.value?.taskId
+  const targetTaskId = currentTaskId || restoredTaskId.value
+  if (targetTaskId) {
+    const matchedTask = tasks.value.find((task) => task.taskId === targetTaskId)
+    if (matchedTask) {
+      return matchedTask
+    }
+  }
+  return tasks.value[0] ?? null
+}
+
+function resetSelectedWorkspace() {
+  closeWorkflowEventSource()
+  selectedTask.value = null
+  suggestion.value = null
+  feedback.value = null
+  feedbackReport.value = null
+  workflowSession.value = null
+  workflowMessages.value = []
+  selectedWorkflowMessageId.value = ''
+  activeStep.value = 'task'
+}
+
+function loadWorkspaceState() {
+  const saved = readWorkspaceState()
+  if (saved.taskId) {
+    restoredTaskId.value = saved.taskId
+  }
+}
+
+function readWorkspaceState(): CreatorWorkspaceState {
+  const savedValue = localStorage.getItem(workspaceStorageKey)
+  if (!savedValue) {
+    return {}
+  }
+
+  try {
+    const saved = JSON.parse(savedValue) as unknown
+    if (!isRecord(saved)) {
+      return {}
+    }
+    return {
+      taskId: typeof saved.taskId === 'string' ? saved.taskId : undefined,
+    }
+  } catch {
+    localStorage.removeItem(workspaceStorageKey)
+    return {}
+  }
+}
+
+function persistWorkspaceState(patch: CreatorWorkspaceState) {
+  const previous = readWorkspaceState()
+  const next: CreatorWorkspaceState = {
+    ...previous,
+    ...patch,
+  }
+  const taskId = patch.taskId === null ? undefined : trimToNull(next.taskId ?? undefined)
+  restoredTaskId.value = taskId ?? ''
+  localStorage.setItem(
+    workspaceStorageKey,
+    JSON.stringify({
+      ...(taskId ? { taskId } : {}),
+    }),
+  )
+}
+
+function trimToNull(value: string | undefined) {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function connectWorkflowEvents(taskId: string, sessionId: string) {
+  closeWorkflowEventSource()
+  const eventSource = createWorkflowEventSource(taskId, sessionId)
+  workflowEventSource.value = eventSource
+  workflowSseText.value = '连接中'
+
+  eventSource.onopen = () => {
+    workflowSseText.value = '实时连接'
+  }
+  eventSource.onerror = () => {
+    workflowSseText.value = '连接中断'
+  }
+
+  const eventNames = [
+    'message_created',
+    'session_status',
+    'result_ready',
+    'heartbeat',
+    'step_started',
+    'step_completed',
+    'step_failed',
+  ]
+  eventNames.forEach((eventName) => {
+    eventSource.addEventListener(eventName, (event) => {
+      handleWorkflowEvent(event as MessageEvent<string>)
+    })
+  })
+}
+
+function closeWorkflowEventSource() {
+  if (!workflowEventSource.value) {
+    return
+  }
+  workflowEventSource.value.close()
+  workflowEventSource.value = null
+  workflowSseText.value = '未连接'
+}
+
+function handleWorkflowEvent(event: MessageEvent<string>) {
+  const data = parseWorkflowEvent(event.data)
+  if (!data) {
+    return
+  }
+
+  if (data.eventType === 'message_created' && isWorkflowMessage(data.payload)) {
+    upsertWorkflowMessage(data.payload)
+    syncWorkflowSelection()
+    return
+  }
+
+  if (data.eventType === 'result_ready') {
+    void refreshWorkflowSuggestion(data.taskId)
+    return
+  }
+
+  if (data.eventType === 'session_status' && workflowSession.value) {
+    const status = readStringField(data.payload, 'status')
+    workflowSession.value = {
+      ...workflowSession.value,
+      status: isWorkflowStatus(status) ? status : workflowSession.value.status,
+      confirmedResultId:
+        readStringField(data.payload, 'confirmedResultId') ??
+        workflowSession.value.confirmedResultId,
+      errorMessage: readStringField(data.payload, 'errorMessage'),
+    }
+    if (status === 'WAITING_CONFIRMATION' || status === 'CONFIRMED') {
+      void refreshWorkflowSuggestion(data.taskId)
+    }
+  }
+}
+
+function parseWorkflowEvent(value: string) {
+  try {
+    return JSON.parse(value) as CreatorWorkflowEvent
+  } catch {
+    return null
+  }
+}
+
+function upsertWorkflowMessage(message: CreatorWorkflowMessage) {
+  const messageIndex = workflowMessages.value.findIndex(
+    (item) => item.messageId === message.messageId,
+  )
+  if (messageIndex >= 0) {
+    workflowMessages.value = workflowMessages.value.map((item, index) =>
+      index === messageIndex ? message : item,
+    )
+    return
+  }
+  workflowMessages.value = [...workflowMessages.value, message].sort(
+    (left, right) => left.sequenceNo - right.sequenceNo,
+  )
+}
+
+async function refreshWorkflowSuggestion(taskId: string) {
+  suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
+}
+
+function isWorkflowMessage(value: unknown): value is CreatorWorkflowMessage {
+  return (
+    isRecord(value) &&
+    typeof value.messageId === 'string' &&
+    typeof value.sessionId === 'string' &&
+    typeof value.content === 'string' &&
+    typeof value.sequenceNo === 'number'
+  )
 }
 
 function parseJsonArray(value: string | null | undefined) {
@@ -304,8 +722,106 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function readStringField(value: unknown, key: string) {
+  if (!isRecord(value)) {
+    return null
+  }
+  const fieldValue = value[key]
+  return typeof fieldValue === 'string' ? fieldValue : null
+}
+
+function isWorkflowStatus(value: string | null): value is CreatorWorkflowStatus {
+  return Boolean(
+    value &&
+    [
+      'CREATED',
+      'CONTEXT_LOADING',
+      'WAITING_USER_INPUT',
+      'RUNNING',
+      'WAITING_CONFIRMATION',
+      'CONFIRMED',
+      'FAILED',
+      'CANCELLED',
+    ].includes(value),
+  )
+}
+
 function hasText(value: string) {
   return value.trim().length > 0
+}
+
+function previewWorkflowMessage(value: string) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    return '空消息'
+  }
+  return normalized.length > 64 ? `${normalized.slice(0, 64)}...` : normalized
+}
+
+function workflowRoleLabel(role: string) {
+  const labels: Record<string, string> = {
+    SYSTEM: '系统',
+    USER: '用户',
+    AGENT: 'Agent',
+    TOOL: '工具',
+    RESULT: '结果',
+  }
+  return labels[role] ?? role
+}
+
+function workflowContentTypeLabel(contentType: string) {
+  const labels: Record<string, string> = {
+    TEXT: '文本',
+    MATERIAL_SUMMARY: '材料摘要',
+    RESULT_CARD: '结果卡片',
+    ERROR: '错误',
+  }
+  return labels[contentType] ?? contentType
+}
+
+function workflowSessionLabel(status: string) {
+  const labels: Record<string, string> = {
+    CREATED: '已创建',
+    CONTEXT_LOADING: '装载中',
+    WAITING_USER_INPUT: '等待补充',
+    RUNNING: '运行中',
+    WAITING_CONFIRMATION: '等待确认',
+    CONFIRMED: '已确认',
+    FAILED: '失败',
+    CANCELLED: '已取消',
+  }
+  return labels[status] ?? status
+}
+
+function isPrePublishSuggestionVisible(status: string) {
+  return ['WAITING_CONFIRMATION', 'CONFIRMED'].includes(status)
+}
+
+function hasPrePublishResult(status: string) {
+  return [
+    'PRE_PUBLISH_ANALYZED',
+    'FEEDBACK_ANALYZED',
+    'COMPETITOR_ANALYZED',
+    'ANALYZED',
+    'ARCHIVED',
+  ].includes(status)
+}
+
+function hasFeedbackResult(status: string) {
+  return ['FEEDBACK_ANALYZED', 'COMPETITOR_ANALYZED', 'ANALYZED', 'ARCHIVED'].includes(status)
+}
+
+function syncWorkflowSelection(messageId?: string) {
+  const selected = messageId
+    ? workflowMessages.value.find((item) => item.messageId === messageId)
+    : workflowMessages.value.find((item) => item.messageId === selectedWorkflowMessageId.value)
+
+  if (selected) {
+    selectedWorkflowMessageId.value = selected.messageId
+    return
+  }
+
+  selectedWorkflowMessageId.value = workflowMessages.value[0]?.messageId ?? ''
 }
 
 function openGuidanceEditor(target: GuidanceEditorTarget) {
@@ -420,6 +936,7 @@ function showError(error: unknown) {
       </div>
       <div class="creator-status-strip" aria-label="Creator workflow status">
         <span :class="{ active: Boolean(selectedTask) }">任务</span>
+        <span :class="{ active: Boolean(workflowSession) }">工作流</span>
         <span :class="{ active: Boolean(suggestion) }">发布建议</span>
         <span :class="{ active: Boolean(feedbackReport) }">反馈报告</span>
       </div>
@@ -488,7 +1005,7 @@ function showError(error: unknown) {
           </button>
           <button
             type="button"
-            :disabled="!hasSelectedTask"
+            :disabled="!canEnterFeedback"
             :class="{ active: activeStep === 'feedback' }"
             @click="activeStep = 'feedback'"
           >
@@ -532,16 +1049,22 @@ function showError(error: unknown) {
 
           <div class="creator-form-grid">
             <label>
-              <span>用户 ID</span>
-              <input v-model="taskForm.userId" type="text" maxlength="64" placeholder="默认用户" />
-            </label>
-            <label>
               <span>任务名称</span>
-              <input v-model="taskForm.taskName" type="text" maxlength="128" placeholder="填写本期视频主题" />
+              <input
+                v-model="taskForm.taskName"
+                type="text"
+                maxlength="128"
+                placeholder="填写本期视频主题"
+              />
             </label>
             <label>
               <span>标题草稿</span>
-              <input v-model="taskForm.titleDraft" type="text" maxlength="200" placeholder="输入一个粗标题" />
+              <input
+                v-model="taskForm.titleDraft"
+                type="text"
+                maxlength="200"
+                placeholder="输入一个粗标题"
+              />
             </label>
             <label>
               <span>简介草稿</span>
@@ -561,7 +1084,11 @@ function showError(error: unknown) {
             </label>
             <label class="span-full">
               <span>字幕</span>
-              <textarea v-model="taskForm.subtitle" maxlength="20000" placeholder="可选：粘贴字幕文本"></textarea>
+              <textarea
+                v-model="taskForm.subtitle"
+                maxlength="20000"
+                placeholder="可选：粘贴字幕文本"
+              ></textarea>
             </label>
           </div>
         </section>
@@ -583,12 +1110,124 @@ function showError(error: unknown) {
               <button
                 type="button"
                 class="creator-primary-button"
-                :disabled="!hasSelectedTask || isAnalyzingPrePublish"
+                :disabled="!canRunPrePublishAnalyze || isAnalyzingPrePublish"
                 @click="runPrePublishAnalyze"
               >
                 {{ isAnalyzingPrePublish ? '分析中...' : '生成建议' }}
               </button>
             </div>
+          </div>
+
+          <div class="creator-workflow-grid">
+            <section class="creator-workflow-stream" aria-label="发布前优化消息流">
+              <header class="creator-workflow-head">
+                <div>
+                  <p class="creator-kicker">Workflow</p>
+                  <h4>发布前优化消息流</h4>
+                </div>
+                <div class="creator-workflow-head-actions">
+                  <span>{{ workflowStatusText }}</span>
+                  <span
+                    class="creator-sse-status"
+                    :class="{ active: workflowSseText === '实时连接' }"
+                  >
+                    {{ workflowSseText }}
+                  </span>
+                  <button
+                    type="button"
+                    class="creator-ghost-button"
+                    :disabled="!hasSelectedTask || !hasSelectedTaskMaterials || isLoadingWorkflow"
+                    @click="refreshPrePublishWorkflowMessages"
+                  >
+                    {{ isLoadingWorkflow ? '载入中' : '刷新消息' }}
+                  </button>
+                </div>
+              </header>
+
+              <div class="creator-workflow-message-list">
+                <button
+                  v-for="message in workflowMessages"
+                  :key="message.messageId"
+                  type="button"
+                  class="creator-workflow-message"
+                  :class="[
+                    `role-${message.role.toLowerCase()}`,
+                    { active: message.messageId === selectedWorkflowMessage?.messageId },
+                  ]"
+                  @click="selectedWorkflowMessageId = message.messageId"
+                >
+                  <small>
+                    #{{ message.sequenceNo }} · {{ workflowRoleLabel(message.role) }} ·
+                    {{ formatDate(message.createTime) }}
+                  </small>
+                  <strong>{{ previewWorkflowMessage(message.content) }}</strong>
+                  <span>{{ workflowContentTypeLabel(message.contentType) }}</span>
+                </button>
+
+                <p v-if="!isLoadingWorkflow && workflowMessages.length === 0" class="creator-muted">
+                  {{
+                    hasSelectedTaskMaterials
+                      ? '还没有工作流消息，选择任务后会自动装载材料。'
+                      : '当前任务没有材料，无法装载发布前优化工作流。'
+                  }}
+                </p>
+              </div>
+            </section>
+
+            <section class="creator-workflow-detail" aria-label="工作流消息详情">
+              <header class="creator-workflow-head">
+                <div>
+                  <p class="creator-kicker">Detail</p>
+                  <h4>消息详情</h4>
+                </div>
+                <span v-if="selectedWorkflowMessage" class="creator-parse-status">
+                  {{ workflowContentTypeLabel(selectedWorkflowMessage.contentType) }}
+                </span>
+              </header>
+
+              <article v-if="selectedWorkflowMessage" class="creator-workflow-detail-body">
+                <small>
+                  {{ workflowRoleLabel(selectedWorkflowMessage.role) }} ·
+                  {{ formatDate(selectedWorkflowMessage.createTime) }}
+                </small>
+                <strong>
+                  {{
+                    selectedWorkflowMaterial
+                      ? materialLabel(selectedWorkflowMaterial.materialType)
+                      : workflowContentTypeLabel(selectedWorkflowMessage.contentType)
+                  }}
+                </strong>
+                <p v-if="selectedWorkflowMaterial">{{ selectedWorkflowMessage.content }}</p>
+                <pre>{{
+                  selectedWorkflowMaterial?.content || selectedWorkflowMessage.content
+                }}</pre>
+              </article>
+
+              <article v-else class="creator-empty-result">
+                <strong>未选择消息</strong>
+                <span>点击左侧消息可以查看完整材料或过程内容。</span>
+              </article>
+            </section>
+
+            <form class="creator-workflow-composer" @submit.prevent="sendWorkflowSupplement">
+              <textarea
+                v-model="workflowMessageDraft"
+                maxlength="2000"
+                :disabled="!canSendWorkflowMessage || isSendingWorkflowMessage"
+                placeholder="补充发布前优化要求，例如：标题更适合 Java 后端学习者，不要标题党"
+              ></textarea>
+              <button
+                type="submit"
+                class="creator-primary-button"
+                :disabled="
+                  !canSendWorkflowMessage ||
+                  !hasText(workflowMessageDraft) ||
+                  isSendingWorkflowMessage
+                "
+              >
+                {{ isSendingWorkflowMessage ? '发送中...' : '发送消息' }}
+              </button>
+            </form>
           </div>
 
           <div class="creator-form-grid">
@@ -620,6 +1259,33 @@ function showError(error: unknown) {
           </div>
 
           <div v-if="suggestion" class="creator-result-grid">
+            <article class="creator-confirm-panel span-full">
+              <div>
+                <span>确认状态</span>
+                <strong>{{ workflowStatusText }}</strong>
+                <p>
+                  {{
+                    hasConfirmedPrePublish
+                      ? '本轮发布前优化建议已确认，评论弹幕阶段已开放。'
+                      : '建议生成后不会自动推进阶段，需要你确认采用。'
+                  }}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="creator-primary-button"
+                :disabled="!canConfirmPrePublish"
+                @click="confirmPrePublishResult"
+              >
+                {{
+                  hasConfirmedPrePublish
+                    ? '已采用'
+                    : isConfirmingPrePublish
+                      ? '确认中...'
+                      : '采用本轮建议'
+                }}
+              </button>
+            </article>
             <article class="creator-result-block span-full">
               <span>内容摘要</span>
               <p>{{ suggestion.contentSummary || '未解析到摘要' }}</p>
@@ -637,7 +1303,9 @@ function showError(error: unknown) {
               <div class="creator-list">
                 <section v-for="(item, index) in titleSuggestions" :key="index">
                   <strong>{{ getRecordText(item, 'title') || formatValue(item) }}</strong>
-                  <p v-if="getRecordText(item, 'reason')">理由：{{ getRecordText(item, 'reason') }}</p>
+                  <p v-if="getRecordText(item, 'reason')">
+                    理由：{{ getRecordText(item, 'reason') }}
+                  </p>
                   <p v-if="getRecordText(item, 'risk')">风险：{{ getRecordText(item, 'risk') }}</p>
                 </section>
               </div>
@@ -684,7 +1352,7 @@ function showError(error: unknown) {
               <button
                 type="button"
                 class="creator-secondary-action"
-                :disabled="!hasSelectedTask || !hasFeedbackSampleInput || isSavingFeedback"
+                :disabled="!canEnterFeedback || !hasFeedbackSampleInput || isSavingFeedback"
                 @click="submitFeedback"
               >
                 {{ isSavingFeedback ? '保存中...' : '保存样例' }}
@@ -692,7 +1360,7 @@ function showError(error: unknown) {
               <button
                 type="button"
                 class="creator-primary-button"
-                :disabled="!hasSelectedTask || isAnalyzingFeedback"
+                :disabled="!canEnterFeedback || isAnalyzingFeedback"
                 @click="runFeedbackAnalyze"
               >
                 {{ isAnalyzingFeedback ? '分析中...' : '分析反馈' }}
@@ -782,8 +1450,12 @@ function showError(error: unknown) {
               <div class="creator-list">
                 <section v-for="(item, index) in hotTopics" :key="index">
                   <strong>{{ getRecordText(item, 'topic') || formatValue(item) }}</strong>
-                  <p v-if="getRecordText(item, 'evidence')">依据：{{ getRecordText(item, 'evidence') }}</p>
-                  <p v-if="getRecordText(item, 'suggestion')">建议：{{ getRecordText(item, 'suggestion') }}</p>
+                  <p v-if="getRecordText(item, 'evidence')">
+                    依据：{{ getRecordText(item, 'evidence') }}
+                  </p>
+                  <p v-if="getRecordText(item, 'suggestion')">
+                    建议：{{ getRecordText(item, 'suggestion') }}
+                  </p>
                 </section>
               </div>
             </article>
@@ -835,7 +1507,12 @@ function showError(error: unknown) {
       @pointerdown="handleGuidanceBackdropPointerDown"
       @click="handleGuidanceBackdropClick"
     >
-      <section class="creator-prompt-modal" role="dialog" aria-modal="true" :aria-label="guidanceEditorTitle">
+      <section
+        class="creator-prompt-modal"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="guidanceEditorTitle"
+      >
         <header>
           <div>
             <p class="creator-kicker">业务指导</p>

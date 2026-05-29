@@ -62,6 +62,76 @@ export type CreatorSuggestion = {
   updateTime: string
 }
 
+export type CreatorWorkflowStage = 'PRE_PUBLISH' | 'FEEDBACK' | 'REPORT'
+
+export type CreatorWorkflowStatus =
+  | 'CREATED'
+  | 'CONTEXT_LOADING'
+  | 'WAITING_USER_INPUT'
+  | 'RUNNING'
+  | 'WAITING_CONFIRMATION'
+  | 'CONFIRMED'
+  | 'FAILED'
+  | 'CANCELLED'
+
+export type CreatorWorkflowMessageRole = 'SYSTEM' | 'USER' | 'AGENT' | 'TOOL' | 'RESULT'
+
+export type CreatorWorkflowMessageContentType =
+  | 'TEXT'
+  | 'MATERIAL_SUMMARY'
+  | 'RESULT_CARD'
+  | 'ERROR'
+
+export type CreatorWorkflowMessage = {
+  id: number
+  messageId: string
+  sessionId: string
+  role: CreatorWorkflowMessageRole
+  content: string
+  contentType: CreatorWorkflowMessageContentType
+  detailRefType: string | null
+  detailRefId: string | null
+  sequenceNo: number
+  createTime: string
+}
+
+export type CreatorWorkflowSession = {
+  id: number
+  sessionId: string
+  taskId: string
+  stage: CreatorWorkflowStage
+  status: CreatorWorkflowStatus
+  userId: string
+  confirmedResultId: string | null
+  errorMessage: string | null
+  createTime: string
+  updateTime: string
+  messages: CreatorWorkflowMessage[]
+}
+
+export type CreatorWorkflowStartPayload = {
+  userId?: string
+  resumeLatest?: boolean
+}
+
+export type CreatorWorkflowMessagePayload = {
+  content: string
+}
+
+export type CreatorWorkflowConfirmPayload = {
+  suggestionId: string
+}
+
+export type CreatorWorkflowEvent = {
+  eventId: string
+  sessionId: string
+  taskId: string
+  eventType: string
+  sequenceNo: number | null
+  payload: unknown
+  createTime: string
+}
+
 export type CreatorFeedbackSavePayload = {
   commentSamples?: string
   danmakuSamples?: string

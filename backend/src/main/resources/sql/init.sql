@@ -371,3 +371,79 @@ SET @add_competitor_comparison_sql = (
 PREPARE add_competitor_comparison_stmt FROM @add_competitor_comparison_sql;
 EXECUTE add_competitor_comparison_stmt;
 DEALLOCATE PREPARE add_competitor_comparison_stmt;
+
+-- ------------------------------------------------------------
+-- 14. 创作工作流会话表
+--     保存任务在某个业务阶段的一次会话，后续消息流、SSE 和确认状态都挂在这里
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_workflow_session
+(
+    id                   BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    session_id           VARCHAR(64)  NOT NULL COMMENT '工作流会话唯一标识（UUID）',
+    task_id              VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id',
+    stage                VARCHAR(32)  NOT NULL COMMENT '业务阶段：PRE_PUBLISH=发布前优化，FEEDBACK=评论弹幕分析，REPORT=创作复盘报告',
+    status               VARCHAR(32)  NOT NULL DEFAULT 'CREATED' COMMENT '会话状态：CREATED=已创建，CONTEXT_LOADING=正在装载任务材料，WAITING_USER_INPUT=等待用户补充输入，RUNNING=Agent正在分析，WAITING_CONFIRMATION=等待用户确认结果，CONFIRMED=用户已确认，FAILED=执行失败，CANCELLED=用户已取消',
+    user_id              VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识',
+    confirmed_result_id  VARCHAR(64)           DEFAULT NULL COMMENT '用户确认后的结果 ID，用于记录采用的发布前建议',
+    error_message        VARCHAR(500)          DEFAULT NULL COMMENT '失败原因',
+    create_time          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted           TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_session_id (session_id),
+    KEY idx_task_stage_update_time (task_id, stage, update_time),
+    KEY idx_task_id (task_id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作工作流会话表';
+
+-- ------------------------------------------------------------
+-- 15. 创作工作流消息表
+--     保存会话内的过程消息和用户补充输入，保证页面刷新后可以从历史消息恢复
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_workflow_message
+(
+    id               BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    message_id       VARCHAR(64)  NOT NULL COMMENT '消息唯一标识（UUID）',
+    session_id       VARCHAR(64)  NOT NULL COMMENT '关联 creator_workflow_session.session_id',
+    role             VARCHAR(16)  NOT NULL COMMENT '消息角色：SYSTEM=系统过程消息，USER=用户输入，AGENT=Agent分析消息，TOOL=工具执行结果，RESULT=结构化结果消息',
+    content          LONGTEXT     NOT NULL COMMENT '消息正文',
+    content_type     VARCHAR(32)  NOT NULL DEFAULT 'TEXT' COMMENT '内容类型：TEXT=普通文本，MATERIAL_SUMMARY=材料摘要，RESULT_CARD=结果卡片，ERROR=错误消息',
+    detail_ref_type  VARCHAR(32)           DEFAULT NULL COMMENT '详情引用类型：MATERIAL=创作材料，后续可扩展 ATTACHMENT=附件、SUGGESTION=发布建议',
+    detail_ref_id    VARCHAR(64)           DEFAULT NULL COMMENT '详情引用 ID',
+    sequence_no      INT          NOT NULL COMMENT '会话内顺序号，从 1 开始',
+    create_time      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    is_deleted       TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_message_id (message_id),
+    UNIQUE KEY uk_session_sequence (session_id, sequence_no),
+    KEY idx_session_id (session_id),
+    KEY idx_session_sequence (session_id, sequence_no)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作工作流消息表';
+
+-- ------------------------------------------------------------
+-- 16. 创作工作流步骤表
+--     保存发布前优化等业务工作流的关键执行节点，用于后续失败回放和过程观测
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_workflow_step
+(
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    step_id         VARCHAR(64)  NOT NULL COMMENT '步骤唯一标识（UUID）',
+    session_id      VARCHAR(64)  NOT NULL COMMENT '关联 creator_workflow_session.session_id',
+    step_type       VARCHAR(32)  NOT NULL COMMENT '步骤类型：LOAD_CONTEXT=读取上下文，LLM_CALL=调用大模型，SAVE_RESULT=保存结果，CONFIRM_RESULT=确认结果',
+    step_name       VARCHAR(128) NOT NULL COMMENT '步骤名称，用于前端和排障时快速理解当前节点',
+    status          VARCHAR(16)  NOT NULL DEFAULT 'PENDING' COMMENT '步骤状态：PENDING=待执行，RUNNING=执行中，SUCCESS=成功，FAILED=失败',
+    input_summary   TEXT                  DEFAULT NULL COMMENT '输入摘要，只保存排障所需的简短说明，避免把完整材料重复塞进步骤表',
+    output_summary  TEXT                  DEFAULT NULL COMMENT '输出摘要，用于快速判断本步骤产生了什么结果',
+    raw_output      LONGTEXT              DEFAULT NULL COMMENT '原始输出，主要保存 LLM 返回内容，便于后续失败回放',
+    error_message   VARCHAR(500)          DEFAULT NULL COMMENT '失败原因',
+    start_time      DATETIME              DEFAULT NULL COMMENT '步骤开始时间',
+    end_time        DATETIME              DEFAULT NULL COMMENT '步骤结束时间',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_step_id (step_id),
+    KEY idx_session_id (session_id),
+    KEY idx_session_create_time (session_id, create_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作工作流步骤表';

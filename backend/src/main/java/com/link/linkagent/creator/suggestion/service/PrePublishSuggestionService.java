@@ -49,16 +49,27 @@ public class PrePublishSuggestionService {
 
     @Transactional
     public CreatorSuggestionResponse analyze(String taskId, PrePublishAnalyzeRequest request) {
+        CreatorSuggestionResponse response = generateSuggestion(taskId, request);
+        creatorTaskMapper.updateTaskStatus(response.taskId(), CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name());
+        return response;
+    }
+
+    /**
+     * 只生成并保存建议，不推进任务状态。
+     * 工作流模式需要先让用户确认建议，确认后才能进入下一阶段。
+     */
+    @Transactional
+    public CreatorSuggestionResponse generateSuggestion(String taskId, PrePublishAnalyzeRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
         if (materials.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "创作任务缺少可分析材料");
         }
 
-        String rawOutput = llmService.chat(buildSystemPrompt(), buildUserPrompt(taskRecord, materials, request));
+        PrePublishAnalyzeRequest safeRequest = normalizeRequest(request);
+        String rawOutput = llmService.chat(buildSystemPrompt(), buildUserPrompt(taskRecord, materials, safeRequest));
         CreatorSuggestionRecord suggestionRecord = buildSuggestionRecord(taskRecord.getTaskId(), rawOutput);
         creatorSuggestionMapper.upsert(suggestionRecord);
-        creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name());
         return getSuggestion(taskRecord.getTaskId());
     }
 
@@ -72,6 +83,13 @@ public class PrePublishSuggestionService {
     private CreatorTaskRecord getTaskRecord(String taskId) {
         return creatorTaskMapper.findTaskByTaskId(taskId.trim())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+    }
+
+    private PrePublishAnalyzeRequest normalizeRequest(PrePublishAnalyzeRequest request) {
+        if (request != null) {
+            return request;
+        }
+        return new PrePublishAnalyzeRequest(null, null, null, null);
     }
 
     private CreatorSuggestionRecord buildSuggestionRecord(String taskId, String rawOutput) {
