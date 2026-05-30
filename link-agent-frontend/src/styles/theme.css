@@ -1999,6 +1999,12 @@ textarea:focus {
   gap: 14px;
 }
 
+.creator-panel-title > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
 .creator-panel-title span,
 .creator-result-block > span {
   color: rgba(63, 38, 49, 0.62);
@@ -2007,12 +2013,23 @@ textarea:focus {
 }
 
 .creator-panel-title b {
+  overflow: hidden;
   color: var(--color-pomegranate);
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.creator-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .creator-ghost-button,
 .creator-secondary-action,
+.creator-danger-action,
 .creator-primary-button {
   min-height: 42px;
   padding: 0 14px;
@@ -2039,6 +2056,12 @@ textarea:focus {
   border: 1px solid rgba(0, 174, 236, 0.28);
 }
 
+.creator-danger-action {
+  color: #8f1726;
+  background: rgba(255, 240, 245, 0.92);
+  border: 1px solid rgba(231, 45, 72, 0.28);
+}
+
 .creator-primary-button {
   color: #fff;
   background:
@@ -2047,10 +2070,23 @@ textarea:focus {
   box-shadow: 8px 8px 0 rgba(31, 23, 32, 0.13);
 }
 
+.creator-mini-button {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .creator-ghost-button:hover,
 .creator-secondary-action:hover,
+.creator-danger-action:hover,
 .creator-primary-button:hover {
   transform: translate(-1px, -1px);
+}
+
+.creator-danger-action:hover {
+  color: #fff;
+  background: var(--color-pomegranate);
+  border-color: rgba(231, 45, 72, 0.62);
 }
 
 .creator-primary-button:hover {
@@ -2060,11 +2096,16 @@ textarea:focus {
 
 .creator-ghost-button:focus-visible,
 .creator-secondary-action:focus-visible,
+.creator-danger-action:focus-visible,
 .creator-primary-button:focus-visible,
 .creator-task-item:focus-visible,
+.creator-task-select:focus-visible,
 .creator-workflow-message:focus-visible,
 .creator-tabs button:focus-visible,
+.creator-preference-modes button:focus-visible,
 .surface-switch button:focus-visible,
+.creator-task-toolbar input:focus,
+.creator-task-toolbar select:focus,
 .creator-form-grid input:focus,
 .creator-form-grid textarea:focus,
 .creator-workflow-composer textarea:focus,
@@ -2075,11 +2116,92 @@ textarea:focus {
 
 .creator-primary-button:disabled,
 .creator-secondary-action:disabled,
+.creator-danger-action:disabled,
 .creator-tabs button:disabled {
   cursor: not-allowed;
   opacity: 0.52;
   box-shadow: none;
   transform: none;
+}
+
+.creator-task-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(118px, 0.48fr);
+  gap: 10px;
+}
+
+.creator-task-toolbar label {
+  display: grid;
+  gap: 6px;
+}
+
+.creator-task-toolbar span {
+  color: rgba(63, 38, 49, 0.62);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.creator-task-toolbar input,
+.creator-task-toolbar select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 11px;
+  color: var(--color-ink);
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(231, 45, 72, 0.16);
+  border-radius: 8px;
+  outline: none;
+}
+
+.creator-task-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.creator-task-overview span {
+  display: grid;
+  gap: 2px;
+  min-height: 50px;
+  padding: 8px 10px;
+  color: rgba(63, 38, 49, 0.62);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(0, 174, 236, 0.14);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.creator-task-overview b {
+  color: var(--creator-bili-blue-deep);
+  font-size: 17px;
+}
+
+.creator-delete-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  color: #7c1d29;
+  background: var(--creator-bili-pink-soft);
+  border: 1px solid rgba(231, 45, 72, 0.26);
+  border-radius: 8px;
+}
+
+.creator-delete-confirm strong {
+  color: #7c1d29;
+  font-size: 14px;
+}
+
+.creator-delete-confirm span {
+  color: rgba(124, 29, 41, 0.78);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.creator-delete-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .creator-task-list {
@@ -2092,7 +2214,7 @@ textarea:focus {
 
 .creator-task-item {
   display: grid;
-  gap: 5px;
+  gap: 10px;
   padding: 13px;
   color: var(--color-ink);
   text-align: left;
@@ -2104,6 +2226,24 @@ textarea:focus {
     background-color 180ms ease,
     border-color 180ms ease,
     box-shadow 180ms ease;
+}
+
+.creator-task-select {
+  display: grid;
+  width: 100%;
+  gap: 5px;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.creator-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 
 .creator-task-item:hover,
@@ -2127,6 +2267,25 @@ textarea:focus {
 .creator-muted {
   color: rgba(63, 38, 49, 0.62);
   line-height: 1.45;
+}
+
+.creator-current-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.creator-current-task-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  color: rgba(63, 38, 49, 0.7);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(0, 174, 236, 0.16);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .creator-task-id {
@@ -2257,6 +2416,117 @@ textarea:focus {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.creator-preference-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(231, 45, 72, 0.12);
+  border-radius: 8px;
+}
+
+.creator-preference-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.creator-preference-head span {
+  display: block;
+  color: var(--color-ink-2);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.creator-preference-head strong {
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.creator-preference-head b {
+  color: var(--color-pomegranate);
+  font-size: 12px;
+  font-weight: 900;
+  text-align: right;
+}
+
+.creator-preference-modes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.creator-preference-modes button {
+  display: grid;
+  gap: 3px;
+  min-height: 58px;
+  padding: 10px 12px;
+  color: var(--color-ink);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 174, 236, 0.18);
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.creator-preference-modes button span {
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.creator-preference-modes button small {
+  color: rgba(63, 38, 49, 0.62);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.creator-preference-modes button:hover,
+.creator-preference-modes button.active {
+  background: linear-gradient(135deg, rgba(229, 248, 255, 0.92), rgba(255, 240, 245, 0.94));
+  border-color: rgba(0, 174, 236, 0.34);
+  box-shadow: 8px 8px 0 rgba(231, 45, 72, 0.06);
+  transform: translate(-1px, -1px);
+}
+
+.creator-preference-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.creator-preference-tags span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  color: #005f85;
+  background: linear-gradient(135deg, var(--creator-bili-blue-soft), var(--creator-bili-pink-soft));
+  border: 1px solid rgba(0, 174, 236, 0.16);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.creator-preference-tags span.muted {
+  opacity: 0.45;
+}
+
+.creator-preference-tags em {
+  color: rgba(63, 38, 49, 0.58);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .creator-form-grid label {
@@ -3056,6 +3326,286 @@ textarea:focus {
   line-height: 1.55;
 }
 
+/* 任务管理区需要更像高频工作台，所以这里用中性层级替换原先偏装饰化的粉色纸面效果。 */
+.creator-shell {
+  --creator-panel: rgba(255, 255, 255, 0.9);
+  --creator-panel-strong: rgba(255, 255, 255, 0.98);
+  --creator-line: rgba(15, 23, 42, 0.09);
+  --creator-muted-ink: rgba(44, 55, 74, 0.64);
+  padding: 80px 24px 28px;
+  background:
+    linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%),
+    #f5f7fb;
+}
+
+.creator-header {
+  align-items: center;
+  padding: 20px 22px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--creator-line);
+  border-radius: 8px;
+  box-shadow: 0 18px 52px rgba(15, 23, 42, 0.08);
+}
+
+.creator-header h2 {
+  font-size: 29px;
+  font-weight: 900;
+}
+
+.creator-header p,
+.creator-muted,
+.creator-task-item span,
+.creator-task-item small {
+  color: var(--creator-muted-ink);
+}
+
+.creator-kicker {
+  color: var(--creator-bili-blue-deep);
+}
+
+.creator-status-strip span,
+.creator-parse-status {
+  color: rgba(44, 55, 74, 0.72);
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+.creator-status-strip span.active {
+  color: #006991;
+  background: rgba(231, 247, 255, 0.9);
+  border-color: rgba(0, 174, 236, 0.28);
+}
+
+.creator-layout {
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.creator-panel,
+.creator-section {
+  background: var(--creator-panel);
+  border: 1px solid var(--creator-line);
+  border-radius: 8px;
+  box-shadow: 0 16px 46px rgba(15, 23, 42, 0.075);
+  backdrop-filter: blur(18px);
+}
+
+.creator-panel {
+  padding: 18px;
+}
+
+.compact-panel {
+  gap: 16px;
+}
+
+.creator-panel-title span,
+.creator-result-block > span {
+  color: rgba(44, 55, 74, 0.58);
+}
+
+.creator-panel-title b {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.creator-panel-actions {
+  gap: 6px;
+}
+
+.creator-ghost-button,
+.creator-secondary-action,
+.creator-danger-action,
+.creator-primary-button {
+  border-radius: 8px;
+  box-shadow: none;
+  font-size: 13px;
+  transform: none;
+}
+
+.creator-ghost-button {
+  color: rgba(44, 55, 74, 0.82);
+  background: rgba(255, 255, 255, 0.74);
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+.creator-secondary-action {
+  color: #006d97;
+  background: rgba(239, 251, 255, 0.82);
+  border-color: rgba(0, 174, 236, 0.22);
+}
+
+.creator-danger-action {
+  color: #a21d32;
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(231, 45, 72, 0.18);
+}
+
+.creator-primary-button {
+  color: #fff;
+  background: #111827;
+  border-color: rgba(17, 24, 39, 0.95);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+}
+
+.creator-ghost-button:hover,
+.creator-secondary-action:hover,
+.creator-danger-action:hover,
+.creator-primary-button:hover {
+  transform: none;
+}
+
+.creator-ghost-button:hover,
+.creator-secondary-action:hover {
+  background: #fff;
+  border-color: rgba(0, 174, 236, 0.3);
+}
+
+.creator-danger-action:hover {
+  color: #7c1222;
+  background: rgba(255, 241, 243, 0.92);
+  border-color: rgba(231, 45, 72, 0.32);
+}
+
+.creator-primary-button:hover {
+  filter: none;
+  background: #0f172a;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18);
+}
+
+.creator-mini-button {
+  min-height: 32px;
+  padding: 0 11px;
+}
+
+.creator-task-toolbar {
+  grid-template-columns: minmax(0, 1fr) minmax(126px, 0.45fr);
+  gap: 10px;
+  padding: 12px;
+  background: rgba(248, 250, 252, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.07);
+  border-radius: 8px;
+}
+
+.creator-task-toolbar span {
+  color: rgba(44, 55, 74, 0.58);
+}
+
+.creator-task-toolbar input,
+.creator-task-toolbar select,
+.creator-form-grid input,
+.creator-form-grid textarea,
+.creator-workflow-composer textarea,
+.creator-prompt-field textarea {
+  color: #111827;
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.creator-task-overview {
+  gap: 9px;
+}
+
+.creator-task-overview span {
+  min-height: 58px;
+  padding: 10px 12px;
+  color: rgba(44, 55, 74, 0.58);
+  background: rgba(255, 255, 255, 0.74);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+.creator-task-overview b {
+  color: #111827;
+  font-size: 20px;
+}
+
+.creator-delete-confirm {
+  padding: 12px 13px;
+  color: #7c1222;
+  background: rgba(255, 246, 247, 0.95);
+  border-color: rgba(231, 45, 72, 0.2);
+  box-shadow: inset 3px 0 0 rgba(231, 45, 72, 0.42);
+}
+
+.creator-delete-confirm strong {
+  color: #7c1222;
+}
+
+.creator-delete-confirm span {
+  color: rgba(124, 18, 34, 0.68);
+}
+
+.creator-task-list {
+  max-height: 500px;
+  gap: 9px;
+  scrollbar-color: rgba(0, 174, 236, 0.36) transparent;
+}
+
+.creator-task-item {
+  gap: 11px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: none;
+  cursor: default;
+}
+
+.creator-task-item:hover,
+.creator-task-item.active {
+  background: #fff;
+  border-color: rgba(0, 174, 236, 0.34);
+  box-shadow:
+    inset 3px 0 0 var(--creator-bili-blue),
+    0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.creator-task-item strong {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.creator-task-actions {
+  justify-content: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.creator-current-task-meta span {
+  color: rgba(44, 55, 74, 0.7);
+  background: rgba(248, 250, 252, 0.85);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+.creator-task-id,
+.creator-material-list article {
+  background: rgba(248, 250, 252, 0.82);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+.creator-material-list strong {
+  color: #006d97;
+}
+
+.creator-tabs {
+  background: rgba(255, 255, 255, 0.78);
+  border-color: var(--creator-line);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.06);
+}
+
+.creator-tabs button {
+  color: rgba(44, 55, 74, 0.66);
+}
+
+.creator-tabs button.active {
+  color: #111827;
+  background: #fff;
+  box-shadow:
+    inset 0 -2px 0 var(--creator-bili-blue),
+    0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
 @media (max-width: 1180px) {
   .creator-layout,
   .creator-header {
@@ -3087,12 +3637,22 @@ textarea:focus {
   }
 
   .creator-task-rail,
+  .creator-task-toolbar,
+  .creator-task-overview,
   .creator-form-grid,
   .creator-result-grid,
   .creator-script-grid,
   .creator-workflow-grid,
   .creator-workflow-composer {
     grid-template-columns: 1fr;
+  }
+
+  .creator-preference-modes {
+    grid-template-columns: 1fr;
+  }
+
+  .creator-preference-head {
+    display: grid;
   }
 
   .creator-tabs {

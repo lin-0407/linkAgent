@@ -409,15 +409,29 @@ CREATE TABLE IF NOT EXISTS creator_report
   DEFAULT CHARSET = utf8mb4
   COMMENT = '创作复盘报告表';
 
--- 已建过旧版 creator_report 的本地库需要补齐竞品对照字段，使用 information_schema 避免重复执行时报错。
-SET @add_competitor_comparison_sql = (
-    SELECT IF(
-        COUNT(*) = 0,
-        'ALTER TABLE creator_report ADD COLUMN competitor_comparison TEXT DEFAULT NULL COMMENT ''竞品对照结论 JSON'' AFTER audience_feedback_summary',
-        'SELECT 1'
-    )
-    FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE()
+-- ------------------------------------------------------------
+-- 13.1 创作者长期偏好表
+--      保存每期复盘提炼出的创作偏好快照，让下一期发布前优化能够读取历史经验
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_preference
+(
+    id                 BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    preference_id      VARCHAR(64) NOT NULL COMMENT '创作者偏好快照唯一标识（UUID）',
+    user_id            VARCHAR(64) NOT NULL DEFAULT 'default' COMMENT '用户标识，用于隔离不同创作者的长期偏好',
+    source_task_id     VARCHAR(64) NOT NULL COMMENT '来源创作任务 ID，用于追溯偏好来自哪一期复盘',
+    source_report_id   VARCHAR(64) NOT NULL COMMENT '来源复盘报告 ID，用于报告重新生成后更新偏好内容',
+    preference_content TEXT        NOT NULL COMMENT '创作者偏好洞察 JSON，由复盘报告提炼并在下一期发布前优化中作为参考',
+    create_time        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted         TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_preference_id (preference_id),
+    UNIQUE KEY uk_user_source_task (user_id, source_task_id),
+    KEY idx_user_update_time (user_id, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作者长期偏好表';
+
+()
       AND TABLE_NAME = 'creator_report'
       AND COLUMN_NAME = 'competitor_comparison'
 );

@@ -7,6 +7,7 @@ import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportRecord;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
+import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.report.mapper.CreatorReportMapper;
 import com.link.linkagent.creator.report.model.CreatorReportAnalyzeRequest;
 import com.link.linkagent.creator.report.model.CreatorReportRecord;
@@ -44,6 +45,7 @@ public class CreatorReportService {
     private final CreatorFeedbackMapper creatorFeedbackMapper;
     private final CreatorCompetitorMapper creatorCompetitorMapper;
     private final CreatorReportMapper creatorReportMapper;
+    private final CreatorPreferenceService creatorPreferenceService;
     private final LLMService llmService;
     private final ObjectMapper objectMapper;
 
@@ -52,6 +54,7 @@ public class CreatorReportService {
                                 CreatorFeedbackMapper creatorFeedbackMapper,
                                 CreatorCompetitorMapper creatorCompetitorMapper,
                                 CreatorReportMapper creatorReportMapper,
+                                CreatorPreferenceService creatorPreferenceService,
                                 LLMService llmService,
                                 ObjectMapper objectMapper) {
         this.creatorTaskMapper = creatorTaskMapper;
@@ -59,6 +62,7 @@ public class CreatorReportService {
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.creatorCompetitorMapper = creatorCompetitorMapper;
         this.creatorReportMapper = creatorReportMapper;
+        this.creatorPreferenceService = creatorPreferenceService;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
     }
@@ -80,6 +84,7 @@ public class CreatorReportService {
         );
         CreatorReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
         creatorReportMapper.upsert(reportRecord);
+        creatorPreferenceService.saveFromReport(taskRecord, reportRecord);
         creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.ANALYZED.name());
         return getReport(taskRecord.getTaskId());
     }

@@ -424,7 +424,7 @@ public class CreatorWorkflowService {
 
     private PrePublishAnalyzeRequest mergeWorkflowGuidance(String sessionId, PrePublishAnalyzeRequest request) {
         PrePublishAnalyzeRequest safeRequest = request == null
-                ? new PrePublishAnalyzeRequest(null, null, null, null)
+                ? new PrePublishAnalyzeRequest(null, null, null, null, null)
                 : request;
         StringBuilder builder = new StringBuilder();
         if (TextUtil.hasText(safeRequest.customGuidance())) {
@@ -454,7 +454,8 @@ public class CreatorWorkflowService {
                 mergedGuidance,
                 safeRequest.creatorPreference(),
                 safeRequest.titleStyle(),
-                safeRequest.extraRequirement()
+                safeRequest.extraRequirement(),
+                safeRequest.preferenceMode()
         );
     }
 

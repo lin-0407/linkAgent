@@ -4,7 +4,7 @@
 
 发布前优化 Agent 是创作者在发稿前使用的辅助模块。
 
-当前接口是阶段 4.2 的同步 LLM 基线，负责把任务材料生成结构化建议并保存。阶段 4.4.1 会在此基础上新增工作流会话、SSE 消息流和用户确认机制。
+当前接口是阶段 4.2 的同步 LLM 基线，负责把任务材料生成结构化建议并保存。阶段 4.4.1 会在此基础上新增工作流会话、SSE 消息流和用户确认机制。阶段 4.5.1 起，发布前优化会读取最近几期 `creator_preference`，让建议延续历史复盘中沉淀的创作者偏好。
 
 它基于阶段 4.1 保存的创作任务和材料，生成：
 
@@ -60,7 +60,8 @@ Content-Type: application/json
   "customGuidance": "可选，标题语气、建议风格和分析顺序等业务指导",
   "creatorPreference": "偏好理性一点的表达，不要太夸张",
   "titleStyle": "偏经验分享和结果导向",
-  "extraRequirement": "标题尽量短，简介要清楚"
+  "extraRequirement": "标题尽量短，简介要清楚",
+  "preferenceMode": "USE_HISTORY"
 }
 ```
 
@@ -70,7 +71,11 @@ Content-Type: application/json
 2. `customGuidance` 为空时不添加本次业务指导，最长 2000 个字符。
 3. 后端系统提示词固定维护角色、平台数据边界和 JSON 输出结构，前端不能覆盖。
 4. 三个补充字段都是可选项。
-5. 任务没有材料时返回 400。
+5. `preferenceMode` 可选，支持 `USE_HISTORY`、`IGNORE_HISTORY`、`EXPERIMENT`。
+6. `USE_HISTORY` 会按任务 `userId` 自动读取最近 5 条创作者长期偏好；历史偏好只影响风格和建议倾向。
+7. `IGNORE_HISTORY` 不读取历史偏好，适合本期换风格。
+8. `EXPERIMENT` 读取历史偏好，但只作为避坑参考，本期用户要求优先。
+9. 任务没有材料时返回 400。
 
 ### 查询建议
 
@@ -115,5 +120,7 @@ GET /api/creator/tasks/{taskId}/pre-publish/suggestions
 阶段 4.4 会把发布前建议、反馈分析和复盘报告串成完整闭环。
 
 阶段 4.4.1 会把同步建议生成升级为 Agent 工作流消息流和建议确认。
+
+阶段 4.5.1 会把复盘报告中的创作者偏好洞察沉淀到 `creator_preference`，本接口会自动读取这些历史偏好。
 
 阶段 4.6 会用 `rawOutput`、耗时、token 和人工评分做评测集。

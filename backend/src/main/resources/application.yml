@@ -5,6 +5,9 @@ spring:
   application:
     name: link-agent
 
+  servlet:
+    multipart:
+      max-file-size: 5MB
   # ========== MySQL ==========
   datasource:
     url: ${DB_URL}

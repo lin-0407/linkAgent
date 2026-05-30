@@ -31,6 +31,16 @@ public interface CreatorTaskMapper {
             """)
     int upsertMaterial(CreatorMaterialRecord record);
 
+    @Update("""
+            UPDATE creator_material
+            SET is_deleted = 1,
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND material_type = #{materialType}
+              AND is_deleted = 0
+            """)
+    int deleteMaterialByType(@Param("taskId") String taskId, @Param("materialType") String materialType);
+
     @Select("""
             SELECT id, task_id, user_id, task_name, status, create_time, update_time
             FROM creator_task
@@ -126,4 +136,32 @@ public interface CreatorTaskMapper {
               AND is_deleted = 0
             """)
     int updateTaskStatus(@Param("taskId") String taskId, @Param("status") String status);
+
+    @Update("""
+            UPDATE creator_task
+            SET task_name = #{taskName},
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            """)
+    int updateTaskName(@Param("taskId") String taskId, @Param("taskName") String taskName);
+
+    @Update("""
+            UPDATE creator_task
+            SET is_deleted = 1,
+                status = #{status},
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            """)
+    int deleteTask(@Param("taskId") String taskId, @Param("status") String status);
+
+    @Update("""
+            UPDATE creator_material
+            SET is_deleted = 1,
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            """)
+    int deleteMaterialsByTaskId(@Param("taskId") String taskId);
 }

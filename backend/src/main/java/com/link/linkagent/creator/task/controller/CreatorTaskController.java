@@ -2,6 +2,7 @@ package com.link.linkagent.creator.task.controller;
 
 import com.link.linkagent.creator.task.model.CreatorTaskCreateRequest;
 import com.link.linkagent.creator.task.model.CreatorTaskResponse;
+import com.link.linkagent.creator.task.model.CreatorTaskUpdateRequest;
 import com.link.linkagent.creator.task.model.CreatorTaskSummaryResponse;
 import com.link.linkagent.creator.task.service.CreatorTaskService;
 import jakarta.validation.Valid;
@@ -10,13 +11,17 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.ResponseStatus;
 
 import java.util.List;
 
@@ -38,6 +43,27 @@ public class CreatorTaskController {
     @PostMapping
     public CreatorTaskResponse createTask(@Valid @RequestBody CreatorTaskCreateRequest request) {
         return creatorTaskService.createTask(request);
+    }
+
+    @PutMapping("/{taskId}")
+    public CreatorTaskResponse updateTask(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            String taskId,
+
+            @Valid @RequestBody CreatorTaskUpdateRequest request) {
+        return creatorTaskService.updateTask(taskId, request);
+    }
+
+    @DeleteMapping("/{taskId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteTask(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            String taskId) {
+        creatorTaskService.deleteTask(taskId);
     }
 
     @GetMapping

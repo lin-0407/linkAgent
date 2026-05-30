@@ -8,11 +8,13 @@ import type {
   CreatorFeedbackFetchResult,
   CreatorFeedbackImportResult,
   CreatorFeedbackReport,
+  CreatorPreference,
   CreatorFeedbackSavePayload,
   CreatorSuggestion,
   CreatorTask,
   CreatorTaskCreatePayload,
   CreatorTaskSummary,
+  CreatorTaskUpdatePayload,
   CreatorWorkflowConfirmPayload,
   CreatorWorkflowMessage,
   CreatorWorkflowMessagePayload,
@@ -61,6 +63,15 @@ async function requestForm<T>(url: string, formData: FormData) {
   return (await response.json()) as T
 }
 
+async function requestEmpty(url: string, options?: RequestInit) {
+  const response = await fetch(url, options)
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response)
+    throw new Error(message || `HTTP ${response.status}`)
+  }
+}
+
 function cleanPayload<T extends Record<string, unknown>>(payload: T) {
   return Object.fromEntries(
     Object.entries(payload).filter(([, value]) => {
@@ -79,6 +90,19 @@ export function createCreatorTask(payload: CreatorTaskCreatePayload) {
   })
 }
 
+export function updateCreatorTask(taskId: string, payload: CreatorTaskUpdatePayload) {
+  return requestJson<CreatorTask>(`/api/creator/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteCreatorTask(taskId: string) {
+  return requestEmpty(`/api/creator/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
+  })
+}
+
 export function listCreatorTasks(limit = 20) {
   const params = new URLSearchParams({
     limit: String(limit),
@@ -88,6 +112,14 @@ export function listCreatorTasks(limit = 20) {
 
 export function getCreatorTask(taskId: string) {
   return requestJson<CreatorTask>(`/api/creator/tasks/${encodeURIComponent(taskId)}`)
+}
+
+export function listCreatorPreferences(userId = 'default', limit = 10) {
+  const params = new URLSearchParams({
+    userId,
+    limit: String(limit),
+  })
+  return requestJson<CreatorPreference[]>(`/api/creator/preferences?${params.toString()}`)
 }
 
 export function analyzePrePublish(taskId: string, payload: PrePublishAnalyzePayload) {

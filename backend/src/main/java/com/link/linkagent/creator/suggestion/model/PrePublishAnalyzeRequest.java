@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.suggestion.model;
 
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Pattern;
 
 /**
  * 发布前优化分析请求。
@@ -17,6 +18,12 @@ public record PrePublishAnalyzeRequest(
         String titleStyle,
 
         @Size(max = 500, message = "额外要求长度不能超过500个字符")
-        String extraRequirement
+        String extraRequirement,
+
+        @Pattern(
+                regexp = "USE_HISTORY|IGNORE_HISTORY|EXPERIMENT",
+                message = "偏好使用方式只能是 USE_HISTORY、IGNORE_HISTORY 或 EXPERIMENT"
+        )
+        String preferenceMode
 ) {
 }

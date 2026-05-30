@@ -184,6 +184,11 @@ class CreatorCompetitorServiceTest {
         }
 
         @Override
+        public int deleteMaterialByType(String taskId, String materialType) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public Optional<CreatorTaskRecord> findTaskByTaskId(String taskId) {
             return Optional.ofNullable(taskRecord);
         }
@@ -199,9 +204,29 @@ class CreatorCompetitorServiceTest {
         }
 
         @Override
+        public List<CreatorTaskSummaryRecord> listRecentTasks(int limit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public int updateTaskStatus(String taskId, String status) {
             this.updatedStatus = status;
             return 1;
+        }
+
+        @Override
+        public int updateTaskName(String taskId, String taskName) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int deleteTask(String taskId, String status) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int deleteMaterialsByTaskId(String taskId) {
+            throw new UnsupportedOperationException();
         }
     }
 
@@ -214,6 +239,11 @@ class CreatorCompetitorServiceTest {
 
         @Override
         public Optional<CreatorSuggestionRecord> findByTaskId(String taskId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<CreatorSuggestionRecord> findBySuggestionId(String suggestionId) {
             return Optional.empty();
         }
     }
@@ -238,6 +268,67 @@ class CreatorCompetitorServiceTest {
         @Override
         public Optional<CreatorFeedbackReportRecord> findReportByTaskId(String taskId) {
             return Optional.empty();
+        }
+
+        @Override
+        public int softDeleteItemsByTaskId(String taskId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int softDeleteMetricByTaskId(String taskId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int insertItem(com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord record) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int upsertMetric(com.link.linkagent.creator.feedback.model.CreatorFeedbackMetricRecord record) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord> listItemsByTaskId(
+                String taskId,
+                int limit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord> listTopCommentItemsByTaskId(
+                String taskId,
+                int limit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long countItemsBySourceType(String taskId, String sourceType) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long countNoiseItems(String taskId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord> countCategoryStats(
+                String taskId,
+                String sourceType) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord> countSentimentStats(String taskId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Optional<com.link.linkagent.creator.feedback.model.CreatorFeedbackMetricRecord> findMetricByTaskId(String taskId) {
+            throw new UnsupportedOperationException();
         }
     }
 

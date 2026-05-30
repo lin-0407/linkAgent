@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
+  deleteCreatorTask,
   analyzeCreatorFeedback,
   analyzePrePublishWorkflow,
   chatCreatorFeedback,
@@ -14,11 +15,13 @@ import {
   getPrePublishSuggestion,
   fetchCreatorFeedbackByBv,
   importCreatorFeedbackFile,
+  listCreatorPreferences,
   listCreatorTasks,
   listWorkflowMessages,
   saveCreatorFeedback,
   sendWorkflowMessage,
   startPrePublishWorkflow,
+  updateCreatorTask,
 } from '@/api/creator'
 import type {
   CreatorFeedback,
@@ -26,9 +29,12 @@ import type {
   CreatorFeedbackDashboard,
   CreatorFeedbackFetchResult,
   CreatorFeedbackReport,
+  CreatorPreference,
+  CreatorPreferenceMode,
   CreatorSuggestion,
   CreatorTask,
   CreatorTaskSummary,
+  CreatorTaskUpdatePayload,
   CreatorWorkflowEvent,
   CreatorWorkflowMessage,
   CreatorWorkflowSession,
@@ -38,8 +44,13 @@ import type {
 type UnknownRecord = Record<string, unknown>
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
 type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | 'feedbackReport'
+type TaskManageMode = 'create' | 'edit'
 type CreatorWorkspaceState = {
   taskId?: string | null
+}
+type PreferenceChip = {
+  text: string
+  sourceTaskId: string
 }
 
 const guidanceStorageKey = 'link-agent-creator-guidance'
@@ -49,6 +60,38 @@ const defaultPrePublishGuidance =
   '标题表达克制、具体，优先说明视频能解决的问题；先总结核心卖点，再给出优化建议；避免夸张措辞。'
 const defaultFeedbackGuidance =
   '先归纳观众最关注的问题，再分析争议和误解；建议应能直接转化为下一期选题或互动动作。'
+const preferenceModeOptions: Array<{
+  value: CreatorPreferenceMode
+  label: string
+  description: string
+}> = [
+  {
+    value: 'USE_HISTORY',
+    label: '沿用历史偏好',
+    description: '参考最近复盘',
+  },
+  {
+    value: 'IGNORE_HISTORY',
+    label: '本期换风格',
+    description: '不带入历史',
+  },
+  {
+    value: 'EXPERIMENT',
+    label: '试验新方向',
+    description: '新要求优先',
+  },
+]
+const taskStatusOptions: Array<{
+  value: 'ALL' | CreatorTaskSummary['status']
+  label: string
+}> = [
+  { value: 'ALL', label: '全部状态' },
+  { value: 'DRAFT', label: '草稿' },
+  { value: 'PRE_PUBLISH_ANALYZED', label: '发布前完成' },
+  { value: 'FEEDBACK_ANALYZED', label: '反馈分析完成' },
+  { value: 'COMPETITOR_ANALYZED', label: '竞品分析完成' },
+  { value: 'ANALYZED', label: '复盘完成' },
+]
 
 const taskForm = reactive({
   taskName: '',
@@ -63,6 +106,7 @@ const prePublishForm = reactive({
   creatorPreference: '',
   titleStyle: '',
   extraRequirement: '',
+  preferenceMode: 'USE_HISTORY' as CreatorPreferenceMode,
 })
 
 const feedbackForm = reactive({
@@ -91,12 +135,16 @@ const feedbackScriptForm = reactive({
 
 const tasks = ref<CreatorTaskSummary[]>([])
 const selectedTask = ref<CreatorTask | null>(null)
+const taskManageMode = ref<TaskManageMode>('create')
+const taskSearchQuery = ref('')
+const taskStatusFilter = ref<'ALL' | CreatorTaskSummary['status']>('ALL')
 const suggestion = ref<CreatorSuggestion | null>(null)
 const feedback = ref<CreatorFeedback | null>(null)
 const feedbackReport = ref<CreatorFeedbackReport | null>(null)
 const feedbackChatResult = ref<CreatorFeedbackChatResult | null>(null)
 const feedbackDashboard = ref<CreatorFeedbackDashboard | null>(null)
 const feedbackFetchResult = ref<CreatorFeedbackFetchResult | null>(null)
+const creatorPreferences = ref<CreatorPreference[]>([])
 const feedbackImportFile = ref<File | null>(null)
 const feedbackImportWarnings = ref<string[]>([])
 const workflowSession = ref<CreatorWorkflowSession | null>(null)
@@ -109,6 +157,8 @@ const restoredTaskId = ref('')
 const activeStep = ref('task')
 const isLoadingTasks = ref(false)
 const isCreatingTask = ref(false)
+const isUpdatingTask = ref(false)
+const isDeletingTask = ref(false)
 const isAnalyzingPrePublish = ref(false)
 const isConfirmingPrePublish = ref(false)
 const isLoadingWorkflow = ref(false)
@@ -118,8 +168,12 @@ const isImportingFeedback = ref(false)
 const isFetchingFeedback = ref(false)
 const isAnalyzingFeedback = ref(false)
 const isAskingFeedbackChat = ref(false)
+const isLoadingCreatorPreferences = ref(false)
+const lastPrePublishPreferenceMode = ref<CreatorPreferenceMode>('USE_HISTORY')
+const hasPrePublishPreferenceModeSnapshot = ref(false)
 const guidanceEditorTarget = ref<GuidanceEditorTarget | null>(null)
 const resultModalTarget = ref<ResultModalTarget | null>(null)
+const pendingDeleteTask = ref<CreatorTaskSummary | null>(null)
 const isGuidanceBackdropPointerDown = ref(false)
 const isResultModalBackdropPointerDown = ref(false)
 const errorMessage = ref('')
@@ -135,6 +189,57 @@ const hasTaskMaterialInput = computed(
     hasText(taskForm.manuscript) ||
     hasText(taskForm.subtitle),
 )
+const filteredTasks = computed(() => {
+  const keyword = taskSearchQuery.value.trim().toLowerCase()
+  return tasks.value.filter((task) => {
+    const matchStatus = taskStatusFilter.value === 'ALL' || task.status === taskStatusFilter.value
+    if (!matchStatus) {
+      return false
+    }
+    if (!keyword) {
+      return true
+    }
+    const searchableText = [task.taskName, task.taskId, statusLabel(task.status)]
+      .join(' ')
+      .toLowerCase()
+    return searchableText.includes(keyword)
+  })
+})
+const taskSummaryStats = computed(() => {
+  const stats = {
+    total: tasks.value.length,
+    draft: 0,
+    inProgress: 0,
+    done: 0,
+  }
+  for (const task of tasks.value) {
+    if (task.status === 'DRAFT') {
+      stats.draft += 1
+      continue
+    }
+    if (task.status === 'ANALYZED') {
+      stats.done += 1
+      continue
+    }
+    stats.inProgress += 1
+  }
+  return stats
+})
+const taskSubmitLabel = computed(() => {
+  if (taskManageMode.value === 'edit') {
+    return isUpdatingTask.value ? '保存中...' : '保存修改'
+  }
+  return isCreatingTask.value ? '创建中...' : '创建任务'
+})
+const taskFormTitle = computed(() =>
+  taskManageMode.value === 'edit' ? '编辑创作任务' : '创建创作任务',
+)
+const taskFormHint = computed(() =>
+  taskManageMode.value === 'edit'
+    ? '编辑当前任务后，旧材料会被覆盖，后续分析请重新生成。'
+    : '先填一份能直接被后端接住的材料，再创建任务。',
+)
+const pendingDeleteTaskName = computed(() => pendingDeleteTask.value?.taskName ?? '')
 const hasFeedbackSampleInput = computed(
   () => hasText(feedbackForm.commentSamples) || hasText(feedbackForm.danmakuSamples),
 )
@@ -220,6 +325,31 @@ const nextContentSuggestions = computed(() =>
 const interactionSuggestions = computed(() =>
   parseJsonArray(feedbackReport.value?.interactionSuggestions),
 )
+const historicalPreferenceChips = computed<PreferenceChip[]>(() =>
+  creatorPreferences.value
+    .flatMap((record) =>
+      parseJsonArray(record.preferenceContent).map((item) => ({
+        text: preferenceItemText(item),
+        sourceTaskId: record.sourceTaskId,
+      })),
+    )
+    .filter((item) => item.text.length > 0)
+    .slice(0, 8),
+)
+const selectedPreferenceModeLabel = computed(
+  () =>
+    preferenceModeOptions.find((option) => option.value === prePublishForm.preferenceMode)?.label ??
+    '沿用历史偏好',
+)
+const lastPreferenceModeLabel = computed(
+  () =>
+    preferenceModeOptions.find((option) => option.value === lastPrePublishPreferenceMode.value)
+      ?.label ?? '沿用历史偏好',
+)
+const preferenceModeNote = computed(() => preferenceModeNoteByMode(prePublishForm.preferenceMode))
+const lastPreferenceModeNote = computed(() =>
+  preferenceModeNoteByMode(lastPrePublishPreferenceMode.value),
+)
 const selectedWorkflowMessage = computed(() => {
   if (workflowMessages.value.length === 0) {
     return null
@@ -303,7 +433,58 @@ async function refreshTasks() {
   }
 }
 
+function resetTaskForm() {
+  taskForm.taskName = ''
+  taskForm.titleDraft = ''
+  taskForm.descriptionDraft = ''
+  taskForm.manuscript = ''
+  taskForm.subtitle = ''
+}
+
+function fillTaskForm(task: CreatorTask) {
+  taskForm.taskName = task.taskName
+  taskForm.titleDraft = getMaterialContent(task, 'TITLE_DRAFT')
+  taskForm.descriptionDraft = getMaterialContent(task, 'DESCRIPTION_DRAFT')
+  taskForm.manuscript = getMaterialContent(task, 'MANUSCRIPT')
+  taskForm.subtitle = getMaterialContent(task, 'SUBTITLE')
+}
+
+function getMaterialContent(task: CreatorTask, materialType: string) {
+  return task.materials.find((item) => item.materialType === materialType)?.content ?? ''
+}
+
+function hasTaskMaterialChanged(task: CreatorTask) {
+  return (
+    getMaterialContent(task, 'TITLE_DRAFT') !== taskForm.titleDraft.trim() ||
+    getMaterialContent(task, 'DESCRIPTION_DRAFT') !== taskForm.descriptionDraft.trim() ||
+    getMaterialContent(task, 'MANUSCRIPT') !== taskForm.manuscript.trim() ||
+    getMaterialContent(task, 'SUBTITLE') !== taskForm.subtitle.trim()
+  )
+}
+
+function resetGeneratedTaskResults() {
+  closeWorkflowEventSource()
+  suggestion.value = null
+  feedback.value = null
+  feedbackReport.value = null
+  feedbackChatResult.value = null
+  feedbackDashboard.value = null
+  feedbackFetchResult.value = null
+  feedbackImportFile.value = null
+  feedbackImportWarnings.value = []
+  workflowSession.value = null
+  workflowMessages.value = []
+  workflowMessageDraft.value = ''
+  selectedWorkflowMessageId.value = ''
+  resultModalTarget.value = null
+  hasPrePublishPreferenceModeSnapshot.value = false
+}
+
 async function submitTask() {
+  if (taskManageMode.value === 'edit') {
+    await updateTask()
+    return
+  }
   isCreatingTask.value = true
   errorMessage.value = ''
   successMessage.value = ''
@@ -316,19 +497,16 @@ async function submitTask() {
       subtitle: taskForm.subtitle,
     })
     selectedTask.value = task
+    taskManageMode.value = 'create'
     activeStep.value = 'prePublish'
-    suggestion.value = null
-    feedback.value = null
-    feedbackReport.value = null
-    feedbackChatResult.value = null
-    feedbackDashboard.value = null
-    feedbackFetchResult.value = null
-    feedbackImportWarnings.value = []
-    resultModalTarget.value = null
+    resetPrePublishPreferenceMode()
+    resetGeneratedTaskResults()
+    await loadCreatorPreferences(task.userId)
     persistWorkspaceState({ taskId: task.taskId })
     await loadPrePublishWorkflow(task.taskId)
-    successMessage.value = '创作任务已创建，可以继续做发布前优化。'
+    resetTaskForm()
     await refreshTasks()
+    successMessage.value = '创作任务已创建，可以继续做发布前优化。'
   } catch (error) {
     showError(error)
   } finally {
@@ -336,15 +514,145 @@ async function submitTask() {
   }
 }
 
+async function updateTask() {
+  if (!selectedTask.value) {
+    return
+  }
+  isUpdatingTask.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  const materialChanged = hasTaskMaterialChanged(selectedTask.value)
+  const payload: CreatorTaskUpdatePayload = {
+    taskName: taskForm.taskName,
+    titleDraft: taskForm.titleDraft,
+    descriptionDraft: taskForm.descriptionDraft,
+    manuscript: taskForm.manuscript,
+    subtitle: taskForm.subtitle,
+  }
+  try {
+    const task = await updateCreatorTask(selectedTask.value.taskId, payload)
+    selectedTask.value = task
+    taskManageMode.value = 'edit'
+    persistWorkspaceState({ taskId: task.taskId })
+    await loadCreatorPreferences(task.userId)
+    if (materialChanged) {
+      resetGeneratedTaskResults()
+      await loadPrePublishWorkflow(task.taskId, false)
+    } else {
+      await loadPrePublishWorkflow(task.taskId)
+    }
+    await refreshTasks()
+    successMessage.value = materialChanged
+      ? '任务内容已更新，旧建议已清空，请重新生成。'
+      : '任务名称已更新。'
+  } catch (error) {
+    showError(error)
+  } finally {
+    isUpdatingTask.value = false
+  }
+}
+
+function startCreateTask() {
+  taskManageMode.value = 'create'
+  resetTaskForm()
+  pendingDeleteTask.value = null
+  errorMessage.value = ''
+  successMessage.value = ''
+  activeStep.value = 'task'
+}
+
+async function startEditTask(taskId: string) {
+  errorMessage.value = ''
+  successMessage.value = ''
+  const task = selectedTask.value?.taskId === taskId ? selectedTask.value : null
+  if (task) {
+    taskManageMode.value = 'edit'
+    fillTaskForm(task)
+    activeStep.value = 'task'
+    pendingDeleteTask.value = null
+    return
+  }
+
+  await selectTask(taskId)
+  if (selectedTask.value?.taskId !== taskId) {
+    return
+  }
+  taskManageMode.value = 'edit'
+  fillTaskForm(selectedTask.value)
+  activeStep.value = 'task'
+  pendingDeleteTask.value = null
+}
+
+function cancelEditTask() {
+  taskManageMode.value = 'create'
+  resetTaskForm()
+}
+
+function askDeleteTask(task: CreatorTaskSummary) {
+  pendingDeleteTask.value = task
+  errorMessage.value = ''
+  successMessage.value = ''
+}
+
+function askDeleteSelectedTask() {
+  if (!selectedTask.value) {
+    return
+  }
+  askDeleteTask({
+    id: selectedTask.value.id,
+    taskId: selectedTask.value.taskId,
+    userId: selectedTask.value.userId,
+    taskName: selectedTask.value.taskName,
+    status: selectedTask.value.status,
+    materialCount: selectedTask.value.materials.length,
+    createTime: selectedTask.value.createTime,
+    updateTime: selectedTask.value.updateTime,
+  })
+}
+
+function cancelDeleteTask() {
+  pendingDeleteTask.value = null
+}
+
+async function confirmDeleteTask() {
+  if (!pendingDeleteTask.value) {
+    return
+  }
+  isDeletingTask.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  const targetTaskId = pendingDeleteTask.value.taskId
+  try {
+    await deleteCreatorTask(targetTaskId)
+    pendingDeleteTask.value = null
+    if (selectedTask.value?.taskId === targetTaskId) {
+      resetSelectedWorkspace()
+      restoredTaskId.value = ''
+      persistWorkspaceState({ taskId: null })
+    }
+    await refreshTasks()
+    successMessage.value = '任务已删除，列表会自动刷新。'
+  } catch (error) {
+    showError(error)
+  } finally {
+    isDeletingTask.value = false
+  }
+}
+
 async function selectTask(taskId: string) {
   errorMessage.value = ''
   successMessage.value = ''
   resultModalTarget.value = null
+  pendingDeleteTask.value = null
+  taskManageMode.value = 'create'
+  resetTaskForm()
   try {
     const task = await getCreatorTask(taskId)
     selectedTask.value = task
     activeStep.value = 'prePublish'
+    resetPrePublishPreferenceMode()
     persistWorkspaceState({ taskId: task.taskId })
+    await loadCreatorPreferences(task.userId)
     await loadOptionalResults(task)
     await loadPrePublishWorkflow(taskId)
   } catch (error) {
@@ -373,7 +681,19 @@ async function loadOptionalResults(task: CreatorTask) {
   }
 }
 
-async function loadPrePublishWorkflow(taskId: string) {
+async function loadCreatorPreferences(userId?: string) {
+  isLoadingCreatorPreferences.value = true
+  try {
+    creatorPreferences.value = await listCreatorPreferences(userId || 'default', 10)
+  } catch {
+    // 偏好记忆是发布前优化的增强上下文，查询失败时不阻断任务主流程。
+    creatorPreferences.value = []
+  } finally {
+    isLoadingCreatorPreferences.value = false
+  }
+}
+
+async function loadPrePublishWorkflow(taskId: string, resumeLatest = true) {
   isLoadingWorkflow.value = true
   closeWorkflowEventSource()
   workflowSession.value = null
@@ -388,7 +708,7 @@ async function loadPrePublishWorkflow(taskId: string) {
   try {
     workflowSession.value = await startPrePublishWorkflow(taskId, {
       userId: selectedTask.value?.userId,
-      resumeLatest: true,
+      resumeLatest,
     })
     workflowMessages.value = workflowSession.value.messages ?? []
     if (!suggestion.value && isPrePublishSuggestionVisible(workflowSession.value.status)) {
@@ -453,8 +773,11 @@ async function runPrePublishAnalyze() {
         creatorPreference: prePublishForm.creatorPreference,
         titleStyle: prePublishForm.titleStyle,
         extraRequirement: prePublishForm.extraRequirement,
+        preferenceMode: prePublishForm.preferenceMode,
       },
     )
+    lastPrePublishPreferenceMode.value = prePublishForm.preferenceMode
+    hasPrePublishPreferenceModeSnapshot.value = true
     workflowSession.value = {
       ...workflowSession.value,
       status: 'WAITING_CONFIRMATION' as CreatorWorkflowStatus,
@@ -691,15 +1014,19 @@ function resolveRefreshTargetTask() {
 function resetSelectedWorkspace() {
   closeWorkflowEventSource()
   selectedTask.value = null
+  taskManageMode.value = 'create'
+  resetTaskForm()
   suggestion.value = null
   feedback.value = null
   feedbackReport.value = null
   feedbackChatResult.value = null
   feedbackDashboard.value = null
   feedbackFetchResult.value = null
+  creatorPreferences.value = []
   feedbackImportFile.value = null
   feedbackImportWarnings.value = []
   isFetchingFeedback.value = false
+  resetPrePublishPreferenceMode()
   resultModalTarget.value = null
   workflowSession.value = null
   workflowMessages.value = []
@@ -887,6 +1214,22 @@ function formatValue(value: unknown) {
     return String(value)
   }
   return JSON.stringify(value, null, 2)
+}
+
+function preferenceItemText(value: unknown) {
+  if (typeof value === 'string') {
+    return value.trim()
+  }
+  if (isRecord(value)) {
+    const keys = ['preference', 'preferenceValue', 'content', 'insight', 'label', 'value', 'suggestion']
+    for (const key of keys) {
+      const text = value[key]
+      if (typeof text === 'string' && text.trim()) {
+        return text.trim()
+      }
+    }
+  }
+  return formatValue(value)
 }
 
 function getRecordText(value: unknown, key: string) {
@@ -1079,6 +1422,12 @@ function resetCurrentGuidance() {
   }
 }
 
+function resetPrePublishPreferenceMode() {
+  prePublishForm.preferenceMode = 'USE_HISTORY'
+  lastPrePublishPreferenceMode.value = 'USE_HISTORY'
+  hasPrePublishPreferenceModeSnapshot.value = false
+}
+
 function loadGuidanceSettings() {
   // 旧版本曾保存完整系统提示词，主动移除以避免在前端继续保留受保护规则。
   localStorage.removeItem(legacyPromptStorageKey)
@@ -1128,6 +1477,7 @@ function statusLabel(status: string) {
     DRAFT: '草稿',
     PRE_PUBLISH_ANALYZED: '已发布前优化',
     FEEDBACK_ANALYZED: '已反馈分析',
+    COMPETITOR_ANALYZED: '已竞品分析',
     ANALYZED: '已分析',
     ARCHIVED: '已归档',
   }
@@ -1159,6 +1509,19 @@ function statBarWidth(count: number, total: number) {
   return `${Math.max(8, Math.round((count / total) * 100))}%`
 }
 
+function preferenceModeNoteByMode(mode: CreatorPreferenceMode) {
+  if (mode === 'IGNORE_HISTORY') {
+    return '历史偏好不参与本次生成'
+  }
+  if (mode === 'EXPERIMENT') {
+    return '本期覆盖要求优先'
+  }
+  if (historicalPreferenceChips.value.length === 0) {
+    return '暂无可用历史偏好'
+  }
+  return `参考 ${historicalPreferenceChips.value.length} 条偏好`
+}
+
 function showError(error: unknown) {
   errorMessage.value = error instanceof Error ? error.message : '请求失败'
 }
@@ -1184,35 +1547,140 @@ function showError(error: unknown) {
       <aside class="creator-task-rail">
         <div class="creator-panel compact-panel">
           <div class="creator-panel-title">
-            <span>任务列表</span>
-            <button type="button" class="creator-ghost-button" @click="refreshTasks">
-              {{ isLoadingTasks ? '读取中' : '刷新' }}
-            </button>
+            <div>
+              <span>任务管理</span>
+              <b>{{ filteredTasks.length }} / {{ taskSummaryStats.total }}</b>
+            </div>
+            <div class="creator-panel-actions">
+              <button type="button" class="creator-ghost-button" @click="startCreateTask">
+                新建
+              </button>
+              <button type="button" class="creator-ghost-button" @click="refreshTasks">
+                {{ isLoadingTasks ? '读取中' : '刷新' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="creator-task-toolbar">
+            <label class="creator-task-search">
+              <span>搜索</span>
+              <input v-model="taskSearchQuery" type="search" placeholder="名称 / ID / 状态" />
+            </label>
+            <label class="creator-task-filter">
+              <span>状态</span>
+              <select v-model="taskStatusFilter">
+                <option
+                  v-for="option in taskStatusOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="creator-task-overview" aria-label="任务概览">
+            <span><b>{{ taskSummaryStats.draft }}</b> 草稿</span>
+            <span><b>{{ taskSummaryStats.inProgress }}</b> 推进中</span>
+            <span><b>{{ taskSummaryStats.done }}</b> 已复盘</span>
+          </div>
+
+          <div v-if="pendingDeleteTask" class="creator-delete-confirm">
+            <strong>删除「{{ pendingDeleteTaskName }}」？</strong>
+            <span>任务会从列表隐藏，历史分析产物保留在后端。</span>
+            <div class="creator-delete-actions">
+              <button
+                type="button"
+                class="creator-danger-action creator-mini-button"
+                :disabled="isDeletingTask"
+                @click="confirmDeleteTask"
+              >
+                {{ isDeletingTask ? '删除中' : '确认删除' }}
+              </button>
+              <button
+                type="button"
+                class="creator-ghost-button creator-mini-button"
+                :disabled="isDeletingTask"
+                @click="cancelDeleteTask"
+              >
+                取消
+              </button>
+            </div>
           </div>
 
           <div class="creator-task-list">
-            <button
-              v-for="task in tasks"
+            <article
+              v-for="task in filteredTasks"
               :key="task.taskId"
-              type="button"
               class="creator-task-item"
               :class="{ active: task.taskId === selectedTaskId }"
-              @click="selectTask(task.taskId)"
             >
-              <strong>{{ task.taskName }}</strong>
-              <span>{{ statusLabel(task.status) }} · {{ task.materialCount }} 份材料</span>
-              <small>{{ shortId(task.taskId) }} · {{ formatDate(task.updateTime) }}</small>
-            </button>
+              <button type="button" class="creator-task-select" @click="selectTask(task.taskId)">
+                <strong>{{ task.taskName }}</strong>
+                <span>{{ statusLabel(task.status) }} · {{ task.materialCount }} 份材料</span>
+                <small>{{ shortId(task.taskId) }} · {{ formatDate(task.updateTime) }}</small>
+              </button>
+              <div class="creator-task-actions">
+                <button
+                  type="button"
+                  class="creator-ghost-button creator-mini-button"
+                  @click="selectTask(task.taskId)"
+                >
+                  查看
+                </button>
+                <button
+                  type="button"
+                  class="creator-secondary-action creator-mini-button"
+                  @click="startEditTask(task.taskId)"
+                >
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  class="creator-danger-action creator-mini-button"
+                  @click="askDeleteTask(task)"
+                >
+                  删除
+                </button>
+              </div>
+            </article>
             <p v-if="!isLoadingTasks && tasks.length === 0" class="creator-muted">
-              还没有创作任务，先在右侧创建一个。
+              还没有创作任务，先新建一个。
+            </p>
+            <p v-else-if="!isLoadingTasks && filteredTasks.length === 0" class="creator-muted">
+              没有匹配当前筛选条件的任务。
             </p>
           </div>
         </div>
 
         <div v-if="selectedTask" class="creator-panel compact-panel">
           <div class="creator-panel-title">
-            <span>当前任务</span>
-            <b>{{ statusLabel(selectedTask.status) }}</b>
+            <div>
+              <span>当前任务</span>
+              <b>{{ selectedTask.taskName }}</b>
+            </div>
+            <div class="creator-panel-actions">
+              <button
+                type="button"
+                class="creator-secondary-action creator-mini-button"
+                @click="startEditTask(selectedTask.taskId)"
+              >
+                编辑
+              </button>
+              <button
+                type="button"
+                class="creator-danger-action creator-mini-button"
+                @click="askDeleteSelectedTask"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+          <div class="creator-current-task-meta">
+            <span>{{ statusLabel(selectedTask.status) }}</span>
+            <span>{{ selectedTask.materials.length }} 份材料</span>
+            <span>{{ formatDate(selectedTask.updateTime) }}</span>
           </div>
           <code class="creator-task-id">{{ selectedTask.taskId }}</code>
           <div class="creator-material-list">
@@ -1273,17 +1741,30 @@ function showError(error: unknown) {
           <div class="creator-section-head">
             <div>
               <p class="creator-kicker">Step 1</p>
-              <h3>创建创作任务</h3>
+              <h3>{{ taskFormTitle }}</h3>
             </div>
-            <button
-              type="button"
-              class="creator-primary-button"
-              :disabled="!hasTaskMaterialInput || isCreatingTask"
-              @click="submitTask"
-            >
-              {{ isCreatingTask ? '创建中...' : '创建任务' }}
-            </button>
+            <div class="creator-action-row">
+              <button
+                v-if="taskManageMode === 'edit'"
+                type="button"
+                class="creator-secondary-action"
+                :disabled="isUpdatingTask"
+                @click="cancelEditTask"
+              >
+                取消编辑
+              </button>
+              <button
+                type="button"
+                class="creator-primary-button"
+                :disabled="!hasTaskMaterialInput || isCreatingTask || isUpdatingTask"
+                @click="submitTask"
+              >
+                {{ taskSubmitLabel }}
+              </button>
+            </div>
           </div>
+
+          <p class="creator-inline-note">{{ taskFormHint }}</p>
 
           <div class="creator-form-grid">
             <label>
@@ -1475,6 +1956,43 @@ function showError(error: unknown) {
               </button>
             </form>
           </div>
+
+          <article class="creator-preference-panel">
+            <div class="creator-preference-head">
+              <div>
+                <span>偏好记忆</span>
+                <strong>{{ selectedPreferenceModeLabel }}</strong>
+              </div>
+              <b>{{ isLoadingCreatorPreferences ? '读取中' : preferenceModeNote }}</b>
+            </div>
+
+            <div class="creator-preference-modes" role="group" aria-label="偏好使用方式">
+              <button
+                v-for="option in preferenceModeOptions"
+                :key="option.value"
+                type="button"
+                :class="{ active: prePublishForm.preferenceMode === option.value }"
+                @click="prePublishForm.preferenceMode = option.value"
+              >
+                <span>{{ option.label }}</span>
+                <small>{{ option.description }}</small>
+              </button>
+            </div>
+
+            <div class="creator-preference-tags">
+              <span
+                v-for="chip in historicalPreferenceChips"
+                :key="`${chip.sourceTaskId}-${chip.text}`"
+                :class="{ muted: prePublishForm.preferenceMode === 'IGNORE_HISTORY' }"
+                :title="`来源任务：${chip.sourceTaskId}`"
+              >
+                {{ chip.text }}
+              </span>
+              <em v-if="!isLoadingCreatorPreferences && historicalPreferenceChips.length === 0">
+                暂无历史偏好
+              </em>
+            </div>
+          </article>
 
           <div class="creator-form-grid">
             <label>
@@ -1802,6 +2320,23 @@ function showError(error: unknown) {
                         : '采用本轮建议'
                   }}
                 </button>
+              </article>
+              <article class="creator-result-block span-full">
+                <span>偏好使用方式</span>
+                <strong>
+                  {{ hasPrePublishPreferenceModeSnapshot ? lastPreferenceModeLabel : '未记录生成方式' }}
+                </strong>
+                <p>
+                  {{
+                    !hasPrePublishPreferenceModeSnapshot
+                      ? '历史结果未保存偏好使用方式；重新生成后会记录。'
+                      : lastPrePublishPreferenceMode === 'USE_HISTORY'
+                        ? lastPreferenceModeNote
+                        : lastPrePublishPreferenceMode === 'EXPERIMENT'
+                          ? '历史偏好仅作避坑参考，本期覆盖要求优先。'
+                          : '历史偏好未参与本次发布前优化。'
+                  }}
+                </p>
               </article>
               <article class="creator-result-block span-full">
                 <span>内容摘要</span>

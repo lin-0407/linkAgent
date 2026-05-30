@@ -37,11 +37,33 @@ export type CreatorTaskCreatePayload = {
   subtitle?: string
 }
 
+export type CreatorTaskUpdatePayload = {
+  taskName?: string
+  titleDraft?: string
+  descriptionDraft?: string
+  manuscript?: string
+  subtitle?: string
+}
+
 export type PrePublishAnalyzePayload = {
   customGuidance?: string
   creatorPreference?: string
   titleStyle?: string
   extraRequirement?: string
+  preferenceMode?: CreatorPreferenceMode
+}
+
+export type CreatorPreferenceMode = 'USE_HISTORY' | 'IGNORE_HISTORY' | 'EXPERIMENT'
+
+export type CreatorPreference = {
+  id: number
+  preferenceId: string
+  userId: string
+  sourceTaskId: string
+  sourceReportId: string
+  preferenceContent: string
+  createTime: string
+  updateTime: string
 }
 
 export type CreatorSuggestion = {
