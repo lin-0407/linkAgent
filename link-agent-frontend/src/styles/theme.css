@@ -2287,6 +2287,118 @@ textarea:focus {
   padding: 0 12px;
 }
 
+.creator-file-field input {
+  min-height: 46px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.creator-file-field small {
+  color: rgba(63, 38, 49, 0.58);
+  line-height: 1.5;
+}
+
+.creator-script-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(229, 248, 255, 0.78), rgba(255, 240, 245, 0.72)),
+    rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(0, 174, 236, 0.18);
+  border-radius: 8px;
+}
+
+.creator-script-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.creator-script-panel-head span,
+.creator-script-grid label > span {
+  color: var(--color-ink-2);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.creator-script-panel-head p,
+.creator-script-panel small {
+  margin: 0;
+  color: rgba(63, 38, 49, 0.66);
+  line-height: 1.55;
+}
+
+.creator-script-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(120px, 0.65fr));
+  gap: 10px;
+}
+
+.creator-script-grid label {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.creator-script-grid input,
+.creator-script-grid select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  color: var(--color-ink);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 174, 236, 0.2);
+  border-radius: 8px;
+}
+
+.creator-script-panel pre {
+  margin: 0;
+  padding: 11px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(31, 23, 32, 0.86);
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(0, 174, 236, 0.16);
+  border-radius: 8px;
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.creator-script-output {
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  color: rgba(31, 23, 32, 0.86);
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(0, 174, 236, 0.16);
+  border-radius: 8px;
+}
+
+.creator-script-output span {
+  color: var(--color-ink-2);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.creator-script-output code,
+.creator-script-output li {
+  overflow-wrap: anywhere;
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.creator-script-output ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}
+
 .creator-form-grid textarea {
   min-height: 118px;
   max-height: 280px;
@@ -2314,6 +2426,13 @@ textarea:focus {
 .creator-form-grid textarea:focus::placeholder,
 .creator-prompt-field textarea:focus::placeholder {
   color: rgba(63, 38, 49, 0.24);
+}
+
+.creator-inline-note {
+  margin: 0;
+  color: rgba(63, 38, 49, 0.66);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .span-full {
@@ -2346,6 +2465,35 @@ textarea:focus {
   margin: 4px 0;
 }
 
+.creator-result-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(229, 248, 255, 0.78), rgba(255, 240, 245, 0.72)),
+    rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(0, 174, 236, 0.18);
+  border-radius: 8px;
+}
+
+.creator-result-entry div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.creator-result-entry strong {
+  color: var(--color-ink);
+  font-size: 15px;
+}
+
+.creator-result-entry span {
+  color: rgba(63, 38, 49, 0.66);
+  line-height: 1.55;
+}
+
 .creator-chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -2361,6 +2509,159 @@ textarea:focus {
   border: 1px solid rgba(0, 174, 236, 0.18);
   border-radius: 999px;
   font-size: 13px;
+}
+
+.creator-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+
+.creator-metric-grid section {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.creator-metric-grid strong {
+  overflow-wrap: anywhere;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 950;
+  line-height: 1.1;
+}
+
+.creator-metric-grid small {
+  color: rgba(63, 38, 49, 0.58);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.creator-stat-bars {
+  display: grid;
+  gap: 11px;
+}
+
+.creator-stat-bars section {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  padding-bottom: 12px;
+}
+
+.creator-stat-bars div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--color-ink);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.creator-stat-bars small {
+  flex: 0 0 auto;
+  color: rgba(63, 38, 49, 0.58);
+  font-weight: 850;
+}
+
+.creator-stat-bars section::after {
+  content: "";
+  display: block;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 8px;
+  background: rgba(231, 45, 72, 0.08);
+  border-radius: 999px;
+}
+
+.creator-stat-bars i {
+  display: block;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  height: 8px;
+  background:
+    linear-gradient(90deg, var(--creator-bili-blue), var(--creator-bili-pink)),
+    var(--creator-bili-blue);
+  border-radius: 999px;
+}
+
+.creator-feedback-item-list {
+  display: grid;
+  gap: 11px;
+}
+
+.creator-feedback-item-list section {
+  display: grid;
+  gap: 5px;
+  padding-left: 10px;
+  border-left: 3px solid rgba(0, 174, 236, 0.26);
+}
+
+.creator-feedback-item-list small {
+  color: rgba(63, 38, 49, 0.56);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.creator-feedback-item-list p {
+  margin: 0;
+  color: var(--color-ink-2);
+  line-height: 1.62;
+}
+
+.creator-feedback-chat {
+  gap: 12px;
+}
+
+.creator-feedback-chat-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.creator-feedback-chat-form textarea {
+  width: 100%;
+  min-height: 92px;
+  padding: 11px 12px;
+  color: var(--color-ink);
+  resize: vertical;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(231, 45, 72, 0.16);
+  border-radius: 8px;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.creator-feedback-chat-form textarea:focus {
+  border-color: rgba(0, 174, 236, 0.58);
+  box-shadow: 0 0 0 4px rgba(0, 174, 236, 0.12);
+}
+
+.creator-feedback-chat-answer {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: rgba(229, 248, 255, 0.62);
+  border: 1px solid rgba(0, 174, 236, 0.18);
+  border-radius: 8px;
+}
+
+.creator-feedback-chat-answer strong {
+  color: var(--color-ink);
+}
+
+.creator-feedback-chat-answer small {
+  color: rgba(63, 38, 49, 0.6);
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .creator-list {
@@ -2642,6 +2943,43 @@ textarea:focus {
   backdrop-filter: blur(8px);
 }
 
+.creator-result-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1180px, 100%);
+  max-height: min(860px, calc(100vh - 48px));
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+  color: var(--color-ink);
+  background: linear-gradient(180deg, rgba(255, 248, 248, 0.98), rgba(255, 255, 255, 0.96)), #fff;
+  border: 1px solid rgba(231, 45, 72, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 28px 80px rgba(31, 23, 32, 0.32);
+}
+
+.creator-result-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.creator-result-modal-head h3 {
+  margin: 0;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+.creator-result-modal-body {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .creator-prompt-modal {
   display: grid;
   width: min(900px, 100%);
@@ -2751,6 +3089,7 @@ textarea:focus {
   .creator-task-rail,
   .creator-form-grid,
   .creator-result-grid,
+  .creator-script-grid,
   .creator-workflow-grid,
   .creator-workflow-composer {
     grid-template-columns: 1fr;
@@ -2765,12 +3104,27 @@ textarea:focus {
     display: grid;
   }
 
-  .creator-confirm-panel {
+  .creator-confirm-panel,
+  .creator-result-entry,
+  .creator-result-modal-head,
+  .creator-feedback-chat-form {
+    display: grid;
+  }
+
+  .creator-script-panel-head {
     display: grid;
   }
 
   .creator-modal-backdrop {
     padding: 12px;
+  }
+
+  .creator-result-modal {
+    max-height: calc(100vh - 24px);
+  }
+
+  .creator-feedback-chat-form {
+    grid-template-columns: 1fr;
   }
 
   .creator-prompt-modal header,

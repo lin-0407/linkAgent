@@ -144,6 +144,10 @@ export type CreatorFeedbackAnalyzePayload = {
   extraRequirement?: string
 }
 
+export type CreatorFeedbackChatPayload = {
+  question: string
+}
+
 export type CreatorFeedback = {
   id: number
   feedbackId: string
@@ -153,6 +157,88 @@ export type CreatorFeedback = {
   extraContext: string | null
   createTime: string
   updateTime: string
+}
+
+export type CreatorFeedbackImportResult = {
+  taskId: string
+  commentCount: number
+  danmakuCount: number
+  metricImported: boolean
+  warnings: string[]
+}
+
+export type CreatorFeedbackFetchPayload = {
+  bvInput: string
+  maxComments?: number
+  maxRepliesPerComment?: number
+  maxDanmaku?: number
+  format?: 'json' | 'both'
+}
+
+export type CreatorFeedbackFetchResult = CreatorFeedbackImportResult & {
+  bvid: string
+  outputDirectory: string
+  outputFiles: string[]
+}
+
+export type CreatorFeedbackStat = {
+  name: string
+  label: string
+  count: number
+}
+
+export type CreatorFeedbackKeyword = {
+  keyword: string
+  count: number
+}
+
+export type CreatorFeedbackTimelinePoint = {
+  timeBucket: string
+  count: number
+}
+
+export type CreatorFeedbackMetric = {
+  metricId: string
+  viewCount: number | null
+  favoriteCount: number | null
+  coinCount: number | null
+  likeCount: number | null
+  shareCount: number | null
+  source: string | null
+  createTime: string
+}
+
+export type CreatorFeedbackItem = {
+  itemId: string
+  sourceType: string
+  sourceLabel: string
+  content: string
+  occurTimeText: string | null
+  likeCount: number | null
+  replyCount: number | null
+  category: string
+  categoryLabel: string
+  sentiment: string
+  sentimentLabel: string
+  noise: boolean
+  reason: string | null
+  createTime: string
+}
+
+export type CreatorFeedbackDashboard = {
+  taskId: string
+  commentCount: number
+  danmakuCount: number
+  noiseCount: number
+  metric: CreatorFeedbackMetric | null
+  commentCategoryStats: CreatorFeedbackStat[]
+  danmakuCategoryStats: CreatorFeedbackStat[]
+  sentimentStats: CreatorFeedbackStat[]
+  keywords: CreatorFeedbackKeyword[]
+  danmakuTimeline: CreatorFeedbackTimelinePoint[]
+  topCommentItems: CreatorFeedbackItem[]
+  recentItems: CreatorFeedbackItem[]
+  warnings: string[]
 }
 
 export type CreatorFeedbackReport = {
@@ -170,4 +256,15 @@ export type CreatorFeedbackReport = {
   parseStatus: string
   createTime: string
   updateTime: string
+}
+
+export type CreatorFeedbackChatResult = {
+  taskId: string
+  question: string
+  answer: string
+  evidenceItems: CreatorFeedbackItem[]
+  reportUsed: boolean
+  retrievalMode: string
+  ragEnabled: boolean
+  createTime: string
 }

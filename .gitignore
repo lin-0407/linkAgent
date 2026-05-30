@@ -38,6 +38,7 @@ application-dev.yml
 application-dev*.yml
 
 ### Local exports ###
+export/
 exports/
 
 ### Python local cache ###

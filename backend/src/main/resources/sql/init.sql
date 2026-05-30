@@ -235,6 +235,59 @@ CREATE TABLE IF NOT EXISTS creator_llm_feedback_report
   COMMENT = '评论弹幕分析报告表';
 
 -- ------------------------------------------------------------
+-- 10.1 评论弹幕明细表
+--      保存用户主动导入的单条评论/弹幕，支撑分类筛选、图表统计和后续证据追问
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_feedback_item
+(
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    item_id         VARCHAR(64)  NOT NULL COMMENT '明细唯一标识（UUID）',
+    task_id         VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id',
+    source_type     VARCHAR(16)  NOT NULL COMMENT '来源类型：COMMENT=评论，DANMAKU=弹幕',
+    source_id       VARCHAR(64)           DEFAULT NULL COMMENT '平台侧原始 ID；用户粘贴或 TXT 导入没有原始 ID 时为空',
+    content         LONGTEXT     NOT NULL COMMENT '评论或弹幕原文，来自用户粘贴、上传文件或页面 BV 采集脚本输出的样例',
+    occur_time_text VARCHAR(64)           DEFAULT NULL COMMENT '弹幕出现时间或评论发布时间文本，用于时间段分析和证据展示',
+    like_count      BIGINT UNSIGNED       DEFAULT NULL COMMENT '评论点赞量，点赞越多通常代表更多观众共鸣；弹幕或缺失数据为空',
+    reply_count     INT UNSIGNED          DEFAULT NULL COMMENT '评论回复量，回复越多通常代表更多互动或争议；弹幕或缺失数据为空',
+    category        VARCHAR(32)  NOT NULL DEFAULT 'OTHER' COMMENT '分类：APPROVAL/QUESTION/DOUBT/SUGGESTION/EMOTION/INTERACTION/KNOWLEDGE_REACTION/QUESTION_POINT/EMOTION_PEAK/RESONANCE/COMPLAINT/EMPTY_MEANING/DUPLICATE/OTHER',
+    sentiment       VARCHAR(16)  NOT NULL DEFAULT 'NEUTRAL' COMMENT '情绪倾向：POSITIVE=正向，NEGATIVE=负向，NEUTRAL=中性',
+    is_noise        TINYINT      NOT NULL DEFAULT 0 COMMENT '是否无意义内容：0=有效，1=无意义或重复内容',
+    reason          VARCHAR(500)          DEFAULT NULL COMMENT '分类原因，说明当前规则为什么给出这个分类',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_item_id (item_id),
+    KEY idx_task_source_category (task_id, source_type, category),
+    KEY idx_task_source_like (task_id, source_type, like_count),
+    KEY idx_task_sentiment (task_id, sentiment),
+    KEY idx_task_create_time (task_id, create_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '评论弹幕明细表';
+------------------------------------------
+-- 10.2 评论弹幕导入指标表
+--      保存导入样例携带的视频基础指标，用于评论弹幕复盘时理解反馈规模
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_feedback_metric
+(
+    id             BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    metric_id      VARCHAR(64) NOT NULL COMMENT '指标记录唯一标识（UUID）',
+    task_id        VARCHAR(64) NOT NULL COMMENT '关联 creator_task.task_id',
+    view_count     BIGINT UNSIGNED       DEFAULT NULL COMMENT '播放量，来自上传文件或页面 BV 采集脚本输出',
+    favorite_count BIGINT UNSIGNED       DEFAULT NULL COMMENT '收藏量，来自上传文件或页面 BV 采集脚本输出',
+    coin_count     BIGINT UNSIGNED       DEFAULT NULL COMMENT '投币量，来自上传文件或页面 BV 采集脚本输出',
+    like_count     BIGINT UNSIGNED       DEFAULT NULL COMMENT '点赞量，来自上传文件或页面 BV 采集脚本输出',
+    share_count    BIGINT UNSIGNED       DEFAULT NULL COMMENT '分享量，来自上传文件或页面 BV 采集脚本输出',
+    source         VARCHAR(64)           DEFAULT NULL COMMENT '数据来源，例如 bilibili_public_web 或 uploaded_json',
+    create_time    DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    is_deleted     TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_metric_id (metric_id),
+    UNIQUE KEY uk_task_id (task_id),
+    KEY idx_task_create_time (task_id, create_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '评论弹幕导入指标表';
+
+-- ------------------------------------------------------------
 -- 11. 同类型视频竞品样例表
 --     保存用户主动整理的同类视频信息，第一版不做平台抓取
 -- ------------------------------------------------------------

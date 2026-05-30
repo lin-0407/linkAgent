@@ -2,8 +2,8 @@
 """
 给定 B 站 BV 号，拉取公开评论样例和弹幕样例，并输出为本地文件。
 
-本脚本只做单视频、限量、本地辅助采集；不接收 Cookie，不绕过登录或风控。
-这样做是为了让项目保持“用户主动指定视频并生成样例数据”的边界，而不是做后台爬取系统。
+本脚本只处理用户指定的单个视频，按参数做限量采集；不接收 Cookie，不绕过登录或风控。
+这样做是为了把页面入口、脚本输出和后端导入串成可复盘的本地工作流。
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ WBI_NAV_API = "https://api.bilibili.com/x/web-interface/nav"
 COMMENT_TYPE_VIDEO = 1
 DEFAULT_TIMEOUT_SECONDS = 15
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "exports" / "bilibili_feedback"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "export" / "bilibili_feedback"
 MIXIN_KEY_ENC_TAB = [
     46, 47, 18, 2, 53, 8, 23, 32,
     15, 50, 10, 31, 58, 3, 45, 35,
@@ -127,7 +127,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="输出目录，默认项目内 exports/bilibili_feedback",
+        help="输出目录，默认项目内 export/bilibili_feedback",
     )
     parser.add_argument(
         "--format",

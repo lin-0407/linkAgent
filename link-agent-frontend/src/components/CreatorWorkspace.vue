@@ -3,13 +3,17 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
   analyzeCreatorFeedback,
   analyzePrePublishWorkflow,
+  chatCreatorFeedback,
   confirmWorkflowPrePublishSuggestion,
   createCreatorTask,
   createWorkflowEventSource,
   getCreatorFeedback,
+  getCreatorFeedbackDashboard,
   getCreatorFeedbackReport,
   getCreatorTask,
   getPrePublishSuggestion,
+  fetchCreatorFeedbackByBv,
+  importCreatorFeedbackFile,
   listCreatorTasks,
   listWorkflowMessages,
   saveCreatorFeedback,
@@ -18,6 +22,9 @@ import {
 } from '@/api/creator'
 import type {
   CreatorFeedback,
+  CreatorFeedbackChatResult,
+  CreatorFeedbackDashboard,
+  CreatorFeedbackFetchResult,
   CreatorFeedbackReport,
   CreatorSuggestion,
   CreatorTask,
@@ -30,6 +37,7 @@ import type {
 
 type UnknownRecord = Record<string, unknown>
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
+type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | 'feedbackReport'
 type CreatorWorkspaceState = {
   taskId?: string | null
 }
@@ -69,11 +77,28 @@ const feedbackAnalyzeForm = reactive({
   extraRequirement: '',
 })
 
+const feedbackChatForm = reactive({
+  question: '',
+})
+
+const feedbackScriptForm = reactive({
+  bvInput: '',
+  maxComments: 50,
+  maxRepliesPerComment: 20,
+  maxDanmaku: 500,
+  format: 'both' as 'json' | 'both',
+})
+
 const tasks = ref<CreatorTaskSummary[]>([])
 const selectedTask = ref<CreatorTask | null>(null)
 const suggestion = ref<CreatorSuggestion | null>(null)
 const feedback = ref<CreatorFeedback | null>(null)
 const feedbackReport = ref<CreatorFeedbackReport | null>(null)
+const feedbackChatResult = ref<CreatorFeedbackChatResult | null>(null)
+const feedbackDashboard = ref<CreatorFeedbackDashboard | null>(null)
+const feedbackFetchResult = ref<CreatorFeedbackFetchResult | null>(null)
+const feedbackImportFile = ref<File | null>(null)
+const feedbackImportWarnings = ref<string[]>([])
 const workflowSession = ref<CreatorWorkflowSession | null>(null)
 const workflowMessages = ref<CreatorWorkflowMessage[]>([])
 const workflowMessageDraft = ref('')
@@ -89,9 +114,14 @@ const isConfirmingPrePublish = ref(false)
 const isLoadingWorkflow = ref(false)
 const isSendingWorkflowMessage = ref(false)
 const isSavingFeedback = ref(false)
+const isImportingFeedback = ref(false)
+const isFetchingFeedback = ref(false)
 const isAnalyzingFeedback = ref(false)
+const isAskingFeedbackChat = ref(false)
 const guidanceEditorTarget = ref<GuidanceEditorTarget | null>(null)
+const resultModalTarget = ref<ResultModalTarget | null>(null)
 const isGuidanceBackdropPointerDown = ref(false)
+const isResultModalBackdropPointerDown = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 
@@ -141,6 +171,30 @@ const canConfirmPrePublish = computed(
     workflowSession.value?.status === 'WAITING_CONFIRMATION' &&
     !isConfirmingPrePublish.value,
 )
+const canRunFeedbackAnalyze = computed(() =>
+  Boolean(
+    // LLM 分析必须基于已经保存或导入到后端的样例，避免用户改了输入框却误以为未保存内容也参与分析。
+    canEnterFeedback.value &&
+      !isFetchingFeedback.value &&
+      !isAnalyzingFeedback.value &&
+      (feedback.value ||
+        (feedbackDashboard.value &&
+          feedbackDashboard.value.commentCount + feedbackDashboard.value.danmakuCount > 0)),
+  ),
+)
+const canAskFeedbackChat = computed(() =>
+  Boolean(
+    selectedTaskId.value &&
+      feedbackReport.value &&
+      hasText(feedbackChatForm.question) &&
+      !isAskingFeedbackChat.value,
+  ),
+)
+const feedbackDashboardWarnings = computed(() => {
+  const warnings = [...feedbackImportWarnings.value, ...(feedbackDashboard.value?.warnings ?? [])]
+  return Array.from(new Set(warnings))
+})
+const feedbackScriptBv = computed(() => extractBvid(feedbackScriptForm.bvInput))
 const materialPreview = computed(() => {
   if (!selectedTask.value) {
     return []
@@ -205,6 +259,18 @@ const guidanceEditorTitle = computed(() => {
   }
   return ''
 })
+const resultModalTitle = computed(() => {
+  if (resultModalTarget.value === 'prePublishSuggestion') {
+    return '发布前优化建议'
+  }
+  if (resultModalTarget.value === 'feedbackDashboard') {
+    return '评论弹幕导入结果'
+  }
+  if (resultModalTarget.value === 'feedbackReport') {
+    return '反馈分析报告'
+  }
+  return ''
+})
 
 onMounted(() => {
   loadGuidanceSettings()
@@ -254,6 +320,11 @@ async function submitTask() {
     suggestion.value = null
     feedback.value = null
     feedbackReport.value = null
+    feedbackChatResult.value = null
+    feedbackDashboard.value = null
+    feedbackFetchResult.value = null
+    feedbackImportWarnings.value = []
+    resultModalTarget.value = null
     persistWorkspaceState({ taskId: task.taskId })
     await loadPrePublishWorkflow(task.taskId)
     successMessage.value = '创作任务已创建，可以继续做发布前优化。'
@@ -268,6 +339,7 @@ async function submitTask() {
 async function selectTask(taskId: string) {
   errorMessage.value = ''
   successMessage.value = ''
+  resultModalTarget.value = null
   try {
     const task = await getCreatorTask(taskId)
     selectedTask.value = task
@@ -284,13 +356,19 @@ async function loadOptionalResults(task: CreatorTask) {
   suggestion.value = null
   feedback.value = null
   feedbackReport.value = null
+  feedbackChatResult.value = null
+  feedbackDashboard.value = null
+  feedbackFetchResult.value = null
+  feedbackImportFile.value = null
+  feedbackImportWarnings.value = []
 
   if (hasPrePublishResult(task.status)) {
     suggestion.value = await optionalRequest(() => getPrePublishSuggestion(task.taskId))
+    feedback.value = await optionalRequest(() => getCreatorFeedback(task.taskId))
+    feedbackDashboard.value = await optionalRequest(() => getCreatorFeedbackDashboard(task.taskId))
   }
 
   if (hasFeedbackResult(task.status)) {
-    feedback.value = await optionalRequest(() => getCreatorFeedback(task.taskId))
     feedbackReport.value = await optionalRequest(() => getCreatorFeedbackReport(task.taskId))
   }
 }
@@ -383,6 +461,7 @@ async function runPrePublishAnalyze() {
     }
     await refreshPrePublishWorkflowMessages()
     successMessage.value = '发布前优化建议已生成，请确认采用后再进入评论弹幕分析。'
+    openResultModal('prePublishSuggestion')
   } catch (error) {
     showError(error)
   } finally {
@@ -462,6 +541,12 @@ async function submitFeedback() {
       danmakuSamples: feedbackForm.danmakuSamples,
       extraContext: feedbackForm.extraContext,
     })
+    feedbackReport.value = null
+    feedbackChatResult.value = null
+    feedbackDashboard.value = null
+    feedbackFetchResult.value = null
+    feedbackImportWarnings.value = []
+    resultModalTarget.value = null
     activeStep.value = 'feedback'
     successMessage.value = '评论弹幕样例已保存，可以开始分析。'
   } catch (error) {
@@ -471,8 +556,74 @@ async function submitFeedback() {
   }
 }
 
-async function runFeedbackAnalyze() {
+function handleFeedbackFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  feedbackImportFile.value = input.files?.[0] ?? null
+  feedbackImportWarnings.value = []
+}
+
+async function importFeedbackFile() {
+  if (!selectedTaskId.value || !canEnterFeedback.value || !feedbackImportFile.value) {
+    return
+  }
+  isImportingFeedback.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const result = await importCreatorFeedbackFile(selectedTaskId.value, feedbackImportFile.value)
+    feedbackFetchResult.value = null
+    feedbackReport.value = null
+    feedbackChatResult.value = null
+    feedbackImportWarnings.value = result.warnings ?? []
+    // 导入会回填旧样例表并生成明细表，前端立即重读后端状态，避免本地文件内容成为隐藏的数据源。
+    feedback.value = await optionalRequest(() => getCreatorFeedback(selectedTaskId.value))
+    feedbackDashboard.value = await optionalRequest(() => getCreatorFeedbackDashboard(selectedTaskId.value))
+    successMessage.value = `已导入 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，仪表盘已更新。`
+    openResultModal('feedbackDashboard')
+  } catch (error) {
+    showError(error)
+  } finally {
+    isImportingFeedback.value = false
+  }
+}
+
+async function fetchFeedbackByBv() {
   if (!selectedTaskId.value || !canEnterFeedback.value) {
+    return
+  }
+  if (!feedbackScriptBv.value) {
+    errorMessage.value = '请先输入有效 BV 号或视频链接。'
+    return
+  }
+  isFetchingFeedback.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const result = await fetchCreatorFeedbackByBv(selectedTaskId.value, {
+      bvInput: feedbackScriptForm.bvInput,
+      maxComments: clampScriptNumber(feedbackScriptForm.maxComments, 0, 500),
+      maxRepliesPerComment: clampScriptNumber(feedbackScriptForm.maxRepliesPerComment, 0, 100),
+      maxDanmaku: clampScriptNumber(feedbackScriptForm.maxDanmaku, 0, 2000),
+      format: feedbackScriptForm.format,
+    })
+    feedbackFetchResult.value = result
+    feedbackReport.value = null
+    feedbackChatResult.value = null
+    feedbackImportWarnings.value = result.warnings ?? []
+    // 后端已经完成脚本执行和入库，前端只刷新权威状态，避免页面表单成为第二份数据源。
+    feedback.value = await optionalRequest(() => getCreatorFeedback(selectedTaskId.value))
+    feedbackDashboard.value = await optionalRequest(() => getCreatorFeedbackDashboard(selectedTaskId.value))
+    successMessage.value = `已拉取并导入 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，文件已保存到 ${result.outputDirectory}。`
+    openResultModal('feedbackDashboard')
+  } catch (error) {
+    showError(error)
+  } finally {
+    isFetchingFeedback.value = false
+  }
+}
+
+async function runFeedbackAnalyze() {
+  if (!selectedTaskId.value || !canRunFeedbackAnalyze.value) {
     return
   }
   isAnalyzingFeedback.value = true
@@ -484,14 +635,35 @@ async function runFeedbackAnalyze() {
       analysisFocus: feedbackAnalyzeForm.analysisFocus,
       extraRequirement: feedbackAnalyzeForm.extraRequirement,
     })
+    feedbackChatResult.value = null
     selectedTask.value = await getCreatorTask(selectedTaskId.value)
     activeStep.value = 'report'
     successMessage.value = '评论弹幕分析完成，反馈报告已保存。'
+    openResultModal('feedbackReport')
     await refreshTasks()
   } catch (error) {
     showError(error)
   } finally {
     isAnalyzingFeedback.value = false
+  }
+}
+
+async function askFeedbackChat() {
+  if (!selectedTaskId.value || !canAskFeedbackChat.value) {
+    return
+  }
+  isAskingFeedbackChat.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    feedbackChatResult.value = await chatCreatorFeedback(selectedTaskId.value, {
+      question: feedbackChatForm.question,
+    })
+    successMessage.value = '反馈追问已生成，回答基于当前任务报告和评论弹幕证据。'
+  } catch (error) {
+    showError(error)
+  } finally {
+    isAskingFeedbackChat.value = false
   }
 }
 
@@ -522,6 +694,13 @@ function resetSelectedWorkspace() {
   suggestion.value = null
   feedback.value = null
   feedbackReport.value = null
+  feedbackChatResult.value = null
+  feedbackDashboard.value = null
+  feedbackFetchResult.value = null
+  feedbackImportFile.value = null
+  feedbackImportWarnings.value = []
+  isFetchingFeedback.value = false
+  resultModalTarget.value = null
   workflowSession.value = null
   workflowMessages.value = []
   selectedWorkflowMessageId.value = ''
@@ -730,6 +909,18 @@ function readStringField(value: unknown, key: string) {
   return typeof fieldValue === 'string' ? fieldValue : null
 }
 
+function extractBvid(value: string) {
+  const matched = value.match(/BV[0-9A-Za-z]{10}/)
+  return matched?.[0] ?? ''
+}
+
+function clampScriptNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) {
+    return min
+  }
+  return Math.min(max, Math.max(min, Math.trunc(value)))
+}
+
 function isWorkflowStatus(value: string | null): value is CreatorWorkflowStatus {
   return Boolean(
     value &&
@@ -834,6 +1025,27 @@ function closeGuidanceEditor() {
   isGuidanceBackdropPointerDown.value = false
 }
 
+function openResultModal(target: ResultModalTarget) {
+  if (target === 'prePublishSuggestion' && !suggestion.value) {
+    return
+  }
+  if (target === 'feedbackDashboard' && !feedbackDashboard.value && !feedbackFetchResult.value) {
+    return
+  }
+  if (target === 'feedbackReport' && !feedbackReport.value) {
+    return
+  }
+  resultModalTarget.value = target
+  if (guidanceEditorTarget.value) {
+    closeGuidanceEditor()
+  }
+}
+
+function closeResultModal() {
+  resultModalTarget.value = null
+  isResultModalBackdropPointerDown.value = false
+}
+
 function handleGuidanceBackdropPointerDown(event: PointerEvent) {
   isGuidanceBackdropPointerDown.value = event.target === event.currentTarget
 }
@@ -844,6 +1056,18 @@ function handleGuidanceBackdropClick(event: MouseEvent) {
     return
   }
   isGuidanceBackdropPointerDown.value = false
+}
+
+function handleResultModalBackdropPointerDown(event: PointerEvent) {
+  isResultModalBackdropPointerDown.value = event.target === event.currentTarget
+}
+
+function handleResultModalBackdropClick(event: MouseEvent) {
+  if (isResultModalBackdropPointerDown.value && event.target === event.currentTarget) {
+    closeResultModal()
+    return
+  }
+  isResultModalBackdropPointerDown.value = false
 }
 
 function resetCurrentGuidance() {
@@ -919,6 +1143,20 @@ function formatDate(value: string) {
     return '-'
   }
   return value.replace('T', ' ').slice(0, 16)
+}
+
+function formatMetric(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return '-'
+  }
+  return value.toLocaleString('zh-CN')
+}
+
+function statBarWidth(count: number, total: number) {
+  if (total <= 0 || count <= 0) {
+    return '0%'
+  }
+  return `${Math.max(8, Math.round((count / total) * 100))}%`
 }
 
 function showError(error: unknown) {
@@ -1108,6 +1346,14 @@ function showError(error: unknown) {
                 创作指导
               </button>
               <button
+                v-if="suggestion"
+                type="button"
+                class="creator-secondary-action"
+                @click="openResultModal('prePublishSuggestion')"
+              >
+                {{ hasConfirmedPrePublish ? '查看建议' : '查看并确认' }}
+              </button>
+              <button
                 type="button"
                 class="creator-primary-button"
                 :disabled="!canRunPrePublishAnalyze || isAnalyzingPrePublish"
@@ -1258,81 +1504,26 @@ function showError(error: unknown) {
             </label>
           </div>
 
-          <div v-if="suggestion" class="creator-result-grid">
-            <article class="creator-confirm-panel span-full">
-              <div>
-                <span>确认状态</span>
-                <strong>{{ workflowStatusText }}</strong>
-                <p>
-                  {{
-                    hasConfirmedPrePublish
-                      ? '本轮发布前优化建议已确认，评论弹幕阶段已开放。'
-                      : '建议生成后不会自动推进阶段，需要你确认采用。'
-                  }}
-                </p>
-              </div>
-              <button
-                type="button"
-                class="creator-primary-button"
-                :disabled="!canConfirmPrePublish"
-                @click="confirmPrePublishResult"
-              >
+          <article v-if="suggestion" class="creator-result-entry">
+            <div>
+              <strong>发布前 AI 分析结果已生成</strong>
+              <span>
                 {{
                   hasConfirmedPrePublish
-                    ? '已采用'
-                    : isConfirmingPrePublish
-                      ? '确认中...'
-                      : '采用本轮建议'
+                    ? '本轮建议已确认，可以继续评论弹幕阶段。'
+                    : '进入独立弹窗查看标题、简介、标签建议，并决定是否采用。'
                 }}
-              </button>
-            </article>
-            <article class="creator-result-block span-full">
-              <span>内容摘要</span>
-              <p>{{ suggestion.contentSummary || '未解析到摘要' }}</p>
-            </article>
-            <article class="creator-result-block">
-              <span>目标受众</span>
-              <p>{{ suggestion.audienceProfile || '未解析到受众判断' }}</p>
-            </article>
-            <article class="creator-result-block">
-              <span>建议分区</span>
-              <p>{{ suggestion.partitionSuggestion || '未解析到分区建议' }}</p>
-            </article>
-            <article class="creator-result-block span-full">
-              <span>标题建议</span>
-              <div class="creator-list">
-                <section v-for="(item, index) in titleSuggestions" :key="index">
-                  <strong>{{ getRecordText(item, 'title') || formatValue(item) }}</strong>
-                  <p v-if="getRecordText(item, 'reason')">
-                    理由：{{ getRecordText(item, 'reason') }}
-                  </p>
-                  <p v-if="getRecordText(item, 'risk')">风险：{{ getRecordText(item, 'risk') }}</p>
-                </section>
-              </div>
-            </article>
-            <article class="creator-result-block">
-              <span>核心卖点</span>
-              <ul>
-                <li v-for="(item, index) in sellingPoints" :key="index">{{ formatValue(item) }}</li>
-              </ul>
-            </article>
-            <article class="creator-result-block">
-              <span>风险点</span>
-              <ul>
-                <li v-for="(item, index) in riskPoints" :key="index">{{ formatValue(item) }}</li>
-              </ul>
-            </article>
-            <article class="creator-result-block">
-              <span>标签建议</span>
-              <div class="creator-chip-list">
-                <b v-for="(item, index) in tagSuggestions" :key="index">{{ formatValue(item) }}</b>
-              </div>
-            </article>
-            <article class="creator-result-block">
-              <span>简介建议</span>
-              <p>{{ suggestion.descriptionSuggestion || '未解析到简介建议' }}</p>
-            </article>
-          </div>
+              </span>
+            </div>
+            <button
+              type="button"
+              class="creator-primary-button"
+              @click="openResultModal('prePublishSuggestion')"
+            >
+              {{ hasConfirmedPrePublish ? '查看建议' : '查看并确认建议' }}
+            </button>
+          </article>
+
         </section>
 
         <section v-if="activeStep === 'feedback'" class="creator-section">
@@ -1350,9 +1541,33 @@ function showError(error: unknown) {
                 分析指导
               </button>
               <button
+                v-if="feedbackDashboard || feedbackFetchResult"
                 type="button"
                 class="creator-secondary-action"
-                :disabled="!canEnterFeedback || !hasFeedbackSampleInput || isSavingFeedback"
+                @click="openResultModal('feedbackDashboard')"
+              >
+                查看导入结果
+              </button>
+              <button
+                v-if="feedbackReport"
+                type="button"
+                class="creator-secondary-action"
+                @click="openResultModal('feedbackReport')"
+              >
+                查看分析结果
+              </button>
+              <button
+                type="button"
+                class="creator-secondary-action"
+                :disabled="!canEnterFeedback || !feedbackImportFile || isImportingFeedback || isFetchingFeedback"
+                @click="importFeedbackFile"
+              >
+                {{ isImportingFeedback ? '导入中...' : '导入文件' }}
+              </button>
+              <button
+                type="button"
+                class="creator-secondary-action"
+                :disabled="!canEnterFeedback || !hasFeedbackSampleInput || isSavingFeedback || isFetchingFeedback"
                 @click="submitFeedback"
               >
                 {{ isSavingFeedback ? '保存中...' : '保存样例' }}
@@ -1360,7 +1575,7 @@ function showError(error: unknown) {
               <button
                 type="button"
                 class="creator-primary-button"
-                :disabled="!canEnterFeedback || isAnalyzingFeedback"
+                :disabled="!canRunFeedbackAnalyze"
                 @click="runFeedbackAnalyze"
               >
                 {{ isAnalyzingFeedback ? '分析中...' : '分析反馈' }}
@@ -1369,6 +1584,83 @@ function showError(error: unknown) {
           </div>
 
           <div class="creator-form-grid">
+            <article class="span-full creator-script-panel">
+              <div class="creator-script-panel-head">
+                <div>
+                  <span>BV 拉取并导入</span>
+                  <p>填好 BV 和数量上限后，后端执行项目内脚本，文件保存到项目根目录 export/bilibili_feedback，并自动导入仪表盘。</p>
+                </div>
+                <button
+                  type="button"
+                  class="creator-primary-button"
+                  :disabled="!canEnterFeedback || !feedbackScriptBv || isFetchingFeedback"
+                  @click="fetchFeedbackByBv"
+                >
+                  {{ isFetchingFeedback ? '拉取中...' : '拉取并导入' }}
+                </button>
+              </div>
+              <div class="creator-script-grid">
+                <label>
+                  <span>BV 号或链接</span>
+                  <input
+                    v-model="feedbackScriptForm.bvInput"
+                    type="text"
+                    maxlength="200"
+                    placeholder="BVxxxx 或 https://www.bilibili.com/video/BVxxxx"
+                  />
+                </label>
+                <label>
+                  <span>主楼评论数</span>
+                  <input
+                    v-model.number="feedbackScriptForm.maxComments"
+                    type="number"
+                    min="0"
+                    max="500"
+                  />
+                </label>
+                <label>
+                  <span>每条回复数</span>
+                  <input
+                    v-model.number="feedbackScriptForm.maxRepliesPerComment"
+                    type="number"
+                    min="0"
+                    max="100"
+                  />
+                </label>
+                <label>
+                  <span>弹幕数</span>
+                  <input
+                    v-model.number="feedbackScriptForm.maxDanmaku"
+                    type="number"
+                    min="0"
+                    max="2000"
+                  />
+                </label>
+                <label>
+                  <span>输出格式</span>
+                  <select v-model="feedbackScriptForm.format">
+                    <option value="both">JSON + TXT</option>
+                    <option value="json">只输出 JSON</option>
+                  </select>
+                </label>
+              </div>
+              <small>自动导入依赖 JSON 文件，所以页面只开放 JSON 或 JSON+TXT 两种输出格式。</small>
+            </article>
+
+            <label class="span-full creator-file-field">
+              <span>导入脚本文件</span>
+              <!-- 切换任务时重建文件输入框，避免浏览器保留上一个任务选择过的本地文件。 -->
+              <input
+                :key="selectedTaskId"
+                type="file"
+                accept=".json,.txt,application/json,text/plain"
+                :disabled="!canEnterFeedback || isImportingFeedback || isFetchingFeedback"
+                @change="handleFeedbackFileChange"
+              />
+              <small>
+                仍保留文件导入入口，便于导入历史 JSON/TXT 或手工整理后的样例文件。
+              </small>
+            </label>
             <label>
               <span>评论样例</span>
               <textarea
@@ -1411,10 +1703,9 @@ function showError(error: unknown) {
             </label>
           </div>
 
-          <article v-if="feedback" class="creator-result-block span-full">
-            <span>已保存样例</span>
-            <p>{{ formatDate(feedback.updateTime) }} 更新，后端已保存用户主动提供的数据。</p>
-          </article>
+          <p v-if="feedback" class="creator-inline-note">
+            样例已于 {{ formatDate(feedback.updateTime) }} 保存，导入结果和分析报告请通过上方按钮查看。
+          </p>
         </section>
 
         <section v-if="activeStep === 'report'" class="creator-section">
@@ -1423,80 +1714,478 @@ function showError(error: unknown) {
               <p class="creator-kicker">Step 4</p>
               <h3>反馈分析结果</h3>
             </div>
-            <span v-if="feedbackReport" class="creator-parse-status">
-              {{ feedbackReport.parseStatus }}
-            </span>
+            <div v-if="feedbackReport" class="creator-action-row">
+              <span class="creator-parse-status">{{ feedbackReport.parseStatus }}</span>
+              <button
+                type="button"
+                class="creator-primary-button"
+                @click="openResultModal('feedbackReport')"
+              >
+                打开分析结果
+              </button>
+            </div>
           </div>
 
-          <div v-if="feedbackReport" class="creator-result-grid">
-            <article class="creator-result-block span-full">
-              <span>整体反馈</span>
-              <p>{{ feedbackReport.feedbackSummary || '未解析到整体反馈' }}</p>
-            </article>
-            <article class="creator-result-block">
-              <span>情绪倾向</span>
-              <p>{{ feedbackReport.sentimentSummary || '未解析到情绪倾向' }}</p>
-            </article>
-            <article class="creator-result-block">
-              <span>下一期内容建议</span>
-              <ul>
-                <li v-for="(item, index) in nextContentSuggestions" :key="index">
-                  {{ formatValue(item) }}
-                </li>
-              </ul>
-            </article>
-            <article class="creator-result-block span-full">
-              <span>高频观点</span>
-              <div class="creator-list">
-                <section v-for="(item, index) in hotTopics" :key="index">
-                  <strong>{{ getRecordText(item, 'topic') || formatValue(item) }}</strong>
-                  <p v-if="getRecordText(item, 'evidence')">
-                    依据：{{ getRecordText(item, 'evidence') }}
-                  </p>
-                  <p v-if="getRecordText(item, 'suggestion')">
-                    建议：{{ getRecordText(item, 'suggestion') }}
-                  </p>
-                </section>
-              </div>
-            </article>
-            <article class="creator-result-block">
-              <span>争议点</span>
-              <div class="creator-list">
-                <section v-for="(item, index) in controversyPoints" :key="index">
-                  <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
-                  <p v-if="getRecordText(item, 'risk')">风险：{{ getRecordText(item, 'risk') }}</p>
-                  <p v-if="getRecordText(item, 'responseAdvice')">
-                    回应：{{ getRecordText(item, 'responseAdvice') }}
-                  </p>
-                </section>
-              </div>
-            </article>
-            <article class="creator-result-block">
-              <span>误解点</span>
-              <div class="creator-list">
-                <section v-for="(item, index) in misunderstandingPoints" :key="index">
-                  <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
-                  <p v-if="getRecordText(item, 'clarificationAdvice')">
-                    澄清：{{ getRecordText(item, 'clarificationAdvice') }}
-                  </p>
-                </section>
-              </div>
-            </article>
-            <article class="creator-result-block span-full">
-              <span>互动建议</span>
-              <ul>
-                <li v-for="(item, index) in interactionSuggestions" :key="index">
-                  {{ formatValue(item) }}
-                </li>
-              </ul>
-            </article>
-          </div>
+          <article v-if="feedbackReport" class="creator-result-entry">
+            <div>
+              <strong>反馈分析已生成</strong>
+              <span>
+                完整报告已收纳到独立结果弹窗，避免和评论弹幕输入区混在一起。
+              </span>
+            </div>
+            <button
+              type="button"
+              class="creator-primary-button"
+              @click="openResultModal('feedbackReport')"
+            >
+              查看完整报告
+            </button>
+          </article>
 
           <article v-else class="creator-empty-result">
             <strong>还没有反馈报告</strong>
             <span>先提交评论弹幕样例，然后点击“分析反馈”。</span>
           </article>
         </section>
+      </section>
+    </div>
+
+    <div
+      v-if="resultModalTarget"
+      class="creator-modal-backdrop"
+      role="presentation"
+      @pointerdown="handleResultModalBackdropPointerDown"
+      @click="handleResultModalBackdropClick"
+    >
+      <section
+        class="creator-result-modal"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="resultModalTitle"
+      >
+        <header class="creator-result-modal-head">
+          <div>
+            <p class="creator-kicker">阶段结果</p>
+            <h3>{{ resultModalTitle }}</h3>
+          </div>
+          <button type="button" class="creator-ghost-button" @click="closeResultModal">
+            关闭
+          </button>
+        </header>
+
+        <div class="creator-result-modal-body">
+          <template v-if="resultModalTarget === 'prePublishSuggestion' && suggestion">
+            <div class="creator-result-grid">
+              <article class="creator-confirm-panel span-full">
+                <div>
+                  <span>确认状态</span>
+                  <strong>{{ workflowStatusText }}</strong>
+                  <p>
+                    {{
+                      hasConfirmedPrePublish
+                        ? '本轮发布前优化建议已确认，评论弹幕阶段已开放。'
+                        : '建议生成后不会自动推进阶段，需要你确认采用。'
+                    }}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="creator-primary-button"
+                  :disabled="!canConfirmPrePublish"
+                  @click="confirmPrePublishResult"
+                >
+                  {{
+                    hasConfirmedPrePublish
+                      ? '已采用'
+                      : isConfirmingPrePublish
+                        ? '确认中...'
+                        : '采用本轮建议'
+                  }}
+                </button>
+              </article>
+              <article class="creator-result-block span-full">
+                <span>内容摘要</span>
+                <p>{{ suggestion.contentSummary || '未解析到摘要' }}</p>
+              </article>
+              <article class="creator-result-block">
+                <span>目标受众</span>
+                <p>{{ suggestion.audienceProfile || '未解析到受众判断' }}</p>
+              </article>
+              <article class="creator-result-block">
+                <span>建议分区</span>
+                <p>{{ suggestion.partitionSuggestion || '未解析到分区建议' }}</p>
+              </article>
+              <article class="creator-result-block span-full">
+                <span>标题建议</span>
+                <div class="creator-list">
+                  <section v-for="(item, index) in titleSuggestions" :key="index">
+                    <strong>{{ getRecordText(item, 'title') || formatValue(item) }}</strong>
+                    <p v-if="getRecordText(item, 'reason')">
+                      理由：{{ getRecordText(item, 'reason') }}
+                    </p>
+                    <p v-if="getRecordText(item, 'risk')">
+                      风险：{{ getRecordText(item, 'risk') }}
+                    </p>
+                  </section>
+                </div>
+              </article>
+              <article class="creator-result-block">
+                <span>核心卖点</span>
+                <ul>
+                  <li v-for="(item, index) in sellingPoints" :key="index">
+                    {{ formatValue(item) }}
+                  </li>
+                </ul>
+              </article>
+              <article class="creator-result-block">
+                <span>风险点</span>
+                <ul>
+                  <li v-for="(item, index) in riskPoints" :key="index">{{ formatValue(item) }}</li>
+                </ul>
+              </article>
+              <article class="creator-result-block">
+                <span>标签建议</span>
+                <div class="creator-chip-list">
+                  <b v-for="(item, index) in tagSuggestions" :key="index">
+                    {{ formatValue(item) }}
+                  </b>
+                </div>
+              </article>
+              <article class="creator-result-block">
+                <span>简介建议</span>
+                <p>{{ suggestion.descriptionSuggestion || '未解析到简介建议' }}</p>
+              </article>
+            </div>
+          </template>
+
+          <template v-else-if="resultModalTarget === 'feedbackDashboard'">
+            <div class="creator-result-grid">
+              <article v-if="feedbackFetchResult" class="creator-result-block span-full">
+                <span>脚本输出</span>
+                <div class="creator-script-output">
+                  <span>输出目录</span>
+                  <code>{{ feedbackFetchResult.outputDirectory }}</code>
+                  <span>生成文件</span>
+                  <ul>
+                    <li v-for="filePath in feedbackFetchResult.outputFiles" :key="filePath">
+                      {{ filePath }}
+                    </li>
+                  </ul>
+                </div>
+              </article>
+
+              <template v-if="feedbackDashboard">
+                <article class="creator-result-block">
+                  <span>导入概览</span>
+                  <div class="creator-metric-grid">
+                    <section>
+                      <strong>{{ formatMetric(feedbackDashboard.commentCount) }}</strong>
+                      <small>评论</small>
+                    </section>
+                    <section>
+                      <strong>{{ formatMetric(feedbackDashboard.danmakuCount) }}</strong>
+                      <small>弹幕</small>
+                    </section>
+                    <section>
+                      <strong>{{ formatMetric(feedbackDashboard.noiseCount) }}</strong>
+                      <small>无意义/重复</small>
+                    </section>
+                  </div>
+                </article>
+
+                <article class="creator-result-block">
+                  <span>视频指标</span>
+                  <div v-if="feedbackDashboard.metric" class="creator-metric-grid">
+                    <section>
+                      <strong>{{ formatMetric(feedbackDashboard.metric.viewCount) }}</strong>
+                      <small>播放</small>
+                    </section>
+                    <section>
+                      <strong>{{ formatMetric(feedbackDashboard.metric.likeCount) }}</strong>
+                      <small>点赞</small>
+                    </section>
+                    <section>
+                      <strong>{{ formatMetric(feedbackDashboard.metric.coinCount) }}</strong>
+                      <small>投币</small>
+                    </section>
+                    <section>
+                      <strong>{{ formatMetric(feedbackDashboard.metric.favoriteCount) }}</strong>
+                      <small>收藏</small>
+                    </section>
+                  </div>
+                  <p v-else>当前文件没有视频指标，仪表盘只展示评论和弹幕明细。</p>
+                </article>
+
+                <article class="creator-result-block">
+                  <span>评论分类</span>
+                  <div class="creator-stat-bars">
+                    <section
+                      v-for="item in feedbackDashboard.commentCategoryStats"
+                      :key="`comment-${item.name}`"
+                    >
+                      <div>
+                        <strong>{{ item.label }}</strong>
+                        <small>{{ item.count }} 条</small>
+                      </div>
+                      <i
+                        :style="{
+                          width: statBarWidth(item.count, feedbackDashboard.commentCount),
+                        }"
+                      ></i>
+                    </section>
+                  </div>
+                </article>
+
+                <article class="creator-result-block">
+                  <span>弹幕分类</span>
+                  <div class="creator-stat-bars">
+                    <section
+                      v-for="item in feedbackDashboard.danmakuCategoryStats"
+                      :key="`danmaku-${item.name}`"
+                    >
+                      <div>
+                        <strong>{{ item.label }}</strong>
+                        <small>{{ item.count }} 条</small>
+                      </div>
+                      <i
+                        :style="{
+                          width: statBarWidth(item.count, feedbackDashboard.danmakuCount),
+                        }"
+                      ></i>
+                    </section>
+                  </div>
+                </article>
+
+                <article class="creator-result-block">
+                  <span>情绪分布</span>
+                  <div class="creator-stat-bars">
+                    <section
+                      v-for="item in feedbackDashboard.sentimentStats"
+                      :key="`sentiment-${item.name}`"
+                    >
+                      <div>
+                        <strong>{{ item.label }}</strong>
+                        <small>{{ item.count }} 条</small>
+                      </div>
+                      <i
+                        :style="{
+                          width: statBarWidth(
+                            item.count,
+                            feedbackDashboard.commentCount + feedbackDashboard.danmakuCount,
+                          ),
+                        }"
+                      ></i>
+                    </section>
+                  </div>
+                </article>
+
+                <article class="creator-result-block">
+                  <span>高频关键词</span>
+                  <div class="creator-chip-list">
+                    <b v-for="item in feedbackDashboard.keywords" :key="item.keyword">
+                      {{ item.keyword }} · {{ item.count }}
+                    </b>
+                    <p v-if="feedbackDashboard.keywords.length === 0">
+                      暂未命中内置关键词，后续可接入分词或 LLM 分类。
+                    </p>
+                  </div>
+                </article>
+
+                <article class="creator-result-block span-full">
+                  <span>弹幕时间段热度</span>
+                  <div v-if="feedbackDashboard.danmakuTimeline.length" class="creator-stat-bars">
+                    <section
+                      v-for="item in feedbackDashboard.danmakuTimeline"
+                      :key="item.timeBucket"
+                    >
+                      <div>
+                        <strong>{{ item.timeBucket }}</strong>
+                        <small>{{ item.count }} 条</small>
+                      </div>
+                      <i
+                        :style="{
+                          width: statBarWidth(item.count, feedbackDashboard.danmakuCount),
+                        }"
+                      ></i>
+                    </section>
+                  </div>
+                  <p v-else>当前弹幕没有时间戳，暂不展示时间段热度。</p>
+                </article>
+
+                <article class="creator-result-block span-full">
+                  <span>高反馈评论</span>
+                  <div
+                    v-if="feedbackDashboard.topCommentItems.length"
+                    class="creator-feedback-item-list"
+                  >
+                    <section v-for="item in feedbackDashboard.topCommentItems" :key="item.itemId">
+                      <small>
+                        {{ item.categoryLabel }} · {{ item.sentimentLabel }}
+                        <template v-if="item.likeCount !== null">
+                          · 点赞 {{ formatMetric(item.likeCount) }}
+                        </template>
+                        <template v-if="item.replyCount !== null">
+                          · 回复 {{ formatMetric(item.replyCount) }}
+                        </template>
+                        <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
+                      </small>
+                      <p>{{ item.content }}</p>
+                    </section>
+                  </div>
+                  <p v-else>当前导入没有可排序的评论点赞数据。</p>
+                </article>
+
+                <article class="creator-result-block span-full">
+                  <span>最近导入明细</span>
+                  <div class="creator-feedback-item-list">
+                    <section v-for="item in feedbackDashboard.recentItems" :key="item.itemId">
+                      <small>
+                        {{ item.sourceLabel }} · {{ item.categoryLabel }} ·
+                        {{ item.sentimentLabel }}
+                        <template v-if="item.likeCount !== null">
+                          · 点赞 {{ formatMetric(item.likeCount) }}
+                        </template>
+                        <template v-if="item.replyCount !== null">
+                          · 回复 {{ formatMetric(item.replyCount) }}
+                        </template>
+                        <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
+                      </small>
+                      <p>{{ item.content }}</p>
+                    </section>
+                  </div>
+                </article>
+
+                <article
+                  v-if="feedbackDashboardWarnings.length"
+                  class="creator-result-block span-full"
+                >
+                  <span>导入提示</span>
+                  <ul>
+                    <li v-for="warning in feedbackDashboardWarnings" :key="warning">
+                      {{ warning }}
+                    </li>
+                  </ul>
+                </article>
+              </template>
+
+              <article v-else class="creator-empty-result span-full">
+                <strong>还没有可展示的导入仪表盘</strong>
+                <span>请先导入 JSON/TXT 文件，或通过单个 BV 显式触发限量样例采集。</span>
+              </article>
+            </div>
+          </template>
+
+          <template v-else-if="resultModalTarget === 'feedbackReport' && feedbackReport">
+            <div class="creator-result-grid">
+              <article class="creator-result-block span-full">
+                <span>整体反馈</span>
+                <p>{{ feedbackReport.feedbackSummary || '未解析到整体反馈' }}</p>
+              </article>
+              <article class="creator-result-block span-full creator-feedback-chat">
+                <span>反馈追问</span>
+                <div class="creator-feedback-chat-form">
+                  <textarea
+                    v-model="feedbackChatForm.question"
+                    maxlength="1000"
+                    placeholder="例如：为什么认为观众误解了 Agent 工具调用？"
+                    @keydown.ctrl.enter.prevent="askFeedbackChat"
+                  ></textarea>
+                  <button
+                    type="button"
+                    class="creator-primary-button"
+                    :disabled="!canAskFeedbackChat"
+                    @click="askFeedbackChat"
+                  >
+                    {{ isAskingFeedbackChat ? '生成中...' : '追问' }}
+                  </button>
+                </div>
+                <div v-if="feedbackChatResult" class="creator-feedback-chat-answer">
+                  <strong>回答</strong>
+                  <p>{{ feedbackChatResult.answer }}</p>
+                  <small>
+                    当前任务证据 · {{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
+                    {{ feedbackChatResult.ragEnabled ? '向量检索' : 'SQL 检索' }}
+                  </small>
+                  <div
+                    v-if="feedbackChatResult.evidenceItems.length"
+                    class="creator-feedback-item-list"
+                  >
+                    <section
+                      v-for="(item, index) in feedbackChatResult.evidenceItems"
+                      :key="item.itemId"
+                    >
+                      <small>
+                        证据{{ index + 1 }} · {{ item.sourceLabel }} ·
+                        {{ item.categoryLabel }} · {{ item.sentimentLabel }}
+                        <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
+                      </small>
+                      <p>{{ item.content }}</p>
+                    </section>
+                  </div>
+                </div>
+              </article>
+              <article class="creator-result-block">
+                <span>情绪倾向</span>
+                <p>{{ feedbackReport.sentimentSummary || '未解析到情绪倾向' }}</p>
+              </article>
+              <article class="creator-result-block">
+                <span>下一期内容建议</span>
+                <ul>
+                  <li v-for="(item, index) in nextContentSuggestions" :key="index">
+                    {{ formatValue(item) }}
+                  </li>
+                </ul>
+              </article>
+              <article class="creator-result-block span-full">
+                <span>高频观点</span>
+                <div class="creator-list">
+                  <section v-for="(item, index) in hotTopics" :key="index">
+                    <strong>{{ getRecordText(item, 'topic') || formatValue(item) }}</strong>
+                    <p v-if="getRecordText(item, 'evidence')">
+                      依据：{{ getRecordText(item, 'evidence') }}
+                    </p>
+                    <p v-if="getRecordText(item, 'suggestion')">
+                      建议：{{ getRecordText(item, 'suggestion') }}
+                    </p>
+                  </section>
+                </div>
+              </article>
+              <article class="creator-result-block">
+                <span>争议点</span>
+                <div class="creator-list">
+                  <section v-for="(item, index) in controversyPoints" :key="index">
+                    <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
+                    <p v-if="getRecordText(item, 'risk')">
+                      风险：{{ getRecordText(item, 'risk') }}
+                    </p>
+                    <p v-if="getRecordText(item, 'responseAdvice')">
+                      回应：{{ getRecordText(item, 'responseAdvice') }}
+                    </p>
+                  </section>
+                </div>
+              </article>
+              <article class="creator-result-block">
+                <span>误解点</span>
+                <div class="creator-list">
+                  <section v-for="(item, index) in misunderstandingPoints" :key="index">
+                    <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
+                    <p v-if="getRecordText(item, 'clarificationAdvice')">
+                      澄清：{{ getRecordText(item, 'clarificationAdvice') }}
+                    </p>
+                  </section>
+                </div>
+              </article>
+              <article class="creator-result-block span-full">
+                <span>互动建议</span>
+                <ul>
+                  <li v-for="(item, index) in interactionSuggestions" :key="index">
+                    {{ formatValue(item) }}
+                  </li>
+                </ul>
+              </article>
+            </div>
+          </template>
+        </div>
       </section>
     </div>
 

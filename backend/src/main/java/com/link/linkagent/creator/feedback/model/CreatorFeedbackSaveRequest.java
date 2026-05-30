@@ -6,7 +6,7 @@ import jakarta.validation.constraints.Size;
 
 /**
  * 评论弹幕样例保存请求。
- * 第一版只接收用户主动粘贴的数据，避免把能力边界扩展到平台爬取。
+ * 这个入口只负责手动粘贴样例，BV 拉取和文件导入走独立接口，避免一个 DTO 承担过多职责。
  */
 public record CreatorFeedbackSaveRequest(
         @Size(max = 20000, message = "评论样例长度不能超过20000个字符")

@@ -1,6 +1,12 @@
 import type {
   CreatorFeedback,
   CreatorFeedbackAnalyzePayload,
+  CreatorFeedbackChatPayload,
+  CreatorFeedbackChatResult,
+  CreatorFeedbackDashboard,
+  CreatorFeedbackFetchPayload,
+  CreatorFeedbackFetchResult,
+  CreatorFeedbackImportResult,
   CreatorFeedbackReport,
   CreatorFeedbackSavePayload,
   CreatorSuggestion,
@@ -39,6 +45,20 @@ async function readErrorMessage(response: Response) {
   } catch {
     return ''
   }
+}
+
+async function requestForm<T>(url: string, formData: FormData) {
+  const response = await fetch(url, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response)
+    throw new Error(message || `HTTP ${response.status}`)
+  }
+
+  return (await response.json()) as T
 }
 
 function cleanPayload<T extends Record<string, unknown>>(payload: T) {
@@ -164,6 +184,31 @@ export function getCreatorFeedback(taskId: string) {
   return requestJson<CreatorFeedback>(`/api/creator/tasks/${encodeURIComponent(taskId)}/feedback`)
 }
 
+export function importCreatorFeedbackFile(taskId: string, file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return requestForm<CreatorFeedbackImportResult>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/import`,
+    formData,
+  )
+}
+
+export function fetchCreatorFeedbackByBv(taskId: string, payload: CreatorFeedbackFetchPayload) {
+  return requestJson<CreatorFeedbackFetchResult>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/fetch`,
+    {
+      method: 'POST',
+      body: JSON.stringify(cleanPayload(payload)),
+    },
+  )
+}
+
+export function getCreatorFeedbackDashboard(taskId: string) {
+  return requestJson<CreatorFeedbackDashboard>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/dashboard`,
+  )
+}
+
 export function analyzeCreatorFeedback(taskId: string, payload: CreatorFeedbackAnalyzePayload) {
   return requestJson<CreatorFeedbackReport>(
     `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/analyze`,
@@ -177,5 +222,15 @@ export function analyzeCreatorFeedback(taskId: string, payload: CreatorFeedbackA
 export function getCreatorFeedbackReport(taskId: string) {
   return requestJson<CreatorFeedbackReport>(
     `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/report`,
+  )
+}
+
+export function chatCreatorFeedback(taskId: string, payload: CreatorFeedbackChatPayload) {
+  return requestJson<CreatorFeedbackChatResult>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/chat`,
+    {
+      method: 'POST',
+      body: JSON.stringify(cleanPayload(payload)),
+    },
   )
 }
