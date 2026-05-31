@@ -1,0 +1,7 @@
+# 前端镜像只需要源码和 lock 文件，node_modules、dist 这些本地产物不能塞进上下文。
+node_modules
+dist
+.vite
+.idea
+.vscode
+*.log

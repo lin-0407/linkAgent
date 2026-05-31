@@ -25,7 +25,7 @@ spring:
   # ========== Spring AI / LLM ==========
   ai:
     vectorstore:
-      type: none
+      type: ${VECTOR_STORE_TYPE:none}
     openai:
       api-key: ${LLM_API_KEY}
       base-url: ${LLM_BASE_URL}

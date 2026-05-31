@@ -1,0 +1,79 @@
+services:
+  mysql:
+    image: mysql:8.4
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-link_agent_root_password}
+      # init.sql 会固定创建 link_agent，演示环境不把库名做成变量，避免样例数据进错库。
+      MYSQL_DATABASE: link_agent
+      MYSQL_USER: ${MYSQL_USER:-link_agent}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-link_agent_password}
+      TZ: Asia/Shanghai
+    volumes:
+      # 初始化脚本只在数据库第一次创建时执行，所以演示环境要尽量把结构和样例一次性放进去。
+      - mysql-data:/var/lib/mysql
+      - ./backend/src/main/resources/sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DB_URL: "jdbc:mysql://mysql:3306/link_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai"
+      DB_USERNAME: ${MYSQL_USER:-link_agent}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-link_agent_password}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      VECTOR_STORE_TYPE: ${VECTOR_STORE_TYPE:-none}
+      SHORT_TERM_MEMORY_STORE_TYPE: redis
+      SUMMARY_MEMORY_ENABLED: ${SUMMARY_MEMORY_ENABLED:-false}
+      SUMMARY_MEMORY_TRIGGER_MESSAGE_COUNT: ${SUMMARY_MEMORY_TRIGGER_MESSAGE_COUNT:-8}
+      SUMMARY_MEMORY_RETAINED_MESSAGE_COUNT: ${SUMMARY_MEMORY_RETAINED_MESSAGE_COUNT:-2}
+      TOOL_EXECUTION_TIMEOUT_SECONDS: ${TOOL_EXECUTION_TIMEOUT_SECONDS:-10}
+      TOOL_EXECUTION_MAX_RETRIES: ${TOOL_EXECUTION_MAX_RETRIES:-0}
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./link-agent-frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-8088}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
