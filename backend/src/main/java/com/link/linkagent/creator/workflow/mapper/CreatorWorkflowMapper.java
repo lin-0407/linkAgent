@@ -266,4 +266,40 @@ public interface CreatorWorkflowMapper {
     int completeStepFailure(@Param("stepId") String stepId,
                             @Param("status") String status,
                             @Param("errorMessage") String errorMessage);
+
+    @Select("""
+            SELECT id,
+                   step_id,
+                   session_id,
+                   step_type,
+                   step_name,
+                   status,
+                   input_summary,
+                   output_summary,
+                   raw_output,
+                   error_message,
+                   start_time,
+                   end_time,
+                   create_time
+            FROM creator_workflow_step
+            WHERE session_id = #{sessionId}
+              AND is_deleted = 0
+            ORDER BY create_time ASC, id ASC
+            """)
+    @Results(id = "CreatorWorkflowStepRecordMap", value = {
+            @Result(column = "id", property = "id"),
+            @Result(column = "step_id", property = "stepId"),
+            @Result(column = "session_id", property = "sessionId"),
+            @Result(column = "step_type", property = "stepType"),
+            @Result(column = "step_name", property = "stepName"),
+            @Result(column = "status", property = "status"),
+            @Result(column = "input_summary", property = "inputSummary"),
+            @Result(column = "output_summary", property = "outputSummary"),
+            @Result(column = "raw_output", property = "rawOutput"),
+            @Result(column = "error_message", property = "errorMessage"),
+            @Result(column = "start_time", property = "startTime"),
+            @Result(column = "end_time", property = "endTime"),
+            @Result(column = "create_time", property = "createTime")
+    })
+    List<CreatorWorkflowStepRecord> listSteps(@Param("sessionId") String sessionId);
 }

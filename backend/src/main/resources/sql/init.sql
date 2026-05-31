@@ -431,7 +431,12 @@ CREATE TABLE IF NOT EXISTS creator_preference
   DEFAULT CHARSET = utf8mb4
   COMMENT = '创作者长期偏好表';
 
-()
+SET @add_competitor_comparison_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_report ADD COLUMN competitor_comparison TEXT DEFAULT NULL COMMENT ''竞品对照结论 JSON'' AFTER audience_feedback_summary',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME = 'creator_report'
       AND COLUMN_NAME = 'competitor_comparison'
 );
@@ -514,3 +519,138 @@ CREATE TABLE IF NOT EXISTS creator_workflow_step
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '创作工作流步骤表';
+
+-- ------------------------------------------------------------
+-- 17. 评测用例表
+--     保存 4.6 阶段用于人工评分和失败回放的样例任务，优先服务创作者工作流而不是抽象测试框架
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_eval_case
+(
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    case_id         VARCHAR(64)  NOT NULL COMMENT '评测用例唯一标识（稳定业务 ID）',
+    user_id         VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识，用于区分不同创作者的评测样本',
+    case_name       VARCHAR(128) NOT NULL COMMENT '评测用例名称，方便在列表中快速识别',
+    target_stage    VARCHAR(32)  NOT NULL COMMENT '评测阶段：PRE_PUBLISH=发布前优化，FEEDBACK=评论弹幕分析，REPORT=创作复盘报告',
+    task_id         VARCHAR(64)           DEFAULT NULL COMMENT '可选关联的创作任务 ID，用于串起真实任务和评测样本',
+    input_snapshot  LONGTEXT     NOT NULL COMMENT '评测输入快照，保存样例文本或 JSON，避免依赖外部输入',
+    expected_points TEXT                  DEFAULT NULL COMMENT '人工期望命中要点 JSON 或文本，便于对照评分',
+    scoring_rubric  TEXT                  DEFAULT NULL COMMENT '人工评分说明 JSON 或文本，方便统一评测口径',
+    status          VARCHAR(32)  NOT NULL DEFAULT 'ACTIVE' COMMENT '状态：ACTIVE=启用，ARCHIVED=已归档',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_case_id (case_id),
+    KEY idx_user_stage_update_time (user_id, target_stage, update_time),
+    KEY idx_task_id (task_id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '评测用例表';
+
+-- ------------------------------------------------------------
+-- 18. 评测结果表
+--     保存每次评测的输出、耗时、token、失败原因和人工评分，支撑失败回放和样例复盘
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_eval_result
+(
+    id                   BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    result_id            VARCHAR(64)  NOT NULL COMMENT '评测结果唯一标识（UUID）',
+    case_id              VARCHAR(64)  NOT NULL COMMENT '关联 creator_eval_case.case_id',
+    task_id              VARCHAR(64)           DEFAULT NULL COMMENT '关联创作任务 ID，若本次评测来自真实任务则记录',
+    workflow_session_id  VARCHAR(64)           DEFAULT NULL COMMENT '关联工作流会话 ID，用于失败回放定位过程',
+    target_stage         VARCHAR(32)  NOT NULL COMMENT '评测阶段：PRE_PUBLISH=发布前优化，FEEDBACK=评论弹幕分析，REPORT=创作复盘报告',
+    model_name           VARCHAR(128)          DEFAULT NULL COMMENT '模型名称，记录本次评测用的是哪一个模型',
+    output_summary       TEXT                  DEFAULT NULL COMMENT '输出摘要，方便列表页快速扫一眼结果',
+    raw_output           LONGTEXT     NOT NULL COMMENT '模型原始输出或失败上下文，用于回放和对照',
+    run_status           VARCHAR(32)  NOT NULL DEFAULT 'SUCCESS' COMMENT '运行状态：SUCCESS=成功，FAILED=失败',
+    parse_status         VARCHAR(32)  NOT NULL DEFAULT 'RAW_ONLY' COMMENT '解析状态：PARSED=已结构化，RAW_ONLY=仅保留原文',
+    elapsed_ms           BIGINT UNSIGNED       DEFAULT NULL COMMENT '耗时毫秒，用于成本和稳定性评估',
+    prompt_tokens        INT UNSIGNED          DEFAULT NULL COMMENT '提示词 token 数',
+    completion_tokens    INT UNSIGNED          DEFAULT NULL COMMENT '输出 token 数',
+    total_tokens         INT UNSIGNED          DEFAULT NULL COMMENT '总 token 数',
+    failure_reason       VARCHAR(500)          DEFAULT NULL COMMENT '失败原因，成功时可为空',
+    readability_score    TINYINT UNSIGNED      DEFAULT NULL COMMENT '可读性评分，范围 1 到 5',
+    relevance_score      TINYINT UNSIGNED      DEFAULT NULL COMMENT '贴合度评分，范围 1 到 5',
+    completeness_score   TINYINT UNSIGNED      DEFAULT NULL COMMENT '完整性评分，范围 1 到 5',
+    accuracy_score       TINYINT UNSIGNED      DEFAULT NULL COMMENT '准确性评分，范围 1 到 5',
+    stability_score      TINYINT UNSIGNED      DEFAULT NULL COMMENT '稳定性评分，范围 1 到 5',
+    cost_score           TINYINT UNSIGNED      DEFAULT NULL COMMENT '成本评分，范围 1 到 5',
+    explainability_score TINYINT UNSIGNED      DEFAULT NULL COMMENT '可解释性评分，范围 1 到 5',
+    reviewer_note        VARCHAR(1000)         DEFAULT NULL COMMENT '人工评测备注',
+    create_time          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted           TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_result_id (result_id),
+    KEY idx_case_update_time (case_id, update_time),
+    KEY idx_task_update_time (task_id, update_time),
+    KEY idx_workflow_session_id (workflow_session_id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '评测结果表';
+
+INSERT IGNORE INTO creator_eval_case (
+    case_id,
+    user_id,
+    case_name,
+    target_stage,
+    task_id,
+    input_snapshot,
+    expected_points,
+    scoring_rubric,
+    status
+)
+VALUES
+    (
+        'eval-prepublish-title-001',
+        'default',
+        '发布前优化 - 标题表达克制样例',
+        'PRE_PUBLISH',
+        'sample-task-prepublish-001',
+        '任务名称：标题表达优化样例；输入：标题草稿=Spring AI 创作工作台复盘；文稿=讲清任务管理、消息流和复盘闭环；字幕=无。',
+        '["标题应直接说明视频价值","优先体现创作者工作流","给出标题风险提示"]',
+        '["是否能输出可直接使用的标题建议","是否能说明为什么这样写更稳妥"]',
+        'ACTIVE'
+    ),
+    (
+        'eval-prepublish-feedback-002',
+        'default',
+        '发布前优化 - 结合创作者偏好样例',
+        'PRE_PUBLISH',
+        'sample-task-prepublish-002',
+        '任务名称：偏好记忆样例；输入：标题草稿=这次怎么写标题更顺；文稿=希望标题面向技术学习者；字幕=补充了视频卖点。',
+        '["要结合历史偏好","要给出标签和分区建议","要标出可能的标题党风险"]',
+        '["是否读取到创作者偏好","是否把偏好和当前内容合并成可执行建议"]',
+        'ACTIVE'
+    ),
+    (
+        'eval-feedback-001',
+        'default',
+        '评论弹幕分析 - 观众误解样例',
+        'FEEDBACK',
+        'sample-task-feedback-001',
+        '任务名称：反馈分析样例；输入：评论样例集中讨论“看不懂 Agent 流程”；弹幕样例里反复问“这个工具到底解决什么问题”。',
+        '["需要识别误解点","需要区分提问和质疑","需要给出下一期回应建议"]',
+        '["是否提炼出观众误解","是否给出可以直接执行的澄清动作"]',
+        'ACTIVE'
+    ),
+    (
+        'eval-feedback-002',
+        'default',
+        '评论弹幕分析 - 情绪聚合样例',
+        'FEEDBACK',
+        'sample-task-feedback-002',
+        '任务名称：反馈聚合样例；输入：评论里同时存在正向认可、功能建议和少量抱怨，弹幕集中在关键演示节点。',
+        '["要聚合高频观点","要给出情绪倾向总结","要指出争议点和建议回应"]',
+        '["是否能把样例按主题聚类","是否能给出面向创作者的复盘动作"]',
+        'ACTIVE'
+    ),
+    (
+        'eval-report-001',
+        'default',
+        '创作复盘 - 竞品对照样例',
+        'REPORT',
+        'sample-task-report-001',
+        '任务名称：复盘报告样例；输入：已有发布前建议、评论弹幕分析和竞品材料，需要汇总成一份创作复盘。',
+        '["要汇总内容摘要","要说明竞品对照结论","要沉淀创作者偏好"]',
+        '["是否覆盖复盘的完整章节","是否能把前置分析和竞品材料串起来"]',
+        'ACTIVE'
+    );

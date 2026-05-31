@@ -15,9 +15,13 @@ import {
   getPrePublishSuggestion,
   fetchCreatorFeedbackByBv,
   importCreatorFeedbackFile,
+  listCreatorEvalCases,
+  listCreatorEvalResults,
   listCreatorPreferences,
   listCreatorTasks,
   listWorkflowMessages,
+  listWorkflowSteps,
+  recordCreatorEvalResult,
   saveCreatorFeedback,
   sendWorkflowMessage,
   startPrePublishWorkflow,
@@ -29,6 +33,8 @@ import type {
   CreatorFeedbackDashboard,
   CreatorFeedbackFetchResult,
   CreatorFeedbackReport,
+  CreatorEvalCase,
+  CreatorEvalResult,
   CreatorPreference,
   CreatorPreferenceMode,
   CreatorSuggestion,
@@ -39,12 +45,15 @@ import type {
   CreatorWorkflowMessage,
   CreatorWorkflowSession,
   CreatorWorkflowStatus,
+  CreatorWorkflowStep,
+  CreatorWorkflowStage,
 } from '@/types/creator'
 
 type UnknownRecord = Record<string, unknown>
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
 type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | 'feedbackReport'
 type TaskManageMode = 'create' | 'edit'
+type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report'
 type CreatorWorkspaceState = {
   taskId?: string | null
 }
@@ -92,6 +101,16 @@ const taskStatusOptions: Array<{
   { value: 'COMPETITOR_ANALYZED', label: '竞品分析完成' },
   { value: 'ANALYZED', label: '复盘完成' },
 ]
+const evalStageOptions: Array<{
+  value: 'ALL' | CreatorWorkflowStage
+  label: string
+}> = [
+  { value: 'ALL', label: '全部样例' },
+  { value: 'PRE_PUBLISH', label: '发布前优化' },
+  { value: 'FEEDBACK', label: '评论弹幕' },
+  { value: 'REPORT', label: '复盘报告' },
+]
+const evalScoreOptions = [1, 2, 3, 4, 5]
 
 const taskForm = reactive({
   taskName: '',
@@ -138,6 +157,36 @@ const selectedTask = ref<CreatorTask | null>(null)
 const taskManageMode = ref<TaskManageMode>('create')
 const taskSearchQuery = ref('')
 const taskStatusFilter = ref<'ALL' | CreatorTaskSummary['status']>('ALL')
+const evalCases = ref<CreatorEvalCase[]>([])
+const selectedEvalCaseId = ref('')
+const selectedEvalResultId = ref('')
+const evalStageFilter = ref<'ALL' | CreatorWorkflowStage>('ALL')
+const evalResults = ref<CreatorEvalResult[]>([])
+const isLoadingEvalCases = ref(false)
+const isLoadingEvalResults = ref(false)
+const isRecordingEvalResult = ref(false)
+const isDeveloperTestOpen = ref(false)
+const evalResultDraft = reactive({
+  taskId: '',
+  workflowSessionId: '',
+  targetStage: 'PRE_PUBLISH' as CreatorWorkflowStage,
+  modelName: 'qwen3',
+  outputSummary: '',
+  rawOutput: '',
+  elapsedMs: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  failureReason: '',
+  readabilityScore: 4,
+  relevanceScore: 4,
+  completenessScore: 4,
+  accuracyScore: 4,
+  stabilityScore: 4,
+  costScore: 4,
+  explainabilityScore: 4,
+  reviewerNote: '',
+})
 const suggestion = ref<CreatorSuggestion | null>(null)
 const feedback = ref<CreatorFeedback | null>(null)
 const feedbackReport = ref<CreatorFeedbackReport | null>(null)
@@ -149,12 +198,13 @@ const feedbackImportFile = ref<File | null>(null)
 const feedbackImportWarnings = ref<string[]>([])
 const workflowSession = ref<CreatorWorkflowSession | null>(null)
 const workflowMessages = ref<CreatorWorkflowMessage[]>([])
+const workflowSteps = ref<CreatorWorkflowStep[]>([])
 const workflowMessageDraft = ref('')
 const workflowEventSource = ref<EventSource | null>(null)
 const workflowSseText = ref('未连接')
 const selectedWorkflowMessageId = ref('')
 const restoredTaskId = ref('')
-const activeStep = ref('task')
+const activeStep = ref<CreatorActiveStep>('task')
 const isLoadingTasks = ref(false)
 const isCreatingTask = ref(false)
 const isUpdatingTask = ref(false)
@@ -176,6 +226,7 @@ const resultModalTarget = ref<ResultModalTarget | null>(null)
 const pendingDeleteTask = ref<CreatorTaskSummary | null>(null)
 const isGuidanceBackdropPointerDown = ref(false)
 const isResultModalBackdropPointerDown = ref(false)
+const isDeveloperTestBackdropPointerDown = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 
@@ -380,6 +431,67 @@ const workflowStatusText = computed(() => {
   }
   return workflowSessionLabel(workflowSession.value.status)
 })
+const filteredEvalCases = computed(() =>
+  evalCases.value.filter((item) => {
+    return evalStageFilter.value === 'ALL' || item.targetStage === evalStageFilter.value
+  }),
+)
+const selectedEvalCase = computed(() => {
+  if (!selectedEvalCaseId.value) {
+    return filteredEvalCases.value[0] ?? null
+  }
+  return (
+    evalCases.value.find((item) => item.caseId === selectedEvalCaseId.value) ??
+    filteredEvalCases.value[0] ??
+    null
+  )
+})
+const selectedEvalResult = computed(() => {
+  if (evalResults.value.length === 0) {
+    return null
+  }
+  return (
+    evalResults.value.find((item) => item.resultId === selectedEvalResultId.value) ??
+    evalResults.value[0] ??
+    null
+  )
+})
+const evalStats = computed(() => {
+  const stats = {
+    total: evalCases.value.length,
+    prePublish: 0,
+    feedback: 0,
+    report: 0,
+  }
+  for (const item of evalCases.value) {
+    if (item.targetStage === 'PRE_PUBLISH') {
+      stats.prePublish += 1
+    } else if (item.targetStage === 'FEEDBACK') {
+      stats.feedback += 1
+    } else if (item.targetStage === 'REPORT') {
+      stats.report += 1
+    }
+  }
+  return stats
+})
+const workflowStepStats = computed(() => {
+  const stats = {
+    total: workflowSteps.value.length,
+    success: 0,
+    failed: 0,
+    running: 0,
+  }
+  for (const step of workflowSteps.value) {
+    if (step.status === 'SUCCESS') {
+      stats.success += 1
+    } else if (step.status === 'FAILED') {
+      stats.failed += 1
+    } else if (step.status === 'RUNNING') {
+      stats.running += 1
+    }
+  }
+  return stats
+})
 const guidanceEditorTitle = computed(() => {
   if (guidanceEditorTarget.value === 'prePublish') {
     return '发布前优化指导'
@@ -400,6 +512,13 @@ const resultModalTitle = computed(() => {
     return '反馈分析报告'
   }
   return ''
+})
+const canRecordEvalResult = computed(() => {
+  return Boolean(
+    selectedEvalCase.value &&
+      !isRecordingEvalResult.value &&
+      (hasText(evalResultDraft.rawOutput) || hasText(evalResultDraft.failureReason)),
+  )
 })
 
 onMounted(() => {
@@ -430,6 +549,131 @@ async function refreshTasks() {
     showError(error)
   } finally {
     isLoadingTasks.value = false
+  }
+}
+
+async function loadEvaluationCases() {
+  isLoadingEvalCases.value = true
+  try {
+    await refreshEvaluationCases(false)
+  } catch (error) {
+    showError(error)
+  } finally {
+    isLoadingEvalCases.value = false
+  }
+}
+
+function openDeveloperTest() {
+  isDeveloperTestOpen.value = true
+  if (evalCases.value.length === 0 && !isLoadingEvalCases.value) {
+    void loadEvaluationCases()
+  }
+}
+
+async function refreshEvaluationCases(resetSelection = true) {
+  const stage = evalStageFilter.value === 'ALL' ? undefined : evalStageFilter.value
+  evalCases.value = await listCreatorEvalCases('default', stage)
+  if (evalCases.value.length === 0) {
+    selectedEvalCaseId.value = ''
+    evalResults.value = []
+    selectedEvalResultId.value = ''
+    return
+  }
+
+  if (resetSelection || !evalCases.value.some((item) => item.caseId === selectedEvalCaseId.value)) {
+    selectedEvalCaseId.value = evalCases.value[0].caseId
+  }
+
+  await refreshEvaluationResults(selectedEvalCaseId.value)
+}
+
+async function refreshEvaluationResults(caseId: string) {
+  if (!caseId) {
+    evalResults.value = []
+    selectedEvalResultId.value = ''
+    return
+  }
+
+  isLoadingEvalResults.value = true
+  try {
+    evalResults.value = await listCreatorEvalResults(caseId, 10)
+    if (
+      evalResults.value.length === 0 ||
+      !evalResults.value.some((item) => item.resultId === selectedEvalResultId.value)
+    ) {
+      selectedEvalResultId.value = evalResults.value[0]?.resultId ?? ''
+    }
+    resetEvalResultDraftFromCase()
+  } finally {
+    isLoadingEvalResults.value = false
+  }
+}
+
+async function selectEvalCase(caseId: string) {
+  selectedEvalCaseId.value = caseId
+  await refreshEvaluationResults(caseId)
+}
+
+function resetEvalResultDraftFromCase() {
+  if (!selectedEvalCase.value) {
+    return
+  }
+  evalResultDraft.targetStage = selectedEvalCase.value.targetStage
+  evalResultDraft.taskId = selectedEvalCase.value.taskId ?? ''
+  evalResultDraft.workflowSessionId = ''
+  evalResultDraft.outputSummary = ''
+  evalResultDraft.rawOutput = ''
+  evalResultDraft.failureReason = ''
+  evalResultDraft.elapsedMs = 0
+  evalResultDraft.promptTokens = 0
+  evalResultDraft.completionTokens = 0
+  evalResultDraft.totalTokens = 0
+  evalResultDraft.readabilityScore = 4
+  evalResultDraft.relevanceScore = 4
+  evalResultDraft.completenessScore = 4
+  evalResultDraft.accuracyScore = 4
+  evalResultDraft.stabilityScore = 4
+  evalResultDraft.costScore = 4
+  evalResultDraft.explainabilityScore = 4
+  evalResultDraft.reviewerNote = ''
+}
+
+async function submitEvalResult() {
+  if (!selectedEvalCase.value || !canRecordEvalResult.value) {
+    return
+  }
+  isRecordingEvalResult.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const result = await recordCreatorEvalResult(selectedEvalCase.value.caseId, {
+      taskId: trimToNull(evalResultDraft.taskId),
+      workflowSessionId: trimToNull(evalResultDraft.workflowSessionId),
+      targetStage: evalResultDraft.targetStage,
+      modelName: trimToNull(evalResultDraft.modelName),
+      outputSummary: trimToNull(evalResultDraft.outputSummary),
+      rawOutput: trimToNull(evalResultDraft.rawOutput),
+      elapsedMs: normalizeOptionalNumber(evalResultDraft.elapsedMs),
+      promptTokens: normalizeOptionalNumber(evalResultDraft.promptTokens),
+      completionTokens: normalizeOptionalNumber(evalResultDraft.completionTokens),
+      totalTokens: normalizeOptionalNumber(evalResultDraft.totalTokens),
+      failureReason: trimToNull(evalResultDraft.failureReason),
+      readabilityScore: normalizeOptionalNumber(evalResultDraft.readabilityScore),
+      relevanceScore: normalizeOptionalNumber(evalResultDraft.relevanceScore),
+      completenessScore: normalizeOptionalNumber(evalResultDraft.completenessScore),
+      accuracyScore: normalizeOptionalNumber(evalResultDraft.accuracyScore),
+      stabilityScore: normalizeOptionalNumber(evalResultDraft.stabilityScore),
+      costScore: normalizeOptionalNumber(evalResultDraft.costScore),
+      explainabilityScore: normalizeOptionalNumber(evalResultDraft.explainabilityScore),
+      reviewerNote: trimToNull(evalResultDraft.reviewerNote),
+    })
+    await refreshEvaluationResults(selectedEvalCase.value.caseId)
+    selectedEvalResultId.value = result.resultId
+    successMessage.value = '评测结果已记录，可以继续查看结果列表。'
+  } catch (error) {
+    showError(error)
+  } finally {
+    isRecordingEvalResult.value = false
   }
 }
 
@@ -474,6 +718,7 @@ function resetGeneratedTaskResults() {
   feedbackImportWarnings.value = []
   workflowSession.value = null
   workflowMessages.value = []
+  workflowSteps.value = []
   workflowMessageDraft.value = ''
   selectedWorkflowMessageId.value = ''
   resultModalTarget.value = null
@@ -698,6 +943,7 @@ async function loadPrePublishWorkflow(taskId: string, resumeLatest = true) {
   closeWorkflowEventSource()
   workflowSession.value = null
   workflowMessages.value = []
+  workflowSteps.value = []
   workflowMessageDraft.value = ''
   selectedWorkflowMessageId.value = ''
   if (!hasSelectedTaskMaterials.value) {
@@ -711,6 +957,8 @@ async function loadPrePublishWorkflow(taskId: string, resumeLatest = true) {
       resumeLatest,
     })
     workflowMessages.value = workflowSession.value.messages ?? []
+    workflowSteps.value =
+      (await optionalRequest(() => listWorkflowSteps(taskId, workflowSession.value!.sessionId))) ?? []
     if (!suggestion.value && isPrePublishSuggestionVisible(workflowSession.value.status)) {
       suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
     }
@@ -739,11 +987,29 @@ async function refreshPrePublishWorkflowMessages() {
       selectedTaskId.value,
       workflowSession.value.sessionId,
     )
+    workflowSteps.value =
+      (await optionalRequest(() =>
+        listWorkflowSteps(selectedTaskId.value, workflowSession.value!.sessionId),
+      )) ?? []
     syncWorkflowSelection()
   } catch (error) {
     showError(error)
   } finally {
     isLoadingWorkflow.value = false
+  }
+}
+
+async function refreshPrePublishWorkflowSteps() {
+  if (!selectedTaskId.value || !workflowSession.value) {
+    return
+  }
+  try {
+    workflowSteps.value =
+      (await optionalRequest(() =>
+        listWorkflowSteps(selectedTaskId.value, workflowSession.value!.sessionId),
+      )) ?? []
+  } catch (error) {
+    showError(error)
   }
 }
 
@@ -1030,8 +1296,10 @@ function resetSelectedWorkspace() {
   resultModalTarget.value = null
   workflowSession.value = null
   workflowMessages.value = []
+  workflowSteps.value = []
   selectedWorkflowMessageId.value = ''
   activeStep.value = 'task'
+  closeDeveloperTest()
 }
 
 function loadWorkspaceState() {
@@ -1080,6 +1348,11 @@ function persistWorkspaceState(patch: CreatorWorkspaceState) {
 function trimToNull(value: string | undefined) {
   const trimmed = value?.trim()
   return trimmed ? trimmed : undefined
+}
+
+function normalizeOptionalNumber(value: unknown) {
+  const numericValue = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numericValue) ? numericValue : undefined
 }
 
 function connectWorkflowEvents(taskId: string, sessionId: string) {
@@ -1134,6 +1407,11 @@ function handleWorkflowEvent(event: MessageEvent<string>) {
 
   if (data.eventType === 'result_ready') {
     void refreshWorkflowSuggestion(data.taskId)
+    return
+  }
+
+  if (['step_started', 'step_completed', 'step_failed'].includes(data.eventType)) {
+    void refreshPrePublishWorkflowSteps()
     return
   }
 
@@ -1313,6 +1591,26 @@ function workflowContentTypeLabel(contentType: string) {
   return labels[contentType] ?? contentType
 }
 
+function workflowStepTypeLabel(stepType: string) {
+  const labels: Record<string, string> = {
+    LOAD_CONTEXT: '读取上下文',
+    LLM_CALL: '模型调用',
+    SAVE_RESULT: '保存结果',
+    CONFIRM_RESULT: '确认结果',
+  }
+  return labels[stepType] ?? stepType
+}
+
+function workflowStepStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    PENDING: '待执行',
+    RUNNING: '执行中',
+    SUCCESS: '成功',
+    FAILED: '失败',
+  }
+  return labels[status] ?? status
+}
+
 function workflowSessionLabel(status: string) {
   const labels: Record<string, string> = {
     CREATED: '已创建',
@@ -1323,6 +1621,23 @@ function workflowSessionLabel(status: string) {
     CONFIRMED: '已确认',
     FAILED: '失败',
     CANCELLED: '已取消',
+  }
+  return labels[status] ?? status
+}
+
+function evalStageLabel(stage: CreatorWorkflowStage) {
+  const labels: Record<CreatorWorkflowStage, string> = {
+    PRE_PUBLISH: '发布前优化',
+    FEEDBACK: '评论弹幕',
+    REPORT: '复盘报告',
+  }
+  return labels[stage]
+}
+
+function evalResultStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    SUCCESS: '成功',
+    FAILED: '失败',
   }
   return labels[status] ?? status
 }
@@ -1389,6 +1704,11 @@ function closeResultModal() {
   isResultModalBackdropPointerDown.value = false
 }
 
+function closeDeveloperTest() {
+  isDeveloperTestOpen.value = false
+  isDeveloperTestBackdropPointerDown.value = false
+}
+
 function handleGuidanceBackdropPointerDown(event: PointerEvent) {
   isGuidanceBackdropPointerDown.value = event.target === event.currentTarget
 }
@@ -1411,6 +1731,18 @@ function handleResultModalBackdropClick(event: MouseEvent) {
     return
   }
   isResultModalBackdropPointerDown.value = false
+}
+
+function handleDeveloperTestBackdropPointerDown(event: PointerEvent) {
+  isDeveloperTestBackdropPointerDown.value = event.target === event.currentTarget
+}
+
+function handleDeveloperTestBackdropClick(event: MouseEvent) {
+  if (isDeveloperTestBackdropPointerDown.value && event.target === event.currentTarget) {
+    closeDeveloperTest()
+    return
+  }
+  isDeveloperTestBackdropPointerDown.value = false
 }
 
 function resetCurrentGuidance() {
@@ -1535,11 +1867,20 @@ function showError(error: unknown) {
         <h2>UP 主智能工作台</h2>
         <p>从稿件输入到发布前优化，再到评论弹幕复盘，直接在同一个页面验证后端闭环。</p>
       </div>
-      <div class="creator-status-strip" aria-label="Creator workflow status">
-        <span :class="{ active: Boolean(selectedTask) }">任务</span>
-        <span :class="{ active: Boolean(workflowSession) }">工作流</span>
-        <span :class="{ active: Boolean(suggestion) }">发布建议</span>
-        <span :class="{ active: Boolean(feedbackReport) }">反馈报告</span>
+      <div class="creator-header-actions">
+        <div class="creator-status-strip" aria-label="Creator workflow status">
+          <span :class="{ active: Boolean(selectedTask) }">任务</span>
+          <span :class="{ active: Boolean(workflowSession) }">工作流</span>
+          <span :class="{ active: Boolean(suggestion) }">发布建议</span>
+          <span :class="{ active: Boolean(feedbackReport) }">反馈报告</span>
+        </div>
+        <button
+          type="button"
+          class="creator-secondary-action creator-mini-button creator-dev-test-button"
+          @click="openDeveloperTest"
+        >
+          开发者测试
+        </button>
       </div>
     </header>
 
@@ -1812,6 +2153,319 @@ function showError(error: unknown) {
           </div>
         </section>
 
+        <Teleport to="body">
+          <div
+            v-if="isDeveloperTestOpen"
+            class="creator-modal-backdrop creator-dev-test-backdrop"
+            role="presentation"
+            @pointerdown="handleDeveloperTestBackdropPointerDown"
+            @click="handleDeveloperTestBackdropClick"
+          >
+            <section
+              class="creator-result-modal creator-dev-test-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="开发者功能测试"
+            >
+              <header class="creator-result-modal-head creator-dev-test-head">
+                <div>
+                  <p class="creator-kicker">Dev Test</p>
+                  <h3>开发者功能测试</h3>
+                </div>
+                <div class="creator-action-row">
+                  <label class="creator-eval-filter">
+                    <span>阶段</span>
+                    <select v-model="evalStageFilter" @change="loadEvaluationCases">
+                      <option
+                        v-for="option in evalStageOptions"
+                        :key="option.value"
+                        :value="option.value"
+                      >
+                        {{ option.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    class="creator-secondary-action"
+                    :disabled="isLoadingEvalCases"
+                    @click="loadEvaluationCases"
+                  >
+                    {{ isLoadingEvalCases ? '读取中...' : '刷新样例' }}
+                  </button>
+                  <button type="button" class="creator-ghost-button" @click="closeDeveloperTest">
+                    关闭
+                  </button>
+                </div>
+              </header>
+
+              <div class="creator-result-modal-body creator-dev-test-body">
+                <div class="creator-eval-overview" aria-label="评测样例概览">
+            <span><b>{{ evalStats.total }}</b> 样例</span>
+            <span><b>{{ evalStats.prePublish }}</b> 发布前</span>
+            <span><b>{{ evalStats.feedback }}</b> 反馈</span>
+            <span><b>{{ evalStats.report }}</b> 复盘</span>
+          </div>
+
+          <div class="creator-eval-grid">
+            <section class="creator-eval-list-panel" aria-label="评测样例列表">
+              <header class="creator-workflow-head">
+                <div>
+                  <p class="creator-kicker">Cases</p>
+                  <h4>样例列表</h4>
+                </div>
+                <span class="creator-parse-status">{{ filteredEvalCases.length }} 个</span>
+              </header>
+
+              <div class="creator-eval-case-list">
+                <button
+                  v-for="item in filteredEvalCases"
+                  :key="item.caseId"
+                  type="button"
+                  class="creator-eval-case"
+                  :class="{ active: item.caseId === selectedEvalCase?.caseId }"
+                  @click="selectEvalCase(item.caseId)"
+                >
+                  <small>{{ evalStageLabel(item.targetStage) }} · {{ item.status }}</small>
+                  <strong>{{ item.caseName }}</strong>
+                  <span>{{ item.taskId || '未绑定任务' }}</span>
+                </button>
+
+                <p v-if="!isLoadingEvalCases && filteredEvalCases.length === 0" class="creator-muted">
+                  当前筛选条件下没有评测样例。
+                </p>
+              </div>
+            </section>
+
+            <section v-if="selectedEvalCase" class="creator-eval-detail-panel" aria-label="评测样例详情">
+              <header class="creator-workflow-head">
+                <div>
+                  <p class="creator-kicker">{{ evalStageLabel(selectedEvalCase.targetStage) }}</p>
+                  <h4>{{ selectedEvalCase.caseName }}</h4>
+                </div>
+                <span class="creator-parse-status">{{ selectedEvalCase.status }}</span>
+              </header>
+
+              <div class="creator-eval-snapshot">
+                <span>输入快照</span>
+                <pre>{{ selectedEvalCase.inputSnapshot }}</pre>
+                <span>期望要点</span>
+                <pre>{{ selectedEvalCase.expectedPoints || '未填写' }}</pre>
+                <span>评分说明</span>
+                <pre>{{ selectedEvalCase.scoringRubric || '未填写' }}</pre>
+              </div>
+
+              <form class="creator-eval-result-form" @submit.prevent="submitEvalResult">
+                <header>
+                  <div>
+                    <span>记录一次评测结果</span>
+                    <strong>{{ evalStageLabel(evalResultDraft.targetStage) }}</strong>
+                  </div>
+                  <button
+                    type="submit"
+                    class="creator-primary-button"
+                    :disabled="!canRecordEvalResult"
+                  >
+                    {{ isRecordingEvalResult ? '记录中...' : '记录结果' }}
+                  </button>
+                </header>
+
+                <div class="creator-form-grid">
+                  <label>
+                    <span>模型名称</span>
+                    <input v-model="evalResultDraft.modelName" type="text" maxlength="128" />
+                  </label>
+                  <label>
+                    <span>关联任务</span>
+                    <input
+                      v-model="evalResultDraft.taskId"
+                      type="text"
+                      maxlength="64"
+                      placeholder="可选"
+                    />
+                  </label>
+                  <label>
+                    <span>工作流会话</span>
+                    <input
+                      v-model="evalResultDraft.workflowSessionId"
+                      type="text"
+                      maxlength="64"
+                      placeholder="可选"
+                    />
+                  </label>
+                  <label>
+                    <span>耗时毫秒</span>
+                    <input v-model.number="evalResultDraft.elapsedMs" type="number" min="0" />
+                  </label>
+                  <label>
+                    <span>Prompt Token</span>
+                    <input v-model.number="evalResultDraft.promptTokens" type="number" min="0" />
+                  </label>
+                  <label>
+                    <span>Completion Token</span>
+                    <input
+                      v-model.number="evalResultDraft.completionTokens"
+                      type="number"
+                      min="0"
+                    />
+                  </label>
+                  <label class="span-full">
+                    <span>输出摘要</span>
+                    <textarea
+                      v-model="evalResultDraft.outputSummary"
+                      maxlength="4000"
+                      placeholder="概括这次输出的主要结论"
+                    ></textarea>
+                  </label>
+                  <label class="span-full">
+                    <span>模型原始输出</span>
+                    <textarea
+                      v-model="evalResultDraft.rawOutput"
+                      maxlength="20000"
+                      placeholder="粘贴本轮模型输出；失败时可以留空并填写失败原因"
+                    ></textarea>
+                  </label>
+                  <label class="span-full">
+                    <span>失败原因</span>
+                    <textarea
+                      v-model="evalResultDraft.failureReason"
+                      maxlength="500"
+                      placeholder="成功时可留空"
+                    ></textarea>
+                  </label>
+                </div>
+
+                <div class="creator-eval-score-grid" aria-label="人工评分">
+                  <label>
+                    <span>可读性</span>
+                    <select v-model.number="evalResultDraft.readabilityScore">
+                      <option v-for="score in evalScoreOptions" :key="`read-${score}`" :value="score">
+                        {{ score }}
+                      </option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>贴合度</span>
+                    <select v-model.number="evalResultDraft.relevanceScore">
+                      <option v-for="score in evalScoreOptions" :key="`rel-${score}`" :value="score">
+                        {{ score }}
+                      </option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>完整性</span>
+                    <select v-model.number="evalResultDraft.completenessScore">
+                      <option v-for="score in evalScoreOptions" :key="`comp-${score}`" :value="score">
+                        {{ score }}
+                      </option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>准确性</span>
+                    <select v-model.number="evalResultDraft.accuracyScore">
+                      <option v-for="score in evalScoreOptions" :key="`acc-${score}`" :value="score">
+                        {{ score }}
+                      </option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>稳定性</span>
+                    <select v-model.number="evalResultDraft.stabilityScore">
+                      <option v-for="score in evalScoreOptions" :key="`sta-${score}`" :value="score">
+                        {{ score }}
+                      </option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>成本</span>
+                    <select v-model.number="evalResultDraft.costScore">
+                      <option v-for="score in evalScoreOptions" :key="`cost-${score}`" :value="score">
+                        {{ score }}
+                      </option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>可解释性</span>
+                    <select v-model.number="evalResultDraft.explainabilityScore">
+                      <option v-for="score in evalScoreOptions" :key="`exp-${score}`" :value="score">
+                        {{ score }}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+
+                <label class="creator-eval-note-field">
+                  <span>人工备注</span>
+                  <textarea
+                    v-model="evalResultDraft.reviewerNote"
+                    maxlength="1000"
+                    placeholder="记录这次评分的判断依据"
+                  ></textarea>
+                </label>
+              </form>
+
+              <section class="creator-eval-results" aria-label="评测结果列表">
+                <header class="creator-workflow-head">
+                  <div>
+                    <p class="creator-kicker">Results</p>
+                    <h4>最近结果</h4>
+                  </div>
+                  <button
+                    type="button"
+                    class="creator-ghost-button"
+                    :disabled="isLoadingEvalResults"
+                    @click="refreshEvaluationResults(selectedEvalCase.caseId)"
+                  >
+                    {{ isLoadingEvalResults ? '读取中' : '刷新结果' }}
+                  </button>
+                </header>
+
+                <div class="creator-eval-result-list">
+                  <button
+                    v-for="item in evalResults"
+                    :key="item.resultId"
+                    type="button"
+                    class="creator-eval-result-item"
+                    :class="{ active: item.resultId === selectedEvalResult?.resultId }"
+                    @click="selectedEvalResultId = item.resultId"
+                  >
+                    <small>
+                      {{ evalResultStatusLabel(item.runStatus) }} ·
+                      {{ item.modelName || '未记录模型' }} · {{ formatDate(item.updateTime) }}
+                    </small>
+                    <strong>{{ item.outputSummary || item.failureReason || '未填写摘要' }}</strong>
+                    <span>Token {{ formatMetric(item.totalTokens) }} · {{ item.parseStatus }}</span>
+                  </button>
+
+                  <p v-if="evalResults.length === 0" class="creator-muted">
+                    当前样例还没有评测结果。
+                  </p>
+                </div>
+
+                <article v-if="selectedEvalResult" class="creator-eval-result-detail">
+                  <small>
+                    {{ evalResultStatusLabel(selectedEvalResult.runStatus) }} ·
+                    {{ selectedEvalResult.resultId }}
+                  </small>
+                  <strong>{{ selectedEvalResult.outputSummary || '未填写输出摘要' }}</strong>
+                  <p v-if="selectedEvalResult.failureReason">
+                    失败原因：{{ selectedEvalResult.failureReason }}
+                  </p>
+                  <pre>{{ selectedEvalResult.rawOutput }}</pre>
+                </article>
+              </section>
+            </section>
+
+            <article v-else class="creator-empty-result">
+              <strong>还没有评测样例</strong>
+              <span>请先执行数据库初始化脚本，导入阶段 4.6 内置样例。</span>
+            </article>
+                </div>
+              </div>
+            </section>
+          </div>
+        </Teleport>
+
         <section v-if="activeStep === 'prePublish'" class="creator-section">
           <div class="creator-section-head">
             <div>
@@ -1934,6 +2588,54 @@ function showError(error: unknown) {
                 <strong>未选择消息</strong>
                 <span>点击左侧消息可以查看完整材料或过程内容。</span>
               </article>
+            </section>
+
+            <section class="creator-workflow-steps" aria-label="工作流步骤回放">
+              <header class="creator-workflow-head">
+                <div>
+                  <p class="creator-kicker">Replay</p>
+                  <h4>步骤回放</h4>
+                </div>
+                <div class="creator-workflow-head-actions">
+                  <span>{{ workflowStepStats.total }} 步</span>
+                  <span v-if="workflowStepStats.failed > 0">{{ workflowStepStats.failed }} 失败</span>
+                  <span v-else>{{ workflowStepStats.success }} 成功</span>
+                  <button
+                    type="button"
+                    class="creator-ghost-button"
+                    :disabled="!workflowSession"
+                    @click="refreshPrePublishWorkflowSteps"
+                  >
+                    刷新步骤
+                  </button>
+                </div>
+              </header>
+
+              <div class="creator-workflow-step-list">
+                <article
+                  v-for="step in workflowSteps"
+                  :key="step.stepId"
+                  class="creator-workflow-step"
+                  :class="step.status.toLowerCase()"
+                >
+                  <small>
+                    {{ workflowStepTypeLabel(step.stepType) }} ·
+                    {{ workflowStepStatusLabel(step.status) }} ·
+                    {{ formatDate(step.startTime || step.createTime) }}
+                  </small>
+                  <strong>{{ step.stepName }}</strong>
+                  <p v-if="step.inputSummary">输入：{{ step.inputSummary }}</p>
+                  <p v-if="step.outputSummary">输出：{{ step.outputSummary }}</p>
+                  <p v-if="step.errorMessage" class="creator-step-error">
+                    失败：{{ step.errorMessage }}
+                  </p>
+                  <pre v-if="step.rawOutput">{{ step.rawOutput }}</pre>
+                </article>
+
+                <p v-if="workflowSteps.length === 0" class="creator-muted">
+                  当前会话还没有可回放的执行步骤。
+                </p>
+              </div>
             </section>
 
             <form class="creator-workflow-composer" @submit.prevent="sendWorkflowSupplement">

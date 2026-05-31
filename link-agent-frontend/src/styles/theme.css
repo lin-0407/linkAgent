@@ -1924,6 +1924,12 @@ textarea:focus {
   justify-content: flex-end;
 }
 
+.creator-header-actions {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
 .creator-status-strip span,
 .creator-parse-status {
   display: inline-flex;
@@ -1944,6 +1950,14 @@ textarea:focus {
     linear-gradient(135deg, var(--creator-bili-blue-soft), var(--creator-bili-pink-soft)),
     var(--creator-bili-blue-soft);
   border-color: rgba(0, 174, 236, 0.36);
+}
+
+.creator-dev-test-button {
+  min-width: 118px;
+  color: var(--creator-bili-blue-deep);
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(0, 174, 236, 0.34);
 }
 
 .creator-layout {
@@ -2101,6 +2115,8 @@ textarea:focus {
 .creator-task-item:focus-visible,
 .creator-task-select:focus-visible,
 .creator-workflow-message:focus-visible,
+.creator-eval-case:focus-visible,
+.creator-eval-result-item:focus-visible,
 .creator-tabs button:focus-visible,
 .creator-preference-modes button:focus-visible,
 .surface-switch button:focus-visible,
@@ -2109,6 +2125,9 @@ textarea:focus {
 .creator-form-grid input:focus,
 .creator-form-grid textarea:focus,
 .creator-workflow-composer textarea:focus,
+.creator-eval-filter select:focus,
+.creator-eval-score-grid select:focus,
+.creator-eval-note-field textarea:focus,
 .creator-prompt-field textarea:focus {
   outline: 3px solid rgba(0, 174, 236, 0.22);
   outline-offset: 2px;
@@ -2965,6 +2984,7 @@ textarea:focus {
 
 .creator-workflow-stream,
 .creator-workflow-detail,
+.creator-workflow-steps,
 .creator-workflow-composer {
   min-width: 0;
   background: rgba(255, 255, 255, 0.72);
@@ -2973,11 +2993,16 @@ textarea:focus {
 }
 
 .creator-workflow-stream,
-.creator-workflow-detail {
+.creator-workflow-detail,
+.creator-workflow-steps {
   display: grid;
   align-content: start;
   gap: 12px;
   padding: 14px;
+}
+
+.creator-workflow-steps {
+  grid-column: 1 / -1;
 }
 
 .creator-workflow-head {
@@ -3077,7 +3102,8 @@ textarea:focus {
 
 .creator-workflow-message small,
 .creator-workflow-message span,
-.creator-workflow-detail-body small {
+.creator-workflow-detail-body small,
+.creator-workflow-step small {
   color: rgba(63, 38, 49, 0.56);
   font-size: 12px;
   line-height: 1.4;
@@ -3132,6 +3158,69 @@ textarea:focus {
   line-height: 1.62;
 }
 
+.creator-workflow-step-list {
+  display: grid;
+  max-height: 300px;
+  gap: 10px;
+  overflow: auto;
+}
+
+.creator-workflow-step {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 8px;
+  box-shadow: inset 4px 0 0 rgba(148, 163, 184, 0.54);
+}
+
+.creator-workflow-step.success {
+  box-shadow: inset 4px 0 0 rgba(0, 174, 236, 0.72);
+}
+
+.creator-workflow-step.failed {
+  box-shadow: inset 4px 0 0 rgba(231, 45, 72, 0.76);
+}
+
+.creator-workflow-step.running {
+  box-shadow: inset 4px 0 0 rgba(251, 191, 36, 0.78);
+}
+
+.creator-workflow-step strong {
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.creator-workflow-step p {
+  margin: 0;
+  color: rgba(63, 38, 49, 0.66);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.creator-workflow-step .creator-step-error {
+  color: #9f1239;
+  font-weight: 850;
+}
+
+.creator-workflow-step pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(31, 23, 32, 0.84);
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 8px;
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .creator-workflow-composer {
   grid-column: 1 / -1;
   display: grid;
@@ -3164,6 +3253,234 @@ textarea:focus {
 .creator-workflow-composer textarea:disabled {
   cursor: not-allowed;
   opacity: 0.58;
+}
+
+.creator-eval-filter {
+  display: inline-grid;
+  min-width: 150px;
+  gap: 5px;
+  color: rgba(63, 38, 49, 0.62);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.creator-eval-filter select,
+.creator-eval-score-grid select {
+  min-height: 40px;
+  padding: 0 10px;
+  color: var(--color-ink);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  font-weight: 850;
+}
+
+.creator-eval-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.creator-eval-overview span {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  color: rgba(63, 38, 49, 0.62);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.creator-eval-overview b {
+  color: var(--color-ink);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.creator-eval-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.82fr) minmax(0, 1.18fr);
+  gap: 14px;
+}
+
+.creator-eval-list-panel,
+.creator-eval-detail-panel,
+.creator-eval-results {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 12px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 8px;
+}
+
+.creator-eval-case-list,
+.creator-eval-result-list {
+  display: grid;
+  max-height: 420px;
+  gap: 10px;
+  overflow: auto;
+}
+
+.creator-eval-case,
+.creator-eval-result-item {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  color: var(--color-ink);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.creator-eval-case:hover,
+.creator-eval-case.active,
+.creator-eval-result-item:hover,
+.creator-eval-result-item.active {
+  border-color: rgba(0, 174, 236, 0.34);
+  box-shadow: inset 4px 0 0 var(--creator-bili-blue);
+}
+
+.creator-eval-case small,
+.creator-eval-case span,
+.creator-eval-result-item small,
+.creator-eval-result-item span {
+  color: rgba(63, 38, 49, 0.58);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.creator-eval-case strong,
+.creator-eval-result-item strong {
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.creator-eval-snapshot {
+  display: grid;
+  gap: 8px;
+}
+
+.creator-eval-snapshot span {
+  color: rgba(63, 38, 49, 0.58);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.creator-eval-snapshot pre,
+.creator-eval-result-detail pre {
+  max-height: 220px;
+  margin: 0;
+  padding: 11px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(31, 23, 32, 0.86);
+  background: rgba(248, 250, 252, 0.94);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.58;
+}
+
+.creator-eval-result-form {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.creator-eval-result-form > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.creator-eval-result-form > header div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.creator-eval-result-form > header span,
+.creator-eval-note-field span {
+  color: rgba(63, 38, 49, 0.58);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.creator-eval-result-form > header strong {
+  color: var(--color-ink);
+  font-size: 15px;
+}
+
+.creator-eval-score-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.creator-eval-score-grid label,
+.creator-eval-note-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.creator-eval-note-field textarea {
+  min-height: 88px;
+  padding: 11px 12px;
+  color: var(--color-ink);
+  resize: vertical;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  line-height: 1.55;
+}
+
+.creator-eval-results {
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.creator-eval-result-detail {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 8px;
+}
+
+.creator-eval-result-detail small {
+  color: rgba(63, 38, 49, 0.58);
+  font-size: 12px;
+}
+
+.creator-eval-result-detail strong {
+  color: var(--color-ink);
+  font-size: 15px;
+}
+
+.creator-eval-result-detail p {
+  margin: 0;
+  color: #9f1239;
+  font-weight: 850;
+  line-height: 1.55;
 }
 
 .creator-confirm-panel {
@@ -3248,6 +3565,19 @@ textarea:focus {
   min-height: 0;
   overflow: auto;
   padding-right: 4px;
+}
+
+.creator-dev-test-modal {
+  width: min(1280px, 100%);
+}
+
+.creator-dev-test-head {
+  align-items: flex-start;
+}
+
+.creator-dev-test-body {
+  display: grid;
+  gap: 14px;
 }
 
 .creator-prompt-modal {
@@ -3374,6 +3704,18 @@ textarea:focus {
   color: #006991;
   background: rgba(231, 247, 255, 0.9);
   border-color: rgba(0, 174, 236, 0.28);
+}
+
+.creator-dev-test-button {
+  color: #006d97;
+  background: rgba(255, 255, 255, 0.76);
+  border-color: rgba(0, 174, 236, 0.22);
+  box-shadow: none;
+}
+
+.creator-dev-test-button:hover {
+  color: #005f85;
+  background: #fff;
 }
 
 .creator-layout {
@@ -3616,6 +3958,10 @@ textarea:focus {
     justify-content: flex-start;
   }
 
+  .creator-header-actions {
+    justify-items: start;
+  }
+
   .creator-task-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3643,8 +3989,19 @@ textarea:focus {
   .creator-result-grid,
   .creator-script-grid,
   .creator-workflow-grid,
-  .creator-workflow-composer {
+  .creator-workflow-composer,
+  .creator-eval-grid {
     grid-template-columns: 1fr;
+  }
+
+  .creator-eval-overview,
+  .creator-eval-score-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .creator-eval-result-form > header {
+    display: grid;
+    justify-items: stretch;
   }
 
   .creator-preference-modes {

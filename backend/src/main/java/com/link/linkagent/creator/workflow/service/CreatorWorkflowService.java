@@ -26,6 +26,7 @@ import com.link.linkagent.creator.workflow.model.CreatorWorkflowStage;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStartRequest;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStatus;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepRecord;
+import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepResponse;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepStatus;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepType;
 import com.link.linkagent.util.TextUtil;
@@ -98,6 +99,14 @@ public class CreatorWorkflowService {
         return creatorWorkflowMapper.listMessages(sessionRecord.getSessionId())
                 .stream()
                 .map(this::toMessageResponse)
+                .toList();
+    }
+
+    public List<CreatorWorkflowStepResponse> listSteps(String taskId, String sessionId) {
+        CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
+        return creatorWorkflowMapper.listSteps(sessionRecord.getSessionId())
+                .stream()
+                .map(this::toStepResponse)
                 .toList();
     }
 
@@ -747,6 +756,24 @@ public class CreatorWorkflowService {
                 record.getDetailRefType(),
                 record.getDetailRefId(),
                 record.getSequenceNo(),
+                record.getCreateTime()
+        );
+    }
+
+    private CreatorWorkflowStepResponse toStepResponse(CreatorWorkflowStepRecord record) {
+        return new CreatorWorkflowStepResponse(
+                record.getId(),
+                record.getStepId(),
+                record.getSessionId(),
+                record.getStepType(),
+                record.getStepName(),
+                record.getStatus(),
+                record.getInputSummary(),
+                record.getOutputSummary(),
+                record.getRawOutput(),
+                record.getErrorMessage(),
+                record.getStartTime(),
+                record.getEndTime(),
                 record.getCreateTime()
         );
     }

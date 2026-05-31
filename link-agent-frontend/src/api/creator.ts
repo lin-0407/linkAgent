@@ -8,6 +8,9 @@ import type {
   CreatorFeedbackFetchResult,
   CreatorFeedbackImportResult,
   CreatorFeedbackReport,
+  CreatorEvalCase,
+  CreatorEvalResult,
+  CreatorEvalResultPayload,
   CreatorPreference,
   CreatorFeedbackSavePayload,
   CreatorSuggestion,
@@ -19,6 +22,8 @@ import type {
   CreatorWorkflowMessage,
   CreatorWorkflowMessagePayload,
   CreatorWorkflowSession,
+  CreatorWorkflowStage,
+  CreatorWorkflowStep,
   CreatorWorkflowStartPayload,
   PrePublishAnalyzePayload,
 } from '@/types/creator'
@@ -157,6 +162,12 @@ export function listWorkflowMessages(taskId: string, sessionId: string) {
   )
 }
 
+export function listWorkflowSteps(taskId: string, sessionId: string) {
+  return requestJson<CreatorWorkflowStep[]>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/steps`,
+  )
+}
+
 export function createWorkflowEventSource(taskId: string, sessionId: string) {
   return new EventSource(
     `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/events`,
@@ -264,5 +275,39 @@ export function chatCreatorFeedback(taskId: string, payload: CreatorFeedbackChat
       method: 'POST',
       body: JSON.stringify(cleanPayload(payload)),
     },
+  )
+}
+
+export function listCreatorEvalCases(
+  userId = 'default',
+  targetStage?: CreatorWorkflowStage,
+  limit = 20,
+) {
+  const params = new URLSearchParams({
+    userId,
+    limit: String(limit),
+  })
+  if (targetStage) {
+    params.set('targetStage', targetStage)
+  }
+  return requestJson<CreatorEvalCase[]>(`/api/creator/evaluations/cases?${params.toString()}`)
+}
+
+export function recordCreatorEvalResult(caseId: string, payload: CreatorEvalResultPayload) {
+  return requestJson<CreatorEvalResult>(
+    `/api/creator/evaluations/cases/${encodeURIComponent(caseId)}/results`,
+    {
+      method: 'POST',
+      body: JSON.stringify(cleanPayload(payload)),
+    },
+  )
+}
+
+export function listCreatorEvalResults(caseId: string, limit = 10) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+  })
+  return requestJson<CreatorEvalResult[]>(
+    `/api/creator/evaluations/cases/${encodeURIComponent(caseId)}/results?${params.toString()}`,
   )
 }

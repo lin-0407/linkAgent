@@ -45,6 +45,74 @@ export type CreatorTaskUpdatePayload = {
   subtitle?: string
 }
 
+export type CreatorWorkflowStage = 'PRE_PUBLISH' | 'FEEDBACK' | 'REPORT'
+
+export type CreatorEvalCase = {
+  id: number
+  caseId: string
+  userId: string
+  caseName: string
+  targetStage: CreatorWorkflowStage
+  taskId: string | null
+  inputSnapshot: string
+  expectedPoints: string | null
+  scoringRubric: string | null
+  status: string
+  createTime: string
+  updateTime: string
+}
+
+export type CreatorEvalResult = {
+  id: number
+  resultId: string
+  caseId: string
+  taskId: string | null
+  workflowSessionId: string | null
+  targetStage: CreatorWorkflowStage
+  modelName: string | null
+  outputSummary: string | null
+  rawOutput: string
+  runStatus: string
+  parseStatus: string
+  elapsedMs: number | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  failureReason: string | null
+  readabilityScore: number | null
+  relevanceScore: number | null
+  completenessScore: number | null
+  accuracyScore: number | null
+  stabilityScore: number | null
+  costScore: number | null
+  explainabilityScore: number | null
+  reviewerNote: string | null
+  createTime: string
+  updateTime: string
+}
+
+export type CreatorEvalResultPayload = {
+  taskId?: string
+  workflowSessionId?: string
+  targetStage: CreatorWorkflowStage
+  modelName?: string
+  outputSummary?: string
+  rawOutput?: string
+  elapsedMs?: number
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+  failureReason?: string
+  readabilityScore?: number
+  relevanceScore?: number
+  completenessScore?: number
+  accuracyScore?: number
+  stabilityScore?: number
+  costScore?: number
+  explainabilityScore?: number
+  reviewerNote?: string
+}
+
 export type PrePublishAnalyzePayload = {
   customGuidance?: string
   creatorPreference?: string
@@ -84,8 +152,6 @@ export type CreatorSuggestion = {
   updateTime: string
 }
 
-export type CreatorWorkflowStage = 'PRE_PUBLISH' | 'FEEDBACK' | 'REPORT'
-
 export type CreatorWorkflowStatus =
   | 'CREATED'
   | 'CONTEXT_LOADING'
@@ -114,6 +180,22 @@ export type CreatorWorkflowMessage = {
   detailRefType: string | null
   detailRefId: string | null
   sequenceNo: number
+  createTime: string
+}
+
+export type CreatorWorkflowStep = {
+  id: number
+  stepId: string
+  sessionId: string
+  stepType: string
+  stepName: string
+  status: string
+  inputSummary: string | null
+  outputSummary: string | null
+  rawOutput: string | null
+  errorMessage: string | null
+  startTime: string | null
+  endTime: string | null
   createTime: string
 }
 

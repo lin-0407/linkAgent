@@ -395,6 +395,8 @@ POST /api/creator/tasks/{taskId}/feedback/chat
 | creator_feedback_item | 单条评论/弹幕明细与分类结果 | 阶段 4.4.1 |
 | creator_feedback_metric | 用户主动导入的视频基础指标 | 阶段 4.4.1 |
 | creator_preference | 创作者长期偏好 | 阶段 4.5 |
+| creator_eval_case | 评测样例与人工评分输入 | 阶段 4.6 |
+| creator_eval_result | 评测结果与失败回放记录 | 阶段 4.6 |
 
 预留扩展表：
 
@@ -402,8 +404,6 @@ POST /api/creator/tasks/{taskId}/feedback/chat
 待补充：creator_asset
 待补充：creator_collaboration_comment
 待补充：creator_report_version
-待补充：creator_eval_case
-待补充：creator_eval_result
 ```
 
 ---
