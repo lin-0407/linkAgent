@@ -6,6 +6,8 @@ export type CreatorMaterial = {
   updateTime: string
 }
 
+export type CreatorMaterialType = 'TITLE_DRAFT' | 'DESCRIPTION_DRAFT' | 'MANUSCRIPT' | 'SUBTITLE'
+
 export type CreatorTask = {
   id: number
   taskId: string

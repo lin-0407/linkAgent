@@ -189,12 +189,12 @@ com.link.linkagent.creator
 POST /api/creator/tasks
 GET  /api/creator/tasks
 GET  /api/creator/tasks/{taskId}
+POST /api/creator/tasks/{taskId}/materials/import
 ```
 
 预留扩展：
 
 ```text
-待补充：文件上传接口
 待补充：任务状态机
 待补充：任务归档与删除策略
 ```

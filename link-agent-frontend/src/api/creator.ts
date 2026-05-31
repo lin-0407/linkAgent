@@ -14,6 +14,7 @@ import type {
   CreatorPreference,
   CreatorFeedbackSavePayload,
   CreatorSuggestion,
+  CreatorMaterialType,
   CreatorTask,
   CreatorTaskCreatePayload,
   CreatorTaskSummary,
@@ -100,6 +101,20 @@ export function updateCreatorTask(taskId: string, payload: CreatorTaskUpdatePayl
     method: 'PUT',
     body: JSON.stringify(payload),
   })
+}
+
+export function importCreatorTaskMaterialFile(
+  taskId: string,
+  materialType: CreatorMaterialType,
+  file: File,
+) {
+  const formData = new FormData()
+  formData.append('materialType', materialType)
+  formData.append('file', file)
+  return requestForm<CreatorTask>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/materials/import`,
+    formData,
+  )
 }
 
 export function deleteCreatorTask(taskId: string) {

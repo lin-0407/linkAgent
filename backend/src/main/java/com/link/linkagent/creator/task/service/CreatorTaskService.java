@@ -16,11 +16,15 @@ import com.link.linkagent.util.TextUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -34,6 +38,11 @@ public class CreatorTaskService {
     private static final String DEFAULT_USER_ID = "default";
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
+    private static final long MATERIAL_IMPORT_FILE_MAX_SIZE = 5 * 1024 * 1024L;
+    private static final int TITLE_DRAFT_MAX_LENGTH = 200;
+    private static final int DESCRIPTION_DRAFT_MAX_LENGTH = 2000;
+    private static final int LONG_MATERIAL_MAX_LENGTH = 20000;
+    private static final List<String> SUPPORTED_MATERIAL_FILE_SUFFIXES = List.of(".txt", ".md", ".srt", ".ass");
 
     private final CreatorTaskMapper creatorTaskMapper;
 
@@ -73,6 +82,29 @@ public class CreatorTaskService {
         refreshMaterials(taskRecord.getTaskId(), request);
         if (materialChanged) {
             // 材料变化后旧发布建议和复盘结论不应继续被状态链默认认可，因此退回草稿态让用户重新生成。
+            creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.DRAFT.name());
+        }
+
+        return getTask(taskRecord.getTaskId());
+    }
+
+    @Transactional
+    public CreatorTaskResponse importMaterial(String taskId, String materialType, MultipartFile file) {
+        String safeTaskId = normalizeTaskId(taskId);
+        CreatorTaskRecord taskRecord = getTaskRecord(safeTaskId);
+        CreatorMaterialType safeMaterialType = parseMaterialType(materialType);
+        validateMaterialImportFile(file);
+        String importedContent = readMaterialImportText(file);
+        validateMaterialContentLength(safeMaterialType, importedContent);
+
+        String normalizedImportedContent = normalizeMaterialContent(importedContent);
+        String currentContent = findCurrentMaterialContent(
+                creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId()),
+                safeMaterialType
+        );
+        refreshMaterial(taskRecord.getTaskId(), safeMaterialType, importedContent);
+        if (!normalizedImportedContent.equals(currentContent)) {
+            // 文件导入和手工编辑一样会改变分析输入，所以必须让用户重新生成后续建议。
             creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.DRAFT.name());
         }
 
@@ -217,6 +249,88 @@ public class CreatorTaskService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "任务ID不能为空");
         }
         return taskId.trim();
+    }
+
+    private CreatorMaterialType parseMaterialType(String materialType) {
+        if (TextUtil.isBlank(materialType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "材料类型不能为空");
+        }
+        try {
+            return CreatorMaterialType.valueOf(materialType.trim());
+        } catch (IllegalArgumentException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "材料类型不支持");
+        }
+    }
+
+    private void validateMaterialImportFile(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "导入文件不能为空");
+        }
+        if (file.getSize() > MATERIAL_IMPORT_FILE_MAX_SIZE) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "导入文件不能超过5MB");
+        }
+
+        String fileName = normalizeMaterialFileName(file.getOriginalFilename());
+        boolean supported = SUPPORTED_MATERIAL_FILE_SUFFIXES
+                .stream()
+                .anyMatch(fileName::endsWith);
+        if (!supported) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "创作材料导入只支持 TXT、MD、SRT 或 ASS 文本文件");
+        }
+    }
+
+    private String normalizeMaterialFileName(String fileName) {
+        if (TextUtil.isBlank(fileName)) {
+            return "uploaded_material.txt";
+        }
+        return fileName.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String readMaterialImportText(MultipartFile file) {
+        try {
+            String text = new String(file.getBytes(), StandardCharsets.UTF_8);
+            // 部分文本编辑器会写入 UTF-8 BOM，不去掉会让首行材料多出不可见字符。
+            if (text.startsWith("\uFEFF")) {
+                text = text.substring(1);
+            }
+            String trimmedText = text.trim();
+            if (TextUtil.isBlank(trimmedText)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "导入文件内容不能为空");
+            }
+            return trimmedText;
+        } catch (IOException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "导入文件读取失败");
+        }
+    }
+
+    private void validateMaterialContentLength(CreatorMaterialType materialType, String content) {
+        int maxLength = switch (materialType) {
+            case TITLE_DRAFT -> TITLE_DRAFT_MAX_LENGTH;
+            case DESCRIPTION_DRAFT -> DESCRIPTION_DRAFT_MAX_LENGTH;
+            case MANUSCRIPT, SUBTITLE -> LONG_MATERIAL_MAX_LENGTH;
+        };
+        if (content.length() > maxLength) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, materialTypeLabel(materialType) + "导入内容不能超过 " + maxLength + " 个字符");
+        }
+    }
+
+    private String materialTypeLabel(CreatorMaterialType materialType) {
+        return switch (materialType) {
+            case TITLE_DRAFT -> "标题草稿";
+            case DESCRIPTION_DRAFT -> "简介草稿";
+            case MANUSCRIPT -> "文稿";
+            case SUBTITLE -> "字幕";
+        };
+    }
+
+    private String findCurrentMaterialContent(List<CreatorMaterialRecord> currentMaterials,
+                                              CreatorMaterialType materialType) {
+        return currentMaterials
+                .stream()
+                .filter(record -> materialType.name().equals(record.getMaterialType()))
+                .findFirst()
+                .map(record -> normalizeMaterialContent(record.getContent()))
+                .orElse("");
     }
 
     private boolean isMaterialChanged(List<CreatorMaterialRecord> currentMaterials,

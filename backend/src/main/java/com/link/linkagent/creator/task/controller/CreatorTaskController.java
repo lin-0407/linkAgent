@@ -9,9 +9,12 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
-import org.springframework.validation.annotation.Validated;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -22,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -64,6 +68,27 @@ public class CreatorTaskController {
             @Size(max = 64, message = "任务ID长度不能超过64个字符")
             String taskId) {
         creatorTaskService.deleteTask(taskId);
+    }
+
+    @PostMapping(value = "/{taskId}/materials/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public CreatorTaskResponse importMaterial(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            String taskId,
+
+            @RequestParam("materialType")
+            @NotBlank(message = "材料类型不能为空")
+            @Pattern(
+                    regexp = "TITLE_DRAFT|DESCRIPTION_DRAFT|MANUSCRIPT|SUBTITLE",
+                    message = "材料类型只能是 TITLE_DRAFT、DESCRIPTION_DRAFT、MANUSCRIPT 或 SUBTITLE"
+            )
+            String materialType,
+
+            @RequestParam("file")
+            @NotNull(message = "导入文件不能为空")
+            MultipartFile file) {
+        return creatorTaskService.importMaterial(taskId, materialType, file);
     }
 
     @GetMapping

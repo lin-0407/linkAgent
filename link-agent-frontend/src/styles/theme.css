@@ -1788,16 +1788,23 @@ textarea:focus {
 }
 
 .surface-root {
+  display: flow-root;
   min-height: 100vh;
 }
 
+/* 全局切换入口放回文档流里，避免固定浮层压住工作台右上角的高频操作。 */
 .surface-switch {
-  position: fixed;
-  top: 14px;
-  right: 18px;
-  z-index: 50;
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: 5;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: fit-content;
+  max-width: calc(100% - 32px);
   gap: 8px;
+  margin: 12px auto 0;
   padding: 6px;
   background: rgba(255, 248, 248, 0.9);
   border: 1px solid rgba(231, 45, 72, 0.18);
@@ -1854,7 +1861,7 @@ textarea:focus {
   --creator-panel-strong: rgba(255, 255, 255, 0.96);
   --creator-line: rgba(231, 45, 72, 0.18);
   min-height: 100vh;
-  padding: 84px 22px 24px;
+  padding: 24px 22px 24px;
   color: var(--color-ink);
   background:
     linear-gradient(90deg, rgba(0, 174, 236, 0.08) 1px, transparent 1px),
@@ -2585,6 +2592,65 @@ textarea:focus {
 .creator-file-field small {
   color: rgba(63, 38, 49, 0.58);
   line-height: 1.5;
+}
+
+.creator-import-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 0;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(0, 174, 236, 0.16);
+  border-radius: 8px;
+}
+
+.creator-import-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.creator-import-head h4 {
+  margin: 2px 0 0;
+  color: var(--color-ink);
+  font-size: 15px;
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+.creator-import-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.4fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.creator-import-grid label {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.creator-import-grid label > span {
+  color: var(--color-ink-2);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.creator-import-grid select {
+  min-height: 46px;
+  padding: 0 12px;
+  color: var(--color-ink);
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(0, 174, 236, 0.18);
+  border-radius: 8px;
+  outline: none;
+  cursor: pointer;
+}
+
+.creator-import-grid select:focus {
+  border-color: rgba(231, 45, 72, 0.34);
+  box-shadow: 0 0 0 3px rgba(0, 174, 236, 0.12);
 }
 
 .creator-script-panel {
@@ -3662,7 +3728,7 @@ textarea:focus {
   --creator-panel-strong: rgba(255, 255, 255, 0.98);
   --creator-line: rgba(15, 23, 42, 0.09);
   --creator-muted-ink: rgba(44, 55, 74, 0.64);
-  padding: 80px 24px 28px;
+  padding: 24px 24px 28px;
   background:
     linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%),
     #f5f7fb;
@@ -3969,13 +4035,20 @@ textarea:focus {
 
 @media (max-width: 820px) {
   .surface-switch {
-    position: sticky;
-    top: 0;
+    position: relative;
+    top: auto;
     right: auto;
+    width: calc(100% - 24px);
+    max-width: 100%;
+    margin-top: 10px;
     justify-content: center;
-    border-right: 0;
-    border-left: 0;
-    border-radius: 0;
+    border-radius: 12px;
+  }
+
+  .surface-switch button {
+    flex: 1 1 0;
+    justify-content: center;
+    white-space: nowrap;
   }
 
   .creator-shell {
@@ -3986,6 +4059,7 @@ textarea:focus {
   .creator-task-toolbar,
   .creator-task-overview,
   .creator-form-grid,
+  .creator-import-grid,
   .creator-result-grid,
   .creator-script-grid,
   .creator-workflow-grid,
