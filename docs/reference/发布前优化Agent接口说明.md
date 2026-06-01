@@ -6,6 +6,8 @@
 
 当前接口是阶段 4.2 的同步 LLM 基线，负责把任务材料生成结构化建议并保存。阶段 4.4.1 会在此基础上新增工作流会话、SSE 消息流和用户确认机制。阶段 4.5.1 起，发布前优化会读取最近几期 `creator_preference`，让建议延续历史复盘中沉淀的创作者偏好。
 
+阶段 4.11 起，发布前优化结果新增创作者语境字段，用于减少“标题更吸引人”这类空泛建议，强制输出创作者困境、观众钩子、内容定位和可执行修改计划。
+
 它基于阶段 4.1 保存的创作任务和材料，生成：
 
 1. 内容摘要。
@@ -16,6 +18,10 @@
 6. 简介建议。
 7. 标签建议。
 8. 分区建议。
+9. 创作者困境。
+10. 观众钩子。
+11. 内容定位。
+12. 可执行修改计划。
 
 第一版不接入真实平台数据，不做评论分析，不做自动投稿。
 
@@ -32,11 +38,15 @@
 | suggestion_id | 建议唯一标识 |
 | task_id | 关联创作任务 |
 | content_summary | 内容摘要 |
+| creator_dilemma | 创作者困境 |
 | audience_profile | 目标受众判断 |
+| audience_hook | 观众钩子 |
+| content_positioning | 内容定位 |
 | selling_points | 核心卖点 JSON |
 | risk_points | 风险点 JSON |
 | title_suggestions | 标题建议 JSON |
 | description_suggestion | 简介建议 |
+| actionable_revision_plan | 可执行修改计划 JSON |
 | tag_suggestions | 标签建议 JSON |
 | partition_suggestion | 分区建议 |
 | raw_output | LLM 原始输出 |
@@ -88,6 +98,8 @@ GET /api/creator/tasks/{taskId}/pre-publish/suggestions
 1. 任务不存在时返回 404。
 2. 没有建议时返回 404。
 3. 返回中同时包含结构化字段和 `rawOutput`，便于人工检查。
+
+响应中的 `titleSuggestions` 从阶段 4.11 起会尽量包含 `viewerPsychology`、`clickReason`、`trustRisk` 和 `bestScenario`，用于解释标题背后的观众心理和信任风险。旧数据没有这些字段时，前端仍按旧结构展示。
 
 ## 设计取舍
 

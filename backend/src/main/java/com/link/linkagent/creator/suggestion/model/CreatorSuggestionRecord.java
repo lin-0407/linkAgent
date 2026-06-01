@@ -12,11 +12,15 @@ public class CreatorSuggestionRecord {
     private String suggestionId;
     private String taskId;
     private String contentSummary;
+    private String creatorDilemma;
     private String audienceProfile;
+    private String audienceHook;
+    private String contentPositioning;
     private String sellingPoints;
     private String riskPoints;
     private String titleSuggestions;
     private String descriptionSuggestion;
+    private String actionableRevisionPlan;
     private String tagSuggestions;
     private String partitionSuggestion;
     private String rawOutput;
@@ -56,12 +60,36 @@ public class CreatorSuggestionRecord {
         this.contentSummary = contentSummary;
     }
 
+    public String getCreatorDilemma() {
+        return creatorDilemma;
+    }
+
+    public void setCreatorDilemma(String creatorDilemma) {
+        this.creatorDilemma = creatorDilemma;
+    }
+
     public String getAudienceProfile() {
         return audienceProfile;
     }
 
     public void setAudienceProfile(String audienceProfile) {
         this.audienceProfile = audienceProfile;
+    }
+
+    public String getAudienceHook() {
+        return audienceHook;
+    }
+
+    public void setAudienceHook(String audienceHook) {
+        this.audienceHook = audienceHook;
+    }
+
+    public String getContentPositioning() {
+        return contentPositioning;
+    }
+
+    public void setContentPositioning(String contentPositioning) {
+        this.contentPositioning = contentPositioning;
     }
 
     public String getSellingPoints() {
@@ -94,6 +122,14 @@ public class CreatorSuggestionRecord {
 
     public void setDescriptionSuggestion(String descriptionSuggestion) {
         this.descriptionSuggestion = descriptionSuggestion;
+    }
+
+    public String getActionableRevisionPlan() {
+        return actionableRevisionPlan;
+    }
+
+    public void setActionableRevisionPlan(String actionableRevisionPlan) {
+        this.actionableRevisionPlan = actionableRevisionPlan;
     }
 
     public String getTagSuggestions() {

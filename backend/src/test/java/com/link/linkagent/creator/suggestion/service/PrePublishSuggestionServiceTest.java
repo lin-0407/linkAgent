@@ -83,6 +83,70 @@ class PrePublishSuggestionServiceTest {
         assertThat(llmService.lastUserMessage).contains("本期换风格，不使用历史偏好");
     }
 
+    @Test
+    void shouldParseCreatorContextFields() {
+        TrackingCreatorPreferenceMapper preferenceMapper = new TrackingCreatorPreferenceMapper();
+
+        FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
+        taskMapper.taskRecord = createTaskRecord();
+        taskMapper.materials = List.of(createMaterialRecord());
+
+        FakeCreatorSuggestionMapper suggestionMapper = new FakeCreatorSuggestionMapper();
+        CapturingLlmService llmService = new CapturingLlmService("""
+                {
+                  "contentSummary": "摘要",
+                  "creatorDilemma": "创作者困境",
+                  "audienceProfile": "目标受众",
+                  "audienceHook": "观众钩子",
+                  "contentPositioning": "内容定位",
+                  "sellingPoints": ["卖点"],
+                  "riskPoints": ["风险"],
+                  "titleSuggestions": [
+                    {
+                      "title": "标题",
+                      "viewerPsychology": "观众心理",
+                      "clickReason": "点击理由",
+                      "trustRisk": "信任风险",
+                      "bestScenario": "适用场景",
+                      "reason": "理由",
+                      "risk": "风险"
+                    }
+                  ],
+                  "descriptionSuggestion": "简介建议",
+                  "actionableRevisionPlan": [
+                    {
+                      "priority": "HIGH",
+                      "target": "开头",
+                      "problem": "问题",
+                      "action": "动作",
+                      "expectedEffect": "效果"
+                    }
+                  ],
+                  "tagSuggestions": ["标签"],
+                  "partitionSuggestion": "分区"
+                }
+                """);
+
+        PrePublishSuggestionService service = new PrePublishSuggestionService(
+                taskMapper,
+                suggestionMapper,
+                new CreatorPreferenceService(preferenceMapper),
+                llmService,
+                new ObjectMapper());
+
+        CreatorSuggestionResponse response = service.generateSuggestion(
+                "task-1",
+                new PrePublishAnalyzeRequest(null, null, null, null, "IGNORE_HISTORY")
+        );
+
+        assertThat(response.creatorDilemma()).isEqualTo("创作者困境");
+        assertThat(response.audienceHook()).isEqualTo("观众钩子");
+        assertThat(response.contentPositioning()).isEqualTo("内容定位");
+        assertThat(response.actionableRevisionPlan()).contains("\"target\":\"开头\"");
+        assertThat(response.titleSuggestions()).contains("\"viewerPsychology\":\"观众心理\"");
+        assertThat(llmService.lastSystemPrompt).contains("创作者真实决策压力");
+    }
+
     private CreatorTaskRecord createTaskRecord() {
         CreatorTaskRecord record = new CreatorTaskRecord();
         record.setId(1L);

@@ -223,21 +223,29 @@ public class CreatorReportService {
     private String buildSuggestionPrompt(CreatorSuggestionRecord record) {
         return """
                 内容摘要：%s
+                创作者困境：%s
                 目标受众：%s
+                观众钩子：%s
+                内容定位：%s
                 核心卖点：%s
                 风险点：%s
                 标题建议：%s
                 简介建议：%s
+                可执行修改计划：%s
                 标签建议：%s
                 分区建议：%s
                 解析状态：%s
                 """.formatted(
                 normalizeSection(record.getContentSummary()),
+                normalizeSection(record.getCreatorDilemma()),
                 normalizeSection(record.getAudienceProfile()),
+                normalizeSection(record.getAudienceHook()),
+                normalizeSection(record.getContentPositioning()),
                 normalizeSection(record.getSellingPoints()),
                 normalizeSection(record.getRiskPoints()),
                 normalizeSection(record.getTitleSuggestions()),
                 normalizeSection(record.getDescriptionSuggestion()),
+                normalizeSection(record.getActionableRevisionPlan()),
                 normalizeSection(record.getTagSuggestions()),
                 normalizeSection(record.getPartitionSuggestion()),
                 normalizeSection(record.getParseStatus())

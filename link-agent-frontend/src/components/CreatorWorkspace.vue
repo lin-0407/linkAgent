@@ -410,6 +410,9 @@ const materialPreview = computed(() => {
 const sellingPoints = computed(() => parseJsonArray(suggestion.value?.sellingPoints))
 const riskPoints = computed(() => parseJsonArray(suggestion.value?.riskPoints))
 const titleSuggestions = computed(() => parseJsonArray(suggestion.value?.titleSuggestions))
+const actionableRevisionPlan = computed(() =>
+  parseJsonArray(suggestion.value?.actionableRevisionPlan),
+)
 const tagSuggestions = computed(() => parseJsonArray(suggestion.value?.tagSuggestions))
 const hotTopics = computed(() => parseJsonArray(feedbackReport.value?.hotTopics))
 const controversyPoints = computed(() => parseJsonArray(feedbackReport.value?.controversyPoints))
@@ -3304,19 +3307,67 @@ function showError(error: unknown) {
                 <span>内容摘要</span>
                 <p>{{ suggestion.contentSummary || '未解析到摘要' }}</p>
               </article>
+              <article class="creator-result-block span-full">
+                <span>创作者困境</span>
+                <p>{{ suggestion.creatorDilemma || '未解析到创作者困境' }}</p>
+              </article>
               <article class="creator-result-block">
                 <span>目标受众</span>
                 <p>{{ suggestion.audienceProfile || '未解析到受众判断' }}</p>
+              </article>
+              <article class="creator-result-block">
+                <span>观众钩子</span>
+                <p>{{ suggestion.audienceHook || '未解析到观众钩子' }}</p>
+              </article>
+              <article class="creator-result-block span-full">
+                <span>内容定位</span>
+                <p>{{ suggestion.contentPositioning || '未解析到内容定位' }}</p>
               </article>
               <article class="creator-result-block">
                 <span>建议分区</span>
                 <p>{{ suggestion.partitionSuggestion || '未解析到分区建议' }}</p>
               </article>
               <article class="creator-result-block span-full">
+                <span>可执行修改计划</span>
+                <p v-if="actionableRevisionPlan.length === 0">未解析到可执行修改计划</p>
+                <div v-if="actionableRevisionPlan.length > 0" class="creator-list">
+                  <section v-for="(item, index) in actionableRevisionPlan" :key="index">
+                    <strong>
+                      {{
+                        getRecordText(item, 'target') ||
+                        getRecordText(item, 'priority') ||
+                        formatValue(item)
+                      }}
+                    </strong>
+                    <p v-if="getRecordText(item, 'problem')">
+                      问题：{{ getRecordText(item, 'problem') }}
+                    </p>
+                    <p v-if="getRecordText(item, 'action')">
+                      动作：{{ getRecordText(item, 'action') }}
+                    </p>
+                    <p v-if="getRecordText(item, 'expectedEffect')">
+                      预期效果：{{ getRecordText(item, 'expectedEffect') }}
+                    </p>
+                  </section>
+                </div>
+              </article>
+              <article class="creator-result-block span-full">
                 <span>标题建议</span>
                 <div class="creator-list">
                   <section v-for="(item, index) in titleSuggestions" :key="index">
                     <strong>{{ getRecordText(item, 'title') || formatValue(item) }}</strong>
+                    <p v-if="getRecordText(item, 'viewerPsychology')">
+                      观众心理：{{ getRecordText(item, 'viewerPsychology') }}
+                    </p>
+                    <p v-if="getRecordText(item, 'clickReason')">
+                      点击理由：{{ getRecordText(item, 'clickReason') }}
+                    </p>
+                    <p v-if="getRecordText(item, 'trustRisk')">
+                      信任风险：{{ getRecordText(item, 'trustRisk') }}
+                    </p>
+                    <p v-if="getRecordText(item, 'bestScenario')">
+                      适用场景：{{ getRecordText(item, 'bestScenario') }}
+                    </p>
                     <p v-if="getRecordText(item, 'reason')">
                       理由：{{ getRecordText(item, 'reason') }}
                     </p>

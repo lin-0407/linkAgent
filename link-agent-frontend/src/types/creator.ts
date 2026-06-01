@@ -175,11 +175,15 @@ export type CreatorSuggestion = {
   suggestionId: string
   taskId: string
   contentSummary: string | null
+  creatorDilemma: string | null
   audienceProfile: string | null
+  audienceHook: string | null
+  contentPositioning: string | null
   sellingPoints: string | null
   riskPoints: string | null
   titleSuggestions: string | null
   descriptionSuggestion: string | null
+  actionableRevisionPlan: string | null
   tagSuggestions: string | null
   partitionSuggestion: string | null
   rawOutput: string

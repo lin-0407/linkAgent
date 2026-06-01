@@ -165,11 +165,15 @@ CREATE TABLE IF NOT EXISTS creator_suggestion
     suggestion_id          VARCHAR(64)  NOT NULL COMMENT '建议唯一标识（UUID）',
     task_id                VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id',
     content_summary        TEXT                  DEFAULT NULL COMMENT '内容摘要',
+    creator_dilemma        TEXT                  DEFAULT NULL COMMENT '创作者困境，用于记录本期最容易让 UP 主纠结或做错的表达问题',
     audience_profile       TEXT                  DEFAULT NULL COMMENT '目标受众判断',
+    audience_hook          TEXT                  DEFAULT NULL COMMENT '观众点击、继续观看或收藏评论的核心动机',
+    content_positioning    TEXT                  DEFAULT NULL COMMENT '内容定位与差异化方向，不保存编造的平台推荐结论',
     selling_points         TEXT                  DEFAULT NULL COMMENT '核心卖点列表 JSON',
     risk_points            TEXT                  DEFAULT NULL COMMENT '风险点列表 JSON',
     title_suggestions      TEXT                  DEFAULT NULL COMMENT '标题建议列表 JSON',
     description_suggestion TEXT                  DEFAULT NULL COMMENT '简介建议',
+    actionable_revision_plan TEXT                DEFAULT NULL COMMENT '可执行修改计划 JSON，用于把建议落成标题、开头、简介等具体动作',
     tag_suggestions        TEXT                  DEFAULT NULL COMMENT '标签建议列表 JSON',
     partition_suggestion   VARCHAR(128)          DEFAULT NULL COMMENT '分区建议',
     raw_output             LONGTEXT     NOT NULL COMMENT 'LLM 原始输出，用于失败回放和人工检查',
@@ -183,6 +187,59 @@ CREATE TABLE IF NOT EXISTS creator_suggestion
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '发布前优化建议表';
+
+-- 已建过旧版 creator_suggestion 的本地库需要补齐阶段 4.11 字段，避免新代码查询和写入时报未知列。
+SET @add_creator_dilemma_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_suggestion ADD COLUMN creator_dilemma TEXT DEFAULT NULL COMMENT ''创作者困境，用于记录本期最容易让 UP 主纠结或做错的表达问题'' AFTER content_summary',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_suggestion'
+      AND COLUMN_NAME = 'creator_dilemma'
+);
+PREPARE add_creator_dilemma_stmt FROM @add_creator_dilemma_sql;
+EXECUTE add_creator_dilemma_stmt;
+DEALLOCATE PREPARE add_creator_dilemma_stmt;
+
+SET @add_audience_hook_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_suggestion ADD COLUMN audience_hook TEXT DEFAULT NULL COMMENT ''观众点击、继续观看或收藏评论的核心动机'' AFTER audience_profile',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_suggestion'
+      AND COLUMN_NAME = 'audience_hook'
+);
+PREPARE add_audience_hook_stmt FROM @add_audience_hook_sql;
+EXECUTE add_audience_hook_stmt;
+DEALLOCATE PREPARE add_audience_hook_stmt;
+
+SET @add_content_positioning_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_suggestion ADD COLUMN content_positioning TEXT DEFAULT NULL COMMENT ''内容定位与差异化方向，不保存编造的平台推荐结论'' AFTER audience_hook',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_suggestion'
+      AND COLUMN_NAME = 'content_positioning'
+);
+PREPARE add_content_positioning_stmt FROM @add_content_positioning_sql;
+EXECUTE add_content_positioning_stmt;
+DEALLOCATE PREPARE add_content_positioning_stmt;
+
+SET @add_actionable_revision_plan_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_suggestion ADD COLUMN actionable_revision_plan TEXT DEFAULT NULL COMMENT ''可执行修改计划 JSON，用于把建议落成标题、开头、简介等具体动作'' AFTER description_suggestion',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_suggestion'
+      AND COLUMN_NAME = 'actionable_revision_plan'
+);
+PREPARE add_actionable_revision_plan_stmt FROM @add_actionable_revision_plan_sql;
+EXECUTE add_actionable_revision_plan_stmt;
+DEALLOCATE PREPARE add_actionable_revision_plan_stmt;
 
 -- ------------------------------------------------------------
 -- 9. 评论弹幕样例表
@@ -812,11 +869,15 @@ INSERT IGNORE INTO creator_suggestion (
     suggestion_id,
     task_id,
     content_summary,
+    creator_dilemma,
     audience_profile,
+    audience_hook,
+    content_positioning,
     selling_points,
     risk_points,
     title_suggestions,
     description_suggestion,
+    actionable_revision_plan,
     tag_suggestions,
     partition_suggestion,
     raw_output,
@@ -830,14 +891,18 @@ VALUES
         'sample-suggestion-prepublish-001',
         'sample-task-prepublish-001',
         '视频围绕 Spring AI 创作工作台转型，适合展示 AI 应用开发能力和后端工程能力。',
+        '本期最容易做错的是只讲 Spring AI 和 Agent 名词，创作者会担心观众听不出项目到底解决什么创作问题。',
         '目标观众是想做 AI 应用作品集的 Java 后端学习者，以及面试官。',
+        '观众会因为“一个作品集项目如何从通用 Agent 转成创作者工作台”这个问题点进来，继续看的理由是能拿走项目定位和模块拆分方法。',
+        '定位成 AI 应用作品集拆解视频，重点不是炫技，而是证明后端能力如何服务 UP 主发布前优化和复盘闭环。',
         '["把任务输入、建议生成和复盘串成一个闭环","强调创作者工作流而不是通用 Agent 炫技","让观众一眼看懂这个项目解决什么问题"]',
         '["标题信息量偏多","需要避免把技术细节说成抽象概念","开头要先讲创作者场景"]',
-        '[{"title":"Spring AI 创作工作台复盘","reason":"直接点出项目主题，适合先建立场景","risk":"略偏技术向"},{"title":"一个 B 站创作者工作台，怎么把流程跑通","reason":"更像问题型标题，便于引出完整闭环","risk":"技术名露出较少"}]',
+        '[{"title":"Spring AI 创作工作台复盘","viewerPsychology":"想快速判断这个项目是否适合作品集","clickReason":"标题直接给出技术栈和项目主题","trustRisk":"略偏技术向，非后端观众可能觉得门槛高","bestScenario":"面向求职或技术复盘观众","reason":"直接点出项目主题，适合先建立场景","risk":"略偏技术向"},{"title":"一个 B 站创作者工作台，怎么把流程跑通","viewerPsychology":"关心从 0 到 1 跑通业务闭环","clickReason":"问题型表达能引出完整流程","trustRisk":"技术名露出较少，可能弱化 Spring AI 亮点","bestScenario":"面向想借鉴项目路线的学习者","reason":"更像问题型标题，便于引出完整闭环","risk":"技术名露出较少"}]',
         '建议简介先说明这是一个面向创作者的 AI 工作台，再补一句它能做什么和为什么值得看。',
+        '[{"priority":"HIGH","target":"开头","problem":"开头如果先讲框架，观众很难建立创作者场景","action":"第一句话改成“这期演示一个帮 UP 主做发布前优化和复盘的 Spring AI 工作台”","expectedEffect":"先建立业务价值，再让技术实现有意义"},{"priority":"MEDIUM","target":"标题","problem":"标题同时塞业务和技术容易变长","action":"保留一个主关键词，副标题或简介再补 Spring AI","expectedEffect":"降低第一眼阅读成本"}]',
         '["Spring AI","创作工作台","B站创作者","AI应用","后端开发"]',
         'AI 工具教程',
-        '{"contentSummary":"视频围绕 Spring AI 创作工作台转型，适合展示 AI 应用开发能力和后端工程能力。","audienceProfile":"目标观众是想做 AI 应用作品集的 Java 后端学习者，以及面试官。","sellingPoints":["把任务输入、建议生成和复盘串成一个闭环","强调创作者工作流而不是通用 Agent 炫技","让观众一眼看懂这个项目解决什么问题"],"riskPoints":["标题信息量偏多","需要避免把技术细节说成抽象概念","开头要先讲创作者场景"],"titleSuggestions":[{"title":"Spring AI 创作工作台复盘","reason":"直接点出项目主题，适合先建立场景","risk":"略偏技术向"},{"title":"一个 B 站创作者工作台，怎么把流程跑通","reason":"更像问题型标题，便于引出完整闭环","risk":"技术名露出较少"}],"descriptionSuggestion":"建议简介先说明这是一个面向创作者的 AI 工作台，再补一句它能做什么和为什么值得看。","tagSuggestions":["Spring AI","创作工作台","B站创作者","AI应用","后端开发"],"partitionSuggestion":"AI 工具教程"}',
+        '{"contentSummary":"视频围绕 Spring AI 创作工作台转型，适合展示 AI 应用开发能力和后端工程能力。","creatorDilemma":"本期最容易做错的是只讲 Spring AI 和 Agent 名词，创作者会担心观众听不出项目到底解决什么创作问题。","audienceProfile":"目标观众是想做 AI 应用作品集的 Java 后端学习者，以及面试官。","audienceHook":"观众会因为“一个作品集项目如何从通用 Agent 转成创作者工作台”这个问题点进来，继续看的理由是能拿走项目定位和模块拆分方法。","contentPositioning":"定位成 AI 应用作品集拆解视频，重点不是炫技，而是证明后端能力如何服务 UP 主发布前优化和复盘闭环。","sellingPoints":["把任务输入、建议生成和复盘串成一个闭环","强调创作者工作流而不是通用 Agent 炫技","让观众一眼看懂这个项目解决什么问题"],"riskPoints":["标题信息量偏多","需要避免把技术细节说成抽象概念","开头要先讲创作者场景"],"titleSuggestions":[{"title":"Spring AI 创作工作台复盘","viewerPsychology":"想快速判断这个项目是否适合作品集","clickReason":"标题直接给出技术栈和项目主题","trustRisk":"略偏技术向，非后端观众可能觉得门槛高","bestScenario":"面向求职或技术复盘观众","reason":"直接点出项目主题，适合先建立场景","risk":"略偏技术向"},{"title":"一个 B 站创作者工作台，怎么把流程跑通","viewerPsychology":"关心从 0 到 1 跑通业务闭环","clickReason":"问题型表达能引出完整流程","trustRisk":"技术名露出较少，可能弱化 Spring AI 亮点","bestScenario":"面向想借鉴项目路线的学习者","reason":"更像问题型标题，便于引出完整闭环","risk":"技术名露出较少"}],"descriptionSuggestion":"建议简介先说明这是一个面向创作者的 AI 工作台，再补一句它能做什么和为什么值得看。","actionableRevisionPlan":[{"priority":"HIGH","target":"开头","problem":"开头如果先讲框架，观众很难建立创作者场景","action":"第一句话改成“这期演示一个帮 UP 主做发布前优化和复盘的 Spring AI 工作台”","expectedEffect":"先建立业务价值，再让技术实现有意义"},{"priority":"MEDIUM","target":"标题","problem":"标题同时塞业务和技术容易变长","action":"保留一个主关键词，副标题或简介再补 Spring AI","expectedEffect":"降低第一眼阅读成本"}],"tagSuggestions":["Spring AI","创作工作台","B站创作者","AI应用","后端开发"],"partitionSuggestion":"AI 工具教程"}',
         'PARSED',
         '2026-05-29 10:00:00',
         '2026-05-29 10:00:00'
@@ -847,14 +912,18 @@ VALUES
         'sample-suggestion-feedback-001',
         'sample-task-feedback-001',
         '视频聚焦评论弹幕分析，帮助创作者理解观众误解点和改进方向。',
+        '本期创作者容易陷入“我已经做了图表，所以就有价值”的误区，但观众真正需要的是这些反馈能变成什么下一步动作。',
         '目标观众是想把评论复盘做成工作流的内容创作者。',
+        '观众点击是因为想知道评论和弹幕到底能不能指导下一期内容，继续看的理由是看到误解点、争议点和选题建议之间的转换。',
+        '定位成反馈复盘方法视频，重点展示评论弹幕如何被清洗、分类并转成创作动作，而不是单纯展示仪表盘。',
         '["能把评论和弹幕合并成统一视图","能把误解点直接转成下一期建议","能让复盘结果和创作动作连接起来"]',
         '["样例如果太少，统计会显得单薄","需要先说明分类是怎么来的","图表不能替代结论"]',
-        '[{"title":"评论弹幕分析怎么帮助创作复盘","reason":"直接说明能力边界，适合复盘类视频","risk":"偏功能描述"},{"title":"看懂观众为什么说看不懂","reason":"更口语，能直接引出误解点","risk":"可能显得标题党"}]',
+        '[{"title":"评论弹幕分析怎么帮助创作复盘","viewerPsychology":"想确认评论弹幕不是看热闹，而是能指导下一期","clickReason":"标题直接说明能力边界和结果用途","trustRisk":"偏功能描述，情绪张力较弱","bestScenario":"面向内容复盘或产品演示观众","reason":"直接说明能力边界，适合复盘类视频","risk":"偏功能描述"},{"title":"看懂观众为什么说看不懂","viewerPsychology":"对负面反馈和误解点敏感，想知道怎么处理","clickReason":"口语化表达能直接击中创作者焦虑","trustRisk":"如果正文不拿出真实样例，会显得标题党","bestScenario":"面向有评论焦虑的中小 UP 主","reason":"更口语，能直接引出误解点","risk":"可能显得标题党"}]',
         '建议简介可以先讲清楚评论弹幕分析的目标，再补一条“最后会输出什么”。',
+        '[{"priority":"HIGH","target":"结构","problem":"如果先展示图表，观众不知道图表服务哪个创作决策","action":"先讲“我要找出误解点和下一期选题”，再展示分类仪表盘","expectedEffect":"让数据展示和创作动作建立因果关系"},{"priority":"MEDIUM","target":"简介","problem":"简介只写功能会偏工具说明书","action":"补一句“最后会把高频反馈转成下一期内容建议”","expectedEffect":"提高观众对结果的预期"}]',
         '["评论分析","弹幕分析","创作复盘","观众反馈","内容优化"]',
         '内容分析',
-        '{"contentSummary":"视频聚焦评论弹幕分析，帮助创作者理解观众误解点和改进方向。","audienceProfile":"目标观众是想把评论复盘做成工作流的内容创作者。","sellingPoints":["能把评论和弹幕合并成统一视图","能把误解点直接转成下一期建议","能让复盘结果和创作动作连接起来"],"riskPoints":["样例如果太少，统计会显得单薄","需要先说明分类是怎么来的","图表不能替代结论"],"titleSuggestions":[{"title":"评论弹幕分析怎么帮助创作复盘","reason":"直接说明能力边界，适合复盘类视频","risk":"偏功能描述"},{"title":"看懂观众为什么说看不懂","reason":"更口语，能直接引出误解点","risk":"可能显得标题党"}],"descriptionSuggestion":"建议简介可以先讲清楚评论弹幕分析的目标，再补一条“最后会输出什么”。","tagSuggestions":["评论分析","弹幕分析","创作复盘","观众反馈","内容优化"],"partitionSuggestion":"内容分析"}',
+        '{"contentSummary":"视频聚焦评论弹幕分析，帮助创作者理解观众误解点和改进方向。","creatorDilemma":"本期创作者容易陷入“我已经做了图表，所以就有价值”的误区，但观众真正需要的是这些反馈能变成什么下一步动作。","audienceProfile":"目标观众是想把评论复盘做成工作流的内容创作者。","audienceHook":"观众点击是因为想知道评论和弹幕到底能不能指导下一期内容，继续看的理由是看到误解点、争议点和选题建议之间的转换。","contentPositioning":"定位成反馈复盘方法视频，重点展示评论弹幕如何被清洗、分类并转成创作动作，而不是单纯展示仪表盘。","sellingPoints":["能把评论和弹幕合并成统一视图","能把误解点直接转成下一期建议","能让复盘结果和创作动作连接起来"],"riskPoints":["样例如果太少，统计会显得单薄","需要先说明分类是怎么来的","图表不能替代结论"],"titleSuggestions":[{"title":"评论弹幕分析怎么帮助创作复盘","viewerPsychology":"想确认评论弹幕不是看热闹，而是能指导下一期","clickReason":"标题直接说明能力边界和结果用途","trustRisk":"偏功能描述，情绪张力较弱","bestScenario":"面向内容复盘或产品演示观众","reason":"直接说明能力边界，适合复盘类视频","risk":"偏功能描述"},{"title":"看懂观众为什么说看不懂","viewerPsychology":"对负面反馈和误解点敏感，想知道怎么处理","clickReason":"口语化表达能直接击中创作者焦虑","trustRisk":"如果正文不拿出真实样例，会显得标题党","bestScenario":"面向有评论焦虑的中小 UP 主","reason":"更口语，能直接引出误解点","risk":"可能显得标题党"}],"descriptionSuggestion":"建议简介可以先讲清楚评论弹幕分析的目标，再补一条“最后会输出什么”。","actionableRevisionPlan":[{"priority":"HIGH","target":"结构","problem":"如果先展示图表，观众不知道图表服务哪个创作决策","action":"先讲“我要找出误解点和下一期选题”，再展示分类仪表盘","expectedEffect":"让数据展示和创作动作建立因果关系"},{"priority":"MEDIUM","target":"简介","problem":"简介只写功能会偏工具说明书","action":"补一句“最后会把高频反馈转成下一期内容建议”","expectedEffect":"提高观众对结果的预期"}],"tagSuggestions":["评论分析","弹幕分析","创作复盘","观众反馈","内容优化"],"partitionSuggestion":"内容分析"}',
         'PARSED',
         '2026-05-30 10:00:00',
         '2026-05-30 10:00:00'
@@ -864,14 +933,18 @@ VALUES
         'sample-suggestion-report-001',
         'sample-task-report-001',
         '视频围绕创作者工作台闭环展开，适合展示任务管理、偏好记忆和复盘能力。',
+        '本期创作者最大的压力是闭环模块太多，容易讲成流水账；必须让观众先明白每一步分别解决哪个 UP 主问题。',
         '目标观众是想做 AI 应用作品集的 Java 后端学习者，以及面试官。',
+        '观众会被“发布前优化、评论复盘和偏好记忆如何串成一个作品集闭环”吸引，继续看的理由是能复制这个阶段拆分思路。',
+        '定位成完整项目闭环演示，差异化在于把 Spring AI 能力解释成创作者工作流，而不是把 Agent、SSE、记忆当孤立技术点。',
         '["展示完整闭环而不是单点功能","把创作者偏好记忆作为亮点","能顺带说明 Agent、消息流和 SSE 的价值"]',
         '["闭环内容较多，容易讲散","要避免只讲框架名不讲场景","结尾需要明确下一步延伸"]',
-        '[{"title":"Spring AI 创作工作台：把发布前优化、评论复盘和总结串起来","reason":"标题直接点出完整闭环，适合演示完整版","risk":"长度略长"},{"title":"面向 B 站创作者的 AI 工作台怎么做","reason":"更聚焦场景，方便面试官快速抓住主题","risk":"技术细节露出较少"}]',
+        '[{"title":"Spring AI 创作工作台：把发布前优化、评论复盘和总结串起来","viewerPsychology":"想看完整闭环是否真的跑通","clickReason":"标题直接列出三个关键阶段，预期明确","trustRisk":"长度略长，移动端第一眼压力较大","bestScenario":"面向完整项目演示或面试讲解","reason":"标题直接点出完整闭环，适合演示完整版","risk":"长度略长"},{"title":"面向 B 站创作者的 AI 工作台怎么做","viewerPsychology":"想知道项目定位和落地路线","clickReason":"场景清楚，能快速区别于通用 Agent 框架","trustRisk":"技术细节露出较少，可能不够吸引 Spring AI 观众","bestScenario":"面向作品集定位视频或项目总览","reason":"更聚焦场景，方便面试官快速抓住主题","risk":"技术细节露出较少"}]',
         '建议简介先写清楚这个项目服务谁，再补一句它能帮助创作者做哪些动作。',
+        '[{"priority":"HIGH","target":"结构","problem":"闭环阶段多，按功能顺序讲容易变成流水账","action":"每进入一个模块先说“它解决创作者的哪个问题”，再讲实现","expectedEffect":"观众能把技术点和业务价值一一对应"},{"priority":"MEDIUM","target":"结尾","problem":"如果只总结已完成能力，观众不知道下一步为什么要做 RAG","action":"结尾说明“先升级建议质量，再用 RAG 补证据来源”","expectedEffect":"让后续路线显得克制且有因果"}]',
         '["Spring AI","B站创作者","创作复盘","Agent工作流","偏好记忆"]',
         'AI 工具教程',
-        '{"contentSummary":"视频围绕创作者工作台闭环展开，适合展示任务管理、偏好记忆和复盘能力。","audienceProfile":"目标观众是想做 AI 应用作品集的 Java 后端学习者，以及面试官。","sellingPoints":["展示完整闭环而不是单点功能","把创作者偏好记忆作为亮点","能顺带说明 Agent、消息流和 SSE 的价值"],"riskPoints":["闭环内容较多，容易讲散","要避免只讲框架名不讲场景","结尾需要明确下一步延伸"],"titleSuggestions":[{"title":"Spring AI 创作工作台：把发布前优化、评论复盘和总结串起来","reason":"标题直接点出完整闭环，适合演示完整版","risk":"长度略长"},{"title":"面向 B 站创作者的 AI 工作台怎么做","reason":"更聚焦场景，方便面试官快速抓住主题","risk":"技术细节露出较少"}],"descriptionSuggestion":"建议简介先写清楚这个项目服务谁，再补一句它能帮助创作者做哪些动作。","tagSuggestions":["Spring AI","B站创作者","创作复盘","Agent工作流","偏好记忆"],"partitionSuggestion":"AI 工具教程"}',
+        '{"contentSummary":"视频围绕创作者工作台闭环展开，适合展示任务管理、偏好记忆和复盘能力。","creatorDilemma":"本期创作者最大的压力是闭环模块太多，容易讲成流水账；必须让观众先明白每一步分别解决哪个 UP 主问题。","audienceProfile":"目标观众是想做 AI 应用作品集的 Java 后端学习者，以及面试官。","audienceHook":"观众会被“发布前优化、评论复盘和偏好记忆如何串成一个作品集闭环”吸引，继续看的理由是能复制这个阶段拆分思路。","contentPositioning":"定位成完整项目闭环演示，差异化在于把 Spring AI 能力解释成创作者工作流，而不是把 Agent、SSE、记忆当孤立技术点。","sellingPoints":["展示完整闭环而不是单点功能","把创作者偏好记忆作为亮点","能顺带说明 Agent、消息流和 SSE 的价值"],"riskPoints":["闭环内容较多，容易讲散","要避免只讲框架名不讲场景","结尾需要明确下一步延伸"],"titleSuggestions":[{"title":"Spring AI 创作工作台：把发布前优化、评论复盘和总结串起来","viewerPsychology":"想看完整闭环是否真的跑通","clickReason":"标题直接列出三个关键阶段，预期明确","trustRisk":"长度略长，移动端第一眼压力较大","bestScenario":"面向完整项目演示或面试讲解","reason":"标题直接点出完整闭环，适合演示完整版","risk":"长度略长"},{"title":"面向 B 站创作者的 AI 工作台怎么做","viewerPsychology":"想知道项目定位和落地路线","clickReason":"场景清楚，能快速区别于通用 Agent 框架","trustRisk":"技术细节露出较少，可能不够吸引 Spring AI 观众","bestScenario":"面向作品集定位视频或项目总览","reason":"更聚焦场景，方便面试官快速抓住主题","risk":"技术细节露出较少"}],"descriptionSuggestion":"建议简介先写清楚这个项目服务谁，再补一句它能帮助创作者做哪些动作。","actionableRevisionPlan":[{"priority":"HIGH","target":"结构","problem":"闭环阶段多，按功能顺序讲容易变成流水账","action":"每进入一个模块先说“它解决创作者的哪个问题”，再讲实现","expectedEffect":"观众能把技术点和业务价值一一对应"},{"priority":"MEDIUM","target":"结尾","problem":"如果只总结已完成能力，观众不知道下一步为什么要做 RAG","action":"结尾说明“先升级建议质量，再用 RAG 补证据来源”","expectedEffect":"让后续路线显得克制且有因果"}],"tagSuggestions":["Spring AI","B站创作者","创作复盘","Agent工作流","偏好记忆"],"partitionSuggestion":"AI 工具教程"}',
         'PARSED',
         '2026-05-31 10:20:00',
         '2026-05-31 10:20:00'
