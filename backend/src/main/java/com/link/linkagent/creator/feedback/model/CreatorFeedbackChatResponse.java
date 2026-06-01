@@ -15,6 +15,11 @@ public record CreatorFeedbackChatResponse(
         boolean reportUsed,
         String retrievalMode,
         boolean ragEnabled,
+        String modelName,
+        Integer promptTokens,
+        Integer completionTokens,
+        Integer totalTokens,
+        Long elapsedMs,
         LocalDateTime createTime
 ) {
 }

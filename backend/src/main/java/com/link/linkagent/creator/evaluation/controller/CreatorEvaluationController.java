@@ -2,6 +2,7 @@ package com.link.linkagent.creator.evaluation.controller;
 
 import com.link.linkagent.creator.evaluation.model.CreatorEvalCaseCreateRequest;
 import com.link.linkagent.creator.evaluation.model.CreatorEvalCaseResponse;
+import com.link.linkagent.creator.evaluation.model.CreatorEvalPromptVersionStatsResponse;
 import com.link.linkagent.creator.evaluation.model.CreatorEvalResultCreateRequest;
 import com.link.linkagent.creator.evaluation.model.CreatorEvalResultResponse;
 import com.link.linkagent.creator.evaluation.service.CreatorEvaluationService;
@@ -91,5 +92,14 @@ public class CreatorEvaluationController {
             @Max(value = 100, message = "分页上限不能超过100")
             Integer limit) {
         return creatorEvaluationService.listResults(caseId, limit);
+    }
+
+    @GetMapping("/cases/{caseId}/prompt-version-stats")
+    public List<CreatorEvalPromptVersionStatsResponse> comparePromptVersions(
+            @PathVariable
+            @NotBlank(message = "评测用例ID不能为空")
+            @Size(max = 64, message = "评测用例ID长度不能超过64个字符")
+            String caseId) {
+        return creatorEvaluationService.comparePromptVersions(caseId);
     }
 }

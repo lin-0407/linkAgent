@@ -72,6 +72,9 @@ export type CreatorEvalResult = {
   workflowSessionId: string | null
   targetStage: CreatorWorkflowStage
   modelName: string | null
+  promptVersion: string | null
+  promptHash: string | null
+  promptSnapshot: string | null
   outputSummary: string | null
   rawOutput: string
   runStatus: string
@@ -93,11 +96,42 @@ export type CreatorEvalResult = {
   updateTime: string
 }
 
+export type CreatorEvalPromptVersionStats = {
+  caseId: string
+  promptVersion: string
+  latestPromptHash: string | null
+  resultCount: number
+  successCount: number
+  successRatePercent: number | null
+  scoreSampleCount: number
+  averageScore: number | null
+  scoreStandardDeviation: number | null
+  averageReadabilityScore: number | null
+  averageRelevanceScore: number | null
+  averageCompletenessScore: number | null
+  averageAccuracyScore: number | null
+  averageStabilityScore: number | null
+  averageCostScore: number | null
+  averageExplainabilityScore: number | null
+  totalPromptTokens: number | null
+  totalCompletionTokens: number | null
+  totalTokens: number | null
+  averagePromptTokens: number | null
+  averageCompletionTokens: number | null
+  averageTotalTokens: number | null
+  averageElapsedMs: number | null
+  fullScoreCoverageRatePercent: number | null
+  latestUpdateTime: string | null
+}
+
 export type CreatorEvalResultPayload = {
   taskId?: string
   workflowSessionId?: string
   targetStage: CreatorWorkflowStage
   modelName?: string
+  promptVersion?: string
+  promptHash?: string
+  promptSnapshot?: string
   outputSummary?: string
   rawOutput?: string
   elapsedMs?: number
@@ -372,5 +406,10 @@ export type CreatorFeedbackChatResult = {
   reportUsed: boolean
   retrievalMode: string
   ragEnabled: boolean
+  modelName: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  elapsedMs: number | null
   createTime: string
 }

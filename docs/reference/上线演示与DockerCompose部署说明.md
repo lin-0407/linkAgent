@@ -37,6 +37,8 @@ http://localhost:8088
 | `LLM_API_KEY` | 模型服务密钥 |
 | `LLM_BASE_URL` | 模型服务地址 |
 | `LLM_MODEL` | 模型名称 |
+| `LLM_GUARD_ENABLED` | 是否开启单次 LLM 输入规模保护 |
+| `LLM_GUARD_MAX_PROMPT_CHARS` | 单次 LLM 请求最大输入字符数 |
 | `MYSQL_ROOT_PASSWORD` | MySQL root 密码 |
 | `MYSQL_USER` | 业务库账号 |
 | `MYSQL_PASSWORD` | 业务库密码 |

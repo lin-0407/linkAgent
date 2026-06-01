@@ -15,6 +15,9 @@ public class CreatorEvalResultRecord {
     private String workflowSessionId;
     private String targetStage;
     private String modelName;
+    private String promptVersion;
+    private String promptHash;
+    private String promptSnapshot;
     private String outputSummary;
     private String rawOutput;
     private String runStatus;
@@ -89,6 +92,30 @@ public class CreatorEvalResultRecord {
 
     public void setModelName(String modelName) {
         this.modelName = modelName;
+    }
+
+    public String getPromptVersion() {
+        return promptVersion;
+    }
+
+    public void setPromptVersion(String promptVersion) {
+        this.promptVersion = promptVersion;
+    }
+
+    public String getPromptHash() {
+        return promptHash;
+    }
+
+    public void setPromptHash(String promptHash) {
+        this.promptHash = promptHash;
+    }
+
+    public String getPromptSnapshot() {
+        return promptSnapshot;
+    }
+
+    public void setPromptSnapshot(String promptSnapshot) {
+        this.promptSnapshot = promptSnapshot;
     }
 
     public String getOutputSummary() {

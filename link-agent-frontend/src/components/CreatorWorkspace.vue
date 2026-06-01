@@ -17,6 +17,7 @@ import {
   importCreatorFeedbackFile,
   importCreatorTaskMaterialFile,
   listCreatorEvalCases,
+  listCreatorEvalPromptVersionStats,
   listCreatorEvalResults,
   listCreatorPreferences,
   listCreatorTasks,
@@ -35,6 +36,7 @@ import type {
   CreatorFeedbackFetchResult,
   CreatorFeedbackReport,
   CreatorEvalCase,
+  CreatorEvalPromptVersionStats,
   CreatorEvalResult,
   CreatorPreference,
   CreatorPreferenceMode,
@@ -180,6 +182,7 @@ const selectedEvalCaseId = ref('')
 const selectedEvalResultId = ref('')
 const evalStageFilter = ref<'ALL' | CreatorWorkflowStage>('ALL')
 const evalResults = ref<CreatorEvalResult[]>([])
+const evalPromptVersionStats = ref<CreatorEvalPromptVersionStats[]>([])
 const isLoadingEvalCases = ref(false)
 const isLoadingEvalResults = ref(false)
 const isRecordingEvalResult = ref(false)
@@ -189,12 +192,15 @@ const evalResultDraft = reactive({
   workflowSessionId: '',
   targetStage: 'PRE_PUBLISH' as CreatorWorkflowStage,
   modelName: 'qwen3',
+  promptVersion: '',
+  promptHash: '',
+  promptSnapshot: '',
   outputSummary: '',
   rawOutput: '',
-  elapsedMs: 0,
-  promptTokens: 0,
-  completionTokens: 0,
-  totalTokens: 0,
+  elapsedMs: null as number | null,
+  promptTokens: null as number | null,
+  completionTokens: null as number | null,
+  totalTokens: null as number | null,
   failureReason: '',
   readabilityScore: 4,
   relevanceScore: 4,
@@ -630,13 +636,19 @@ async function refreshEvaluationCases(resetSelection = true) {
 async function refreshEvaluationResults(caseId: string) {
   if (!caseId) {
     evalResults.value = []
+    evalPromptVersionStats.value = []
     selectedEvalResultId.value = ''
     return
   }
 
   isLoadingEvalResults.value = true
   try {
-    evalResults.value = await listCreatorEvalResults(caseId, 10)
+    const [results, promptVersionStats] = await Promise.all([
+      listCreatorEvalResults(caseId, 10),
+      listCreatorEvalPromptVersionStats(caseId),
+    ])
+    evalResults.value = results
+    evalPromptVersionStats.value = promptVersionStats
     if (
       evalResults.value.length === 0 ||
       !evalResults.value.some((item) => item.resultId === selectedEvalResultId.value)
@@ -661,13 +673,16 @@ function resetEvalResultDraftFromCase() {
   evalResultDraft.targetStage = selectedEvalCase.value.targetStage
   evalResultDraft.taskId = selectedEvalCase.value.taskId ?? ''
   evalResultDraft.workflowSessionId = ''
+  evalResultDraft.promptVersion = ''
+  evalResultDraft.promptHash = ''
+  evalResultDraft.promptSnapshot = ''
   evalResultDraft.outputSummary = ''
   evalResultDraft.rawOutput = ''
   evalResultDraft.failureReason = ''
-  evalResultDraft.elapsedMs = 0
-  evalResultDraft.promptTokens = 0
-  evalResultDraft.completionTokens = 0
-  evalResultDraft.totalTokens = 0
+  evalResultDraft.elapsedMs = null
+  evalResultDraft.promptTokens = null
+  evalResultDraft.completionTokens = null
+  evalResultDraft.totalTokens = null
   evalResultDraft.readabilityScore = 4
   evalResultDraft.relevanceScore = 4
   evalResultDraft.completenessScore = 4
@@ -691,6 +706,9 @@ async function submitEvalResult() {
       workflowSessionId: trimToNull(evalResultDraft.workflowSessionId),
       targetStage: evalResultDraft.targetStage,
       modelName: trimToNull(evalResultDraft.modelName),
+      promptVersion: trimToNull(evalResultDraft.promptVersion),
+      promptHash: trimToNull(evalResultDraft.promptHash),
+      promptSnapshot: trimToNull(evalResultDraft.promptSnapshot),
       outputSummary: trimToNull(evalResultDraft.outputSummary),
       rawOutput: trimToNull(evalResultDraft.rawOutput),
       elapsedMs: normalizeOptionalNumber(evalResultDraft.elapsedMs),
@@ -1481,6 +1499,12 @@ function trimToNull(value: string | undefined) {
 }
 
 function normalizeOptionalNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') {
+    return undefined
+  }
+  if (typeof value === 'string' && value.trim().length === 0) {
+    return undefined
+  }
   const numericValue = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(numericValue) ? numericValue : undefined
 }
@@ -1962,6 +1986,13 @@ function formatMetric(value: number | null | undefined) {
     return '-'
   }
   return value.toLocaleString('zh-CN')
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return '-'
+  }
+  return `${formatMetric(value)}%`
 }
 
 function statBarWidth(count: number, total: number) {
@@ -2450,6 +2481,24 @@ function showError(error: unknown) {
                     <input v-model="evalResultDraft.modelName" type="text" maxlength="128" />
                   </label>
                   <label>
+                    <span>Prompt 版本</span>
+                    <input
+                      v-model="evalResultDraft.promptVersion"
+                      type="text"
+                      maxlength="64"
+                      placeholder="例如 prepublish-v2"
+                    />
+                  </label>
+                  <label>
+                    <span>Prompt 哈希</span>
+                    <input
+                      v-model="evalResultDraft.promptHash"
+                      type="text"
+                      maxlength="64"
+                      placeholder="可选，留空由后端根据快照计算"
+                    />
+                  </label>
+                  <label>
                     <span>关联任务</span>
                     <input
                       v-model="evalResultDraft.taskId"
@@ -2473,15 +2522,23 @@ function showError(error: unknown) {
                   </label>
                   <label>
                     <span>Prompt Token</span>
-                    <input v-model.number="evalResultDraft.promptTokens" type="number" min="0" />
+                    <input v-model.number="evalResultDraft.promptTokens" type="number" min="1" />
                   </label>
                   <label>
                     <span>Completion Token</span>
                     <input
                       v-model.number="evalResultDraft.completionTokens"
                       type="number"
-                      min="0"
+                      min="1"
                     />
+                  </label>
+                  <label class="span-full">
+                    <span>Prompt 快照</span>
+                    <textarea
+                      v-model="evalResultDraft.promptSnapshot"
+                      maxlength="20000"
+                      placeholder="粘贴本轮 system prompt 和 user prompt，后续用于复现和版本对比"
+                    ></textarea>
                   </label>
                   <label class="span-full">
                     <span>输出摘要</span>
@@ -2595,6 +2652,25 @@ function showError(error: unknown) {
                 </header>
 
                 <div class="creator-eval-result-list">
+                  <article
+                    v-if="evalPromptVersionStats.length > 0"
+                    class="creator-eval-prompt-stats"
+                    aria-label="Prompt版本对比"
+                  >
+                    <strong>Prompt 版本对比</strong>
+                    <div>
+                      <span v-for="item in evalPromptVersionStats" :key="item.promptVersion">
+                        {{ item.promptVersion }} · {{ item.resultCount }} 次 · 成功率
+                        {{ formatPercent(item.successRatePercent) }} · 均分
+                        {{ formatMetric(item.averageScore) }} · 准确
+                        {{ formatMetric(item.averageAccuracyScore) }} · Token
+                        {{ formatMetric(item.averageTotalTokens) }} · 覆盖
+                        {{ formatPercent(item.fullScoreCoverageRatePercent) }} · 波动
+                        {{ formatMetric(item.scoreStandardDeviation) }}
+                      </span>
+                    </div>
+                  </article>
+
                   <button
                     v-for="item in evalResults"
                     :key="item.resultId"
@@ -2608,7 +2684,10 @@ function showError(error: unknown) {
                       {{ item.modelName || '未记录模型' }} · {{ formatDate(item.updateTime) }}
                     </small>
                     <strong>{{ item.outputSummary || item.failureReason || '未填写摘要' }}</strong>
-                    <span>Token {{ formatMetric(item.totalTokens) }} · {{ item.parseStatus }}</span>
+                    <span>
+                      {{ item.promptVersion || '未记录Prompt版本' }} · Token
+                      {{ formatMetric(item.totalTokens) }} · {{ item.parseStatus }}
+                    </span>
                   </button>
 
                   <p v-if="evalResults.length === 0" class="creator-muted">
@@ -2625,6 +2704,13 @@ function showError(error: unknown) {
                   <p v-if="selectedEvalResult.failureReason">
                     失败原因：{{ selectedEvalResult.failureReason }}
                   </p>
+                  <p v-if="selectedEvalResult.promptVersion || selectedEvalResult.promptHash">
+                    Prompt：{{ selectedEvalResult.promptVersion || '未记录版本' }}
+                    <span v-if="selectedEvalResult.promptHash">
+                      · {{ selectedEvalResult.promptHash.slice(0, 12) }}
+                    </span>
+                  </p>
+                  <pre v-if="selectedEvalResult.promptSnapshot">{{ selectedEvalResult.promptSnapshot }}</pre>
                   <pre>{{ selectedEvalResult.rawOutput }}</pre>
                 </article>
               </section>
@@ -3515,7 +3601,10 @@ function showError(error: unknown) {
                   <p>{{ feedbackChatResult.answer }}</p>
                   <small>
                     当前任务证据 · {{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
-                    {{ feedbackChatResult.ragEnabled ? '向量检索' : 'SQL 检索' }}
+                    {{ feedbackChatResult.ragEnabled ? '向量检索' : 'SQL 检索' }} ·
+                    {{ feedbackChatResult.modelName || '未记录模型' }} · Token
+                    {{ formatMetric(feedbackChatResult.totalTokens) }} ·
+                    {{ formatMetric(feedbackChatResult.elapsedMs) }} ms
                   </small>
                   <div
                     v-if="feedbackChatResult.evidenceItems.length"

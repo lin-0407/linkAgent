@@ -62,6 +62,10 @@ spring:
           #     endpoint: /mcp
 
 agent:
+  llm:
+    guard:
+      enabled: ${LLM_GUARD_ENABLED:true}
+      max-prompt-chars: ${LLM_GUARD_MAX_PROMPT_CHARS:30000}
   tool:
     execution:
       timeout-seconds: ${TOOL_EXECUTION_TIMEOUT_SECONDS:10}

@@ -372,6 +372,77 @@ POST /api/creator/tasks/{taskId}/feedback/chat
 待补充：成本保护
 ```
 
+### 阶段 4.8：演示环境成本保护
+
+目标：
+
+1. 在统一 LLM 调用入口增加输入规模保护。
+2. 让公开演示环境可以通过环境变量控制单次模型输入上限。
+3. 在超限时返回清晰的业务提示，避免已经发起模型请求后才失败。
+
+预期配置：
+
+```text
+LLM_GUARD_ENABLED
+LLM_GUARD_MAX_PROMPT_CHARS
+```
+
+预留扩展：
+
+```text
+待补充：演示口令
+待补充：IP 级限流
+待补充：token 用量记录
+待补充：多模型成本对比
+```
+
+### 阶段 4.9：Prompt 版本评测闭环
+
+目标：
+
+1. 让每次评测结果绑定 Prompt 版本、快照和哈希。
+2. 支持按 Prompt 版本聚合人工评分、耗时和 token。
+3. 让 Prompt 调优从“凭感觉改”变成“有样例、有版本、有结果对照”。
+
+预期接口：
+
+```text
+GET /api/creator/evaluations/cases/{caseId}/prompt-version-stats
+```
+
+预留扩展：
+
+```text
+待补充：自动批量跑评测
+待补充：多模型横向对比
+待补充：Prompt 模板后台
+```
+
+### 阶段 4.10：LLM 用量采集与评测统计口径
+
+目标：
+
+1. 从 Spring AI 响应元数据中提取模型名称、token 和调用耗时。
+2. 让反馈追问真实返回本次 LLM 调用成本信息。
+3. 将 Prompt 版本统计扩展为成功率、分项评分、评分覆盖率、分数波动和 token 成本。
+4. 明确人工 `accuracyScore` 不是自动准确率，避免作品集叙事虚高。
+
+预期接口：
+
+```text
+GET /api/creator/evaluations/cases/{caseId}/prompt-version-stats
+POST /api/creator/tasks/{taskId}/feedback/chat
+```
+
+预留扩展：
+
+```text
+待补充：独立 LLM 调用流水表
+待补充：多评审人一致性统计
+待补充：LLM-as-judge 辅助评分
+待补充：模型价格表和人民币成本估算
+```
+
 ---
 
 ## 8. 数据库初步规划

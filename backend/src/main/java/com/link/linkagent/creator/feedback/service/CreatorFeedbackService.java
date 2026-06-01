@@ -28,6 +28,7 @@ import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.llm.LlmCallResult;
 import com.link.linkagent.util.LlmJsonUtil;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.http.HttpStatus;
@@ -248,18 +249,23 @@ public class CreatorFeedbackService {
         }
 
         List<CreatorFeedbackItemRecord> evidenceRecords = selectChatEvidence(request.question(), items);
-        String rawAnswer = llmService.chat(
+        LlmCallResult llmCallResult = llmService.chatWithUsage(
                 buildChatSystemPrompt(),
                 buildChatUserPrompt(taskRecord, reportRecord, evidenceRecords, request.question())
         );
         return new CreatorFeedbackChatResponse(
                 taskRecord.getTaskId(),
                 request.question().trim(),
-                normalizeChatAnswer(rawAnswer),
+                normalizeChatAnswer(llmCallResult.content()),
                 evidenceRecords.stream().map(this::toItemResponse).toList(),
                 reportRecord != null,
                 "MYSQL_REPORT_AND_CLASSIFIED_ITEMS",
                 false,
+                llmCallResult.modelName(),
+                llmCallResult.promptTokens(),
+                llmCallResult.completionTokens(),
+                llmCallResult.totalTokens(),
+                llmCallResult.elapsedMs(),
                 LocalDateTime.now()
         );
     }

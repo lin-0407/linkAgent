@@ -62,6 +62,100 @@ class CreatorEvaluationServiceTest {
         assertThat(response.totalTokens()).isEqualTo(25);
         assertThat(response.runStatus()).isEqualTo("SUCCESS");
         assertThat(response.parseStatus()).isEqualTo("PARSED");
+        assertThat(response.promptVersion()).isEqualTo("feedback-v1");
+        assertThat(response.promptHash()).hasSize(64);
+    }
+
+    @Test
+    void shouldComparePromptVersionsByEvaluationScores() {
+        FakeCreatorEvaluationMapper mapper = new FakeCreatorEvaluationMapper();
+        CreatorEvalCaseRecord evalCase = createCaseRecord("case-1", "FEEDBACK", "task-from-case");
+        mapper.cases.put(evalCase.getCaseId(), evalCase);
+        CreatorEvaluationService service = new CreatorEvaluationService(mapper);
+
+        service.recordResult("case-1", createResultRequest("FEEDBACK", "{\"feedbackSummary\":\"v1\"}", null, 10, 15));
+        service.recordResult("case-1", createResultRequest("FEEDBACK", "{\"feedbackSummary\":\"v1-2\"}", null, 20, 25));
+
+        var stats = service.comparePromptVersions("case-1");
+
+        assertThat(stats).hasSize(1);
+        assertThat(stats.getFirst().promptVersion()).isEqualTo("feedback-v1");
+        assertThat(stats.getFirst().resultCount()).isEqualTo(2);
+        assertThat(stats.getFirst().successCount()).isEqualTo(2);
+        assertThat(stats.getFirst().successRatePercent()).isEqualTo(100.0);
+        assertThat(stats.getFirst().scoreSampleCount()).isEqualTo(2);
+        assertThat(stats.getFirst().totalTokens()).isEqualTo(70L);
+        assertThat(stats.getFirst().averagePromptTokens()).isEqualTo(15.0);
+        assertThat(stats.getFirst().averageCompletionTokens()).isEqualTo(20.0);
+        assertThat(stats.getFirst().averageTotalTokens()).isEqualTo(35.0);
+        assertThat(stats.getFirst().averageScore()).isEqualTo(4.0);
+        assertThat(stats.getFirst().averageAccuracyScore()).isEqualTo(4.0);
+        assertThat(stats.getFirst().scoreStandardDeviation()).isEqualTo(0.0);
+        assertThat(stats.getFirst().fullScoreCoverageRatePercent()).isEqualTo(100.0);
+    }
+
+    @Test
+    void shouldComparePromptVersionsWithAllResultsInsteadOfRecentLimit() {
+        FakeCreatorEvaluationMapper mapper = new FakeCreatorEvaluationMapper();
+        CreatorEvalCaseRecord evalCase = createCaseRecord("case-1", "FEEDBACK", "task-from-case");
+        mapper.cases.put(evalCase.getCaseId(), evalCase);
+        CreatorEvaluationService service = new CreatorEvaluationService(mapper);
+
+        for (int index = 0; index < 101; index++) {
+            service.recordResult("case-1", createResultRequest(
+                    "FEEDBACK",
+                    "{\"feedbackSummary\":\"ok\"}",
+                    null,
+                    10,
+                    15
+            ));
+        }
+
+        var stats = service.comparePromptVersions("case-1");
+
+        assertThat(stats).hasSize(1);
+        assertThat(stats.getFirst().resultCount()).isEqualTo(101);
+        assertThat(stats.getFirst().totalTokens()).isEqualTo(2525L);
+    }
+
+    @Test
+    void shouldKeepTotalTokensNullWhenTokenPartIsMissing() {
+        FakeCreatorEvaluationMapper mapper = new FakeCreatorEvaluationMapper();
+        CreatorEvalCaseRecord evalCase = createCaseRecord("case-1", "FEEDBACK", "task-from-case");
+        mapper.cases.put(evalCase.getCaseId(), evalCase);
+        CreatorEvaluationService service = new CreatorEvaluationService(mapper);
+
+        CreatorEvalResultResponse response = service.recordResult("case-1", createResultRequest(
+                "FEEDBACK",
+                "{\"feedbackSummary\":\"ok\"}",
+                null,
+                10,
+                null
+        ));
+
+        assertThat(response.promptTokens()).isEqualTo(10);
+        assertThat(response.completionTokens()).isNull();
+        assertThat(response.totalTokens()).isNull();
+    }
+
+    @Test
+    void shouldNormalizeZeroTokensAsUnknownUsage() {
+        FakeCreatorEvaluationMapper mapper = new FakeCreatorEvaluationMapper();
+        CreatorEvalCaseRecord evalCase = createCaseRecord("case-1", "FEEDBACK", "task-from-case");
+        mapper.cases.put(evalCase.getCaseId(), evalCase);
+        CreatorEvaluationService service = new CreatorEvaluationService(mapper);
+
+        CreatorEvalResultResponse response = service.recordResult("case-1", createResultRequest(
+                "FEEDBACK",
+                "{\"feedbackSummary\":\"ok\"}",
+                null,
+                0,
+                0
+        ));
+
+        assertThat(response.promptTokens()).isNull();
+        assertThat(response.completionTokens()).isNull();
+        assertThat(response.totalTokens()).isNull();
     }
 
     @Test
@@ -123,6 +217,9 @@ class CreatorEvaluationServiceTest {
                 "session-1",
                 targetStage,
                 "qwen3",
+                "feedback-v1",
+                null,
+                "system: 反馈分析\nuser: 评论样例",
                 "输出摘要",
                 rawOutput,
                 1200L,
@@ -186,6 +283,14 @@ class CreatorEvaluationServiceTest {
                     .stream()
                     .filter(record -> caseId.equals(record.getCaseId()))
                     .limit(limit)
+                    .toList();
+        }
+
+        @Override
+        public List<CreatorEvalResultRecord> listAllResultsByCaseIdForStats(String caseId) {
+            return results.values()
+                    .stream()
+                    .filter(record -> caseId.equals(record.getCaseId()))
                     .toList();
         }
     }

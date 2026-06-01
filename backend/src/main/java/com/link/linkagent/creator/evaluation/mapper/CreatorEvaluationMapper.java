@@ -119,6 +119,9 @@ public interface CreatorEvaluationMapper {
                 workflow_session_id,
                 target_stage,
                 model_name,
+                prompt_version,
+                prompt_hash,
+                prompt_snapshot,
                 output_summary,
                 raw_output,
                 run_status,
@@ -144,6 +147,9 @@ public interface CreatorEvaluationMapper {
                 #{workflowSessionId},
                 #{targetStage},
                 #{modelName},
+                #{promptVersion},
+                #{promptHash},
+                #{promptSnapshot},
                 #{outputSummary},
                 #{rawOutput},
                 #{runStatus},
@@ -173,6 +179,9 @@ public interface CreatorEvaluationMapper {
                    workflow_session_id,
                    target_stage,
                    model_name,
+                   prompt_version,
+                   prompt_hash,
+                   prompt_snapshot,
                    output_summary,
                    raw_output,
                    run_status,
@@ -205,6 +214,9 @@ public interface CreatorEvaluationMapper {
             @Result(column = "workflow_session_id", property = "workflowSessionId"),
             @Result(column = "target_stage", property = "targetStage"),
             @Result(column = "model_name", property = "modelName"),
+            @Result(column = "prompt_version", property = "promptVersion"),
+            @Result(column = "prompt_hash", property = "promptHash"),
+            @Result(column = "prompt_snapshot", property = "promptSnapshot"),
             @Result(column = "output_summary", property = "outputSummary"),
             @Result(column = "raw_output", property = "rawOutput"),
             @Result(column = "run_status", property = "runStatus"),
@@ -236,6 +248,9 @@ public interface CreatorEvaluationMapper {
                    workflow_session_id,
                    target_stage,
                    model_name,
+                   prompt_version,
+                   prompt_hash,
+                   prompt_snapshot,
                    output_summary,
                    raw_output,
                    run_status,
@@ -265,5 +280,43 @@ public interface CreatorEvaluationMapper {
     @ResultMap("CreatorEvalResultRecordMap")
     List<CreatorEvalResultRecord> listResultsByCaseId(@Param("caseId") String caseId,
                                                       @Param("limit") int limit);
+
+    @Select("""
+            SELECT id,
+                   result_id,
+                   case_id,
+                   task_id,
+                   workflow_session_id,
+                   target_stage,
+                   model_name,
+                   prompt_version,
+                   prompt_hash,
+                   prompt_snapshot,
+                   output_summary,
+                   raw_output,
+                   run_status,
+                   parse_status,
+                   elapsed_ms,
+                   prompt_tokens,
+                   completion_tokens,
+                   total_tokens,
+                   failure_reason,
+                   readability_score,
+                   relevance_score,
+                   completeness_score,
+                   accuracy_score,
+                   stability_score,
+                   cost_score,
+                   explainability_score,
+                   reviewer_note,
+                   create_time,
+                   update_time
+            FROM creator_eval_result
+            WHERE case_id = #{caseId}
+              AND is_deleted = 0
+            ORDER BY update_time DESC, id DESC
+            """)
+    @ResultMap("CreatorEvalResultRecordMap")
+    List<CreatorEvalResultRecord> listAllResultsByCaseIdForStats(@Param("caseId") String caseId);
 
 }

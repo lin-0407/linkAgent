@@ -9,6 +9,7 @@ import type {
   CreatorFeedbackImportResult,
   CreatorFeedbackReport,
   CreatorEvalCase,
+  CreatorEvalPromptVersionStats,
   CreatorEvalResult,
   CreatorEvalResultPayload,
   CreatorPreference,
@@ -324,5 +325,11 @@ export function listCreatorEvalResults(caseId: string, limit = 10) {
   })
   return requestJson<CreatorEvalResult[]>(
     `/api/creator/evaluations/cases/${encodeURIComponent(caseId)}/results?${params.toString()}`,
+  )
+}
+
+export function listCreatorEvalPromptVersionStats(caseId: string) {
+  return requestJson<CreatorEvalPromptVersionStats[]>(
+    `/api/creator/evaluations/cases/${encodeURIComponent(caseId)}/prompt-version-stats`,
   )
 }

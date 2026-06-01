@@ -559,6 +559,9 @@ CREATE TABLE IF NOT EXISTS creator_eval_result
     workflow_session_id  VARCHAR(64)           DEFAULT NULL COMMENT '关联工作流会话 ID，用于失败回放定位过程',
     target_stage         VARCHAR(32)  NOT NULL COMMENT '评测阶段：PRE_PUBLISH=发布前优化，FEEDBACK=评论弹幕分析，REPORT=创作复盘报告',
     model_name           VARCHAR(128)          DEFAULT NULL COMMENT '模型名称，记录本次评测用的是哪一个模型',
+    prompt_version       VARCHAR(64)           DEFAULT NULL COMMENT 'Prompt 版本号，用于对比同一评测样例在不同提示词下的表现',
+    prompt_hash          VARCHAR(64)           DEFAULT NULL COMMENT 'Prompt 快照 SHA-256 哈希，用于确认两次评测是否使用同一份提示词',
+    prompt_snapshot      LONGTEXT              DEFAULT NULL COMMENT 'Prompt 快照，保存本次评测使用的 system/user 提示词或摘要，便于复现',
     output_summary       TEXT                  DEFAULT NULL COMMENT '输出摘要，方便列表页快速扫一眼结果',
     raw_output           LONGTEXT     NOT NULL COMMENT '模型原始输出或失败上下文，用于回放和对照',
     run_status           VARCHAR(32)  NOT NULL DEFAULT 'SUCCESS' COMMENT '运行状态：SUCCESS=成功，FAILED=失败',
@@ -582,7 +585,8 @@ CREATE TABLE IF NOT EXISTS creator_eval_result
     UNIQUE KEY uk_result_id (result_id),
     KEY idx_case_update_time (case_id, update_time),
     KEY idx_task_update_time (task_id, update_time),
-    KEY idx_workflow_session_id (workflow_session_id)
+    KEY idx_workflow_session_id (workflow_session_id),
+    KEY idx_stage_prompt_version (target_stage, prompt_version, update_time)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '评测结果表';
@@ -1618,6 +1622,9 @@ INSERT IGNORE INTO creator_eval_result (
     workflow_session_id,
     target_stage,
     model_name,
+    prompt_version,
+    prompt_hash,
+    prompt_snapshot,
     output_summary,
     raw_output,
     run_status,
@@ -1647,6 +1654,9 @@ VALUES
         'sample-wf-report-001',
         'REPORT',
         'qwen3',
+        'report-v1-demo',
+        '3454e78174c8fb4d434697d57ba247371b9785a1cee1ddf01697ba0073ae5405',
+        'system: 你是面向 B 站创作者的复盘助手；user: 汇总发布前建议、评论弹幕反馈和竞品分析，输出结构化复盘报告。',
         '完整复盘已生成，重点强调创作者工作流、偏好记忆和评论复盘之间的闭环。',
         '{"contentSummary":"本期演示围绕创作者工作台闭环展开，核心是把任务输入、发布前优化、评论复盘和长期偏好串起来。","overallConclusion":"这是一个适合面试展示的 AI 应用闭环，关键不是功能堆叠，而是把每一步都解释成创作者能直接理解的动作。"}',
         'SUCCESS',

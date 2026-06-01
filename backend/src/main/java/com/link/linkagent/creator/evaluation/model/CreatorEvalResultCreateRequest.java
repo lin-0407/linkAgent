@@ -4,6 +4,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 
@@ -25,6 +26,15 @@ public record CreatorEvalResultCreateRequest(
         @Size(max = 128, message = "模型名称长度不能超过128个字符")
         String modelName,
 
+        @Size(max = 64, message = "Prompt版本长度不能超过64个字符")
+        String promptVersion,
+
+        @Pattern(regexp = "^[a-fA-F0-9]{64}$", message = "Prompt哈希必须是64位SHA-256十六进制字符串")
+        String promptHash,
+
+        @Size(max = 20000, message = "Prompt快照长度不能超过20000个字符")
+        String promptSnapshot,
+
         @Size(max = 4000, message = "输出摘要长度不能超过4000个字符")
         String outputSummary,
 
@@ -34,13 +44,13 @@ public record CreatorEvalResultCreateRequest(
         @PositiveOrZero(message = "耗时毫秒不能小于0")
         Long elapsedMs,
 
-        @PositiveOrZero(message = "提示词 token 不能小于0")
+        @Positive(message = "提示词 token 必须大于0")
         Integer promptTokens,
 
-        @PositiveOrZero(message = "输出 token 不能小于0")
+        @Positive(message = "输出 token 必须大于0")
         Integer completionTokens,
 
-        @PositiveOrZero(message = "总 token 不能小于0")
+        @Positive(message = "总 token 必须大于0")
         Integer totalTokens,
 
         @Size(max = 500, message = "失败原因长度不能超过500个字符")

@@ -39,6 +39,11 @@ Content-Type: application/json
 | `reportUsed` | 是否使用了已保存反馈报告 |
 | `retrievalMode` | 当前证据来源，第一版为 MySQL |
 | `ragEnabled` | 当前是否启用向量检索，第一版为 `false` |
+| `modelName` | 本次 LLM 调用返回的模型名称 |
+| `promptTokens` | 输入 token，供应商未返回时为空 |
+| `completionTokens` | 输出 token，供应商未返回时为空 |
+| `totalTokens` | 总 token，供应商未返回时为空 |
+| `elapsedMs` | LLM 调用耗时毫秒 |
 | `createTime` | 回答生成时间 |
 
 ## 证据来源

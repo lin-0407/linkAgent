@@ -3392,6 +3392,33 @@ textarea:focus {
   overflow: auto;
 }
 
+.creator-eval-prompt-stats {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  color: var(--color-ink);
+  background: rgba(234, 248, 255, 0.78);
+  border: 1px solid rgba(0, 174, 236, 0.22);
+  border-radius: 8px;
+}
+
+.creator-eval-prompt-stats strong {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.creator-eval-prompt-stats div {
+  display: grid;
+  gap: 6px;
+}
+
+.creator-eval-prompt-stats span {
+  color: rgba(63, 38, 49, 0.68);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .creator-eval-case,
 .creator-eval-result-item {
   display: grid;
