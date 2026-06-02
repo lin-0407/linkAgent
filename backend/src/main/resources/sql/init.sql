@@ -279,6 +279,10 @@ CREATE TABLE IF NOT EXISTS creator_llm_feedback_report
     misunderstanding_points  TEXT                 DEFAULT NULL COMMENT '误解点列表 JSON',
     next_content_suggestions TEXT                 DEFAULT NULL COMMENT '下一期内容建议列表 JSON',
     interaction_suggestions  TEXT                 DEFAULT NULL COMMENT '互动回应建议列表 JSON',
+    creator_feedback_dilemma TEXT                 DEFAULT NULL COMMENT '本轮反馈暴露出的创作者复盘困境',
+    audience_core_concern    TEXT                 DEFAULT NULL COMMENT '观众最集中的真实关注点和互动动机',
+    misunderstanding_source_analysis TEXT         DEFAULT NULL COMMENT '误解来源分析列表 JSON',
+    feedback_action_plan     TEXT                 DEFAULT NULL COMMENT '评论区回应、内容修正、下一期动作计划列表 JSON',
     raw_output               LONGTEXT    NOT NULL COMMENT 'LLM 原始输出，用于失败回放和人工检查',
     parse_status             VARCHAR(32) NOT NULL DEFAULT 'PARSED' COMMENT '解析状态：PARSED=已解析，RAW_ONLY=仅保存原文',
     create_time              DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -290,6 +294,59 @@ CREATE TABLE IF NOT EXISTS creator_llm_feedback_report
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '评论弹幕分析报告表';
+
+-- 已建过旧版 creator_llm_feedback_report 的本地库需要补齐阶段 4.12 字段，避免新代码查询和写入时报未知列。
+SET @add_creator_feedback_dilemma_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_llm_feedback_report ADD COLUMN creator_feedback_dilemma TEXT DEFAULT NULL COMMENT ''本轮反馈暴露出的创作者复盘困境'' AFTER interaction_suggestions',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_llm_feedback_report'
+      AND COLUMN_NAME = 'creator_feedback_dilemma'
+);
+PREPARE add_creator_feedback_dilemma_stmt FROM @add_creator_feedback_dilemma_sql;
+EXECUTE add_creator_feedback_dilemma_stmt;
+DEALLOCATE PREPARE add_creator_feedback_dilemma_stmt;
+
+SET @add_audience_core_concern_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_llm_feedback_report ADD COLUMN audience_core_concern TEXT DEFAULT NULL COMMENT ''观众最集中的真实关注点和互动动机'' AFTER creator_feedback_dilemma',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_llm_feedback_report'
+      AND COLUMN_NAME = 'audience_core_concern'
+);
+PREPARE add_audience_core_concern_stmt FROM @add_audience_core_concern_sql;
+EXECUTE add_audience_core_concern_stmt;
+DEALLOCATE PREPARE add_audience_core_concern_stmt;
+
+SET @add_misunderstanding_source_analysis_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_llm_feedback_report ADD COLUMN misunderstanding_source_analysis TEXT DEFAULT NULL COMMENT ''误解来源分析列表 JSON'' AFTER audience_core_concern',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_llm_feedback_report'
+      AND COLUMN_NAME = 'misunderstanding_source_analysis'
+);
+PREPARE add_misunderstanding_source_analysis_stmt FROM @add_misunderstanding_source_analysis_sql;
+EXECUTE add_misunderstanding_source_analysis_stmt;
+DEALLOCATE PREPARE add_misunderstanding_source_analysis_stmt;
+
+SET @add_feedback_action_plan_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_llm_feedback_report ADD COLUMN feedback_action_plan TEXT DEFAULT NULL COMMENT ''评论区回应、内容修正、下一期动作计划列表 JSON'' AFTER misunderstanding_source_analysis',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_llm_feedback_report'
+      AND COLUMN_NAME = 'feedback_action_plan'
+);
+PREPARE add_feedback_action_plan_stmt FROM @add_feedback_action_plan_sql;
+EXECUTE add_feedback_action_plan_stmt;
+DEALLOCATE PREPARE add_feedback_action_plan_stmt;
 
 -- ------------------------------------------------------------
 -- 10.1 评论弹幕明细表
@@ -320,7 +377,7 @@ CREATE TABLE IF NOT EXISTS creator_feedback_item
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '评论弹幕明细表';
-------------------------------------------
+-- ------------------------------------------
 -- 10.2 评论弹幕导入指标表
 --      保存导入样例携带的视频基础指标，用于评论弹幕复盘时理解反馈规模
 -- ------------------------------------------------------------

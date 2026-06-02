@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   deleteCreatorTask,
   analyzeCreatorFeedback,
@@ -257,6 +257,7 @@ const isResultModalBackdropPointerDown = ref(false)
 const isDeveloperTestBackdropPointerDown = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
+let successMessageTimer: number | undefined
 
 const selectedTaskId = computed(() => selectedTask.value?.taskId ?? '')
 const hasSelectedTask = computed(() => selectedTaskId.value.length > 0)
@@ -425,6 +426,12 @@ const nextContentSuggestions = computed(() =>
 const interactionSuggestions = computed(() =>
   parseJsonArray(feedbackReport.value?.interactionSuggestions),
 )
+const misunderstandingSourceAnalysis = computed(() =>
+  parseJsonArray(feedbackReport.value?.misunderstandingSourceAnalysis),
+)
+const feedbackActionPlan = computed(() =>
+  parseJsonArray(feedbackReport.value?.feedbackActionPlan),
+)
 const historicalPreferenceChips = computed<PreferenceChip[]>(() =>
   creatorPreferences.value
     .flatMap((record) =>
@@ -578,7 +585,33 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   closeWorkflowEventSource()
+  clearSuccessMessageTimer()
 })
+
+watch(successMessage, (message) => {
+  clearSuccessMessageTimer()
+  if (!message) {
+    return
+  }
+
+  successMessageTimer = window.setTimeout(() => {
+    successMessage.value = ''
+    successMessageTimer = undefined
+  }, 2800)
+})
+
+function clearSuccessMessageTimer() {
+  if (successMessageTimer === undefined) {
+    return
+  }
+  window.clearTimeout(successMessageTimer)
+  successMessageTimer = undefined
+}
+
+function closeSuccessToast() {
+  clearSuccessMessageTimer()
+  successMessage.value = ''
+}
 
 async function refreshTasks() {
   isLoadingTasks.value = true
@@ -2025,6 +2058,28 @@ function showError(error: unknown) {
 
 <template>
   <section class="creator-shell">
+    <Transition name="creator-toast">
+      <div
+        v-if="successMessage"
+        class="creator-toast success-toast"
+        role="status"
+        aria-live="polite"
+      >
+        <div>
+          <strong>操作完成</strong>
+          <span>{{ successMessage }}</span>
+        </div>
+        <button
+          type="button"
+          class="creator-toast-close"
+          aria-label="关闭成功提示"
+          @click="closeSuccessToast"
+        >
+          ×
+        </button>
+      </div>
+    </Transition>
+
     <header class="creator-header">
       <div>
         <p class="creator-kicker">Creator Copilot</p>
@@ -2235,11 +2290,6 @@ function showError(error: unknown) {
         <div v-if="errorMessage" class="creator-alert error-alert">
           <strong>请求失败</strong>
           <span>{{ errorMessage }}</span>
-        </div>
-
-        <div v-if="successMessage" class="creator-alert success-alert">
-          <strong>操作完成</strong>
-          <span>{{ successMessage }}</span>
         </div>
 
         <section v-if="activeStep === 'task'" class="creator-section">
@@ -3624,116 +3674,213 @@ function showError(error: unknown) {
           </template>
 
           <template v-else-if="resultModalTarget === 'feedbackReport' && feedbackReport">
-            <div class="creator-result-grid">
-              <article class="creator-result-block span-full">
-                <span>整体反馈</span>
-                <p>{{ feedbackReport.feedbackSummary || '未解析到整体反馈' }}</p>
-              </article>
-              <article class="creator-result-block span-full creator-feedback-chat">
-                <span>反馈追问</span>
-                <div class="creator-feedback-chat-form">
-                  <textarea
-                    v-model="feedbackChatForm.question"
-                    maxlength="1000"
-                    placeholder="例如：为什么认为观众误解了 Agent 工具调用？"
-                    @keydown.ctrl.enter.prevent="askFeedbackChat"
-                  ></textarea>
-                  <button
-                    type="button"
-                    class="creator-primary-button"
-                    :disabled="!canAskFeedbackChat"
-                    @click="askFeedbackChat"
-                  >
-                    {{ isAskingFeedbackChat ? '生成中...' : '追问' }}
-                  </button>
-                </div>
-                <div v-if="feedbackChatResult" class="creator-feedback-chat-answer">
-                  <strong>回答</strong>
-                  <p>{{ feedbackChatResult.answer }}</p>
-                  <small>
-                    当前任务证据 · {{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
-                    {{ feedbackChatResult.ragEnabled ? '向量检索' : 'SQL 检索' }} ·
-                    {{ feedbackChatResult.modelName || '未记录模型' }} · Token
-                    {{ formatMetric(feedbackChatResult.totalTokens) }} ·
-                    {{ formatMetric(feedbackChatResult.elapsedMs) }} ms
-                  </small>
-                  <div
-                    v-if="feedbackChatResult.evidenceItems.length"
-                    class="creator-feedback-item-list"
-                  >
-                    <section
-                      v-for="(item, index) in feedbackChatResult.evidenceItems"
-                      :key="item.itemId"
-                    >
-                      <small>
-                        证据{{ index + 1 }} · {{ item.sourceLabel }} ·
-                        {{ item.categoryLabel }} · {{ item.sentimentLabel }}
-                        <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
-                      </small>
-                      <p>{{ item.content }}</p>
-                    </section>
+            <div class="creator-report">
+              <section class="creator-report-group">
+                <h4 class="creator-report-group-title">概览</h4>
+                <div class="creator-report-overview">
+                  <div class="creator-report-row">
+                    <span>整体反馈</span>
+                    <p>{{ feedbackReport.feedbackSummary || '未解析到整体反馈' }}</p>
+                  </div>
+                  <div class="creator-report-row">
+                    <span>创作者复盘困境</span>
+                    <p>{{ feedbackReport.creatorFeedbackDilemma || '未解析到创作者复盘困境' }}</p>
+                  </div>
+                  <div class="creator-report-row">
+                    <span>观众核心关注</span>
+                    <p>{{ feedbackReport.audienceCoreConcern || '未解析到观众核心关注' }}</p>
+                  </div>
+                  <div class="creator-report-row">
+                    <span>情绪倾向</span>
+                    <p>{{ feedbackReport.sentimentSummary || '未解析到情绪倾向' }}</p>
                   </div>
                 </div>
-              </article>
-              <article class="creator-result-block">
-                <span>情绪倾向</span>
-                <p>{{ feedbackReport.sentimentSummary || '未解析到情绪倾向' }}</p>
-              </article>
-              <article class="creator-result-block">
-                <span>下一期内容建议</span>
-                <ul>
-                  <li v-for="(item, index) in nextContentSuggestions" :key="index">
-                    {{ formatValue(item) }}
-                  </li>
-                </ul>
-              </article>
-              <article class="creator-result-block span-full">
-                <span>高频观点</span>
-                <div class="creator-list">
-                  <section v-for="(item, index) in hotTopics" :key="index">
-                    <strong>{{ getRecordText(item, 'topic') || formatValue(item) }}</strong>
-                    <p v-if="getRecordText(item, 'evidence')">
-                      依据：{{ getRecordText(item, 'evidence') }}
-                    </p>
-                    <p v-if="getRecordText(item, 'suggestion')">
-                      建议：{{ getRecordText(item, 'suggestion') }}
-                    </p>
-                  </section>
+              </section>
+
+              <section class="creator-report-group">
+                <h4 class="creator-report-group-title">观众怎么想</h4>
+                <div class="creator-report-cards">
+                  <article class="creator-result-block">
+                    <span>高频观点</span>
+                    <div class="creator-list">
+                      <section v-for="(item, index) in hotTopics" :key="index">
+                        <strong>{{ getRecordText(item, 'topic') || formatValue(item) }}</strong>
+                        <p v-if="getRecordText(item, 'evidence')" class="creator-kv">
+                          <span>依据</span>{{ getRecordText(item, 'evidence') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'creatorDecision')" class="creator-kv">
+                          <span>判断</span>{{ getRecordText(item, 'creatorDecision') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'suggestion')" class="creator-kv">
+                          <span>建议</span>{{ getRecordText(item, 'suggestion') }}
+                        </p>
+                      </section>
+                    </div>
+                  </article>
+                  <article class="creator-result-block">
+                    <span>下一期内容建议</span>
+                    <div class="creator-list">
+                      <section v-for="(item, index) in nextContentSuggestions" :key="index">
+                        <strong>{{ getRecordText(item, 'topic') || formatValue(item) }}</strong>
+                        <p v-if="getRecordText(item, 'sourceSignal')" class="creator-kv">
+                          <span>信号</span>{{ getRecordText(item, 'sourceSignal') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'executionHint')" class="creator-kv">
+                          <span>做法</span>{{ getRecordText(item, 'executionHint') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'risk')" class="creator-kv">
+                          <span>注意</span>{{ getRecordText(item, 'risk') }}
+                        </p>
+                      </section>
+                    </div>
+                  </article>
                 </div>
-              </article>
-              <article class="creator-result-block">
-                <span>争议点</span>
-                <div class="creator-list">
-                  <section v-for="(item, index) in controversyPoints" :key="index">
-                    <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
-                    <p v-if="getRecordText(item, 'risk')">
-                      风险：{{ getRecordText(item, 'risk') }}
-                    </p>
-                    <p v-if="getRecordText(item, 'responseAdvice')">
-                      回应：{{ getRecordText(item, 'responseAdvice') }}
-                    </p>
-                  </section>
+              </section>
+
+              <section class="creator-report-group">
+                <h4 class="creator-report-group-title">风险与误解</h4>
+                <div class="creator-report-cards">
+                  <article class="creator-result-block">
+                    <span>争议点</span>
+                    <div class="creator-list">
+                      <section v-for="(item, index) in controversyPoints" :key="index">
+                        <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
+                        <p v-if="getRecordText(item, 'risk')" class="creator-kv">
+                          <span>风险</span>{{ getRecordText(item, 'risk') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'responseBoundary')" class="creator-kv">
+                          <span>边界</span>{{ getRecordText(item, 'responseBoundary') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'responseAdvice')" class="creator-kv">
+                          <span>回应</span>{{ getRecordText(item, 'responseAdvice') }}
+                        </p>
+                      </section>
+                    </div>
+                  </article>
+                  <article class="creator-result-block">
+                    <span>误解点</span>
+                    <div class="creator-list">
+                      <section v-for="(item, index) in misunderstandingPoints" :key="index">
+                        <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
+                        <p v-if="getRecordText(item, 'source')" class="creator-kv">
+                          <span>来源</span>{{ getRecordText(item, 'source') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'clarificationAdvice')" class="creator-kv">
+                          <span>澄清</span>{{ getRecordText(item, 'clarificationAdvice') }}
+                        </p>
+                      </section>
+                    </div>
+                  </article>
+                  <article class="creator-result-block">
+                    <span>误解来源分析</span>
+                    <div v-if="misunderstandingSourceAnalysis.length" class="creator-list">
+                      <section
+                        v-for="(item, index) in misunderstandingSourceAnalysis"
+                        :key="index"
+                      >
+                        <strong>{{ getRecordText(item, 'source') || formatValue(item) }}</strong>
+                        <p v-if="getRecordText(item, 'reason')" class="creator-kv">
+                          <span>成因</span>{{ getRecordText(item, 'reason') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'repairAction')" class="creator-kv">
+                          <span>修复</span>{{ getRecordText(item, 'repairAction') }}
+                        </p>
+                      </section>
+                    </div>
+                    <p v-else class="creator-report-empty">未解析到误解来源分析</p>
+                  </article>
                 </div>
-              </article>
-              <article class="creator-result-block">
-                <span>误解点</span>
-                <div class="creator-list">
-                  <section v-for="(item, index) in misunderstandingPoints" :key="index">
-                    <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
-                    <p v-if="getRecordText(item, 'clarificationAdvice')">
-                      澄清：{{ getRecordText(item, 'clarificationAdvice') }}
-                    </p>
-                  </section>
+              </section>
+
+              <section class="creator-report-group">
+                <h4 class="creator-report-group-title">我该做什么</h4>
+                <div class="creator-report-cards">
+                  <article class="creator-result-block">
+                    <span>互动建议</span>
+                    <div class="creator-list">
+                      <section v-for="(item, index) in interactionSuggestions" :key="index">
+                        <strong>{{ getRecordText(item, 'channel') || formatValue(item) }}</strong>
+                        <p v-if="getRecordText(item, 'message')" class="creator-kv">
+                          <span>内容</span>{{ getRecordText(item, 'message') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'purpose')" class="creator-kv">
+                          <span>目的</span>{{ getRecordText(item, 'purpose') }}
+                        </p>
+                      </section>
+                    </div>
+                  </article>
+                  <article class="creator-result-block">
+                    <span>反馈行动计划</span>
+                    <div v-if="feedbackActionPlan.length" class="creator-list">
+                      <section v-for="(item, index) in feedbackActionPlan" :key="index">
+                        <strong>
+                          <span
+                            v-if="getRecordText(item, 'priority')"
+                            class="creator-badge"
+                          >{{ getRecordText(item, 'priority') }}</span>
+                          {{ getRecordText(item, 'action') || formatValue(item) }}
+                        </strong>
+                        <p v-if="getRecordText(item, 'reason')" class="creator-kv">
+                          <span>原因</span>{{ getRecordText(item, 'reason') }}
+                        </p>
+                        <p v-if="getRecordText(item, 'expectedResult')" class="creator-kv">
+                          <span>预期</span>{{ getRecordText(item, 'expectedResult') }}
+                        </p>
+                      </section>
+                    </div>
+                    <p v-else class="creator-report-empty">未解析到反馈行动计划</p>
+                  </article>
                 </div>
-              </article>
-              <article class="creator-result-block span-full">
-                <span>互动建议</span>
-                <ul>
-                  <li v-for="(item, index) in interactionSuggestions" :key="index">
-                    {{ formatValue(item) }}
-                  </li>
-                </ul>
-              </article>
+              </section>
+
+              <section class="creator-report-group">
+                <h4 class="creator-report-group-title">反馈追问</h4>
+                <article class="creator-result-block creator-feedback-chat">
+                  <div class="creator-feedback-chat-form">
+                    <textarea
+                      v-model="feedbackChatForm.question"
+                      maxlength="1000"
+                      placeholder="例如：为什么认为观众误解了 Agent 工具调用？"
+                      @keydown.ctrl.enter.prevent="askFeedbackChat"
+                    ></textarea>
+                    <button
+                      type="button"
+                      class="creator-primary-button"
+                      :disabled="!canAskFeedbackChat"
+                      @click="askFeedbackChat"
+                    >
+                      {{ isAskingFeedbackChat ? '生成中...' : '追问' }}
+                    </button>
+                  </div>
+                  <div v-if="feedbackChatResult" class="creator-feedback-chat-answer">
+                    <strong>回答</strong>
+                    <p>{{ feedbackChatResult.answer }}</p>
+                    <small>
+                      当前任务证据 · {{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
+                      {{ feedbackChatResult.ragEnabled ? '向量检索' : 'SQL 检索' }} ·
+                      {{ feedbackChatResult.modelName || '未记录模型' }} · Token
+                      {{ formatMetric(feedbackChatResult.totalTokens) }} ·
+                      {{ formatMetric(feedbackChatResult.elapsedMs) }} ms
+                    </small>
+                    <div
+                      v-if="feedbackChatResult.evidenceItems.length"
+                      class="creator-feedback-item-list"
+                    >
+                      <section
+                        v-for="(item, index) in feedbackChatResult.evidenceItems"
+                        :key="item.itemId"
+                      >
+                        <small>
+                          证据{{ index + 1 }} · {{ item.sourceLabel }} ·
+                          {{ item.categoryLabel }} · {{ item.sentimentLabel }}
+                          <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
+                        </small>
+                        <p>{{ item.content }}</p>
+                      </section>
+                    </div>
+                  </div>
+                </article>
+              </section>
             </div>
           </template>
         </div>

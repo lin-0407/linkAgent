@@ -255,21 +255,29 @@ public class CreatorReportService {
     private String buildFeedbackReportPrompt(CreatorFeedbackReportRecord record) {
         return """
                 反馈摘要：%s
+                创作者反馈困境：%s
+                观众核心关注：%s
                 高频观点：%s
                 情绪倾向：%s
                 争议点：%s
                 误解点：%s
+                误解来源分析：%s
                 下一期内容建议：%s
                 互动回应建议：%s
+                反馈行动计划：%s
                 解析状态：%s
                 """.formatted(
                 normalizeSection(record.getFeedbackSummary()),
+                normalizeSection(record.getCreatorFeedbackDilemma()),
+                normalizeSection(record.getAudienceCoreConcern()),
                 normalizeSection(record.getHotTopics()),
                 normalizeSection(record.getSentimentSummary()),
                 normalizeSection(record.getControversyPoints()),
                 normalizeSection(record.getMisunderstandingPoints()),
+                normalizeSection(record.getMisunderstandingSourceAnalysis()),
                 normalizeSection(record.getNextContentSuggestions()),
                 normalizeSection(record.getInteractionSuggestions()),
+                normalizeSection(record.getFeedbackActionPlan()),
                 normalizeSection(record.getParseStatus())
         );
     }

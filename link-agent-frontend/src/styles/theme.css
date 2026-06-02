@@ -1924,6 +1924,81 @@ textarea:focus {
   text-transform: uppercase;
 }
 
+.creator-toast {
+  position: fixed;
+  top: 22px;
+  right: 22px;
+  z-index: 90;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(420px, calc(100vw - 44px));
+  padding: 12px 12px 12px 14px;
+  color: #063348;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(0, 174, 236, 0.28);
+  border-left: 4px solid var(--creator-bili-blue);
+  border-radius: 8px;
+  box-shadow:
+    0 18px 46px rgba(15, 23, 42, 0.16),
+    0 2px 10px rgba(0, 174, 236, 0.12);
+  backdrop-filter: blur(14px);
+}
+
+.creator-toast div {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.creator-toast strong {
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.creator-toast span {
+  color: #075985;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.creator-toast-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  color: #075985;
+  background: rgba(229, 248, 255, 0.86);
+  border: 1px solid rgba(0, 174, 236, 0.18);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.creator-toast-close:hover {
+  color: #00384f;
+  background: #e5f8ff;
+}
+
+.creator-toast-enter-active,
+.creator-toast-leave-active {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.creator-toast-enter-from,
+.creator-toast-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
 .creator-status-strip {
   display: flex;
   flex-wrap: wrap;
@@ -2026,11 +2101,29 @@ textarea:focus {
   gap: 4px;
 }
 
-.creator-panel-title span,
-.creator-result-block > span {
+.creator-panel-title span {
   color: rgba(63, 38, 49, 0.62);
   font-size: 12px;
   font-weight: 900;
+}
+
+.creator-result-block > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+/* 区块标题加一道石榴红竖条并提到正文色，解决“标题比正文还浅”的层级倒置问题。 */
+.creator-result-block > span::before {
+  content: '';
+  flex: none;
+  width: 3px;
+  height: 13px;
+  background: var(--color-pomegranate);
+  border-radius: 2px;
 }
 
 .creator-panel-title b {
@@ -3024,13 +3117,12 @@ textarea:focus {
   gap: 10px;
 }
 
+/* 列表项改成左侧色线，去掉整圈边框与底色，消除“卡里又套卡”的视觉噪声。 */
 .creator-list section {
   display: grid;
-  gap: 5px;
-  padding: 11px;
-  background: var(--creator-panel-strong);
-  border: 1px solid rgba(231, 45, 72, 0.12);
-  border-radius: 8px;
+  gap: 4px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid rgba(231, 45, 72, 0.22);
 }
 
 .creator-list strong,
@@ -3040,6 +3132,114 @@ textarea:focus {
 
 .creator-list p {
   color: rgba(63, 38, 49, 0.72);
+}
+
+/* ===== 阶段 4.12：反馈报告分组排版 ===== */
+/* 把十几块平铺内容归拢成「概览/观众怎么想/风险与误解/我该做什么」语义组，建立秩序。 */
+.creator-report {
+  display: grid;
+  gap: 22px;
+}
+
+/* 组标题：石榴红竖条 + 下边线，明显高于卡片标题，形成清晰的两级层级。 */
+.creator-report-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  color: var(--color-pomegranate);
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 950;
+  border-bottom: 1px solid rgba(231, 45, 72, 0.16);
+}
+
+.creator-report-group-title::before {
+  content: '';
+  flex: none;
+  width: 4px;
+  height: 15px;
+  background: var(--color-pomegranate);
+  border-radius: 2px;
+}
+
+/* 概览组：四条叙事用同一张面板内的分隔行承载，标签左对齐便于扫描。 */
+.creator-report-overview {
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(231, 45, 72, 0.13);
+  border-radius: 8px;
+}
+
+.creator-report-row {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 14px;
+  padding: 12px 14px;
+}
+
+.creator-report-row + .creator-report-row {
+  border-top: 1px solid rgba(231, 45, 72, 0.1);
+}
+
+.creator-report-row > span {
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.creator-report-row > p {
+  margin: 0;
+  color: var(--color-ink-2);
+  line-height: 1.65;
+}
+
+/* 明细组：卡片自动等宽换行，避免手动 full/half 混排造成的乱节奏。 */
+.creator-report-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+/* 子行键值：固定键列宽，让多行的“依据/判断/建议”值左缘对齐，形成扫描路径。 */
+.creator-kv {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  margin: 0;
+}
+
+.creator-kv > span {
+  color: rgba(63, 38, 49, 0.5);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 行动计划优先级用小药丸标签，呼应“[HIGH] 动作”的预览。 */
+.creator-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 8px;
+  color: #fff;
+  background: var(--color-pomegranate);
+  font-size: 11px;
+  font-weight: 800;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.creator-report-empty {
+  margin: 0;
+  color: rgba(63, 38, 49, 0.5);
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .creator-report-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
 }
 
 .creator-workflow-grid {
@@ -4082,6 +4282,13 @@ textarea:focus {
     padding: 18px 12px 16px;
   }
 
+  .creator-toast {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
+
   .creator-task-rail,
   .creator-task-toolbar,
   .creator-task-overview,
@@ -4153,5 +4360,12 @@ textarea:focus {
 
   .creator-prompt-field textarea {
     min-height: 300px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creator-toast-enter-active,
+  .creator-toast-leave-active {
+    transition: none;
   }
 }

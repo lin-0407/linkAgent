@@ -396,6 +396,10 @@ export type CreatorFeedbackReport = {
   misunderstandingPoints: string | null
   nextContentSuggestions: string | null
   interactionSuggestions: string | null
+  creatorFeedbackDilemma: string | null
+  audienceCoreConcern: string | null
+  misunderstandingSourceAnalysis: string | null
+  feedbackActionPlan: string | null
   rawOutput: string
   parseStatus: string
   createTime: string

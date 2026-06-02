@@ -18,6 +18,11 @@ public class CreatorFeedbackReportRecord {
     private String misunderstandingPoints;
     private String nextContentSuggestions;
     private String interactionSuggestions;
+    // 阶段 4.12 新增的高信号字段：回答“为什么这样反馈”和“下一步怎么改”，和旧总结字段并存。
+    private String creatorFeedbackDilemma;
+    private String audienceCoreConcern;
+    private String misunderstandingSourceAnalysis;
+    private String feedbackActionPlan;
     private String rawOutput;
     private String parseStatus;
     private LocalDateTime createTime;
@@ -101,6 +106,38 @@ public class CreatorFeedbackReportRecord {
 
     public void setInteractionSuggestions(String interactionSuggestions) {
         this.interactionSuggestions = interactionSuggestions;
+    }
+
+    public String getCreatorFeedbackDilemma() {
+        return creatorFeedbackDilemma;
+    }
+
+    public void setCreatorFeedbackDilemma(String creatorFeedbackDilemma) {
+        this.creatorFeedbackDilemma = creatorFeedbackDilemma;
+    }
+
+    public String getAudienceCoreConcern() {
+        return audienceCoreConcern;
+    }
+
+    public void setAudienceCoreConcern(String audienceCoreConcern) {
+        this.audienceCoreConcern = audienceCoreConcern;
+    }
+
+    public String getMisunderstandingSourceAnalysis() {
+        return misunderstandingSourceAnalysis;
+    }
+
+    public void setMisunderstandingSourceAnalysis(String misunderstandingSourceAnalysis) {
+        this.misunderstandingSourceAnalysis = misunderstandingSourceAnalysis;
+    }
+
+    public String getFeedbackActionPlan() {
+        return feedbackActionPlan;
+    }
+
+    public void setFeedbackActionPlan(String feedbackActionPlan) {
+        this.feedbackActionPlan = feedbackActionPlan;
     }
 
     public String getRawOutput() {
