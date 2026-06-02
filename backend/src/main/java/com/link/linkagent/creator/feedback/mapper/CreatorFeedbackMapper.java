@@ -14,6 +14,7 @@ import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -417,4 +418,119 @@ public interface CreatorFeedbackMapper {
             @Result(column = "create_time", property = "createTime")
     })
     Optional<CreatorFeedbackMetricRecord> findMetricByTaskId(@Param("taskId") String taskId);
+
+    // ============================ 阶段 4.13 反馈证据向量索引 ============================
+
+    /**
+     * 查询当前任务可索引的评论弹幕明细。
+     * <p>
+     * 不在导入时自动索引全部明细，而是由用户显式触发重建并带 limit，是为了让演示环境的 Embedding 成本可控。
+     * includeNoise=false 时排除噪声明细，避免把“哈哈哈”等无意义内容也写进向量库浪费 Embedding。
+     */
+    @Select("""
+            <script>
+            SELECT id, item_id, task_id, source_type, source_id, content,
+                   occur_time_text, like_count, reply_count, category,
+                   sentiment, is_noise, reason, create_time
+            FROM creator_feedback_item
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            <if test='!includeNoise'>
+              AND is_noise = 0
+            </if>
+            ORDER BY id DESC
+            LIMIT #{limit}
+            </script>
+            """)
+    @ResultMap("CreatorFeedbackItemRecordMap")
+    List<CreatorFeedbackItemRecord> listIndexableItemsByTaskId(@Param("taskId") String taskId,
+                                                               @Param("limit") int limit,
+                                                               @Param("includeNoise") boolean includeNoise);
+
+    /**
+     * 标记某条明细已成功写入向量库。
+     * <p>
+     * 带 task_id 和 is_deleted = 0 条件，避免向量库回传的旧 item_id 串改到历史导入批次或已删除明细。
+     */
+    @Update("""
+            UPDATE creator_feedback_item
+            SET embedding_id = #{embeddingId},
+                embedding_status = 'INDEXED',
+                embedding_error = NULL,
+                embedding_update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND item_id = #{itemId}
+              AND is_deleted = 0
+            """)
+    int updateItemEmbeddingIndexed(@Param("taskId") String taskId,
+                                   @Param("itemId") String itemId,
+                                   @Param("embeddingId") String embeddingId);
+
+    /**
+     * 标记某条明细索引失败，并保存截断后的失败原因摘要，便于排查 Embedding 或 Milvus 异常。
+     */
+    @Update("""
+            UPDATE creator_feedback_item
+            SET embedding_status = 'FAILED',
+                embedding_error = #{errorMessage},
+                embedding_update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND item_id = #{itemId}
+              AND is_deleted = 0
+            """)
+    int updateItemEmbeddingFailed(@Param("taskId") String taskId,
+                                  @Param("itemId") String itemId,
+                                  @Param("errorMessage") String errorMessage);
+
+    /**
+     * 按向量索引状态分组计数，复用 CreatorFeedbackStatRecord（name=状态，count=数量）。
+     * 复用而不新建结构，是因为索引状态计数和分类/情绪计数本质上是同一种“枚举计数”形态。
+     */
+    @Select("""
+            SELECT embedding_status AS name,
+                   COUNT(1) AS count
+            FROM creator_feedback_item
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            GROUP BY embedding_status
+            """)
+    @ResultMap("CreatorFeedbackStatRecordMap")
+    List<CreatorFeedbackStatRecord> countEmbeddingStatusByTaskId(@Param("taskId") String taskId);
+
+    /**
+     * 查询当前任务最近一次成功索引时间（仅看 INDEXED 状态），用于状态展示的 lastIndexedAt。
+     * 没有任何成功索引时返回 null。
+     */
+    @Select("""
+            SELECT MAX(embedding_update_time)
+            FROM creator_feedback_item
+            WHERE task_id = #{taskId}
+              AND embedding_status = 'INDEXED'
+              AND is_deleted = 0
+            """)
+    LocalDateTime findLastEmbeddingUpdateTime(@Param("taskId") String taskId);
+
+    /**
+     * 按 task_id + item_id 列表回查 MySQL 当前有效明细。
+     * <p>
+     * 这是 RAG 的“事实来源回查”：Milvus 只负责找出候选 item_id，最终证据必须用 task_id 和 is_deleted = 0
+     * 回查 MySQL，保证向量库里的旧导入批次文档或已删除明细不会进入回答。调用方需保证 itemIds 非空。
+     */
+    @Select("""
+            <script>
+            SELECT id, item_id, task_id, source_type, source_id, content,
+                   occur_time_text, like_count, reply_count, category,
+                   sentiment, is_noise, reason, create_time
+            FROM creator_feedback_item
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+              AND item_id IN
+              <foreach item='itemId' collection='itemIds' open='(' separator=',' close=')'>
+                  #{itemId}
+              </foreach>
+            </script>
+            """)
+    @ResultMap("CreatorFeedbackItemRecordMap")
+    List<CreatorFeedbackItemRecord> listItemsByTaskIdAndItemIds(@Param("taskId") String taskId,
+                                                                @Param("itemIds") List<String> itemIds);
 }

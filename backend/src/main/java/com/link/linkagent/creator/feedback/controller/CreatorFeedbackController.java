@@ -4,12 +4,16 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackChatRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackChatResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackDashboardResponse;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackEvidenceIndexRequest;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackEvidenceIndexResponse;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackEvidenceIndexStatusResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackFetchRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackFetchResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackImportResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackSaveRequest;
+import com.link.linkagent.creator.feedback.service.CreatorFeedbackEvidenceIndexService;
 import com.link.linkagent.creator.feedback.service.CreatorFeedbackService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -36,9 +40,13 @@ import org.springframework.web.multipart.MultipartFile;
 public class CreatorFeedbackController {
 
     private final CreatorFeedbackService creatorFeedbackService;
+    // 索引/状态是独立于反馈 CRUD 的职责，直接注入索引服务，避免 CreatorFeedbackService 继续膨胀。
+    private final CreatorFeedbackEvidenceIndexService creatorFeedbackEvidenceIndexService;
 
-    public CreatorFeedbackController(CreatorFeedbackService creatorFeedbackService) {
+    public CreatorFeedbackController(CreatorFeedbackService creatorFeedbackService,
+                                     CreatorFeedbackEvidenceIndexService creatorFeedbackEvidenceIndexService) {
         this.creatorFeedbackService = creatorFeedbackService;
+        this.creatorFeedbackEvidenceIndexService = creatorFeedbackEvidenceIndexService;
     }
 
     @PostMapping
@@ -123,5 +131,31 @@ public class CreatorFeedbackController {
 
             @Valid @RequestBody CreatorFeedbackChatRequest request) {
         return creatorFeedbackService.chat(taskId, request);
+    }
+
+    /**
+     * 重建当前任务反馈证据索引。需要 RAG 业务开关与 Milvus 同时就绪，否则返回业务提示。
+     */
+    @PostMapping("/evidence-index/rebuild")
+    public CreatorFeedbackEvidenceIndexResponse rebuildEvidenceIndex(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            String taskId,
+
+            @Valid @RequestBody CreatorFeedbackEvidenceIndexRequest request) {
+        return creatorFeedbackEvidenceIndexService.rebuild(taskId, request);
+    }
+
+    /**
+     * 查询当前任务证据索引状态，供前端在反馈报告弹窗展示已索引/待索引/失败数量与当前检索模式。
+     */
+    @GetMapping("/evidence-index/status")
+    public CreatorFeedbackEvidenceIndexStatusResponse getEvidenceIndexStatus(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            String taskId) {
+        return creatorFeedbackEvidenceIndexService.status(taskId);
     }
 }

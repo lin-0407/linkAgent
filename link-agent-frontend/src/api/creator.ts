@@ -3,6 +3,9 @@ import type {
   CreatorFeedbackAnalyzePayload,
   CreatorFeedbackChatPayload,
   CreatorFeedbackChatResult,
+  CreatorFeedbackEvidenceIndexPayload,
+  CreatorFeedbackEvidenceIndexResult,
+  CreatorFeedbackEvidenceIndexStatus,
   CreatorFeedbackDashboard,
   CreatorFeedbackFetchPayload,
   CreatorFeedbackFetchResult,
@@ -291,6 +294,25 @@ export function chatCreatorFeedback(taskId: string, payload: CreatorFeedbackChat
       method: 'POST',
       body: JSON.stringify(cleanPayload(payload)),
     },
+  )
+}
+
+export function rebuildCreatorFeedbackEvidenceIndex(
+  taskId: string,
+  payload: CreatorFeedbackEvidenceIndexPayload,
+) {
+  return requestJson<CreatorFeedbackEvidenceIndexResult>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/evidence-index/rebuild`,
+    {
+      method: 'POST',
+      body: JSON.stringify(cleanPayload(payload)),
+    },
+  )
+}
+
+export function getCreatorFeedbackEvidenceIndexStatus(taskId: string) {
+  return requestJson<CreatorFeedbackEvidenceIndexStatus>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/evidence-index/status`,
   )
 }
 

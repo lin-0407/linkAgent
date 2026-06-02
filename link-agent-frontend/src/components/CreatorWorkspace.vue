@@ -10,6 +10,7 @@ import {
   createWorkflowEventSource,
   getCreatorFeedback,
   getCreatorFeedbackDashboard,
+  getCreatorFeedbackEvidenceIndexStatus,
   getCreatorFeedbackReport,
   getCreatorTask,
   getPrePublishSuggestion,
@@ -24,6 +25,7 @@ import {
   listWorkflowMessages,
   listWorkflowSteps,
   recordCreatorEvalResult,
+  rebuildCreatorFeedbackEvidenceIndex,
   saveCreatorFeedback,
   sendWorkflowMessage,
   startPrePublishWorkflow,
@@ -33,6 +35,7 @@ import type {
   CreatorFeedback,
   CreatorFeedbackChatResult,
   CreatorFeedbackDashboard,
+  CreatorFeedbackEvidenceIndexStatus,
   CreatorFeedbackFetchResult,
   CreatorFeedbackReport,
   CreatorEvalCase,
@@ -215,6 +218,9 @@ const suggestion = ref<CreatorSuggestion | null>(null)
 const feedback = ref<CreatorFeedback | null>(null)
 const feedbackReport = ref<CreatorFeedbackReport | null>(null)
 const feedbackChatResult = ref<CreatorFeedbackChatResult | null>(null)
+// 阶段 4.13：证据索引状态与重建结果提示。状态在打开反馈报告弹窗时按需加载，避免每次切任务都多发请求。
+const feedbackEvidenceIndexStatus = ref<CreatorFeedbackEvidenceIndexStatus | null>(null)
+const feedbackEvidenceIndexWarnings = ref<string[]>([])
 const feedbackDashboard = ref<CreatorFeedbackDashboard | null>(null)
 const feedbackFetchResult = ref<CreatorFeedbackFetchResult | null>(null)
 const creatorPreferences = ref<CreatorPreference[]>([])
@@ -246,6 +252,8 @@ const isImportingFeedback = ref(false)
 const isFetchingFeedback = ref(false)
 const isAnalyzingFeedback = ref(false)
 const isAskingFeedbackChat = ref(false)
+const isRebuildingFeedbackEvidenceIndex = ref(false)
+const isLoadingFeedbackEvidenceIndexStatus = ref(false)
 const isLoadingCreatorPreferences = ref(false)
 const lastPrePublishPreferenceMode = ref<CreatorPreferenceMode>('USE_HISTORY')
 const hasPrePublishPreferenceModeSnapshot = ref(false)
@@ -894,6 +902,8 @@ function resetGeneratedTaskResults() {
   feedback.value = null
   feedbackReport.value = null
   feedbackChatResult.value = null
+  feedbackEvidenceIndexStatus.value = null
+  feedbackEvidenceIndexWarnings.value = []
   feedbackDashboard.value = null
   feedbackFetchResult.value = null
   feedbackImportFile.value = null
@@ -1094,6 +1104,8 @@ async function loadOptionalResults(task: CreatorTask) {
   feedback.value = null
   feedbackReport.value = null
   feedbackChatResult.value = null
+  feedbackEvidenceIndexStatus.value = null
+  feedbackEvidenceIndexWarnings.value = []
   feedbackDashboard.value = null
   feedbackFetchResult.value = null
   feedbackImportFile.value = null
@@ -1437,6 +1449,59 @@ async function askFeedbackChat() {
     showError(error)
   } finally {
     isAskingFeedbackChat.value = false
+  }
+}
+
+// 打开反馈报告弹窗时按需加载索引状态。状态查询失败不阻断追问主流程，所以走 optionalRequest 容错。
+async function loadFeedbackEvidenceIndexStatus() {
+  if (!selectedTaskId.value || isLoadingFeedbackEvidenceIndexStatus.value) {
+    return
+  }
+  isLoadingFeedbackEvidenceIndexStatus.value = true
+  try {
+    feedbackEvidenceIndexStatus.value = await optionalRequest(() =>
+      getCreatorFeedbackEvidenceIndexStatus(selectedTaskId.value),
+    )
+  } finally {
+    isLoadingFeedbackEvidenceIndexStatus.value = false
+  }
+}
+
+async function rebuildFeedbackEvidenceIndex() {
+  if (!selectedTaskId.value || isRebuildingFeedbackEvidenceIndex.value) {
+    return
+  }
+  isRebuildingFeedbackEvidenceIndex.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  feedbackEvidenceIndexWarnings.value = []
+  try {
+    // maxItems/includeNoise 留空，让后端按 creator.feedback.rag 配置默认值索引，前端不重复定义业务默认值。
+    const result = await rebuildCreatorFeedbackEvidenceIndex(selectedTaskId.value, {})
+    feedbackEvidenceIndexWarnings.value = result.warnings ?? []
+    // 重建会改变索引计数，立即重读权威状态，避免前端用旧计数展示。
+    await loadFeedbackEvidenceIndexStatus()
+    // 索引后旧追问回答可能基于旧检索模式，清空让用户重新追问拿到向量检索结果。
+    feedbackChatResult.value = null
+    successMessage.value = `证据索引完成：已索引 ${result.indexedCount} 条，失败 ${result.failedCount} 条。`
+  } catch (error) {
+    showError(error)
+  } finally {
+    isRebuildingFeedbackEvidenceIndex.value = false
+  }
+}
+
+// 把后端检索模式编码翻译成用户能看懂的中文，统一用于状态区和追问回答脚注。
+function retrievalModeLabel(mode: string | null | undefined) {
+  switch (mode) {
+    case 'MILVUS_VECTOR_AND_MYSQL_REPORT':
+      return '向量检索'
+    case 'MILVUS_VECTOR_WITH_SQL_FALLBACK':
+      return '向量检索（含 SQL 兜底）'
+    case 'MYSQL_REPORT_AND_CLASSIFIED_ITEMS':
+      return 'SQL 证据检索'
+    default:
+      return 'SQL 证据检索'
   }
 }
 
@@ -1886,6 +1951,11 @@ function openResultModal(target: ResultModalTarget) {
   resultModalTarget.value = target
   if (guidanceEditorTarget.value) {
     closeGuidanceEditor()
+  }
+  // 反馈追问区在报告弹窗内，打开时刷新一次证据索引状态，保证展示的是当前任务最新索引情况。
+  if (target === 'feedbackReport') {
+    feedbackEvidenceIndexWarnings.value = []
+    void loadFeedbackEvidenceIndexStatus()
   }
 }
 
@@ -3836,6 +3906,46 @@ function showError(error: unknown) {
               <section class="creator-report-group">
                 <h4 class="creator-report-group-title">反馈追问</h4>
                 <article class="creator-result-block creator-feedback-chat">
+                  <div v-if="feedbackEvidenceIndexStatus" class="creator-feedback-index-status">
+                    <div
+                      v-if="feedbackEvidenceIndexStatus.ragEnabled && feedbackEvidenceIndexStatus.vectorStoreReady"
+                      class="creator-feedback-index-line"
+                    >
+                      <small>
+                        证据索引 · 已索引
+                        {{ feedbackEvidenceIndexStatus.indexedCount }}/{{ feedbackEvidenceIndexStatus.totalItems }}
+                        · 待索引 {{ feedbackEvidenceIndexStatus.pendingCount }}
+                        <template v-if="feedbackEvidenceIndexStatus.failedCount">
+                          · 失败 {{ feedbackEvidenceIndexStatus.failedCount }}
+                        </template>
+                        · {{ retrievalModeLabel(feedbackEvidenceIndexStatus.retrievalMode) }}
+                        <template v-if="feedbackEvidenceIndexStatus.lastIndexedAt">
+                          · 最近索引 {{ formatDate(feedbackEvidenceIndexStatus.lastIndexedAt) }}
+                        </template>
+                      </small>
+                      <button
+                        type="button"
+                        class="creator-ghost-button"
+                        :disabled="isRebuildingFeedbackEvidenceIndex"
+                        @click="rebuildFeedbackEvidenceIndex"
+                      >
+                        {{ isRebuildingFeedbackEvidenceIndex ? '索引中...' : '重建证据索引' }}
+                      </button>
+                    </div>
+                    <small v-else class="creator-feedback-index-hint">
+                      当前使用 SQL 证据检索（{{
+                        feedbackEvidenceIndexStatus.ragEnabled ? 'Milvus 未就绪' : 'RAG 未启用'
+                      }}），无需配置 Milvus 即可追问。
+                    </small>
+                    <ul
+                      v-if="feedbackEvidenceIndexWarnings.length"
+                      class="creator-feedback-index-warnings"
+                    >
+                      <li v-for="(warning, index) in feedbackEvidenceIndexWarnings" :key="index">
+                        {{ warning }}
+                      </li>
+                    </ul>
+                  </div>
                   <div class="creator-feedback-chat-form">
                     <textarea
                       v-model="feedbackChatForm.question"
@@ -3857,7 +3967,7 @@ function showError(error: unknown) {
                     <p>{{ feedbackChatResult.answer }}</p>
                     <small>
                       当前任务证据 · {{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
-                      {{ feedbackChatResult.ragEnabled ? '向量检索' : 'SQL 检索' }} ·
+                      {{ retrievalModeLabel(feedbackChatResult.retrievalMode) }} ·
                       {{ feedbackChatResult.modelName || '未记录模型' }} · Token
                       {{ formatMetric(feedbackChatResult.totalTokens) }} ·
                       {{ formatMetric(feedbackChatResult.elapsedMs) }} ms

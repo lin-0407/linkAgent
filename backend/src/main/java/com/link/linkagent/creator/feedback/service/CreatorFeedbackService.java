@@ -8,6 +8,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackChatRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackChatResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackDashboardResponse;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackEvidenceRetrievalResult;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackFetchRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackFetchResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackImportResponse;
@@ -24,6 +25,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackSaveRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackTimelineResponse;
+import com.link.linkagent.creator.feedback.util.CreatorFeedbackLabelUtil;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
@@ -72,7 +74,6 @@ public class CreatorFeedbackService {
     private static final int DASHBOARD_ITEM_LIMIT = 2000;
     private static final int DASHBOARD_RECENT_LIMIT = 12;
     private static final int DASHBOARD_TOP_COMMENT_LIMIT = 8;
-    private static final int FEEDBACK_CHAT_EVIDENCE_LIMIT = 8;
     private static final int FEEDBACK_CHAT_ANSWER_MAX_LENGTH = 4000;
     private static final long SCRIPT_TIMEOUT_SECONDS = 180;
     private static final Pattern BVID_PATTERN = Pattern.compile("BV[0-9A-Za-z]{10}");
@@ -89,17 +90,21 @@ public class CreatorFeedbackService {
     private final LLMService llmService;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
+    // 证据检索拆成独立服务：本类已同时承担导入、分析、仪表盘、追问和脚本采集，把“选证据”交出去能让追问链路只负责编排。
+    private final CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService;
 
     public CreatorFeedbackService(CreatorTaskMapper creatorTaskMapper,
                                   CreatorFeedbackMapper creatorFeedbackMapper,
                                   LLMService llmService,
                                   ObjectMapper objectMapper,
-                                  TransactionTemplate transactionTemplate) {
+                                  TransactionTemplate transactionTemplate,
+                                  CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
         this.transactionTemplate = transactionTemplate;
+        this.evidenceRetrievalService = evidenceRetrievalService;
     }
 
     @Transactional
@@ -248,7 +253,11 @@ public class CreatorFeedbackService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先生成反馈报告或导入评论弹幕明细");
         }
 
-        List<CreatorFeedbackItemRecord> evidenceRecords = selectChatEvidence(request.question(), items);
+        // 证据选择交给检索服务：内部根据 RAG 开关和 Milvus 可用性决定走向量检索还是 SQL 轻量匹配，
+        // 但无论哪条路径，返回的 evidenceRecords 都来自 MySQL 当前有效明细，保证证据是事实而非向量库脏数据。
+        CreatorFeedbackEvidenceRetrievalResult retrievalResult =
+                evidenceRetrievalService.retrieve(taskRecord.getTaskId(), request.question(), items);
+        List<CreatorFeedbackItemRecord> evidenceRecords = retrievalResult.evidenceRecords();
         LlmCallResult llmCallResult = llmService.chatWithUsage(
                 buildChatSystemPrompt(),
                 buildChatUserPrompt(taskRecord, reportRecord, evidenceRecords, request.question())
@@ -259,8 +268,8 @@ public class CreatorFeedbackService {
                 normalizeChatAnswer(llmCallResult.content()),
                 evidenceRecords.stream().map(this::toItemResponse).toList(),
                 reportRecord != null,
-                "MYSQL_REPORT_AND_CLASSIFIED_ITEMS",
-                false,
+                retrievalResult.retrievalMode(),
+                retrievalResult.ragEnabled(),
                 llmCallResult.modelName(),
                 llmCallResult.promptTokens(),
                 llmCallResult.completionTokens(),
@@ -984,109 +993,6 @@ public class CreatorFeedbackService {
         }
     }
 
-    private List<CreatorFeedbackItemRecord> selectChatEvidence(String question, List<CreatorFeedbackItemRecord> items) {
-        if (items.isEmpty()) {
-            return List.of();
-        }
-        List<String> terms = buildQuestionTerms(question);
-        List<ScoredFeedbackItem> scoredItems = items.stream()
-                .filter(item -> !Boolean.TRUE.equals(item.getNoise()))
-                .map(item -> new ScoredFeedbackItem(item, scoreEvidenceItem(question, terms, item)))
-                .filter(item -> item.score() > 0)
-                .sorted(Comparator
-                        .comparingInt(ScoredFeedbackItem::score).reversed()
-                        .thenComparing(item -> nullableLongValue(item.record().getLikeCount()), Comparator.reverseOrder())
-                        .thenComparing(item -> nullableLongValue(item.record().getReplyCount()), Comparator.reverseOrder())
-                        .thenComparing(item -> nullableLongValue(item.record().getId()), Comparator.reverseOrder()))
-                .limit(FEEDBACK_CHAT_EVIDENCE_LIMIT)
-                .toList();
-        if (!scoredItems.isEmpty()) {
-            return scoredItems.stream().map(ScoredFeedbackItem::record).toList();
-        }
-
-        // 问题没有命中明确证据时，仍给模型少量最新有效样例，让它能判断“证据不足”而不是凭空回答。
-        return items.stream()
-                .filter(item -> !Boolean.TRUE.equals(item.getNoise()))
-                .limit(Math.min(FEEDBACK_CHAT_EVIDENCE_LIMIT, 5))
-                .toList();
-    }
-
-    private List<String> buildQuestionTerms(String question) {
-        if (TextUtil.isBlank(question)) {
-            return List.of();
-        }
-        Set<String> terms = new LinkedHashSet<>();
-        Matcher asciiMatcher = Pattern.compile("[0-9A-Za-z]{2,}").matcher(question);
-        while (asciiMatcher.find()) {
-            terms.add(asciiMatcher.group().toLowerCase(Locale.ROOT));
-        }
-
-        String hanText = question.replaceAll("[^\\p{IsHan}]", "");
-        int gramLimit = 32;
-        for (int index = 0; index + 1 < hanText.length() && terms.size() < gramLimit; index++) {
-            terms.add(hanText.substring(index, index + 2));
-        }
-        for (int index = 0; index + 2 < hanText.length() && terms.size() < gramLimit; index++) {
-            terms.add(hanText.substring(index, index + 3));
-        }
-        return new ArrayList<>(terms);
-    }
-
-    private int scoreEvidenceItem(String question, List<String> terms, CreatorFeedbackItemRecord item) {
-        String content = TextUtil.trimToDefault(item.getContent(), "").toLowerCase(Locale.ROOT);
-        String normalizedQuestion = TextUtil.trimToDefault(question, "").toLowerCase(Locale.ROOT);
-        int score = 0;
-        for (String term : terms) {
-            if (content.contains(term.toLowerCase(Locale.ROOT))) {
-                score += term.length() >= 3 ? 3 : 2;
-            }
-        }
-        score += scoreByQuestionIntent(normalizedQuestion, item);
-        if (item.getLikeCount() != null && item.getLikeCount() > 0) {
-            score += 1;
-        }
-        if (item.getReplyCount() != null && item.getReplyCount() > 0) {
-            score += 1;
-        }
-        return score;
-    }
-
-    private int scoreByQuestionIntent(String question, CreatorFeedbackItemRecord item) {
-        String category = TextUtil.trimToDefault(item.getCategory(), "");
-        String sentiment = TextUtil.trimToDefault(item.getSentiment(), "");
-        int score = 0;
-        if (containsAny(question, "误解", "不懂", "没理解", "看不懂")
-                && List.of("QUESTION", "QUESTION_POINT", "DOUBT", "COMPLAINT").contains(category)) {
-            score += 5;
-        }
-        if (containsAny(question, "争议", "质疑", "反对", "负面", "风险")
-                && (List.of("DOUBT", "COMPLAINT").contains(category) || "NEGATIVE".equals(sentiment))) {
-            score += 5;
-        }
-        if (containsAny(question, "问题", "为什么", "怎么", "提问")
-                && List.of("QUESTION", "QUESTION_POINT").contains(category)) {
-            score += 4;
-        }
-        if (containsAny(question, "建议", "下期", "选题", "改进")
-                && "SUGGESTION".equals(category)) {
-            score += 4;
-        }
-        if (containsAny(question, "喜欢", "认可", "正向", "有用")
-                && (List.of("APPROVAL", "RESONANCE", "KNOWLEDGE_REACTION").contains(category)
-                || "POSITIVE".equals(sentiment))) {
-            score += 4;
-        }
-        return score;
-    }
-
-    private Long nullableLongValue(Long value) {
-        return value == null ? 0L : value;
-    }
-
-    private Long nullableLongValue(Integer value) {
-        return value == null ? 0L : value.longValue();
-    }
-
     private CreatorFeedbackItemResponse toItemResponse(CreatorFeedbackItemRecord record) {
         return new CreatorFeedbackItemResponse(
                 record.getItemId(),
@@ -1120,42 +1026,13 @@ public class CreatorFeedbackService {
     }
 
     private String labelFor(String value) {
-        if (value == null) {
-            return "未分类";
-        }
-        return switch (value) {
-            case "COMMENT" -> "评论";
-            case "DANMAKU" -> "弹幕";
-            case "APPROVAL" -> "认可";
-            case "QUESTION" -> "提问";
-            case "DOUBT" -> "质疑";
-            case "SUGGESTION" -> "建议";
-            case "EMOTION" -> "情绪表达";
-            case "INTERACTION" -> "互动";
-            case "KNOWLEDGE_REACTION" -> "知识点反应";
-            case "QUESTION_POINT" -> "时间点疑问";
-            case "EMOTION_PEAK" -> "情绪高峰";
-            case "RESONANCE" -> "共鸣";
-            case "COMPLAINT" -> "吐槽不满";
-            case "EMPTY_MEANING" -> "无意义内容";
-            case "DUPLICATE" -> "重复内容";
-            case "POSITIVE" -> "正向";
-            case "NEGATIVE" -> "负向";
-            case "NEUTRAL" -> "中性";
-            case "OTHER" -> "其他";
-            default -> value;
-        };
+        // 标签映射已抽到 CreatorFeedbackLabelUtil，和向量索引服务共用一份，避免两处各维护一份 switch 导致标签漂移。
+        return CreatorFeedbackLabelUtil.labelFor(value);
     }
 
     private record ImportedFeedback(
             List<CreatorFeedbackItemRecord> items,
             CreatorFeedbackMetricRecord metric
-    ) {
-    }
-
-    private record ScoredFeedbackItem(
-            CreatorFeedbackItemRecord record,
-            int score
     ) {
     }
 
@@ -1278,6 +1155,13 @@ public class CreatorFeedbackService {
                 你不能声称自己实时抓取了 B 站数据，不能编造样例外的评论、弹幕、播放量或百分比。
                 如果证据不足或证据与问题无关，必须明确说明“当前样例中没有足够证据”，再给出下一步建议。
                 回答要直接、克制，优先帮助创作者决定下一期内容或互动动作。
+
+                关于证据的额外约束：
+                证据可能来自语义向量检索。即使一条证据和问题“语义相似”，也不能直接当成事实结论。
+                每个判断必须同时满足：
+                1. 证据文本本身支持该判断。
+                2. 反馈报告语境支持该判断。
+                3. 证据不足时明确说明不足，不要用相似度高来掩盖证据缺失。
                 """;
     }
 
@@ -1303,8 +1187,9 @@ public class CreatorFeedbackService {
                 回答要求：
                 1. 只基于上面的报告和证据回答。
                 2. 必须在正文中引用证据编号，例如“证据1”“证据2”。
-                3. 如果没有足够相关证据，不要强行下结论。
+                3. 不允许编造样例之外的评论、弹幕或平台数据；没有足够相关证据时不要强行下结论。
                 4. 输出中文，不要使用 Markdown 表格。
+                5. 优先回答创作者下一步可执行的动作，例如评论区回应、内容修正或下一期选题。
                 """.formatted(
                 taskRecord.getTaskName(),
                 taskRecord.getTaskId(),
@@ -1318,22 +1203,32 @@ public class CreatorFeedbackService {
         if (reportRecord == null) {
             return "当前任务还没有 LLM 反馈报告，只能基于已导入明细回答。";
         }
+        // 接入阶段 4.12 新增的高信号字段：如果追问继续只读旧总结字段，会让“为什么这样反馈、下一步怎么改”
+        // 这层升级停留在报告展示层，无法真正进入交互问答，所以把它们一并喂给追问模型。
         String reportText = """
                 整体反馈：%s
                 情绪倾向：%s
+                创作者复盘困境：%s
+                观众核心关注：%s
                 高频观点：%s
                 争议点：%s
                 误解点：%s
+                误解来源分析：%s
                 下一期建议：%s
                 互动建议：%s
+                反馈行动计划：%s
                 """.formatted(
                 TextUtil.trimToDefault(reportRecord.getFeedbackSummary(), "未解析"),
                 TextUtil.trimToDefault(reportRecord.getSentimentSummary(), "未解析"),
+                TextUtil.trimToDefault(reportRecord.getCreatorFeedbackDilemma(), "未解析"),
+                TextUtil.trimToDefault(reportRecord.getAudienceCoreConcern(), "未解析"),
                 TextUtil.trimToDefault(reportRecord.getHotTopics(), "未解析"),
                 TextUtil.trimToDefault(reportRecord.getControversyPoints(), "未解析"),
                 TextUtil.trimToDefault(reportRecord.getMisunderstandingPoints(), "未解析"),
+                TextUtil.trimToDefault(reportRecord.getMisunderstandingSourceAnalysis(), "未解析"),
                 TextUtil.trimToDefault(reportRecord.getNextContentSuggestions(), "未解析"),
-                TextUtil.trimToDefault(reportRecord.getInteractionSuggestions(), "未解析")
+                TextUtil.trimToDefault(reportRecord.getInteractionSuggestions(), "未解析"),
+                TextUtil.trimToDefault(reportRecord.getFeedbackActionPlan(), "未解析")
         );
         return TextUtil.abbreviateWithSuffix(reportText, FEEDBACK_MAX_LENGTH, "\n[报告内容过长，已截断用于追问]");
     }

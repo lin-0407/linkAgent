@@ -367,16 +367,90 @@ CREATE TABLE IF NOT EXISTS creator_feedback_item
     sentiment       VARCHAR(16)  NOT NULL DEFAULT 'NEUTRAL' COMMENT '情绪倾向：POSITIVE=正向，NEGATIVE=负向，NEUTRAL=中性',
     is_noise        TINYINT      NOT NULL DEFAULT 0 COMMENT '是否无意义内容：0=有效，1=无意义或重复内容',
     reason          VARCHAR(500)          DEFAULT NULL COMMENT '分类原因，说明当前规则为什么给出这个分类',
+    -- 阶段 4.13 新增：向量索引状态字段。放在明细表而不是新建索引任务表，是因为本阶段只需知道当前任务哪些明细已可被向量检索，避免过度设计
+    embedding_id          VARCHAR(128)          DEFAULT NULL COMMENT 'Milvus 文档 ID，默认复用 item_id，让向量文档与 MySQL 明细一一对应',
+    embedding_status      VARCHAR(32)  NOT NULL DEFAULT 'PENDING' COMMENT '向量索引状态：PENDING=待索引，INDEXED=已索引，FAILED=失败，SKIPPED=跳过；默认 PENDING 不依赖 Milvus',
+    embedding_error       VARCHAR(512)          DEFAULT NULL COMMENT '最近一次索引失败原因摘要，便于排查 Embedding 或 Milvus 异常；只存截断摘要不存完整堆栈',
+    embedding_update_time DATETIME              DEFAULT NULL COMMENT '最近一次索引状态更新时间，未索引时为空',
     create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
     UNIQUE KEY uk_item_id (item_id),
     KEY idx_task_source_category (task_id, source_type, category),
     KEY idx_task_source_like (task_id, source_type, like_count),
     KEY idx_task_sentiment (task_id, sentiment),
-    KEY idx_task_create_time (task_id, create_time)
+    KEY idx_task_create_time (task_id, create_time),
+    -- 反馈报告弹窗每次打开都会查索引状态，按 (task_id, embedding_status) 建索引让 GROUP BY 计数走索引
+    KEY idx_task_embedding_status (task_id, embedding_status)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '评论弹幕明细表';
+
+-- 已建过旧版 creator_feedback_item 的本地库需要补齐阶段 4.13 向量索引字段，避免新代码查询和写入时报未知列；条件式 ALTER 保证重复执行 init.sql 不报错。
+SET @add_embedding_id_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_feedback_item ADD COLUMN embedding_id VARCHAR(128) DEFAULT NULL COMMENT ''Milvus 文档 ID，默认复用 item_id'' AFTER reason',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_feedback_item'
+      AND COLUMN_NAME = 'embedding_id'
+);
+PREPARE add_embedding_id_stmt FROM @add_embedding_id_sql;
+EXECUTE add_embedding_id_stmt;
+DEALLOCATE PREPARE add_embedding_id_stmt;
+
+SET @add_embedding_status_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_feedback_item ADD COLUMN embedding_status VARCHAR(32) NOT NULL DEFAULT ''PENDING'' COMMENT ''向量索引状态：PENDING/INDEXED/FAILED/SKIPPED'' AFTER embedding_id',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_feedback_item'
+      AND COLUMN_NAME = 'embedding_status'
+);
+PREPARE add_embedding_status_stmt FROM @add_embedding_status_sql;
+EXECUTE add_embedding_status_stmt;
+DEALLOCATE PREPARE add_embedding_status_stmt;
+
+SET @add_embedding_error_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_feedback_item ADD COLUMN embedding_error VARCHAR(512) DEFAULT NULL COMMENT ''最近一次索引失败原因摘要'' AFTER embedding_status',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_feedback_item'
+      AND COLUMN_NAME = 'embedding_error'
+);
+PREPARE add_embedding_error_stmt FROM @add_embedding_error_sql;
+EXECUTE add_embedding_error_stmt;
+DEALLOCATE PREPARE add_embedding_error_stmt;
+
+SET @add_embedding_update_time_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_feedback_item ADD COLUMN embedding_update_time DATETIME DEFAULT NULL COMMENT ''最近一次索引状态更新时间'' AFTER embedding_error',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_feedback_item'
+      AND COLUMN_NAME = 'embedding_update_time'
+);
+PREPARE add_embedding_update_time_stmt FROM @add_embedding_update_time_sql;
+EXECUTE add_embedding_update_time_stmt;
+DEALLOCATE PREPARE add_embedding_update_time_stmt;
+
+-- 已建过旧版表的库可能缺少索引状态计数索引，条件式补建，避免重复执行报 Duplicate key name。
+SET @add_idx_task_embedding_status_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_feedback_item ADD INDEX idx_task_embedding_status (task_id, embedding_status)',
+              'SELECT 1')
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_feedback_item'
+      AND INDEX_NAME = 'idx_task_embedding_status'
+);
+PREPARE add_idx_task_embedding_status_stmt FROM @add_idx_task_embedding_status_sql;
+EXECUTE add_idx_task_embedding_status_stmt;
+DEALLOCATE PREPARE add_idx_task_embedding_status_stmt;
 -- ------------------------------------------
 -- 10.2 评论弹幕导入指标表
 --      保存导入样例携带的视频基础指标，用于评论弹幕复盘时理解反馈规模

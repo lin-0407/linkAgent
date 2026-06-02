@@ -421,3 +421,34 @@ export type CreatorFeedbackChatResult = {
   elapsedMs: number | null
   createTime: string
 }
+
+// 阶段 4.13：重建证据索引入参。两个字段都可空，为空时后端回落到 creator.feedback.rag 配置默认值。
+export type CreatorFeedbackEvidenceIndexPayload = {
+  maxItems?: number | null
+  includeNoise?: boolean | null
+}
+
+export type CreatorFeedbackEvidenceIndexResult = {
+  taskId: string
+  ragEnabled: boolean
+  vectorStoreReady: boolean
+  requestedCount: number
+  indexedCount: number
+  skippedCount: number
+  failedCount: number
+  warnings: string[]
+  createTime: string
+}
+
+// 证据索引状态：ragEnabled 区分“业务开关没开”，vectorStoreReady 区分“Milvus 基础设施没就绪”。
+export type CreatorFeedbackEvidenceIndexStatus = {
+  taskId: string
+  ragEnabled: boolean
+  vectorStoreReady: boolean
+  totalItems: number
+  indexedCount: number
+  pendingCount: number
+  failedCount: number
+  lastIndexedAt: string | null
+  retrievalMode: string
+}

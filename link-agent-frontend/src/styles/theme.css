@@ -3112,6 +3112,39 @@ textarea:focus {
   font-weight: 850;
 }
 
+/* 阶段 4.13：证据索引状态条。用浅底小卡和追问回答区区分开，但保持同一套配色。 */
+.creator-feedback-index-status {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 247, 240, 0.7);
+  border: 1px solid rgba(231, 45, 72, 0.14);
+  border-radius: 8px;
+}
+
+.creator-feedback-index-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.creator-feedback-index-line small,
+.creator-feedback-index-hint {
+  color: rgba(63, 38, 49, 0.66);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.5;
+}
+
+.creator-feedback-index-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(231, 45, 72, 0.78);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .creator-list {
   display: grid;
   gap: 10px;
