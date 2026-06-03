@@ -6,6 +6,10 @@ import com.link.linkagent.creator.report.service.CreatorReportService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -47,5 +51,23 @@ public class CreatorReportController {
             @Size(max = 64, message = "任务ID长度不能超过64个字符")
             String taskId) {
         return creatorReportService.getReport(taskId);
+    }
+
+    @GetMapping(value = "/markdown", produces = "text/markdown;charset=UTF-8")
+    public ResponseEntity<String> exportMarkdown(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            String taskId) {
+        String normalizedTaskId = taskId.trim();
+        String markdown = creatorReportService.exportMarkdown(normalizedTaskId);
+        String fileName = "creator-report-%s.md".formatted(normalizedTaskId);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/markdown;charset=UTF-8"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(fileName)
+                        .build()
+                        .toString())
+                .body(markdown);
     }
 }

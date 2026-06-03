@@ -275,7 +275,7 @@ GET  /api/creator/tasks/{taskId}/feedback/report
 预留扩展：
 
 ```text
-待补充：PDF/Markdown 导出
+待补充：PDF 导出（Markdown 导出已由阶段 4.14 补齐）
 待补充：报告版本管理
 待补充：多人协作批注
 ```

@@ -82,6 +82,32 @@ async function requestEmpty(url: string, options?: RequestInit) {
   }
 }
 
+async function requestBlob(url: string, options?: RequestInit) {
+  const response = await fetch(url, options)
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response)
+    throw new Error(message || `HTTP ${response.status}`)
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: parseDownloadFilename(response.headers.get('Content-Disposition')),
+  }
+}
+
+function parseDownloadFilename(contentDisposition: string | null) {
+  if (!contentDisposition) {
+    return ''
+  }
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].replace(/"/g, ''))
+  }
+  const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
+  return filenameMatch?.[1] ?? ''
+}
+
 function cleanPayload<T extends Record<string, unknown>>(payload: T) {
   return Object.fromEntries(
     Object.entries(payload).filter(([, value]) => {
@@ -314,6 +340,10 @@ export function getCreatorFeedbackEvidenceIndexStatus(taskId: string) {
   return requestJson<CreatorFeedbackEvidenceIndexStatus>(
     `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/evidence-index/status`,
   )
+}
+
+export function exportCreatorReportMarkdown(taskId: string) {
+  return requestBlob(`/api/creator/tasks/${encodeURIComponent(taskId)}/report/markdown`)
 }
 
 export function listCreatorEvalCases(

@@ -27,7 +27,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -91,14 +93,23 @@ public class CreatorReportService {
 
     public CreatorReportResponse getReport(String taskId) {
         getTaskRecord(taskId);
-        CreatorReportRecord record = creatorReportMapper.findByTaskId(taskId.trim())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作复盘报告不存在"));
-        return toResponse(record);
+        return toResponse(getReportRecord(taskId));
+    }
+
+    public String exportMarkdown(String taskId) {
+        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        CreatorReportRecord reportRecord = getReportRecord(taskRecord.getTaskId());
+        return buildMarkdownReport(taskRecord, reportRecord);
     }
 
     private CreatorTaskRecord getTaskRecord(String taskId) {
         return creatorTaskMapper.findTaskByTaskId(taskId.trim())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+    }
+
+    private CreatorReportRecord getReportRecord(String taskId) {
+        return creatorReportMapper.findByTaskId(taskId.trim())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作复盘报告不存在"));
     }
 
     private CreatorReportRecord buildReportRecord(String taskId, String rawOutput) {
@@ -331,6 +342,172 @@ public class CreatorReportService {
             return "字幕";
         }
         return materialType;
+    }
+
+    private String buildMarkdownReport(CreatorTaskRecord taskRecord, CreatorReportRecord reportRecord) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("# ")
+                .append(TextUtil.trimToDefault(TextUtil.collapseWhitespace(taskRecord.getTaskName()), "未命名任务"))
+                .append(" 创作复盘报告\n\n");
+        builder.append("- 任务ID：").append(taskRecord.getTaskId()).append("\n");
+        builder.append("- 报告ID：").append(reportRecord.getReportId()).append("\n");
+        builder.append("- 解析状态：").append(TextUtil.trimToDefault(reportRecord.getParseStatus(), "未提供")).append("\n");
+        builder.append("- 生成时间：").append(reportRecord.getCreateTime() == null ? "未提供" : reportRecord.getCreateTime()).append("\n");
+        builder.append("- 更新时间：").append(reportRecord.getUpdateTime() == null ? "未提供" : reportRecord.getUpdateTime()).append("\n\n");
+
+        appendMarkdownSection(builder, "内容摘要", reportRecord.getContentSummary());
+        appendMarkdownSection(builder, "核心卖点", reportRecord.getCoreSellingPoints());
+        appendMarkdownSection(builder, "标题简介复盘", reportRecord.getTitleDescriptionReview());
+        appendMarkdownSection(builder, "观众反馈摘要", reportRecord.getAudienceFeedbackSummary());
+        appendMarkdownSection(builder, "竞品对照结论", reportRecord.getCompetitorComparison());
+        appendMarkdownSection(builder, "争议与误解", reportRecord.getControversyAndMisunderstanding());
+        appendMarkdownSection(builder, "下一步动作建议", reportRecord.getNextActionSuggestions());
+        appendMarkdownSection(builder, "创作者偏好洞察", reportRecord.getCreatorPreferenceInsight());
+        appendMarkdownSection(builder, "复盘总判断", reportRecord.getOverallConclusion());
+
+        if (!"PARSED".equals(reportRecord.getParseStatus())) {
+            // 解析失败时必须保留原始输出，否则导出的报告会丢失排查 LLM 输出格式问题的关键证据。
+            appendMarkdownSection(builder, "原始输出", reportRecord.getRawOutput());
+        }
+        return builder.toString();
+    }
+
+    private void appendMarkdownSection(StringBuilder builder, String title, String value) {
+        builder.append("## ").append(title).append("\n\n");
+        builder.append(formatMarkdownValue(value)).append("\n\n");
+    }
+
+    private String formatMarkdownValue(String value) {
+        String normalized = TextUtil.trimToDefault(value, "未提供");
+        try {
+            JsonNode rootNode = objectMapper.readTree(normalized);
+            StringBuilder builder = new StringBuilder();
+            appendJsonNodeMarkdown(builder, rootNode, 0);
+            return TextUtil.trimToDefault(builder.toString(), "未提供");
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            return normalized;
+        }
+    }
+
+    private void appendJsonNodeMarkdown(StringBuilder builder, JsonNode node, int indent) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            builder.append(indent(indent)).append("未提供\n");
+            return;
+        }
+        if (node.isValueNode()) {
+            builder.append(indent(indent)).append(toMarkdownScalar(node)).append("\n");
+            return;
+        }
+        if (node.isArray()) {
+            appendJsonArrayMarkdown(builder, node, indent);
+            return;
+        }
+        appendJsonObjectMarkdown(builder, node, indent);
+    }
+
+    private void appendJsonArrayMarkdown(StringBuilder builder, JsonNode arrayNode, int indent) {
+        if (arrayNode.size() == 0) {
+            builder.append(indent(indent)).append("- 未提供\n");
+            return;
+        }
+        for (JsonNode item : arrayNode) {
+            if (item.isObject()) {
+                builder.append(indent(indent)).append("- ").append(resolveObjectSummary(item)).append("\n");
+                appendJsonObjectMarkdown(builder, item, indent + 2);
+            } else if (item.isArray()) {
+                builder.append(indent(indent)).append("-\n");
+                appendJsonArrayMarkdown(builder, item, indent + 2);
+            } else {
+                builder.append(indent(indent)).append("- ").append(toMarkdownScalar(item)).append("\n");
+            }
+        }
+    }
+
+    private void appendJsonObjectMarkdown(StringBuilder builder, JsonNode objectNode, int indent) {
+        Iterator<Map.Entry<String, JsonNode>> fields = objectNode.fields();
+        if (!fields.hasNext()) {
+            builder.append(indent(indent)).append("- 未提供\n");
+            return;
+        }
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> field = fields.next();
+            JsonNode childNode = field.getValue();
+            String label = labelForReportKey(field.getKey());
+            if (childNode == null || childNode.isNull() || childNode.isMissingNode()) {
+                builder.append(indent(indent)).append("- **").append(label).append("**：未提供\n");
+                continue;
+            }
+            if (childNode.isValueNode()) {
+                builder.append(indent(indent))
+                        .append("- **")
+                        .append(label)
+                        .append("**：")
+                        .append(toMarkdownScalar(childNode))
+                        .append("\n");
+                continue;
+            }
+            builder.append(indent(indent)).append("- **").append(label).append("**：\n");
+            appendJsonNodeMarkdown(builder, childNode, indent + 2);
+        }
+    }
+
+    private String resolveObjectSummary(JsonNode objectNode) {
+        List<String> summaryKeys = List.of(
+                "suggestion",
+                "point",
+                "title",
+                "topic",
+                "target",
+                "benchmarkConclusion",
+                "titleConclusion"
+        );
+        for (String key : summaryKeys) {
+            JsonNode valueNode = objectNode.get(key);
+            if (valueNode != null && valueNode.isValueNode()) {
+                String value = TextUtil.trimToDefault(valueNode.asText(), "");
+                if (TextUtil.hasText(value)) {
+                    return value;
+                }
+            }
+        }
+        return "条目";
+    }
+
+    private String toMarkdownScalar(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return "未提供";
+        }
+        if (node.isBoolean()) {
+            return node.asBoolean() ? "是" : "否";
+        }
+        return TextUtil.trimToDefault(node.asText(), "未提供");
+    }
+
+    private String labelForReportKey(String key) {
+        return switch (key) {
+            case "titleConclusion" -> "标题结论";
+            case "descriptionConclusion" -> "简介结论";
+            case "tagAndPartitionConclusion" -> "标签与分区结论";
+            case "riskReminder" -> "风险提醒";
+            case "benchmarkConclusion" -> "对标结论";
+            case "ownAdvantages" -> "本视频优势";
+            case "ownDisadvantages" -> "本视频短板";
+            case "differentiationStrategy" -> "差异化策略";
+            case "point" -> "问题点";
+            case "impact" -> "影响";
+            case "action" -> "处理建议";
+            case "suggestion" -> "动作建议";
+            case "reason" -> "依据";
+            case "priority" -> "优先级";
+            case "title" -> "标题";
+            case "topic" -> "选题";
+            case "target" -> "目标";
+            default -> key;
+        };
+    }
+
+    private String indent(int count) {
+        return " ".repeat(Math.max(0, count));
     }
 
     private CreatorReportResponse toResponse(CreatorReportRecord record) {

@@ -8,6 +8,7 @@ import {
   confirmWorkflowPrePublishSuggestion,
   createCreatorTask,
   createWorkflowEventSource,
+  exportCreatorReportMarkdown,
   getCreatorFeedback,
   getCreatorFeedbackDashboard,
   getCreatorFeedbackEvidenceIndexStatus,
@@ -254,6 +255,7 @@ const isAnalyzingFeedback = ref(false)
 const isAskingFeedbackChat = ref(false)
 const isRebuildingFeedbackEvidenceIndex = ref(false)
 const isLoadingFeedbackEvidenceIndexStatus = ref(false)
+const isExportingReportMarkdown = ref(false)
 const isLoadingCreatorPreferences = ref(false)
 const lastPrePublishPreferenceMode = ref<CreatorPreferenceMode>('USE_HISTORY')
 const hasPrePublishPreferenceModeSnapshot = ref(false)
@@ -1450,6 +1452,40 @@ async function askFeedbackChat() {
   } finally {
     isAskingFeedbackChat.value = false
   }
+}
+
+async function downloadReportMarkdown() {
+  if (!selectedTaskId.value || isExportingReportMarkdown.value) {
+    return
+  }
+  isExportingReportMarkdown.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const result = await exportCreatorReportMarkdown(selectedTaskId.value)
+    triggerBrowserDownload(
+      result.blob,
+      result.filename || `creator-report-${selectedTaskId.value}.md`,
+    )
+    successMessage.value = '复盘报告 Markdown 已开始下载。'
+  } catch (error) {
+    showError(error)
+  } finally {
+    isExportingReportMarkdown.value = false
+  }
+}
+
+function triggerBrowserDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  // 临时 URL 只服务本次下载，稍后释放可以兼顾下载可靠性和浏览器内存占用。
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 // 打开反馈报告弹窗时按需加载索引状态。状态查询失败不阻断追问主流程，所以走 optionalRequest 容错。
@@ -3315,11 +3351,22 @@ function showError(error: unknown) {
           <div class="creator-section-head">
             <div>
               <p class="creator-kicker">Step 4</p>
-              <h3>反馈分析结果</h3>
+              <h3>反馈与复盘结果</h3>
             </div>
-            <div v-if="feedbackReport" class="creator-action-row">
-              <span class="creator-parse-status">{{ feedbackReport.parseStatus }}</span>
+            <div v-if="selectedTaskId" class="creator-action-row">
               <button
+                type="button"
+                class="creator-secondary-action"
+                :disabled="isExportingReportMarkdown"
+                @click="downloadReportMarkdown"
+              >
+                {{ isExportingReportMarkdown ? '导出中...' : '导出复盘 Markdown' }}
+              </button>
+              <span v-if="feedbackReport" class="creator-parse-status">
+                {{ feedbackReport.parseStatus }}
+              </span>
+              <button
+                v-if="feedbackReport"
                 type="button"
                 class="creator-primary-button"
                 @click="openResultModal('feedbackReport')"
@@ -3333,7 +3380,7 @@ function showError(error: unknown) {
             <div>
               <strong>反馈分析已生成</strong>
               <span>
-                完整报告已收纳到独立结果弹窗，避免和评论弹幕输入区混在一起。
+                反馈分析收纳在独立结果弹窗；完整复盘报告生成后可直接导出 Markdown 归档。
               </span>
             </div>
             <button
@@ -3347,7 +3394,7 @@ function showError(error: unknown) {
 
           <article v-else class="creator-empty-result">
             <strong>还没有反馈报告</strong>
-            <span>先提交评论弹幕样例，然后点击“分析反馈”。</span>
+            <span>先提交评论弹幕样例并分析反馈；完整复盘报告生成后可导出 Markdown。</span>
           </article>
         </section>
       </section>
