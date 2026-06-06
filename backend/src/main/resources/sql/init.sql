@@ -1881,3 +1881,81 @@ VALUES
         '2026-05-31 09:55:00',
         '2026-05-31 09:55:00'
     );
+
+-- ------------------------------------------------------------
+-- 19. 跨分区视频案例主表（知识库父表，阶段 5.1 起用）
+--     存储「优品标杆 + 竞品」视频案例，跨创作任务复用，作为 Agent 发布前优化 / 竞品分析时可检索的领域知识底座。
+--     设计成父表是为 5.2 的「父子召回（small-to-big）」打底：召回后用本表扩展成完整案例卡片，优质评论弹幕明细见子表 creator_reference_video_item。
+--     本表不挂在某个 creator_task 下，因为案例是跨任务、跨分区共享的，归属创作者的知识库而非单次任务。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_reference_video
+(
+    id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    video_id              VARCHAR(64)     NOT NULL COMMENT '案例唯一标识（UUID）；跨任务稳定引用，同时作为子表外键和向量文档 ID 的来源',
+    bv_id                 VARCHAR(20)              DEFAULT NULL COMMENT 'B 站 BV 号；seed 内置样例或手动录入可能没有，故可空',
+    tier                  VARCHAR(16)     NOT NULL DEFAULT 'BENCHMARK' COMMENT '案例层级：BENCHMARK=优品标杆（榜单来源），COMPETITOR=竞品，OWN_HISTORY=创作者历史；决定检索时如何使用该案例',
+    category              VARCHAR(64)              DEFAULT NULL COMMENT '分区 / 主题，用于同赛道过滤检索；质量分也按分区归一化，缺失时不参与分区相对打分',
+    title                 VARCHAR(255)             DEFAULT NULL COMMENT '视频标题，案例卡片的语义主体之一；导入接口负责校验必填，DB 层保持宽松以容纳 seed / 手动录入',
+    description           LONGTEXT                 DEFAULT NULL COMMENT '视频简介原文，案例卡片的语义主体之一',
+    tags                  VARCHAR(512)             DEFAULT NULL COMMENT '标签 JSON 数组（如 ["AI","教程"]），用于主题匹配和检索过滤',
+    view_count            BIGINT UNSIGNED          DEFAULT NULL COMMENT '播放量，质量打分的分母；缺失或为 0 时不打分（quality_score 置空）',
+    like_count            BIGINT UNSIGNED          DEFAULT NULL COMMENT '点赞量，质量打分互动率分子之一；离线脚本未取到时为空',
+    coin_count            BIGINT UNSIGNED          DEFAULT NULL COMMENT '投币量，质量信号最强、打分权重最高；缺失为空',
+    favorite_count        BIGINT UNSIGNED          DEFAULT NULL COMMENT '收藏量，质量打分互动率分子之一；缺失为空',
+    danmaku_count         BIGINT UNSIGNED          DEFAULT NULL COMMENT '弹幕量，质量打分互动率分子之一；缺失为空',
+    reply_count           BIGINT UNSIGNED          DEFAULT NULL COMMENT '评论量，质量打分互动率分子之一；缺失为空',
+    highlight_summary     LONGTEXT                 DEFAULT NULL COMMENT '清洗后优质评论 / 弹幕的亮点摘要，由小模型汇总，作为案例卡片语义主体之一（5.1c 生成，5.1a 为空）',
+    quality_score         DECIMAL(6, 2)            DEFAULT NULL COMMENT '分区归一化质量分（0–100，v1 公式产出）；view 缺失或分区样本不足时为空（5.1c 计算）',
+    source                VARCHAR(64)     NOT NULL DEFAULT 'seed' COMMENT '数据来源：bilibili_rank_daily / weekly / monthly=榜单，manual_bv=手动指定 BV，seed=内置样例',
+    publish_time_text     VARCHAR(64)              DEFAULT NULL COMMENT '发布时间文本；仅作展示用、不做时间运算，故存文本而非 DATETIME',
+    -- 向量索引状态字段，完全沿用 creator_feedback_item 的范式：默认 PENDING 不依赖 Milvus，5.1a 阶段全部停留在 PENDING
+    embedding_id          VARCHAR(128)             DEFAULT NULL COMMENT 'Milvus 文档 ID，默认复用 video_id，让向量文档与案例主表一一对应',
+    embedding_status      VARCHAR(32)     NOT NULL DEFAULT 'PENDING' COMMENT '向量索引状态：PENDING=待索引，INDEXED=已索引，FAILED=失败，SKIPPED=跳过；默认 PENDING 不依赖 Milvus',
+    embedding_error       VARCHAR(512)             DEFAULT NULL COMMENT '最近一次索引失败原因摘要，便于排查 Embedding 或 Milvus 异常；只存截断摘要不存完整堆栈',
+    embedding_update_time DATETIME                 DEFAULT NULL COMMENT '最近一次索引状态更新时间，未索引时为空',
+    create_time           DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time           DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted            TINYINT         NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_video_id (video_id),
+    -- 同赛道检索主路径：按分区 + 层级过滤（例如「知识区·科技」下的 BENCHMARK 案例）
+    KEY idx_category_tier (category, tier),
+    KEY idx_bv_id (bv_id),
+    -- 索引重建按状态批量扫描待索引案例，单列索引支撑 WHERE embedding_status = 'PENDING'
+    KEY idx_embedding_status (embedding_status)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '跨分区视频案例主表';
+
+-- ------------------------------------------------------------
+-- 20. 跨分区视频案例优质评论弹幕子表（知识库子表，阶段 5.1 起用）
+--     结构对标 creator_feedback_item，但外键是 video_id（跨任务）而非 task_id。
+--     只保留清洗后「非噪声且正 / 负向」的优质短文本，为 5.2 的父子召回（small-to-big）提供可被精确召回的子文档。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_reference_video_item
+(
+    id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    item_id               VARCHAR(64)  NOT NULL COMMENT '明细唯一标识（UUID）',
+    video_id              VARCHAR(64)  NOT NULL COMMENT '关联 creator_reference_video.video_id；跨创作任务，不挂在某个 task 下',
+    source_type           VARCHAR(16)  NOT NULL COMMENT '来源类型：COMMENT=评论，DANMAKU=弹幕',
+    content               LONGTEXT     NOT NULL COMMENT '评论或弹幕原文，来自离线脚本产出的原始全量，入库时清洗筛选',
+    sentiment             VARCHAR(16)  NOT NULL DEFAULT 'NEUTRAL' COMMENT '情绪倾向：POSITIVE=正向，NEGATIVE=负向，NEUTRAL=中性；本表只落 POSITIVE / NEGATIVE（中性灌水在清洗时丢弃）',
+    is_noise              TINYINT      NOT NULL DEFAULT 0 COMMENT '是否无意义内容：0=有效，1=无意义或重复；本表只落 0，保留字段以便排查清洗逻辑',
+    like_count            BIGINT UNSIGNED       DEFAULT NULL COMMENT '评论点赞量，点赞越多通常代表更多观众共鸣；弹幕或缺失为空',
+    reply_count           INT UNSIGNED          DEFAULT NULL COMMENT '评论回复量，回复越多通常代表更多互动或争议；弹幕或缺失为空',
+    occur_time_text       VARCHAR(64)           DEFAULT NULL COMMENT '弹幕出现时间或评论发布时间文本，用于证据展示',
+    reason                VARCHAR(500)          DEFAULT NULL COMMENT '清洗分类原因，说明为什么判为此情绪或保留为优质条目',
+    -- 向量索引状态字段，完全沿用 creator_feedback_item 范式；5.1a 不接 Embedding，全部停留在 PENDING
+    embedding_id          VARCHAR(128)          DEFAULT NULL COMMENT 'Milvus 文档 ID，默认复用 item_id，让向量文档与明细一一对应',
+    embedding_status      VARCHAR(32)  NOT NULL DEFAULT 'PENDING' COMMENT '向量索引状态：PENDING=待索引，INDEXED=已索引，FAILED=失败，SKIPPED=跳过；默认 PENDING 不依赖 Milvus',
+    embedding_error       VARCHAR(512)          DEFAULT NULL COMMENT '最近一次索引失败原因摘要，便于排查 Embedding 或 Milvus 异常；只存截断摘要不存完整堆栈',
+    embedding_update_time DATETIME              DEFAULT NULL COMMENT '最近一次索引状态更新时间，未索引时为空',
+    create_time           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    is_deleted            TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_item_id (item_id),
+    -- 父子召回与情绪聚合主路径：按案例 + 情绪过滤优质条目
+    KEY idx_video_sentiment (video_id, sentiment),
+    -- 索引重建按状态批量扫描某案例下待索引明细
+    KEY idx_video_embedding_status (video_id, embedding_status)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '跨分区视频案例优质评论弹幕子表';

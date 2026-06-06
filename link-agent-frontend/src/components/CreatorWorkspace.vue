@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   deleteCreatorTask,
   analyzeCreatorFeedback,
@@ -181,6 +181,8 @@ const selectedTask = ref<CreatorTask | null>(null)
 const taskManageMode = ref<TaskManageMode>('create')
 const taskSearchQuery = ref('')
 const taskStatusFilter = ref<'ALL' | CreatorTaskSummary['status']>('ALL')
+// 任务列表是导航型信息，默认收进弹窗，避免持续挤占创作主流程空间。
+const isTaskManagerOpen = ref(false)
 const evalCases = ref<CreatorEvalCase[]>([])
 const selectedEvalCaseId = ref('')
 const selectedEvalResultId = ref('')
@@ -234,11 +236,14 @@ const workflowSession = ref<CreatorWorkflowSession | null>(null)
 const workflowMessages = ref<CreatorWorkflowMessage[]>([])
 const workflowSteps = ref<CreatorWorkflowStep[]>([])
 const workflowMessageDraft = ref('')
+const workflowMessageListRef = ref<HTMLDivElement | null>(null)
 const workflowEventSource = ref<EventSource | null>(null)
 const workflowSseText = ref('未连接')
 const selectedWorkflowMessageId = ref('')
 const restoredTaskId = ref('')
 const activeStep = ref<CreatorActiveStep>('task')
+// 当前任务详情默认折叠，让发布前优化和复盘区域成为页面第一视觉重点。
+const isCurrentTaskExpanded = ref(false)
 const isLoadingTasks = ref(false)
 const isCreatingTask = ref(false)
 const isUpdatingTask = ref(false)
@@ -261,6 +266,7 @@ const lastPrePublishPreferenceMode = ref<CreatorPreferenceMode>('USE_HISTORY')
 const hasPrePublishPreferenceModeSnapshot = ref(false)
 const guidanceEditorTarget = ref<GuidanceEditorTarget | null>(null)
 const resultModalTarget = ref<ResultModalTarget | null>(null)
+const isFeedbackChatDrawerOpen = ref(false)
 const pendingDeleteTask = ref<CreatorTaskSummary | null>(null)
 const isGuidanceBackdropPointerDown = ref(false)
 const isResultModalBackdropPointerDown = ref(false)
@@ -272,6 +278,13 @@ let successMessageTimer: number | undefined
 const selectedTaskId = computed(() => selectedTask.value?.taskId ?? '')
 const hasSelectedTask = computed(() => selectedTaskId.value.length > 0)
 const hasSelectedTaskMaterials = computed(() => (selectedTask.value?.materials.length ?? 0) > 0)
+const activeStepIndex = computed(() => {
+  const stepOrder: CreatorActiveStep[] = ['task', 'prePublish', 'feedback', 'report']
+  return Math.max(stepOrder.indexOf(activeStep.value), 0)
+})
+const activeStepStyle = computed<Record<string, string>>(() => ({
+  '--creator-active-step-index': String(activeStepIndex.value),
+}))
 const canImportTaskMaterial = computed(
   () => taskManageMode.value === 'create' || selectedTaskId.value.length > 0,
 )
@@ -591,11 +604,13 @@ onMounted(() => {
   loadGuidanceSettings()
   loadWorkspaceState()
   void refreshTasks()
+  window.addEventListener('keydown', handleWorkspaceKeydown)
 })
 
 onBeforeUnmount(() => {
   closeWorkflowEventSource()
   clearSuccessMessageTimer()
+  window.removeEventListener('keydown', handleWorkspaceKeydown)
 })
 
 watch(successMessage, (message) => {
@@ -610,12 +625,46 @@ watch(successMessage, (message) => {
   }, 2800)
 })
 
+watch(
+  () => workflowMessages.value.length,
+  () => {
+    void scrollWorkflowMessagesToBottom()
+  },
+)
+
 function clearSuccessMessageTimer() {
   if (successMessageTimer === undefined) {
     return
   }
   window.clearTimeout(successMessageTimer)
   successMessageTimer = undefined
+}
+
+function openTaskManager() {
+  pendingDeleteTask.value = null
+  isTaskManagerOpen.value = true
+}
+
+function closeTaskManager() {
+  isTaskManagerOpen.value = false
+}
+
+function handleWorkspaceKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape') {
+    return
+  }
+  if (isTaskManagerOpen.value) {
+    closeTaskManager()
+  }
+}
+
+async function scrollWorkflowMessagesToBottom() {
+  await nextTick()
+  const messageList = workflowMessageListRef.value
+  if (!messageList) {
+    return
+  }
+  messageList.scrollTop = messageList.scrollHeight
 }
 
 function closeSuccessToast() {
@@ -906,6 +955,7 @@ function resetGeneratedTaskResults() {
   feedbackChatResult.value = null
   feedbackEvidenceIndexStatus.value = null
   feedbackEvidenceIndexWarnings.value = []
+  isFeedbackChatDrawerOpen.value = false
   feedbackDashboard.value = null
   feedbackFetchResult.value = null
   feedbackImportFile.value = null
@@ -999,6 +1049,7 @@ function startCreateTask() {
   errorMessage.value = ''
   successMessage.value = ''
   activeStep.value = 'task'
+  closeTaskManager()
 }
 
 async function startEditTask(taskId: string) {
@@ -1011,6 +1062,7 @@ async function startEditTask(taskId: string) {
     fillTaskForm(task)
     activeStep.value = 'task'
     pendingDeleteTask.value = null
+    closeTaskManager()
     return
   }
 
@@ -1022,6 +1074,7 @@ async function startEditTask(taskId: string) {
   fillTaskForm(selectedTask.value)
   activeStep.value = 'task'
   pendingDeleteTask.value = null
+  closeTaskManager()
 }
 
 function cancelEditTask() {
@@ -1039,7 +1092,7 @@ function askDeleteSelectedTask() {
   if (!selectedTask.value) {
     return
   }
-  askDeleteTask({
+  pendingDeleteTask.value = {
     id: selectedTask.value.id,
     taskId: selectedTask.value.taskId,
     userId: selectedTask.value.userId,
@@ -1048,7 +1101,10 @@ function askDeleteSelectedTask() {
     materialCount: selectedTask.value.materials.length,
     createTime: selectedTask.value.createTime,
     updateTime: selectedTask.value.updateTime,
-  })
+  }
+  errorMessage.value = ''
+  successMessage.value = ''
+  isTaskManagerOpen.value = true
 }
 
 function cancelDeleteTask() {
@@ -1096,6 +1152,7 @@ async function selectTask(taskId: string) {
     await loadCreatorPreferences(task.userId)
     await loadOptionalResults(task)
     await loadPrePublishWorkflow(taskId)
+    closeTaskManager()
   } catch (error) {
     showError(error)
   }
@@ -1307,6 +1364,7 @@ async function sendWorkflowSupplement() {
     upsertWorkflowMessage(message)
     workflowMessageDraft.value = ''
     syncWorkflowSelection(message.messageId)
+    await scrollWorkflowMessagesToBottom()
     successMessage.value = '补充要求已写入工作流消息流。'
   } catch (error) {
     showError(error)
@@ -1571,6 +1629,9 @@ function resetSelectedWorkspace() {
   feedback.value = null
   feedbackReport.value = null
   feedbackChatResult.value = null
+  feedbackEvidenceIndexStatus.value = null
+  feedbackEvidenceIndexWarnings.value = []
+  isFeedbackChatDrawerOpen.value = false
   feedbackDashboard.value = null
   feedbackFetchResult.value = null
   creatorPreferences.value = []
@@ -1988,7 +2049,7 @@ function openResultModal(target: ResultModalTarget) {
   if (guidanceEditorTarget.value) {
     closeGuidanceEditor()
   }
-  // 反馈追问区在报告弹窗内，打开时刷新一次证据索引状态，保证展示的是当前任务最新索引情况。
+  // 报告弹窗只负责阅读，证据索引状态提前刷新，追问抽屉打开时可以直接展示当前任务上下文。
   if (target === 'feedbackReport') {
     feedbackEvidenceIndexWarnings.value = []
     void loadFeedbackEvidenceIndexStatus()
@@ -1998,6 +2059,28 @@ function openResultModal(target: ResultModalTarget) {
 function closeResultModal() {
   resultModalTarget.value = null
   isResultModalBackdropPointerDown.value = false
+  isFeedbackChatDrawerOpen.value = false
+}
+
+function openFeedbackChatDrawer() {
+  if (!feedbackReport.value) {
+    return
+  }
+  isFeedbackChatDrawerOpen.value = true
+  feedbackEvidenceIndexWarnings.value = []
+  void loadFeedbackEvidenceIndexStatus()
+}
+
+function closeFeedbackChatDrawer() {
+  isFeedbackChatDrawerOpen.value = false
+}
+
+function toggleFeedbackChatDrawer() {
+  if (isFeedbackChatDrawerOpen.value) {
+    closeFeedbackChatDrawer()
+    return
+  }
+  openFeedbackChatDrawer()
 }
 
 function closeDeveloperTest() {
@@ -2206,120 +2289,149 @@ function showError(error: unknown) {
         >
           开发者测试
         </button>
+        <button
+          type="button"
+          class="creator-primary-button creator-mini-button"
+          @click="openTaskManager"
+        >
+          任务管理
+        </button>
       </div>
     </header>
 
-    <div class="creator-layout">
-      <aside class="creator-task-rail">
-        <div class="creator-panel compact-panel">
-          <div class="creator-panel-title">
-            <div>
-              <span>任务管理</span>
-              <b>{{ filteredTasks.length }} / {{ taskSummaryStats.total }}</b>
-            </div>
-            <div class="creator-panel-actions">
-              <button type="button" class="creator-ghost-button" @click="startCreateTask">
-                新建
-              </button>
-              <button type="button" class="creator-ghost-button" @click="refreshTasks">
-                {{ isLoadingTasks ? '读取中' : '刷新' }}
-              </button>
-            </div>
-          </div>
-
-          <div class="creator-task-toolbar">
-            <label class="creator-task-search">
-              <span>搜索</span>
-              <input v-model="taskSearchQuery" type="search" placeholder="名称 / ID / 状态" />
-            </label>
-            <label class="creator-task-filter">
-              <span>状态</span>
-              <select v-model="taskStatusFilter">
-                <option
-                  v-for="option in taskStatusOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
-          </div>
-
-          <div class="creator-task-overview" aria-label="任务概览">
-            <span><b>{{ taskSummaryStats.draft }}</b> 草稿</span>
-            <span><b>{{ taskSummaryStats.inProgress }}</b> 推进中</span>
-            <span><b>{{ taskSummaryStats.done }}</b> 已复盘</span>
-          </div>
-
-          <div v-if="pendingDeleteTask" class="creator-delete-confirm">
-            <strong>删除「{{ pendingDeleteTaskName }}」？</strong>
-            <span>任务会从列表隐藏，历史分析产物保留在后端。</span>
-            <div class="creator-delete-actions">
-              <button
-                type="button"
-                class="creator-danger-action creator-mini-button"
-                :disabled="isDeletingTask"
-                @click="confirmDeleteTask"
-              >
-                {{ isDeletingTask ? '删除中' : '确认删除' }}
-              </button>
-              <button
-                type="button"
-                class="creator-ghost-button creator-mini-button"
-                :disabled="isDeletingTask"
-                @click="cancelDeleteTask"
-              >
-                取消
-              </button>
-            </div>
-          </div>
-
-          <div class="creator-task-list">
-            <article
-              v-for="task in filteredTasks"
-              :key="task.taskId"
-              class="creator-task-item"
-              :class="{ active: task.taskId === selectedTaskId }"
-            >
-              <button type="button" class="creator-task-select" @click="selectTask(task.taskId)">
-                <strong>{{ task.taskName }}</strong>
-                <span>{{ statusLabel(task.status) }} · {{ task.materialCount }} 份材料</span>
-                <small>{{ shortId(task.taskId) }} · {{ formatDate(task.updateTime) }}</small>
-              </button>
-              <div class="creator-task-actions">
-                <button
-                  type="button"
-                  class="creator-ghost-button creator-mini-button"
-                  @click="selectTask(task.taskId)"
-                >
-                  查看
+    <Teleport to="body">
+      <Transition name="creator-modal">
+        <div
+          v-if="isTaskManagerOpen"
+          class="creator-modal-backdrop creator-task-manager-backdrop"
+          @click.self="closeTaskManager"
+        >
+          <section
+            class="creator-task-manager-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="creator-task-manager-title"
+          >
+            <header class="creator-result-modal-head creator-task-manager-head">
+              <div>
+                <span>任务管理</span>
+                <h3 id="creator-task-manager-title">
+                  {{ filteredTasks.length }} / {{ taskSummaryStats.total }}
+                </h3>
+              </div>
+              <div class="creator-panel-actions">
+                <button type="button" class="creator-ghost-button" @click="startCreateTask">
+                  新建
                 </button>
-                <button
-                  type="button"
-                  class="creator-secondary-action creator-mini-button"
-                  @click="startEditTask(task.taskId)"
-                >
-                  编辑
+                <button type="button" class="creator-ghost-button" @click="refreshTasks">
+                  {{ isLoadingTasks ? '读取中' : '刷新' }}
                 </button>
-                <button
-                  type="button"
-                  class="creator-danger-action creator-mini-button"
-                  @click="askDeleteTask(task)"
-                >
-                  删除
+                <button type="button" class="creator-ghost-button" @click="closeTaskManager">
+                  关闭
                 </button>
               </div>
-            </article>
-            <p v-if="!isLoadingTasks && tasks.length === 0" class="creator-muted">
-              还没有创作任务，先新建一个。
-            </p>
-            <p v-else-if="!isLoadingTasks && filteredTasks.length === 0" class="creator-muted">
-              没有匹配当前筛选条件的任务。
-            </p>
-          </div>
-        </div>
+            </header>
 
+            <div class="creator-task-manager-body">
+              <div class="creator-task-toolbar">
+                <label class="creator-task-search">
+                  <span>搜索</span>
+                  <input v-model="taskSearchQuery" type="search" placeholder="名称 / ID / 状态" />
+                </label>
+                <label class="creator-task-filter">
+                  <span>状态</span>
+                  <select v-model="taskStatusFilter">
+                    <option
+                      v-for="option in taskStatusOptions"
+                      :key="option.value"
+                      :value="option.value"
+                    >
+                      {{ option.label }}
+                    </option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="creator-task-overview" aria-label="任务概览">
+                <span><b>{{ taskSummaryStats.draft }}</b> 草稿</span>
+                <span><b>{{ taskSummaryStats.inProgress }}</b> 推进中</span>
+                <span><b>{{ taskSummaryStats.done }}</b> 已复盘</span>
+              </div>
+
+              <div v-if="pendingDeleteTask" class="creator-delete-confirm">
+                <strong>删除「{{ pendingDeleteTaskName }}」？</strong>
+                <span>任务会从列表隐藏，历史分析产物保留在后端。</span>
+                <div class="creator-delete-actions">
+                  <button
+                    type="button"
+                    class="creator-danger-action creator-mini-button"
+                    :disabled="isDeletingTask"
+                    @click="confirmDeleteTask"
+                  >
+                    {{ isDeletingTask ? '删除中' : '确认删除' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="creator-ghost-button creator-mini-button"
+                    :disabled="isDeletingTask"
+                    @click="cancelDeleteTask"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+
+              <div class="creator-task-list creator-task-manager-list">
+                <article
+                  v-for="task in filteredTasks"
+                  :key="task.taskId"
+                  class="creator-task-item"
+                  :class="{ active: task.taskId === selectedTaskId }"
+                >
+                  <button type="button" class="creator-task-select" @click="selectTask(task.taskId)">
+                    <strong>{{ task.taskName }}</strong>
+                    <span>{{ statusLabel(task.status) }} · {{ task.materialCount }} 份材料</span>
+                    <small>{{ shortId(task.taskId) }} · {{ formatDate(task.updateTime) }}</small>
+                  </button>
+                  <div class="creator-task-actions">
+                    <button
+                      type="button"
+                      class="creator-ghost-button creator-mini-button"
+                      @click="selectTask(task.taskId)"
+                    >
+                      查看
+                    </button>
+                    <button
+                      type="button"
+                      class="creator-secondary-action creator-mini-button"
+                      @click="startEditTask(task.taskId)"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      class="creator-danger-action creator-mini-button"
+                      @click="askDeleteTask(task)"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </article>
+                <p v-if="!isLoadingTasks && tasks.length === 0" class="creator-muted">
+                  还没有创作任务，先新建一个。
+                </p>
+                <p v-else-if="!isLoadingTasks && filteredTasks.length === 0" class="creator-muted">
+                  没有匹配当前筛选条件的任务。
+                </p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <div class="creator-layout">
+      <aside class="creator-task-rail">
         <div v-if="selectedTask" class="creator-panel compact-panel">
           <div class="creator-panel-title">
             <div>
@@ -2336,6 +2448,13 @@ function showError(error: unknown) {
               </button>
               <button
                 type="button"
+                class="creator-ghost-button creator-mini-button"
+                @click="isCurrentTaskExpanded = !isCurrentTaskExpanded"
+              >
+                {{ isCurrentTaskExpanded ? '收起' : '展开' }}
+              </button>
+              <button
+                type="button"
                 class="creator-danger-action creator-mini-button"
                 @click="askDeleteSelectedTask"
               >
@@ -2348,18 +2467,34 @@ function showError(error: unknown) {
             <span>{{ selectedTask.materials.length }} 份材料</span>
             <span>{{ formatDate(selectedTask.updateTime) }}</span>
           </div>
-          <code class="creator-task-id">{{ selectedTask.taskId }}</code>
-          <div class="creator-material-list">
+          <code v-if="isCurrentTaskExpanded" class="creator-task-id">{{ selectedTask.taskId }}</code>
+          <div v-if="isCurrentTaskExpanded" class="creator-material-list">
             <article v-for="material in materialPreview" :key="material.id">
               <strong>{{ material.label }}</strong>
               <p>{{ material.content }}</p>
             </article>
           </div>
         </div>
+        <div v-else class="creator-panel compact-panel creator-task-empty-panel">
+          <div class="creator-panel-title">
+            <div>
+              <span>当前任务</span>
+              <b>未选择</b>
+            </div>
+          </div>
+          <p class="creator-muted">打开任务管理选择历史任务，或直接在右侧创建新任务。</p>
+          <button type="button" class="creator-primary-button" @click="openTaskManager">
+            打开任务管理
+          </button>
+        </div>
       </aside>
 
       <section class="creator-main">
-        <nav class="creator-tabs" aria-label="Creator workflow tabs">
+        <nav
+          class="creator-tabs"
+          aria-label="Creator workflow tabs"
+          :style="activeStepStyle"
+        >
           <button
             type="button"
             :class="{ active: activeStep === 'task' }"
@@ -2944,7 +3079,7 @@ function showError(error: unknown) {
                 </div>
               </header>
 
-              <div class="creator-workflow-message-list">
+              <div ref="workflowMessageListRef" class="creator-workflow-message-list">
                 <button
                   v-for="message in workflowMessages"
                   :key="message.messageId"
@@ -3409,6 +3544,10 @@ function showError(error: unknown) {
     >
       <section
         class="creator-result-modal"
+        :class="{
+          'with-feedback-drawer':
+            resultModalTarget === 'feedbackReport' && isFeedbackChatDrawerOpen,
+        }"
         role="dialog"
         aria-modal="true"
         :aria-label="resultModalTitle"
@@ -3418,9 +3557,19 @@ function showError(error: unknown) {
             <p class="creator-kicker">阶段结果</p>
             <h3>{{ resultModalTitle }}</h3>
           </div>
-          <button type="button" class="creator-ghost-button" @click="closeResultModal">
-            关闭
-          </button>
+          <div class="creator-panel-actions">
+            <button
+              v-if="resultModalTarget === 'feedbackReport'"
+              type="button"
+              class="creator-secondary-action"
+              @click="toggleFeedbackChatDrawer"
+            >
+              {{ isFeedbackChatDrawerOpen ? '收起追问' : '追问报告' }}
+            </button>
+            <button type="button" class="creator-ghost-button" @click="closeResultModal">
+              关闭
+            </button>
+          </div>
         </header>
 
         <div class="creator-result-modal-body">
@@ -3950,97 +4099,133 @@ function showError(error: unknown) {
                 </div>
               </section>
 
-              <section class="creator-report-group">
-                <h4 class="creator-report-group-title">反馈追问</h4>
-                <article class="creator-result-block creator-feedback-chat">
-                  <div v-if="feedbackEvidenceIndexStatus" class="creator-feedback-index-status">
-                    <div
-                      v-if="feedbackEvidenceIndexStatus.ragEnabled && feedbackEvidenceIndexStatus.vectorStoreReady"
-                      class="creator-feedback-index-line"
-                    >
-                      <small>
-                        证据索引 · 已索引
-                        {{ feedbackEvidenceIndexStatus.indexedCount }}/{{ feedbackEvidenceIndexStatus.totalItems }}
-                        · 待索引 {{ feedbackEvidenceIndexStatus.pendingCount }}
-                        <template v-if="feedbackEvidenceIndexStatus.failedCount">
-                          · 失败 {{ feedbackEvidenceIndexStatus.failedCount }}
-                        </template>
-                        · {{ retrievalModeLabel(feedbackEvidenceIndexStatus.retrievalMode) }}
-                        <template v-if="feedbackEvidenceIndexStatus.lastIndexedAt">
-                          · 最近索引 {{ formatDate(feedbackEvidenceIndexStatus.lastIndexedAt) }}
-                        </template>
-                      </small>
-                      <button
-                        type="button"
-                        class="creator-ghost-button"
-                        :disabled="isRebuildingFeedbackEvidenceIndex"
-                        @click="rebuildFeedbackEvidenceIndex"
-                      >
-                        {{ isRebuildingFeedbackEvidenceIndex ? '索引中...' : '重建证据索引' }}
-                      </button>
-                    </div>
-                    <small v-else class="creator-feedback-index-hint">
-                      当前使用 SQL 证据检索（{{
-                        feedbackEvidenceIndexStatus.ragEnabled ? 'Milvus 未就绪' : 'RAG 未启用'
-                      }}），无需配置 Milvus 即可追问。
-                    </small>
-                    <ul
-                      v-if="feedbackEvidenceIndexWarnings.length"
-                      class="creator-feedback-index-warnings"
-                    >
-                      <li v-for="(warning, index) in feedbackEvidenceIndexWarnings" :key="index">
-                        {{ warning }}
-                      </li>
-                    </ul>
-                  </div>
-                  <div class="creator-feedback-chat-form">
-                    <textarea
-                      v-model="feedbackChatForm.question"
-                      maxlength="1000"
-                      placeholder="例如：为什么认为观众误解了 Agent 工具调用？"
-                      @keydown.ctrl.enter.prevent="askFeedbackChat"
-                    ></textarea>
-                    <button
-                      type="button"
-                      class="creator-primary-button"
-                      :disabled="!canAskFeedbackChat"
-                      @click="askFeedbackChat"
-                    >
-                      {{ isAskingFeedbackChat ? '生成中...' : '追问' }}
-                    </button>
-                  </div>
-                  <div v-if="feedbackChatResult" class="creator-feedback-chat-answer">
-                    <strong>回答</strong>
-                    <p>{{ feedbackChatResult.answer }}</p>
-                    <small>
-                      当前任务证据 · {{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
-                      {{ retrievalModeLabel(feedbackChatResult.retrievalMode) }} ·
-                      {{ feedbackChatResult.modelName || '未记录模型' }} · Token
-                      {{ formatMetric(feedbackChatResult.totalTokens) }} ·
-                      {{ formatMetric(feedbackChatResult.elapsedMs) }} ms
-                    </small>
-                    <div
-                      v-if="feedbackChatResult.evidenceItems.length"
-                      class="creator-feedback-item-list"
-                    >
-                      <section
-                        v-for="(item, index) in feedbackChatResult.evidenceItems"
-                        :key="item.itemId"
-                      >
-                        <small>
-                          证据{{ index + 1 }} · {{ item.sourceLabel }} ·
-                          {{ item.categoryLabel }} · {{ item.sentimentLabel }}
-                          <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
-                        </small>
-                        <p>{{ item.content }}</p>
-                      </section>
-                    </div>
-                  </div>
-                </article>
-              </section>
             </div>
           </template>
         </div>
+
+        <aside
+          v-if="resultModalTarget === 'feedbackReport' && isFeedbackChatDrawerOpen"
+          class="creator-feedback-drawer"
+          aria-label="反馈追问"
+        >
+      <header class="creator-feedback-drawer-head">
+        <div>
+          <p class="creator-kicker">Ask Report</p>
+          <h3>反馈追问</h3>
+        </div>
+        <button type="button" class="creator-ghost-button" @click="closeFeedbackChatDrawer">
+          关闭
+        </button>
+      </header>
+
+      <div class="creator-feedback-drawer-body">
+        <section class="message-list creator-feedback-chat-thread" aria-label="反馈追问对话">
+          <template v-if="feedbackChatResult">
+            <div class="message user">
+              <div class="bubble">
+                <p>{{ feedbackChatResult.question }}</p>
+              </div>
+              <div class="avatar">U</div>
+            </div>
+            <div class="message assistant">
+              <div class="avatar">A</div>
+              <div class="bubble">
+                <p>{{ feedbackChatResult.answer }}</p>
+              </div>
+            </div>
+          </template>
+          <div v-else class="creator-feedback-chat-empty">
+            <strong>还没有追问</strong>
+            <p>输入一个和本次反馈报告相关的问题，系统会结合报告与评论弹幕证据回答。</p>
+          </div>
+        </section>
+
+        <details
+          v-if="feedbackChatResult && feedbackChatResult.evidenceItems.length > 0"
+          class="creator-feedback-drawer-details"
+        >
+          <summary>
+            依据
+            <small>{{ feedbackChatResult.evidenceItems.length }} 条证据</small>
+          </summary>
+          <div class="creator-feedback-evidence-list">
+            <section
+              v-for="(item, index) in feedbackChatResult.evidenceItems"
+              :key="item.itemId"
+            >
+              <small>
+                证据{{ index + 1 }} · {{ item.sourceLabel }} ·
+                {{ item.categoryLabel }} · {{ item.sentimentLabel }}
+                <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
+              </small>
+              <p>{{ item.content }}</p>
+            </section>
+          </div>
+        </details>
+
+        <details class="creator-feedback-drawer-details">
+          <summary>
+            技术信息
+            <small>{{ feedbackEvidenceIndexStatus ? retrievalModeLabel(feedbackEvidenceIndexStatus.retrievalMode) : '未读取' }}</small>
+          </summary>
+          <div class="creator-feedback-tech-panel">
+            <template v-if="feedbackEvidenceIndexStatus">
+              <p
+                v-if="feedbackEvidenceIndexStatus.ragEnabled && feedbackEvidenceIndexStatus.vectorStoreReady"
+              >
+                证据索引：已索引
+                {{ feedbackEvidenceIndexStatus.indexedCount }}/{{ feedbackEvidenceIndexStatus.totalItems }}，
+                待索引 {{ feedbackEvidenceIndexStatus.pendingCount }}。
+              </p>
+              <p v-else>
+                当前使用 SQL 证据检索（{{
+                  feedbackEvidenceIndexStatus.ragEnabled ? 'Milvus 未就绪' : 'RAG 未启用'
+                }}）。
+              </p>
+              <button
+                type="button"
+                class="creator-ghost-button creator-mini-button"
+                :disabled="isRebuildingFeedbackEvidenceIndex"
+                @click="rebuildFeedbackEvidenceIndex"
+              >
+                {{ isRebuildingFeedbackEvidenceIndex ? '索引中...' : '重建证据索引' }}
+              </button>
+            </template>
+            <p v-else>
+              {{ isLoadingFeedbackEvidenceIndexStatus ? '正在读取证据索引状态...' : '暂未读取证据索引状态。' }}
+            </p>
+            <p v-if="feedbackChatResult">
+              {{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
+              {{ retrievalModeLabel(feedbackChatResult.retrievalMode) }} ·
+              {{ feedbackChatResult.modelName || '未记录模型' }} · Token
+              {{ formatMetric(feedbackChatResult.totalTokens) }} ·
+              {{ formatMetric(feedbackChatResult.elapsedMs) }} ms
+            </p>
+            <ul v-if="feedbackEvidenceIndexWarnings.length">
+              <li v-for="(warning, index) in feedbackEvidenceIndexWarnings" :key="index">
+                {{ warning }}
+              </li>
+            </ul>
+          </div>
+        </details>
+      </div>
+
+      <form class="creator-feedback-chat-composer" @submit.prevent="askFeedbackChat">
+        <textarea
+          v-model="feedbackChatForm.question"
+          maxlength="1000"
+          placeholder="向当前报告追问..."
+          @keydown.ctrl.enter.prevent="askFeedbackChat"
+        ></textarea>
+        <button
+          type="submit"
+          class="creator-primary-button"
+          :disabled="!canAskFeedbackChat"
+        >
+          {{ isAskingFeedbackChat ? '生成中...' : '追问' }}
+        </button>
+      </form>
+        </aside>
       </section>
     </div>
 

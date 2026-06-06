@@ -44,7 +44,7 @@ spring:
         # 首次建集合设 true，建好后改回 false，避免每次启动都尝试初始化 schema
         initialize-schema: ${MILVUS_INITIALIZE_SCHEMA:false}
         # 必须与 LLM_EMBEDDING_DIMENSIONS 一致，否则写入维度与集合维度冲突
-        embedding-dimension: ${MILVUS_EMBEDDING_DIMENSION:1536}
+        embedding-dimension: ${MILVUS_EMBEDDING_DIMENSION:1024}
     openai:
       api-key: ${LLM_API_KEY}
       base-url: ${LLM_BASE_URL}
@@ -120,6 +120,26 @@ creator:
       max-index-items: ${CREATOR_FEEDBACK_RAG_MAX_INDEX_ITEMS:300}
       # 重建索引时是否默认包含噪声明细
       include-noise-default: ${CREATOR_FEEDBACK_RAG_INCLUDE_NOISE_DEFAULT:false}
+
+# ========== 跨分区视频案例知识库 RAG（阶段 5.1） ==========
+# 与反馈 RAG 完全独立的开关，默认关闭：关闭时不连 Milvus、不调 Embedding，案例导入与列表照常工作（不依赖向量库）。
+# Milvus 连接复用上面的 MILVUS_* 同一套环境变量；只是集合名与维度不同，做到专用集合物理隔离。
+knowledge:
+  rag:
+    enabled: ${KNOWLEDGE_RAG_ENABLED:false}
+    collection-name: ${KNOWLEDGE_RAG_COLLECTION_NAME:creator_reference_video}
+    # 必须与 Embedding 输出维度严格一致；启用知识库时请把 LLM_EMBEDDING_DIMENSIONS 一并设为 1024（Qwen text-embedding-v4 推荐值）
+    embedding-dimension: ${LLM_EMBEDDING_DIMENSIONS:1024}
+    # Qwen text-embedding-v3/v4 OpenAI 兼容模式单批硬上限为 10，知识库索引批次不能照抄反馈侧的 25
+    index-batch-size: ${KNOWLEDGE_RAG_INDEX_BATCH_SIZE:10}
+    # 首次启用时自动建集合；建好后可设 false 省去每次启动的 schema 检查
+    initialize-schema: ${KNOWLEDGE_RAG_INITIALIZE_SCHEMA:true}
+    milvus:
+      host: ${MILVUS_HOST:localhost}
+      port: ${MILVUS_PORT:19530}
+      username: ${MILVUS_USERNAME:}
+      password: ${MILVUS_PASSWORD:}
+      database-name: ${MILVUS_DATABASE_NAME:default}
 
 # ========== Langfuse (可观测) ==========
 # langfuse:

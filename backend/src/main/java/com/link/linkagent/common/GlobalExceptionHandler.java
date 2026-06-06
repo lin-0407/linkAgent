@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -50,6 +51,19 @@ public class GlobalExceptionHandler {
                 .body(new ApiErrorResponse(
                         HttpStatus.BAD_REQUEST.value(),
                         exception.getMessage(),
+                        request.getRequestURI()
+                ));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiErrorResponse> handleHttpMessageNotReadable(HttpMessageNotReadableException exception,
+                                                                         HttpServletRequest request) {
+        // 请求体解析失败通常是调用方 JSON 写法或 Content-Type 不正确，返回 400 能让前端明确这是入参问题。
+        log.warn("请求体解析失败: path={}, message={}", request.getRequestURI(), exception.getMessage());
+        return ResponseEntity.badRequest()
+                .body(new ApiErrorResponse(
+                        HttpStatus.BAD_REQUEST.value(),
+                        "请求体格式不正确，请确认使用合法 JSON：字段名和字符串必须使用双引号，并设置 Content-Type=application/json。",
                         request.getRequestURI()
                 ));
     }
