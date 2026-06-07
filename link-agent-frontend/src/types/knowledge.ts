@@ -82,3 +82,22 @@ export type ReferenceVideoIndexResult = {
   warnings: string[]
   createTime: string
 }
+
+// 案例检索入参（5.2a；5.2b 增补 strategy）：query 必填，tier / category / strategy 可选；topK 用后端默认。
+export type ReferenceVideoSearchPayload = {
+  query: string
+  tier?: string
+  category?: string
+  // 查询增强策略（5.2b，可选）：NONE/REWRITE/HYDE/MULTI_QUERY；为空走后端配置默认（默认 REWRITE）。
+  strategy?: string
+}
+
+// 案例检索响应（5.2a；5.2b 增补 strategy / enhancedQueries）：mode 回显实际检索模式；
+// strategy 为实际生效策略（SQL 路径为 NONE）；enhancedQueries 为实际用于向量检索的扩展查询（NONE / SQL 为空）；
+// items 复用案例卡片类型。
+export type ReferenceVideoSearchResult = {
+  mode: string
+  strategy: string
+  enhancedQueries: string[]
+  items: ReferenceVideo[]
+}

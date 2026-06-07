@@ -5,6 +5,8 @@ import type {
   ReferenceVideoIndexStatus,
   ReferenceVideoListQuery,
   ReferenceVideoPage,
+  ReferenceVideoSearchPayload,
+  ReferenceVideoSearchResult,
 } from '@/types/knowledge'
 
 // 案例库接口封装。requestJson / readErrorMessage 与 api/creator.ts 同款：
@@ -80,6 +82,27 @@ export function rebuildReferenceVideoIndex(maxItems?: number) {
     body.maxItems = maxItems
   }
   return requestJson<ReferenceVideoIndexResult>('/api/knowledge/reference-videos/index/rebuild', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+// 案例检索：query 必填；空的 tier / category / strategy 不下发，交给后端按「不过滤 / 配置默认」处理（与 fetchImport 同约定）。
+export function searchReferenceVideos(payload: ReferenceVideoSearchPayload) {
+  const body: Record<string, string> = { query: payload.query.trim() }
+  const tier = payload.tier?.trim()
+  const category = payload.category?.trim()
+  const strategy = payload.strategy?.trim()
+  if (tier) {
+    body.tier = tier
+  }
+  if (category) {
+    body.category = category
+  }
+  if (strategy) {
+    body.strategy = strategy
+  }
+  return requestJson<ReferenceVideoSearchResult>('/api/knowledge/reference-videos/search', {
     method: 'POST',
     body: JSON.stringify(body),
   })

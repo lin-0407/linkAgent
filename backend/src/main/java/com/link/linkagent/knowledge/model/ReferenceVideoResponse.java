@@ -31,4 +31,33 @@ public record ReferenceVideoResponse(
         LocalDateTime createTime,
         LocalDateTime updateTime
 ) {
+
+    /**
+     * 由数据库记录对象组装列表项响应。供检索链路（5.2）复用，避免在多处重复手写 21 个字段的构造。
+     */
+    public static ReferenceVideoResponse from(ReferenceVideoRecord record) {
+        return new ReferenceVideoResponse(
+                record.getId(),
+                record.getVideoId(),
+                record.getBvId(),
+                record.getTier(),
+                record.getCategory(),
+                record.getTitle(),
+                record.getDescription(),
+                record.getTags(),
+                record.getViewCount(),
+                record.getLikeCount(),
+                record.getCoinCount(),
+                record.getFavoriteCount(),
+                record.getDanmakuCount(),
+                record.getReplyCount(),
+                record.getHighlightSummary(),
+                record.getQualityScore(),
+                record.getSource(),
+                record.getPublishTimeText(),
+                record.getEmbeddingStatus(),
+                record.getCreateTime(),
+                record.getUpdateTime()
+        );
+    }
 }

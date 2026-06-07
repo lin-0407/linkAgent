@@ -59,6 +59,11 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-vector-store-milvus</artifactId>
         </dependency>
+        <!-- Modular RAG 查询变换组件（5.2b 查询增强：RewriteQueryTransformer / MultiQueryExpander），版本由 spring-ai-bom 统一管理 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-rag</artifactId>
+        </dependency>
 
         <!-- ===== 数据层 ===== -->
         <!-- Redis 短期记忆 -->

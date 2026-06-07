@@ -7,8 +7,11 @@ import com.link.linkagent.knowledge.model.ReferenceVideoIndexRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexStatusResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoPageResponse;
+import com.link.linkagent.knowledge.model.ReferenceVideoSearchRequest;
+import com.link.linkagent.knowledge.model.ReferenceVideoSearchResponse;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceFetchService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceIndexService;
+import com.link.linkagent.knowledge.service.KnowledgeReferenceRetrievalService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceVideoService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -35,13 +38,16 @@ public class KnowledgeReferenceVideoController {
     private final KnowledgeReferenceVideoService knowledgeReferenceVideoService;
     private final KnowledgeReferenceFetchService knowledgeReferenceFetchService;
     private final KnowledgeReferenceIndexService knowledgeReferenceIndexService;
+    private final KnowledgeReferenceRetrievalService knowledgeReferenceRetrievalService;
 
     public KnowledgeReferenceVideoController(KnowledgeReferenceVideoService knowledgeReferenceVideoService,
                                              KnowledgeReferenceFetchService knowledgeReferenceFetchService,
-                                             KnowledgeReferenceIndexService knowledgeReferenceIndexService) {
+                                             KnowledgeReferenceIndexService knowledgeReferenceIndexService,
+                                             KnowledgeReferenceRetrievalService knowledgeReferenceRetrievalService) {
         this.knowledgeReferenceVideoService = knowledgeReferenceVideoService;
         this.knowledgeReferenceFetchService = knowledgeReferenceFetchService;
         this.knowledgeReferenceIndexService = knowledgeReferenceIndexService;
+        this.knowledgeReferenceRetrievalService = knowledgeReferenceRetrievalService;
     }
 
     /**
@@ -61,6 +67,16 @@ public class KnowledgeReferenceVideoController {
     public ReferenceVideoImportResponse fetchAndImportReferenceVideo(
             @Valid @RequestBody ReferenceVideoFetchImportRequest request) {
         return knowledgeReferenceFetchService.fetchAndImport(request);
+    }
+
+    /**
+     * 案例库检索（5.2a）：dense 语义检索父表案例卡片 + SQL 关键词兜底，响应回显本次实际检索模式。
+     * RAG 关闭或向量库未就绪时不报错，正常返回 mode=SQL（优雅降级，非错误）；非法 tier / 空 query / 超长 → 400。
+     */
+    @PostMapping("/search")
+    public ReferenceVideoSearchResponse searchReferenceVideos(
+            @Valid @RequestBody ReferenceVideoSearchRequest request) {
+        return knowledgeReferenceRetrievalService.search(request);
     }
 
     /**

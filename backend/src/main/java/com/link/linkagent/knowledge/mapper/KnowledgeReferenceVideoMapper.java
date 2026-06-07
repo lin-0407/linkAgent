@@ -176,6 +176,58 @@ public interface KnowledgeReferenceVideoMapper {
                               @Param("tier") String tier);
 
     /**
+     * 按 video_id 批量回查父表案例（5.2a 检索回查事实源）。
+     * 向量库只返回 videoId，必须用 is_deleted=0 回查父表拿真身：向量库里的旧批次/已删案例自然被过滤掉。
+     * 顺序由调用方按向量相似度重排（MySQL IN 不保证顺序），故这里不加 ORDER BY。调用方需保证 videoIds 非空。
+     * 复用 listReferenceVideos 的 ReferenceVideoRecordMap，故 SELECT 列须与之保持一致。
+     */
+    @Select("""
+            <script>
+            SELECT id, video_id, bv_id, tier, category, title, description, tags,
+                   view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
+                   highlight_summary, quality_score, source, publish_time_text,
+                   embedding_status, create_time, update_time
+            FROM creator_reference_video
+            WHERE is_deleted = 0
+              AND video_id IN
+              <foreach item='vid' collection='videoIds' open='(' separator=',' close=')'>
+                  #{vid}
+              </foreach>
+            </script>
+            """)
+    @ResultMap("ReferenceVideoRecordMap")
+    List<ReferenceVideoRecord> listByVideoIds(@Param("videoIds") List<String> videoIds);
+
+    /**
+     * SQL 关键词兜底检索父表（5.2a）：RAG 关闭或向量库不可用时走这里。
+     * keyword 为空则不加关键词条件（退化为「按质量分取前 N」）；title/description/highlight_summary 任一命中即返回。
+     * 排序 quality_score DESC：5.1c 的归一化质量分让兜底也优先高质量案例；MySQL 中 NULL 在 DESC 下排最后（未打分案例垫底）。
+     * 刻意不做中文分词打分：父表是「案例卡片」粒度、量级小，整串 LIKE + 质量分排序已够；真正的关键词召回留给 5.2d 原生 BM25。
+     * 复用 listReferenceVideos 的 ReferenceVideoRecordMap，故 SELECT 列须与之保持一致。
+     */
+    @Select("""
+            SELECT id, video_id, bv_id, tier, category, title, description, tags,
+                   view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
+                   highlight_summary, quality_score, source, publish_time_text,
+                   embedding_status, create_time, update_time
+            FROM creator_reference_video
+            WHERE is_deleted = 0
+              AND (#{category} IS NULL OR category = #{category})
+              AND (#{tier} IS NULL OR tier = #{tier})
+              AND (#{keyword} IS NULL
+                   OR title LIKE CONCAT('%', #{keyword}, '%')
+                   OR description LIKE CONCAT('%', #{keyword}, '%')
+                   OR highlight_summary LIKE CONCAT('%', #{keyword}, '%'))
+            ORDER BY quality_score DESC, id DESC
+            LIMIT #{limit}
+            """)
+    @ResultMap("ReferenceVideoRecordMap")
+    List<ReferenceVideoRecord> searchByKeyword(@Param("category") String category,
+                                               @Param("tier") String tier,
+                                               @Param("keyword") String keyword,
+                                               @Param("limit") int limit);
+
+    /**
      * 按 BV 号统计未删除的案例数，用于导入时按 BV 去重（>0 即已存在，跳过本次导入）。
      */
     @Select("""

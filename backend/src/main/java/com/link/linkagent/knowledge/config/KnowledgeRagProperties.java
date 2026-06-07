@@ -1,5 +1,6 @@
 package com.link.linkagent.knowledge.config;
 
+import com.link.linkagent.knowledge.model.QueryEnhanceStrategy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -45,6 +46,16 @@ public class KnowledgeRagProperties {
     private int maxIndexItems = 200;
 
     /**
+     * 单次检索返回的候选案例上限（5.2a）。纯检索侧参数、与索引无关；接口层另有 @Max(50) 与服务层硬上限兜底。
+     */
+    private int topK = 8;
+
+    /**
+     * 向量命中数低于该值时合并 SQL 兜底（5.2a，照搬反馈侧范式），避免召回过少导致候选不足。
+     */
+    private int minVectorHitCount = 3;
+
+    /**
      * 是否在构建向量库时自动建集合。默认 true：首次启用时自动按上面的维度建出专用集合；
      * 建好后可设 false 省去每次启动的 schema 检查。
      */
@@ -54,6 +65,11 @@ public class KnowledgeRagProperties {
      * Milvus 连接参数，复用 MILVUS_* 环境变量。
      */
     private final Milvus milvus = new Milvus();
+
+    /**
+     * 查询增强（5.2b）配置：默认策略 + MULTI_QUERY 条数上限。
+     */
+    private final QueryEnhancement queryEnhancement = new QueryEnhancement();
 
     public boolean isEnabled() {
         return enabled;
@@ -95,6 +111,22 @@ public class KnowledgeRagProperties {
         this.maxIndexItems = maxIndexItems;
     }
 
+    public int getTopK() {
+        return topK;
+    }
+
+    public void setTopK(int topK) {
+        this.topK = topK;
+    }
+
+    public int getMinVectorHitCount() {
+        return minVectorHitCount;
+    }
+
+    public void setMinVectorHitCount(int minVectorHitCount) {
+        this.minVectorHitCount = minVectorHitCount;
+    }
+
     public boolean isInitializeSchema() {
         return initializeSchema;
     }
@@ -105,6 +137,10 @@ public class KnowledgeRagProperties {
 
     public Milvus getMilvus() {
         return milvus;
+    }
+
+    public QueryEnhancement getQueryEnhancement() {
+        return queryEnhancement;
     }
 
     /**
@@ -156,6 +192,35 @@ public class KnowledgeRagProperties {
 
         public void setDatabaseName(String databaseName) {
             this.databaseName = databaseName;
+        }
+    }
+
+    /**
+     * 查询增强（5.2b）配置。
+     * 默认策略 REWRITE：开启 RAG 时默认即走改写增强；设为 NONE 可显式退回 5.2a 单查询行为。
+     */
+    public static class QueryEnhancement {
+
+        /** 默认查询增强策略。默认 REWRITE（单路、最稳）；NONE 显式关闭。 */
+        private QueryEnhanceStrategy strategy = QueryEnhanceStrategy.REWRITE;
+
+        /** MULTI_QUERY 扩展查询条数上限，二次防御检索次数放大。 */
+        private int multiQueryCount = 3;
+
+        public QueryEnhanceStrategy getStrategy() {
+            return strategy;
+        }
+
+        public void setStrategy(QueryEnhanceStrategy strategy) {
+            this.strategy = strategy;
+        }
+
+        public int getMultiQueryCount() {
+            return multiQueryCount;
+        }
+
+        public void setMultiQueryCount(int multiQueryCount) {
+            this.multiQueryCount = multiQueryCount;
         }
     }
 }

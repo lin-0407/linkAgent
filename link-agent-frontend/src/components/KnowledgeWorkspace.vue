@@ -5,12 +5,14 @@ import {
   getReferenceVideoIndexStatus,
   listReferenceVideos,
   rebuildReferenceVideoIndex,
+  searchReferenceVideos,
 } from '@/api/knowledge'
 import type {
   ReferenceVideo,
   ReferenceVideoImportResult,
   ReferenceVideoIndexResult,
   ReferenceVideoIndexStatus,
+  ReferenceVideoSearchResult,
 } from '@/types/knowledge'
 
 // 案例层级选项：与后端 ALLOWED_TIERS 一致。
@@ -18,6 +20,15 @@ const TIER_OPTIONS = [
   { value: 'BENCHMARK', label: '标杆案例' },
   { value: 'COMPETITOR', label: '竞品案例' },
   { value: 'OWN_HISTORY', label: '自己历史' },
+] as const
+
+// 查询增强策略选项（5.2b）。空值 = 用后端配置默认（默认 REWRITE）；NONE = 显式不增强。
+const STRATEGY_OPTIONS = [
+  { value: '', label: '默认（后端配置）' },
+  { value: 'REWRITE', label: '查询改写' },
+  { value: 'HYDE', label: 'HyDE 假设文档' },
+  { value: 'MULTI_QUERY', label: '多查询' },
+  { value: 'NONE', label: '不增强' },
 ] as const
 
 const PAGE_SIZE = 12
@@ -46,6 +57,15 @@ const indexStatusError = ref('')
 const indexing = ref(false)
 const indexResult = ref<ReferenceVideoIndexResult | null>(null)
 const indexError = ref('')
+
+// 案例检索（5.2a）：query 必填，tier / category 为可选过滤；topK 不在前端暴露，用后端默认（knowledge.rag.top-k=8）。
+const searchQuery = ref('')
+const searchTier = ref('')
+const searchCategory = ref('')
+const searchStrategy = ref('')
+const searching = ref(false)
+const searchError = ref('')
+const searchResult = ref<ReferenceVideoSearchResult | null>(null)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
@@ -186,6 +206,58 @@ function retrievalModeLabel(mode: string) {
   return mode === 'VECTOR' ? '向量检索' : 'SQL 检索'
 }
 
+// 检索结果的实际模式标签（三态），与索引状态的两态预测 retrievalModeLabel 刻意分开：
+// 这里多一个「向量 + SQL 兜底」，对应后端向量命中不足、合并兜底补足的情况，硬复用会丢掉这个信号。
+function searchModeLabel(mode: string) {
+  switch (mode) {
+    case 'VECTOR':
+      return '向量语义检索'
+    case 'VECTOR_WITH_SQL_FALLBACK':
+      return '向量 + SQL 兜底'
+    default:
+      return 'SQL 关键词检索'
+  }
+}
+
+// 增强策略标签（5.2b）：把后端回显的实际生效策略转中文。
+function strategyLabel(strategy: string) {
+  switch (strategy) {
+    case 'REWRITE':
+      return '查询改写'
+    case 'HYDE':
+      return 'HyDE 假设文档'
+    case 'MULTI_QUERY':
+      return '多查询'
+    case 'NONE':
+      return '未增强'
+    default:
+      return strategy
+  }
+}
+
+async function submitSearch() {
+  const query = searchQuery.value.trim()
+  if (!query || searching.value) {
+    return
+  }
+  searching.value = true
+  searchError.value = ''
+  try {
+    searchResult.value = await searchReferenceVideos({
+      query,
+      tier: searchTier.value,
+      category: searchCategory.value,
+      strategy: searchStrategy.value,
+    })
+  } catch (error) {
+    // 检索失败清掉旧结果，避免把上一次命中误当本次结果展示。
+    searchResult.value = null
+    searchError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    searching.value = false
+  }
+}
+
 onMounted(() => {
   void loadList()
   void loadIndexStatus()
@@ -309,6 +381,93 @@ onMounted(() => {
       <ul v-if="indexResult && indexResult.warnings.length" class="knowledge-warnings">
         <li v-for="(warning, idx) in indexResult.warnings" :key="idx">{{ warning }}</li>
       </ul>
+    </section>
+
+    <section class="creator-section">
+      <div class="creator-section-head"><h3>案例检索</h3></div>
+      <p class="creator-inline-note">
+        用一句话按语义检索最相关的案例（如「开场如何快速留住观众」）。RAG 关闭或向量库未就绪时自动降级为关键词检索（SQL 兜底），结果上方标签会标明本次实际走的检索模式。
+      </p>
+      <div class="knowledge-toolbar">
+        <input
+          v-model="searchQuery"
+          type="text"
+          class="knowledge-search-input"
+          placeholder="想参考什么？例如：美食视频封面怎么做更吸引人"
+          :disabled="searching"
+          @keyup.enter="submitSearch"
+        />
+        <select v-model="searchTier" :disabled="searching">
+          <option value="">全部层级</option>
+          <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <input
+          v-model="searchCategory"
+          type="text"
+          placeholder="按分区筛选（可选）"
+          :disabled="searching"
+          @keyup.enter="submitSearch"
+        />
+        <select v-model="searchStrategy" :disabled="searching" title="查询增强策略">
+          <option v-for="option in STRATEGY_OPTIONS" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <button
+          type="button"
+          class="creator-primary-button"
+          :disabled="searching || !searchQuery.trim()"
+          @click="submitSearch"
+        >
+          {{ searching ? '检索中…' : '检索' }}
+        </button>
+      </div>
+
+      <div v-if="searchError" class="creator-alert error-alert">
+        <strong>检索失败</strong>
+        <span>{{ searchError }}</span>
+      </div>
+      <template v-else-if="searchResult">
+        <div class="creator-chip-list">
+          <b>检索模式 {{ searchModeLabel(searchResult.mode) }}</b>
+          <b>增强策略 {{ strategyLabel(searchResult.strategy) }}</b>
+          <b>命中 {{ searchResult.items.length }} 条</b>
+        </div>
+        <p v-if="searchResult.enhancedQueries.length" class="knowledge-enhanced">
+          <span class="knowledge-enhanced-label">扩展查询</span>
+          <span v-for="(q, i) in searchResult.enhancedQueries" :key="i" class="knowledge-enhanced-item">{{ q }}</span>
+        </p>
+        <p v-if="!searchResult.items.length" class="creator-muted">
+          没有匹配的案例，换个说法，或先在上方采集 / 索引更多案例。
+        </p>
+        <div v-else class="knowledge-card-list">
+          <article v-for="hit in searchResult.items" :key="hit.id" class="knowledge-card">
+            <strong>{{ hit.title }}</strong>
+            <div class="creator-chip-list">
+              <b>{{ tierLabel(hit.tier) }}</b>
+              <b v-if="hit.category">{{ hit.category }}</b>
+              <b v-if="hit.qualityScore !== null">质量分 {{ hit.qualityScore }}</b>
+              <b>{{ embeddingLabel(hit.embeddingStatus) }}</b>
+            </div>
+            <small>
+              {{ hit.bvId || '无 BV' }} · {{ hit.source }}
+              <template v-if="hit.publishTimeText"> · {{ hit.publishTimeText }}</template>
+            </small>
+            <p v-if="hit.highlightSummary">{{ hit.highlightSummary }}</p>
+            <p v-else class="creator-muted">（暂无亮点摘要）</p>
+            <div class="knowledge-stats">
+              <span>播放 {{ formatCount(hit.viewCount) }}</span>
+              <span>点赞 {{ formatCount(hit.likeCount) }}</span>
+              <span>投币 {{ formatCount(hit.coinCount) }}</span>
+              <span>收藏 {{ formatCount(hit.favoriteCount) }}</span>
+              <span>弹幕 {{ formatCount(hit.danmakuCount) }}</span>
+              <span>评论 {{ formatCount(hit.replyCount) }}</span>
+            </div>
+          </article>
+        </div>
+      </template>
     </section>
 
     <section class="creator-section">
@@ -457,6 +616,36 @@ onMounted(() => {
   width: auto;
   min-height: 38px;
   padding: 0 10px;
+}
+
+/* 检索框是该工具栏的主输入，让它拉伸占据主要宽度，过滤项与按钮跟随其后 */
+.knowledge-search-input {
+  flex: 1 1 280px;
+  min-width: 240px;
+}
+
+/* 扩展查询回显：让 LLM 实际扩出的查询可见，便于核对增强是否合理 */
+.knowledge-enhanced {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.knowledge-enhanced-label {
+  color: var(--color-ink-2);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.knowledge-enhanced-item {
+  padding: 2px 8px;
+  color: rgba(44, 55, 74, 0.78);
+  background: rgba(0, 174, 236, 0.08);
+  border: 1px solid rgba(0, 174, 236, 0.2);
+  border-radius: 999px;
+  font-size: 12px;
 }
 
 .knowledge-card-list {
