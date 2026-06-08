@@ -1,6 +1,7 @@
 package com.link.linkagent.knowledge.mapper;
 
 import com.link.linkagent.knowledge.model.ReferenceVideoEmbeddingStatusCount;
+import com.link.linkagent.knowledge.model.ReferenceVideoItemIndexRow;
 import com.link.linkagent.knowledge.model.ReferenceVideoItemRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoScoringRow;
@@ -380,4 +381,155 @@ public interface KnowledgeReferenceVideoMapper {
               AND is_deleted = 0
             """)
     LocalDateTime findLastEmbeddingUpdateTime();
+
+    // ============================ 子表向量索引（5.2c-1：子条目向量化） ============================
+
+    /**
+     * 查询待索引的优质子条目（5.2c 子表向量化）。
+     * 只取尚未成功索引的（embedding_status PENDING / FAILED）做增量；JOIN 父表只索引「父表存活」的子条目，
+     * 过滤掉孤儿 / 父已删的条目（父删了它的评论弹幕案例也就无意义）；并把父表 category/tier 反范式带出——
+     * 写进子向量文档 metadata，供 5.2c-2 子召回复用与父检索同款的元数据过滤（子表本身没有这两列）。
+     * 命中子表 idx_video_embedding_status；ORDER BY i.id 让批次稳定可复现。
+     */
+    @Select("""
+            SELECT i.item_id     AS item_id,
+                   i.video_id    AS video_id,
+                   i.content     AS content,
+                   i.sentiment   AS sentiment,
+                   i.source_type AS source_type,
+                   v.category    AS category,
+                   v.tier        AS tier
+            FROM creator_reference_video_item i
+            JOIN creator_reference_video v
+                 ON v.video_id = i.video_id AND v.is_deleted = 0
+            WHERE i.is_deleted = 0
+              AND i.embedding_status IN ('PENDING', 'FAILED')
+            ORDER BY i.id
+            LIMIT #{limit}
+            """)
+    @Results(id = "ReferenceVideoItemIndexRowMap", value = {
+            @Result(column = "item_id", property = "itemId"),
+            @Result(column = "video_id", property = "videoId"),
+            @Result(column = "content", property = "content"),
+            @Result(column = "sentiment", property = "sentiment"),
+            @Result(column = "source_type", property = "sourceType"),
+            @Result(column = "category", property = "category"),
+            @Result(column = "tier", property = "tier")
+    })
+    List<ReferenceVideoItemIndexRow> listIndexableItems(@Param("limit") int limit);
+
+    /**
+     * 取全部未删除优质子条目（5.2d-3 子集合 hybrid 整库重灌）。
+     * 与 {@link #listIndexableItems} 的差异：hybrid 是<b>整库重灌</b>、不看 embedding_status（那套状态属于 Spring AI 子集合），
+     * 只按 is_deleted=0 + 父表存活取全量（受 limit 二次收敛）。JOIN 父表反范式带出 category/tier 供 hybrid 过滤。
+     * 复用 listIndexableItems 的 ReferenceVideoItemIndexRowMap，故 SELECT 列须与之保持一致。
+     */
+    @Select("""
+            SELECT i.item_id     AS item_id,
+                   i.video_id    AS video_id,
+                   i.content     AS content,
+                   i.sentiment   AS sentiment,
+                   i.source_type AS source_type,
+                   v.category    AS category,
+                   v.tier        AS tier
+            FROM creator_reference_video_item i
+            JOIN creator_reference_video v
+                 ON v.video_id = i.video_id AND v.is_deleted = 0
+            WHERE i.is_deleted = 0
+            ORDER BY i.id
+            LIMIT #{limit}
+            """)
+    @ResultMap("ReferenceVideoItemIndexRowMap")
+    List<ReferenceVideoItemIndexRow> listAllItemsForHybrid(@Param("limit") int limit);
+
+    /**
+     * 统计可灌入子 hybrid 的子条目总数（与 {@link #listAllItemsForHybrid} 同源：未删子条目 + 父表存活），供子 hybrid status 展示。
+     */
+    @Select("""
+            SELECT COUNT(*)
+            FROM creator_reference_video_item i
+            JOIN creator_reference_video v
+                 ON v.video_id = i.video_id AND v.is_deleted = 0
+            WHERE i.is_deleted = 0
+            """)
+    long countItemsForHybrid();
+
+    /**
+     * 标记某子条目已成功写入子向量库：embedding_id 复用 item_id，让子向量文档与子表条目一一对应、回查证据免映射。
+     */
+    @Update("""
+            UPDATE creator_reference_video_item
+            SET embedding_id = #{embeddingId},
+                embedding_status = 'INDEXED',
+                embedding_error = NULL,
+                embedding_update_time = CURRENT_TIMESTAMP
+            WHERE item_id = #{itemId}
+              AND is_deleted = 0
+            """)
+    int updateItemEmbeddingIndexed(@Param("itemId") String itemId,
+                                   @Param("embeddingId") String embeddingId);
+
+    /**
+     * 标记某子条目索引失败，保存截断后的失败原因摘要，便于排查 Embedding / Milvus 异常。
+     */
+    @Update("""
+            UPDATE creator_reference_video_item
+            SET embedding_status = 'FAILED',
+                embedding_error = #{errorMessage},
+                embedding_update_time = CURRENT_TIMESTAMP
+            WHERE item_id = #{itemId}
+              AND is_deleted = 0
+            """)
+    int updateItemEmbeddingFailed(@Param("itemId") String itemId,
+                                  @Param("errorMessage") String errorMessage);
+
+    /**
+     * 按向量索引状态分组计数子条目，供子索引 status 汇总各状态数量。复用父侧同形的 ReferenceVideoEmbeddingStatusCountMap。
+     */
+    @Select("""
+            SELECT embedding_status AS status,
+                   COUNT(1) AS count
+            FROM creator_reference_video_item
+            WHERE is_deleted = 0
+            GROUP BY embedding_status
+            """)
+    @ResultMap("ReferenceVideoEmbeddingStatusCountMap")
+    List<ReferenceVideoEmbeddingStatusCount> countItemEmbeddingStatus();
+
+    /**
+     * 子条目最近一次成功索引时间（仅看 INDEXED），子索引 status 的 lastIndexedAt；无成功索引时返回 null。
+     */
+    @Select("""
+            SELECT MAX(embedding_update_time)
+            FROM creator_reference_video_item
+            WHERE embedding_status = 'INDEXED'
+              AND is_deleted = 0
+            """)
+    LocalDateTime findLastItemEmbeddingUpdateTime();
+
+    /**
+     * 按 item_id 批量回查子条目证据（5.2c-2 small-to-big 证据回显）。
+     * 子向量库只给 itemId，子表才是真身；is_deleted=0 过滤掉索引后被软删的子条目（不再作为证据展示）。
+     * 顺序由调用方按子召回相似度/最终卡片顺序重排（IN 不保证顺序），故不加 ORDER BY；调用方保证 itemIds 非空。
+     * 只取证据展示所需 5 列，复用同形可借 ReferenceVideoItemRecord 承载（其余字段留空）。
+     */
+    @Select("""
+            <script>
+            SELECT item_id, video_id, content, sentiment, source_type
+            FROM creator_reference_video_item
+            WHERE is_deleted = 0
+              AND item_id IN
+              <foreach item='id' collection='itemIds' open='(' separator=',' close=')'>
+                  #{id}
+              </foreach>
+            </script>
+            """)
+    @Results(id = "ReferenceVideoItemEvidenceMap", value = {
+            @Result(column = "item_id", property = "itemId"),
+            @Result(column = "video_id", property = "videoId"),
+            @Result(column = "content", property = "content"),
+            @Result(column = "sentiment", property = "sentiment"),
+            @Result(column = "source_type", property = "sourceType")
+    })
+    List<ReferenceVideoItemRecord> listItemsByItemIds(@Param("itemIds") List<String> itemIds);
 }

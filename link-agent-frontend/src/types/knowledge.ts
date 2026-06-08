@@ -92,12 +92,29 @@ export type ReferenceVideoSearchPayload = {
   strategy?: string
 }
 
-// 案例检索响应（5.2a；5.2b 增补 strategy / enhancedQueries）：mode 回显实际检索模式；
-// strategy 为实际生效策略（SQL 路径为 NONE）；enhancedQueries 为实际用于向量检索的扩展查询（NONE / SQL 为空）；
-// items 复用案例卡片类型。
+// 单条召回证据（5.2c-2）：small-to-big 中命中的优质评论 / 弹幕原文。
+export type ReferenceVideoEvidenceItem = {
+  itemId: string
+  content: string
+  sentiment: string
+  sourceType: string
+}
+
+// 按 videoId 分组的召回证据（5.2c-2，方案 a）：这张案例卡片是被哪几条子条目召回的。
+export type ReferenceVideoEvidence = {
+  videoId: string
+  items: ReferenceVideoEvidenceItem[]
+}
+
+// 案例检索响应（5.2a；5.2b 增补 strategy / enhancedQueries；5.2c-2 增补 evidence；5.2e 增补 reranked）：
+// mode 回显实际检索模式；strategy 为实际生效策略（SQL 路径为 NONE）；enhancedQueries 为实际用于向量检索的扩展查询（NONE / SQL 为空）；
+// items 复用案例卡片类型；evidence 为 small-to-big 命中的子条目证据（按 videoId 分组，无子召回 / SQL 路径为空）；
+// reranked 表示本次结果是否经 qwen3-rerank 精排（关闭 / 失败 / SQL 降级为 false）。
 export type ReferenceVideoSearchResult = {
   mode: string
   strategy: string
   enhancedQueries: string[]
   items: ReferenceVideo[]
+  evidence: ReferenceVideoEvidence[]
+  reranked: boolean
 }

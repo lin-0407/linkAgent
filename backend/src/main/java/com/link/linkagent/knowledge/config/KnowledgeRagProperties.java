@@ -28,6 +28,13 @@ public class KnowledgeRagProperties {
     private String collectionName = "creator_reference_video";
 
     /**
+     * 知识库专用 Milvus <b>子集合</b>名（阶段 5.2c）。与父集合 {@link #collectionName} 物理隔离：
+     * 父集合存「案例卡片」大文档，子集合存「优质评论弹幕原文」小文档，两种粒度分开互不污染。
+     * 与父集合复用同一个 MilvusServiceClient、同维度、同 Embedding，仅集合名不同。
+     */
+    private String childCollectionName = "creator_reference_video_item";
+
+    /**
      * 向量维度，必须与 Embedding 输出维度严格一致。默认 1024 对应 Qwen text-embedding-v4 的推荐维度；
      * 不一致会在写入时报维度冲突，所以 application.yml 里把它绑定到 LLM_EMBEDDING_DIMENSIONS 同一变量。
      */
@@ -71,6 +78,16 @@ public class KnowledgeRagProperties {
      */
     private final QueryEnhancement queryEnhancement = new QueryEnhancement();
 
+    /**
+     * 重排序（5.2e）配置：qwen3-rerank 精排开关、模型、端点、候选池等。
+     */
+    private final Rerank rerank = new Rerank();
+
+    /**
+     * 原生混合检索（5.2d）配置：dense+BM25 hybrid 开关、专用集合名、BM25 文本字段长度与中文分析器。
+     */
+    private final Hybrid hybrid = new Hybrid();
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -85,6 +102,14 @@ public class KnowledgeRagProperties {
 
     public void setCollectionName(String collectionName) {
         this.collectionName = collectionName;
+    }
+
+    public String getChildCollectionName() {
+        return childCollectionName;
+    }
+
+    public void setChildCollectionName(String childCollectionName) {
+        this.childCollectionName = childCollectionName;
     }
 
     public int getEmbeddingDimension() {
@@ -141,6 +166,14 @@ public class KnowledgeRagProperties {
 
     public QueryEnhancement getQueryEnhancement() {
         return queryEnhancement;
+    }
+
+    public Rerank getRerank() {
+        return rerank;
+    }
+
+    public Hybrid getHybrid() {
+        return hybrid;
     }
 
     /**
@@ -221,6 +254,147 @@ public class KnowledgeRagProperties {
 
         public void setMultiQueryCount(int multiQueryCount) {
             this.multiQueryCount = multiQueryCount;
+        }
+    }
+
+    /**
+     * 重排序（5.2e）配置。
+     * 默认<b>关</b>：rerank 是每次检索额外一次外部调用（成本 + 延迟），opt-in 才开（与 RAG 总开关默认关同思路）。
+     */
+    public static class Rerank {
+
+        /** 是否启用 qwen3-rerank 精排。默认 false。 */
+        private boolean enabled = false;
+
+        /** 重排模型 id。默认 qwen3-rerank（老的 gte-rerank 已于 2026-05-30 下线）。 */
+        private String model = "qwen3-rerank";
+
+        /**
+         * qwen3-rerank 的 OpenAI 兼容端点 base-url。注意是 {@code compatible-api}（rerank 专用），
+         * 不是 chat 用的 {@code compatible-mode}——两者不同，用错会 404 / 报错。
+         */
+        private String baseUrl = "https://dashscope.aliyuncs.com/compatible-api/v1";
+
+        /** 重排服务 API Key。默认在 application.yml 绑定到 ${LLM_API_KEY}（复用同一个 DashScope Key）。 */
+        private String apiKey = "";
+
+        /**
+         * 开启 rerank 时先召回的更宽候选池上限（retrieve-wide → rerank → 截 topK）。
+         * 精排只重排不扩召回，候选越宽精排空间越大；上限受检索层 MAX_TOP_K 二次收敛。
+         */
+        private int candidatePoolSize = 20;
+
+        /** 调用超时（毫秒），防慢响应拖垮 /search 同步链路。 */
+        private int timeoutMs = 10000;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getModel() {
+            return model;
+        }
+
+        public void setModel(String model) {
+            this.model = model;
+        }
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public int getCandidatePoolSize() {
+            return candidatePoolSize;
+        }
+
+        public void setCandidatePoolSize(int candidatePoolSize) {
+            this.candidatePoolSize = candidatePoolSize;
+        }
+
+        public int getTimeoutMs() {
+            return timeoutMs;
+        }
+
+        public void setTimeoutMs(int timeoutMs) {
+            this.timeoutMs = timeoutMs;
+        }
+    }
+
+    /**
+     * 原生混合检索（5.2d）配置。
+     * 默认<b>关</b>：开启需 Milvus 服务端 ≥2.5（BM25 是服务端能力）+ 自建 schema 集合 + 重灌；与 RAG 总开关一起双门控。
+     */
+    public static class Hybrid {
+
+        /** 是否启用原生 dense+BM25 hybrid。默认 false（双开关：还需 knowledge.rag.enabled=true）。 */
+        private boolean enabled = false;
+
+        /** hybrid 专用集合名（自建 schema，与 Spring AI 那套父/子集合物理隔离）。 */
+        private String collectionName = "creator_reference_video_hybrid";
+
+        /** 子条目 hybrid 集合名（5.2d-3）：子条目原文的 dense+BM25 hybrid 集合，与父 hybrid 集合物理隔离。 */
+        private String childCollectionName = "creator_reference_video_item_hybrid";
+
+        /** BM25 text 字段 VarChar 上限。默认取 Milvus 上限 65535，避免长案例卡片插入越界（中文多字节）。 */
+        private int textMaxLength = 65535;
+
+        /** text 字段分析器类型。默认 chinese：中文无空格，standard 分析器分词差会劣化 BM25 召回。 */
+        private String analyzerType = "chinese";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getCollectionName() {
+            return collectionName;
+        }
+
+        public void setCollectionName(String collectionName) {
+            this.collectionName = collectionName;
+        }
+
+        public String getChildCollectionName() {
+            return childCollectionName;
+        }
+
+        public void setChildCollectionName(String childCollectionName) {
+            this.childCollectionName = childCollectionName;
+        }
+
+        public int getTextMaxLength() {
+            return textMaxLength;
+        }
+
+        public void setTextMaxLength(int textMaxLength) {
+            this.textMaxLength = textMaxLength;
+        }
+
+        public String getAnalyzerType() {
+            return analyzerType;
+        }
+
+        public void setAnalyzerType(String analyzerType) {
+            this.analyzerType = analyzerType;
         }
     }
 }

@@ -87,6 +87,57 @@ export function rebuildReferenceVideoIndex(maxItems?: number) {
   })
 }
 
+// 查询子条目向量索引状态（5.2c-1）。与父索引状态同形，复用 ReferenceVideoIndexStatus；RAG 关闭时也正常返回。
+export function getReferenceVideoItemIndexStatus() {
+  return requestJson<ReferenceVideoIndexStatus>('/api/knowledge/reference-videos/index/items/status')
+}
+
+// 触发（增量）重建子条目向量索引（5.2c-1，small-to-big 的 small 端）。maxItems 不传则用后端配置默认值。
+export function rebuildReferenceVideoItemIndex(maxItems?: number) {
+  const body: Record<string, number> = {}
+  if (maxItems != null) {
+    body.maxItems = maxItems
+  }
+  return requestJson<ReferenceVideoIndexResult>('/api/knowledge/reference-videos/index/items/rebuild', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+// 查询原生 hybrid 索引状态（5.2d-1）。复用同形 ReferenceVideoIndexStatus；RAG/hybrid 关闭时也正常返回。
+export function getReferenceVideoHybridIndexStatus() {
+  return requestJson<ReferenceVideoIndexStatus>('/api/knowledge/reference-videos/index/hybrid/status')
+}
+
+// 触发（整库重灌）原生 hybrid 索引（5.2d-1，dense+BM25）。maxItems 不传则用后端配置默认值。
+export function rebuildReferenceVideoHybridIndex(maxItems?: number) {
+  const body: Record<string, number> = {}
+  if (maxItems != null) {
+    body.maxItems = maxItems
+  }
+  return requestJson<ReferenceVideoIndexResult>('/api/knowledge/reference-videos/index/hybrid/rebuild', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+// 查询子条目原生 hybrid 索引状态（5.2d-3）。复用同形 ReferenceVideoIndexStatus；RAG/hybrid 关闭时也正常返回。
+export function getReferenceVideoItemHybridIndexStatus() {
+  return requestJson<ReferenceVideoIndexStatus>('/api/knowledge/reference-videos/index/hybrid/items/status')
+}
+
+// 触发（整库重灌）子条目原生 hybrid 索引（5.2d-3，dense+BM25）。maxItems 不传则用后端配置默认值。
+export function rebuildReferenceVideoItemHybridIndex(maxItems?: number) {
+  const body: Record<string, number> = {}
+  if (maxItems != null) {
+    body.maxItems = maxItems
+  }
+  return requestJson<ReferenceVideoIndexResult>('/api/knowledge/reference-videos/index/hybrid/items/rebuild', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
 // 案例检索：query 必填；空的 tier / category / strategy 不下发，交给后端按「不过滤 / 配置默认」处理（与 fetchImport 同约定）。
 export function searchReferenceVideos(payload: ReferenceVideoSearchPayload) {
   const body: Record<string, string> = { query: payload.query.trim() }

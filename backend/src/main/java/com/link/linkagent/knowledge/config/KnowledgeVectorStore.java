@@ -43,6 +43,13 @@ public class KnowledgeVectorStore {
     private MilvusVectorStore vectorStore;
     private volatile boolean ready = false;
 
+    /**
+     * 子集合（5.2c）向量库与就绪位，与父集合<b>独立</b>：复用同一个 {@link #milvusClient}，但集合名、就绪状态分开。
+     * 独立就绪位是「零回归」的关键——子集合建库失败只降级子召回，父集合 {@link #ready} 不受影响、5.2a/b 检索照常。
+     */
+    private MilvusVectorStore childVectorStore;
+    private volatile boolean childReady = false;
+
     public KnowledgeVectorStore(KnowledgeRagProperties properties,
                                 ObjectProvider<EmbeddingModel> embeddingModelProvider) {
         this.properties = properties;
@@ -86,6 +93,31 @@ public class KnowledgeVectorStore {
             this.ready = false;
             log.error("知识库向量库初始化失败，已降级为 SQL（导入与列表不受影响）。请检查 Milvus 连接与维度是否匹配。", exception);
         }
+
+        // 子集合（5.2c）：与父集合复用同一个 MilvusServiceClient、同 Embedding、同维度、同索引/度量，仅集合名不同。
+        // 放在父集合之后、用独立 try + 独立就绪位（childReady）：子集合建库失败只 log.warn 并让子召回不可用，
+        // 绝不回滚父集合的 ready —— 这正是「5.2c 对 5.2a/b 零回归」的落点。父集合连 client 都没建出来时跳过。
+        if (this.milvusClient != null) {
+            try {
+                MilvusVectorStore childStore = MilvusVectorStore.builder(milvusClient, embeddingModel)
+                        .collectionName(properties.getChildCollectionName())
+                        .databaseName(properties.getMilvus().getDatabaseName())
+                        .embeddingDimension(properties.getEmbeddingDimension())
+                        .indexType(IndexType.IVF_FLAT)
+                        .metricType(MetricType.COSINE)
+                        .initializeSchema(properties.isInitializeSchema())
+                        .build();
+                // 同父集合：非 Spring 托管 Bean，必须手动 afterPropertiesSet 才会真正建出子集合 schema。
+                childStore.afterPropertiesSet();
+                this.childVectorStore = childStore;
+                this.childReady = true;
+                log.info("知识库子条目向量库就绪：childCollection={}, dimension={}。",
+                        properties.getChildCollectionName(), properties.getEmbeddingDimension());
+            } catch (Exception exception) {
+                this.childReady = false;
+                log.warn("知识库子条目向量库初始化失败，子召回不可用（父集合检索不受影响）。请检查子集合维度是否匹配。", exception);
+            }
+        }
     }
 
     private MilvusServiceClient buildMilvusClient() {
@@ -114,6 +146,21 @@ public class KnowledgeVectorStore {
      */
     public Optional<VectorStore> getVectorStore() {
         return Optional.ofNullable(vectorStore);
+    }
+
+    /**
+     * 子条目向量库（5.2c）是否就绪。与父 {@link #isReady()} <b>独立</b>：子建库失败时这里为 false、父仍可为 true。
+     * 5.2c-1 子条目索引、5.2c-2 子召回都先查这里，未就绪则不碰子集合。
+     */
+    public boolean isChildReady() {
+        return childReady;
+    }
+
+    /**
+     * 把子条目向量库交给索引/检索服务使用；未就绪时返回空，调用方据此降级（不影响父集合检索）。
+     */
+    public Optional<VectorStore> getChildVectorStore() {
+        return Optional.ofNullable(childVectorStore);
     }
 
     @PreDestroy

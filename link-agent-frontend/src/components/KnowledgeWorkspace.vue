@@ -2,13 +2,20 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   fetchImportReferenceVideo,
+  getReferenceVideoHybridIndexStatus,
   getReferenceVideoIndexStatus,
+  getReferenceVideoItemHybridIndexStatus,
+  getReferenceVideoItemIndexStatus,
   listReferenceVideos,
+  rebuildReferenceVideoHybridIndex,
   rebuildReferenceVideoIndex,
+  rebuildReferenceVideoItemHybridIndex,
+  rebuildReferenceVideoItemIndex,
   searchReferenceVideos,
 } from '@/api/knowledge'
 import type {
   ReferenceVideo,
+  ReferenceVideoEvidenceItem,
   ReferenceVideoImportResult,
   ReferenceVideoIndexResult,
   ReferenceVideoIndexStatus,
@@ -58,6 +65,31 @@ const indexing = ref(false)
 const indexResult = ref<ReferenceVideoIndexResult | null>(null)
 const indexError = ref('')
 
+// 子条目向量索引状态与重建（5.2c-1，small-to-big 的 small 端）。与父索引状态同形，复用同一套类型；
+// vectorStoreReady 在此语义下表示「子向量库是否就绪」，子集合未就绪时重建按钮禁用。
+const itemIndexStatus = ref<ReferenceVideoIndexStatus | null>(null)
+const itemIndexLoading = ref(false)
+const itemIndexStatusError = ref('')
+const itemIndexing = ref(false)
+const itemIndexResult = ref<ReferenceVideoIndexResult | null>(null)
+const itemIndexError = ref('')
+
+// 原生 hybrid 索引状态与重灌（5.2d-1）。复用同形类型；vectorStoreReady=hybrid 库是否就绪，关时重灌按钮禁用。
+const hybridIndexStatus = ref<ReferenceVideoIndexStatus | null>(null)
+const hybridIndexLoading = ref(false)
+const hybridIndexStatusError = ref('')
+const hybridIndexing = ref(false)
+const hybridIndexResult = ref<ReferenceVideoIndexResult | null>(null)
+const hybridIndexError = ref('')
+
+// 子条目原生 hybrid 索引状态与重灌（5.2d-3）。复用同形类型；vectorStoreReady=子 hybrid 库是否就绪，关时重灌按钮禁用。
+const childHybridIndexStatus = ref<ReferenceVideoIndexStatus | null>(null)
+const childHybridIndexLoading = ref(false)
+const childHybridIndexStatusError = ref('')
+const childHybridIndexing = ref(false)
+const childHybridIndexResult = ref<ReferenceVideoIndexResult | null>(null)
+const childHybridIndexError = ref('')
+
 // 案例检索（5.2a）：query 必填，tier / category 为可选过滤；topK 不在前端暴露，用后端默认（knowledge.rag.top-k=8）。
 const searchQuery = ref('')
 const searchTier = ref('')
@@ -66,6 +98,16 @@ const searchStrategy = ref('')
 const searching = ref(false)
 const searchError = ref('')
 const searchResult = ref<ReferenceVideoSearchResult | null>(null)
+
+// 证据按 videoId 建查找表（5.2c-2，响应方案 a）：响应里 evidence 与 items 平级、按 videoId 关联，
+// 这里转成 map 让卡片渲染时 O(1) 取到「这张卡片被哪几条子条目召回」。
+const evidenceByVideoId = computed(() => {
+  const map: Record<string, ReferenceVideoEvidenceItem[]> = {}
+  for (const group of searchResult.value?.evidence ?? []) {
+    map[group.videoId] = group.items
+  }
+  return map
+})
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
@@ -202,6 +244,96 @@ async function rebuildIndex() {
   }
 }
 
+async function loadItemIndexStatus() {
+  itemIndexLoading.value = true
+  itemIndexStatusError.value = ''
+  try {
+    itemIndexStatus.value = await getReferenceVideoItemIndexStatus()
+  } catch (error) {
+    itemIndexStatusError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    itemIndexLoading.value = false
+  }
+}
+
+async function rebuildItemIndex() {
+  if (itemIndexing.value) {
+    return
+  }
+  itemIndexing.value = true
+  itemIndexError.value = ''
+  itemIndexResult.value = null
+  try {
+    itemIndexResult.value = await rebuildReferenceVideoItemIndex()
+    // 子条目索引只影响子集合、不改父卡片的 embedding 标记，故只刷新子索引状态、不必重载案例列表。
+    await loadItemIndexStatus()
+  } catch (error) {
+    itemIndexError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    itemIndexing.value = false
+  }
+}
+
+async function loadHybridIndexStatus() {
+  hybridIndexLoading.value = true
+  hybridIndexStatusError.value = ''
+  try {
+    hybridIndexStatus.value = await getReferenceVideoHybridIndexStatus()
+  } catch (error) {
+    hybridIndexStatusError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    hybridIndexLoading.value = false
+  }
+}
+
+async function rebuildHybridIndex() {
+  if (hybridIndexing.value) {
+    return
+  }
+  hybridIndexing.value = true
+  hybridIndexError.value = ''
+  hybridIndexResult.value = null
+  try {
+    // 整库重灌：drop 旧 hybrid 集合 → 自建 schema 重建 → 从 MySQL 重灌，耗时随案例数增长。
+    hybridIndexResult.value = await rebuildReferenceVideoHybridIndex()
+    await loadHybridIndexStatus()
+  } catch (error) {
+    hybridIndexError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    hybridIndexing.value = false
+  }
+}
+
+async function loadChildHybridIndexStatus() {
+  childHybridIndexLoading.value = true
+  childHybridIndexStatusError.value = ''
+  try {
+    childHybridIndexStatus.value = await getReferenceVideoItemHybridIndexStatus()
+  } catch (error) {
+    childHybridIndexStatusError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    childHybridIndexLoading.value = false
+  }
+}
+
+async function rebuildChildHybridIndex() {
+  if (childHybridIndexing.value) {
+    return
+  }
+  childHybridIndexing.value = true
+  childHybridIndexError.value = ''
+  childHybridIndexResult.value = null
+  try {
+    // 整库重灌子集合：drop 旧子 hybrid 集合 → 自建 schema 重建 → 从 MySQL 重灌未删子条目。
+    childHybridIndexResult.value = await rebuildReferenceVideoItemHybridIndex()
+    await loadChildHybridIndexStatus()
+  } catch (error) {
+    childHybridIndexError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    childHybridIndexing.value = false
+  }
+}
+
 function retrievalModeLabel(mode: string) {
   return mode === 'VECTOR' ? '向量检索' : 'SQL 检索'
 }
@@ -214,6 +346,10 @@ function searchModeLabel(mode: string) {
       return '向量语义检索'
     case 'VECTOR_WITH_SQL_FALLBACK':
       return '向量 + SQL 兜底'
+    case 'HYBRID':
+      return '原生 hybrid（dense+BM25）'
+    case 'HYBRID_WITH_SQL_FALLBACK':
+      return 'hybrid + SQL 兜底'
     default:
       return 'SQL 关键词检索'
   }
@@ -233,6 +369,22 @@ function strategyLabel(strategy: string) {
     default:
       return strategy
   }
+}
+
+// 证据情绪 / 来源标签（5.2c-2）：把后端枚举转中文，正负向在样式上区分。
+function sentimentLabel(sentiment: string) {
+  switch (sentiment) {
+    case 'POSITIVE':
+      return '正向'
+    case 'NEGATIVE':
+      return '负向'
+    default:
+      return sentiment
+  }
+}
+
+function sourceTypeLabel(sourceType: string) {
+  return sourceType === 'DANMAKU' ? '弹幕' : '评论'
 }
 
 async function submitSearch() {
@@ -261,6 +413,9 @@ async function submitSearch() {
 onMounted(() => {
   void loadList()
   void loadIndexStatus()
+  void loadItemIndexStatus()
+  void loadHybridIndexStatus()
+  void loadChildHybridIndexStatus()
 })
 </script>
 
@@ -384,6 +539,149 @@ onMounted(() => {
     </section>
 
     <section class="creator-section">
+      <div class="creator-section-head">
+        <h3>子条目索引</h3>
+        <div class="knowledge-toolbar">
+          <button type="button" class="creator-secondary-action" :disabled="itemIndexLoading" @click="loadItemIndexStatus">
+            {{ itemIndexLoading ? '刷新中…' : '刷新状态' }}
+          </button>
+          <button
+            type="button"
+            class="creator-primary-button"
+            :disabled="itemIndexing || !itemIndexStatus?.vectorStoreReady"
+            @click="rebuildItemIndex"
+          >
+            {{ itemIndexing ? '索引中…' : '重建子条目索引' }}
+          </button>
+        </div>
+      </div>
+      <p class="creator-inline-note">
+        把优质评论 / 弹幕原文写入独立子集合，作为「父子召回（small-to-big）」的小颗粒召回端（5.2c 检索侧用）。与上方父集合索引相互独立：子集合未就绪只影响子召回、不影响案例检索。
+      </p>
+
+      <div v-if="itemIndexStatusError" class="creator-alert error-alert">
+        <strong>状态加载失败</strong>
+        <span>{{ itemIndexStatusError }}</span>
+      </div>
+      <div v-else-if="itemIndexStatus" class="creator-chip-list">
+        <b>{{ itemIndexStatus.ragEnabled ? 'RAG 已启用' : 'RAG 关闭' }}</b>
+        <b>{{ itemIndexStatus.vectorStoreReady ? '子向量库就绪' : '子向量库未就绪' }}</b>
+        <b>已索引 {{ itemIndexStatus.indexedCount }}</b>
+        <b>待索引 {{ itemIndexStatus.pendingCount }}</b>
+        <b v-if="itemIndexStatus.failedCount > 0">失败 {{ itemIndexStatus.failedCount }}</b>
+        <b>共 {{ itemIndexStatus.totalCount }}</b>
+      </div>
+
+      <div v-if="itemIndexResult" class="creator-alert success-alert">
+        <strong>重建完成</strong>
+        <span>
+          本次索引 {{ itemIndexResult.indexedCount }} 条子条目<template v-if="itemIndexResult.failedCount > 0">，失败 {{ itemIndexResult.failedCount }} 条</template>。
+        </span>
+      </div>
+      <div v-if="itemIndexError" class="creator-alert error-alert">
+        <strong>重建失败</strong>
+        <span>{{ itemIndexError }}</span>
+      </div>
+      <ul v-if="itemIndexResult && itemIndexResult.warnings.length" class="knowledge-warnings">
+        <li v-for="(warning, idx) in itemIndexResult.warnings" :key="idx">{{ warning }}</li>
+      </ul>
+    </section>
+
+    <section class="creator-section">
+      <div class="creator-section-head">
+        <h3>原生 hybrid 索引</h3>
+        <div class="knowledge-toolbar">
+          <button type="button" class="creator-secondary-action" :disabled="hybridIndexLoading" @click="loadHybridIndexStatus">
+            {{ hybridIndexLoading ? '刷新中…' : '刷新状态' }}
+          </button>
+          <button
+            type="button"
+            class="creator-primary-button"
+            :disabled="hybridIndexing || !hybridIndexStatus?.vectorStoreReady"
+            @click="rebuildHybridIndex"
+          >
+            {{ hybridIndexing ? '重灌中…' : '重建 hybrid 索引（重灌）' }}
+          </button>
+        </div>
+      </div>
+      <p class="creator-inline-note">
+        把案例卡片灌入自建 schema 的 hybrid 集合（dense 语义 + BM25 关键词），供原生混合检索用。需 Milvus 服务端 ≥2.5 并开启 knowledge.rag.hybrid；整库重灌（drop 后从 MySQL 重建，无损）。关闭时此处显示未就绪、按钮不可用。
+      </p>
+
+      <div v-if="hybridIndexStatusError" class="creator-alert error-alert">
+        <strong>状态加载失败</strong>
+        <span>{{ hybridIndexStatusError }}</span>
+      </div>
+      <div v-else-if="hybridIndexStatus" class="creator-chip-list">
+        <b>{{ hybridIndexStatus.ragEnabled ? 'RAG 已启用' : 'RAG 关闭' }}</b>
+        <b>{{ hybridIndexStatus.vectorStoreReady ? 'hybrid 库就绪' : 'hybrid 库未就绪' }}</b>
+        <b>检索模式 {{ hybridIndexStatus.retrievalMode }}</b>
+        <b>可重灌案例 {{ hybridIndexStatus.totalCount }}</b>
+      </div>
+
+      <div v-if="hybridIndexResult" class="creator-alert success-alert">
+        <strong>重灌完成</strong>
+        <span>
+          本次灌入 {{ hybridIndexResult.indexedCount }} 条案例<template v-if="hybridIndexResult.failedCount > 0">，失败 {{ hybridIndexResult.failedCount }} 条</template>。
+        </span>
+      </div>
+      <div v-if="hybridIndexError" class="creator-alert error-alert">
+        <strong>重灌失败</strong>
+        <span>{{ hybridIndexError }}</span>
+      </div>
+      <ul v-if="hybridIndexResult && hybridIndexResult.warnings.length" class="knowledge-warnings">
+        <li v-for="(warning, idx) in hybridIndexResult.warnings" :key="idx">{{ warning }}</li>
+      </ul>
+    </section>
+
+    <section class="creator-section">
+      <div class="creator-section-head">
+        <h3>子条目 hybrid 索引</h3>
+        <div class="knowledge-toolbar">
+          <button type="button" class="creator-secondary-action" :disabled="childHybridIndexLoading" @click="loadChildHybridIndexStatus">
+            {{ childHybridIndexLoading ? '刷新中…' : '刷新状态' }}
+          </button>
+          <button
+            type="button"
+            class="creator-primary-button"
+            :disabled="childHybridIndexing || !childHybridIndexStatus?.vectorStoreReady"
+            @click="rebuildChildHybridIndex"
+          >
+            {{ childHybridIndexing ? '重灌中…' : '重建子 hybrid 索引（重灌）' }}
+          </button>
+        </div>
+      </div>
+      <p class="creator-inline-note">
+        把优质评论 / 弹幕原文灌入子 hybrid 集合（dense 语义 + BM25 关键词），hybrid 开启时 small-to-big 子召回走它。需开启 knowledge.rag.hybrid；整库重灌（drop 后从 MySQL 重建，无损）。关闭时此处显示未就绪、按钮不可用。
+      </p>
+
+      <div v-if="childHybridIndexStatusError" class="creator-alert error-alert">
+        <strong>状态加载失败</strong>
+        <span>{{ childHybridIndexStatusError }}</span>
+      </div>
+      <div v-else-if="childHybridIndexStatus" class="creator-chip-list">
+        <b>{{ childHybridIndexStatus.ragEnabled ? 'RAG 已启用' : 'RAG 关闭' }}</b>
+        <b>{{ childHybridIndexStatus.vectorStoreReady ? '子 hybrid 库就绪' : '子 hybrid 库未就绪' }}</b>
+        <b>检索模式 {{ childHybridIndexStatus.retrievalMode }}</b>
+        <b>可重灌子条目 {{ childHybridIndexStatus.totalCount }}</b>
+      </div>
+
+      <div v-if="childHybridIndexResult" class="creator-alert success-alert">
+        <strong>重灌完成</strong>
+        <span>
+          本次灌入 {{ childHybridIndexResult.indexedCount }} 条子条目<template v-if="childHybridIndexResult.failedCount > 0">，失败 {{ childHybridIndexResult.failedCount }} 条</template>。
+        </span>
+      </div>
+      <div v-if="childHybridIndexError" class="creator-alert error-alert">
+        <strong>重灌失败</strong>
+        <span>{{ childHybridIndexError }}</span>
+      </div>
+      <ul v-if="childHybridIndexResult && childHybridIndexResult.warnings.length" class="knowledge-warnings">
+        <li v-for="(warning, idx) in childHybridIndexResult.warnings" :key="idx">{{ warning }}</li>
+      </ul>
+    </section>
+
+    <section class="creator-section">
       <div class="creator-section-head"><h3>案例检索</h3></div>
       <p class="creator-inline-note">
         用一句话按语义检索最相关的案例（如「开场如何快速留住观众」）。RAG 关闭或向量库未就绪时自动降级为关键词检索（SQL 兜底），结果上方标签会标明本次实际走的检索模式。
@@ -433,6 +731,7 @@ onMounted(() => {
         <div class="creator-chip-list">
           <b>检索模式 {{ searchModeLabel(searchResult.mode) }}</b>
           <b>增强策略 {{ strategyLabel(searchResult.strategy) }}</b>
+          <b v-if="searchResult.reranked">已精排 · qwen3-rerank</b>
           <b>命中 {{ searchResult.items.length }} 条</b>
         </div>
         <p v-if="searchResult.enhancedQueries.length" class="knowledge-enhanced">
@@ -464,6 +763,18 @@ onMounted(() => {
               <span>收藏 {{ formatCount(hit.favoriteCount) }}</span>
               <span>弹幕 {{ formatCount(hit.danmakuCount) }}</span>
               <span>评论 {{ formatCount(hit.replyCount) }}</span>
+            </div>
+            <div v-if="evidenceByVideoId[hit.videoId]?.length" class="knowledge-evidence">
+              <span class="knowledge-evidence-label">召回证据 · 观众原话</span>
+              <p
+                v-for="ev in evidenceByVideoId[hit.videoId]"
+                :key="ev.itemId"
+                class="knowledge-evidence-item"
+                :class="ev.sentiment === 'NEGATIVE' ? 'is-negative' : 'is-positive'"
+              >
+                <b>{{ sourceTypeLabel(ev.sourceType) }} · {{ sentimentLabel(ev.sentiment) }}</b>
+                {{ ev.content }}
+              </p>
             </div>
           </article>
         </div>
@@ -697,6 +1008,55 @@ onMounted(() => {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 850;
+}
+
+/* 召回证据（5.2c-2）：small-to-big 命中的观众原话，以「引用条」形式展示，正/负向用左色条区分。
+   选择器特意带父类 .knowledge-evidence 提高特异性，压过更泛的 .knowledge-card p（否则字号/颜色被它覆盖）。 */
+.knowledge-evidence {
+  display: grid;
+  gap: 5px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(15, 23, 42, 0.12);
+}
+
+.knowledge-evidence-label {
+  color: var(--color-ink-2);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.knowledge-evidence .knowledge-evidence-item {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid transparent;
+  border-radius: 6px;
+  background: rgba(248, 250, 252, 0.85);
+  color: var(--color-ink-2);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.knowledge-evidence .knowledge-evidence-item > b {
+  margin-right: 6px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.knowledge-evidence .knowledge-evidence-item.is-positive {
+  border-left-color: rgba(34, 197, 94, 0.66);
+}
+
+.knowledge-evidence .knowledge-evidence-item.is-positive > b {
+  color: rgba(21, 128, 61, 0.92);
+}
+
+.knowledge-evidence .knowledge-evidence-item.is-negative {
+  border-left-color: rgba(239, 68, 68, 0.6);
+}
+
+.knowledge-evidence .knowledge-evidence-item.is-negative > b {
+  color: rgba(185, 28, 28, 0.92);
 }
 
 .knowledge-pager {

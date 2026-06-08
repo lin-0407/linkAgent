@@ -128,6 +128,8 @@ knowledge:
   rag:
     enabled: ${KNOWLEDGE_RAG_ENABLED:false}
     collection-name: ${KNOWLEDGE_RAG_COLLECTION_NAME:creator_reference_video}
+    # 5.2c 子集合：存优质评论弹幕原文（small 端），与父集合物理隔离；与父集合共用同一 Milvus 连接与维度，仅集合名不同
+    child-collection-name: ${KNOWLEDGE_RAG_CHILD_COLLECTION_NAME:creator_reference_video_item}
     # 必须与 Embedding 输出维度严格一致；启用知识库时请把 LLM_EMBEDDING_DIMENSIONS 一并设为 1024（Qwen text-embedding-v4 推荐值）
     embedding-dimension: ${LLM_EMBEDDING_DIMENSIONS:1024}
     # Qwen text-embedding-v3/v4 OpenAI 兼容模式单批硬上限为 10，知识库索引批次不能照抄反馈侧的 25
@@ -140,6 +142,27 @@ knowledge:
       username: ${MILVUS_USERNAME:}
       password: ${MILVUS_PASSWORD:}
       database-name: ${MILVUS_DATABASE_NAME:default}
+    # 重排序（5.2e）：qwen3-rerank 精排，默认关（opt-in，每次检索额外一次外部调用）。
+    # 注意 base-url 是 compatible-api（rerank 专用），不是 chat 的 compatible-mode；老 gte-rerank 已于 2026-05-30 下线。
+    rerank:
+      enabled: ${KNOWLEDGE_RAG_RERANK_ENABLED:false}
+      model: ${KNOWLEDGE_RAG_RERANK_MODEL:qwen3-rerank}
+      base-url: ${KNOWLEDGE_RAG_RERANK_BASE_URL:https://dashscope.aliyuncs.com/compatible-api/v1}
+      # 默认复用 LLM 网关同一个 DashScope Key；如 rerank 用独立 Key，单独配 KNOWLEDGE_RAG_RERANK_API_KEY
+      api-key: ${KNOWLEDGE_RAG_RERANK_API_KEY:${LLM_API_KEY:}}
+      candidate-pool-size: ${KNOWLEDGE_RAG_RERANK_POOL:20}
+      timeout-ms: ${KNOWLEDGE_RAG_RERANK_TIMEOUT_MS:10000}
+    # 原生 dense+BM25 混合检索（5.2d）：默认关，需 Milvus 服务端 ≥2.5（BM25 是服务端能力）+ 自建 schema 集合 + 重灌。
+    # 与 enabled 双开关：还需 knowledge.rag.enabled=true。复用上面 milvus.* 同一套连接（v2 client 用 uri 形式）。
+    hybrid:
+      enabled: ${KNOWLEDGE_RAG_HYBRID_ENABLED:false}
+      collection-name: ${KNOWLEDGE_RAG_HYBRID_COLLECTION_NAME:creator_reference_video_hybrid}
+      # 子条目 hybrid 集合（5.2d-3）：子条目原文的 dense+BM25 集合，与父 hybrid 集合物理隔离
+      child-collection-name: ${KNOWLEDGE_RAG_HYBRID_CHILD_COLLECTION_NAME:creator_reference_video_item_hybrid}
+      # BM25 text 字段 VarChar 上限（中文多字节，给足以防长卡片插入越界）
+      text-max-length: ${KNOWLEDGE_RAG_HYBRID_TEXT_MAX_LENGTH:65535}
+      # text 字段分析器：中文用 chinese（无空格中文需中文分词，否则 BM25 召回差）；开库自测确认该分析器可建
+      analyzer-type: ${KNOWLEDGE_RAG_HYBRID_ANALYZER:chinese}
 
 # ========== Langfuse (可观测) ==========
 # langfuse:

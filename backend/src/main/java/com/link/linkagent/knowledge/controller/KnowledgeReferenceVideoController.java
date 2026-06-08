@@ -10,7 +10,10 @@ import com.link.linkagent.knowledge.model.ReferenceVideoPageResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchResponse;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceFetchService;
+import com.link.linkagent.knowledge.service.KnowledgeReferenceHybridIndexService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceIndexService;
+import com.link.linkagent.knowledge.service.KnowledgeReferenceItemHybridIndexService;
+import com.link.linkagent.knowledge.service.KnowledgeReferenceItemIndexService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceRetrievalService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceVideoService;
 import jakarta.validation.Valid;
@@ -38,15 +41,24 @@ public class KnowledgeReferenceVideoController {
     private final KnowledgeReferenceVideoService knowledgeReferenceVideoService;
     private final KnowledgeReferenceFetchService knowledgeReferenceFetchService;
     private final KnowledgeReferenceIndexService knowledgeReferenceIndexService;
+    private final KnowledgeReferenceItemIndexService knowledgeReferenceItemIndexService;
+    private final KnowledgeReferenceHybridIndexService knowledgeReferenceHybridIndexService;
+    private final KnowledgeReferenceItemHybridIndexService knowledgeReferenceItemHybridIndexService;
     private final KnowledgeReferenceRetrievalService knowledgeReferenceRetrievalService;
 
     public KnowledgeReferenceVideoController(KnowledgeReferenceVideoService knowledgeReferenceVideoService,
                                              KnowledgeReferenceFetchService knowledgeReferenceFetchService,
                                              KnowledgeReferenceIndexService knowledgeReferenceIndexService,
+                                             KnowledgeReferenceItemIndexService knowledgeReferenceItemIndexService,
+                                             KnowledgeReferenceHybridIndexService knowledgeReferenceHybridIndexService,
+                                             KnowledgeReferenceItemHybridIndexService knowledgeReferenceItemHybridIndexService,
                                              KnowledgeReferenceRetrievalService knowledgeReferenceRetrievalService) {
         this.knowledgeReferenceVideoService = knowledgeReferenceVideoService;
         this.knowledgeReferenceFetchService = knowledgeReferenceFetchService;
         this.knowledgeReferenceIndexService = knowledgeReferenceIndexService;
+        this.knowledgeReferenceItemIndexService = knowledgeReferenceItemIndexService;
+        this.knowledgeReferenceHybridIndexService = knowledgeReferenceHybridIndexService;
+        this.knowledgeReferenceItemHybridIndexService = knowledgeReferenceItemHybridIndexService;
         this.knowledgeReferenceRetrievalService = knowledgeReferenceRetrievalService;
     }
 
@@ -120,5 +132,63 @@ public class KnowledgeReferenceVideoController {
     @GetMapping("/index/status")
     public ReferenceVideoIndexStatusResponse referenceVideoIndexStatus() {
         return knowledgeReferenceIndexService.status();
+    }
+
+    /**
+     * 重建（增量）子条目向量索引（5.2c-1）：把尚未成功索引的优质评论 / 弹幕原文写入子集合并回写状态。
+     * 请求体可空（不带 maxItems 时用配置默认值）；RAG 未启用或子向量库未就绪时返回 400。
+     * 与父表 /index/rebuild 平行、互不影响：子集合是 small-to-big 召回的 small 端，单独成索引动作。
+     */
+    @PostMapping("/index/items/rebuild")
+    public ReferenceVideoIndexResponse rebuildReferenceVideoItemIndex(
+            @Valid @RequestBody(required = false) ReferenceVideoIndexRequest request) {
+        return knowledgeReferenceItemIndexService.rebuildItems(request);
+    }
+
+    /**
+     * 查询子条目向量索引状态（5.2c-1）：各状态计数、最近成功索引时间、检索模式预测。
+     * RAG 关闭时也正常返回（ragEnabled=false），用于确认子向量索引的优雅降级是否生效。
+     */
+    @GetMapping("/index/items/status")
+    public ReferenceVideoIndexStatusResponse referenceVideoItemIndexStatus() {
+        return knowledgeReferenceItemIndexService.itemStatus();
+    }
+
+    /**
+     * 重建（整库重灌）父表原生 hybrid 索引（5.2d-1）：drop 旧 hybrid 集合 → 自建 schema 建集合 → 从 MySQL 全量重灌。
+     * 需 knowledge.rag.enabled + knowledge.rag.hybrid.enabled + Milvus v2 就绪（服务端 ≥2.5），否则 400。
+     */
+    @PostMapping("/index/hybrid/rebuild")
+    public ReferenceVideoIndexResponse rebuildReferenceVideoHybridIndex(
+            @Valid @RequestBody(required = false) ReferenceVideoIndexRequest request) {
+        return knowledgeReferenceHybridIndexService.rebuildHybrid(request);
+    }
+
+    /**
+     * 查询父表原生 hybrid 索引状态（5.2d-1）：RAG/hybrid 是否就绪、可重灌的父卡片总数、检索模式预测（HYBRID/SQL）。
+     * RAG/hybrid 关闭时也正常返回，用于确认降级。
+     */
+    @GetMapping("/index/hybrid/status")
+    public ReferenceVideoIndexStatusResponse referenceVideoHybridIndexStatus() {
+        return knowledgeReferenceHybridIndexService.hybridStatus();
+    }
+
+    /**
+     * 重建（整库重灌）子条目原生 hybrid 索引（5.2d-3）：drop 旧子 hybrid 集合 → 自建 schema → 从 MySQL 全量重灌未删子条目。
+     * 需 knowledge.rag.enabled + knowledge.rag.hybrid.enabled + Milvus v2 就绪，否则 400。子集合是 hybrid 开启时 small-to-big 的 small 端。
+     */
+    @PostMapping("/index/hybrid/items/rebuild")
+    public ReferenceVideoIndexResponse rebuildReferenceVideoItemHybridIndex(
+            @Valid @RequestBody(required = false) ReferenceVideoIndexRequest request) {
+        return knowledgeReferenceItemHybridIndexService.rebuildChildHybrid(request);
+    }
+
+    /**
+     * 查询子条目原生 hybrid 索引状态（5.2d-3）：RAG/hybrid 是否就绪、可重灌的子条目总数、检索模式预测（HYBRID/SQL）。
+     * RAG/hybrid 关闭时也正常返回，用于确认降级。
+     */
+    @GetMapping("/index/hybrid/items/status")
+    public ReferenceVideoIndexStatusResponse referenceVideoItemHybridIndexStatus() {
+        return knowledgeReferenceItemHybridIndexService.childHybridStatus();
     }
 }
