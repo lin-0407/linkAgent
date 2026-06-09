@@ -13,6 +13,7 @@ import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
 import com.link.linkagent.util.TextUtil;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -28,7 +29,7 @@ import org.slf4j.LoggerFactory;
 /**
  * ReAct 主循环 —— 驱动 Thought → Action → Observation 迭代。
  * <p>
- * 核心设计：经典 ReAct 文本解析（非模型原生 Tool Calling），模型无关。
+ * 核心设计：经典 ReAct（默认文本解析，5.4 起可由开关切换为 schema 约束的结构化每步；两者均非模型原生 Tool Calling），模型无关。
  */
 @Component
 public class AgentExecutor {
@@ -42,6 +43,10 @@ public class AgentExecutor {
     private final SummaryMemory summaryMemory;
     private final LongTermMemory longTermMemory;
     private final LongTermMemoryExtractor longTermMemoryExtractor;
+
+    /** 结构化内核开关（阶段 5.4）：开则 ReAct 每步走 schema 约束的 ReActStep，关则走原文本解析路。默认关 = 零回归。 */
+    @Value("${agent.kernel.structured.enabled:false}")
+    private boolean structuredKernelEnabled;
 
     private static final int MAX_ITERATIONS = 10;
 
@@ -108,19 +113,32 @@ public class AgentExecutor {
     public AgentChatResponse run(String sessionId, String userId, String userMessage) {
         String resolvedSessionId = resolveSessionId(sessionId);
         String resolvedUserId = resolveUserId(userId);
-        String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
 
+        // 拼接记忆 + 用户输入作为对话起点，格式与系统提示词约定一致
         StringBuilder conversation = new StringBuilder();
-        String finalAnswer = null;
-        int iteration = 0;
-        List<AgentStep> steps = new ArrayList<>();
-
-        // 拼接用户输入作为对话起点，格式与系统提示词约定一致
         appendLongTermMemory(conversation, longTermMemory.listByUser(resolvedUserId, 10));
         appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
         List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
         appendMemory(conversation, recentMessages);
         conversation.append("Human:").append(userMessage).append("\n\n");
+
+        // 结构化内核（5.4）：开关开则每步走受 schema 约束的 ReActStep；默认关时走下方文本路 = 零回归
+        if (structuredKernelEnabled) {
+            String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
+            List<AgentStep> structuredSteps = new ArrayList<>();
+            String structuredAnswer = runStructuredLoop(structuredSystemPrompt, conversation, structuredSteps);
+            if (structuredAnswer == null) {
+                return new AgentChatResponse(resolvedSessionId, null, "迭代次数超过上限", structuredSteps.size(), structuredSteps);
+            }
+            persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer);
+            return new AgentChatResponse(resolvedSessionId, structuredAnswer, null, structuredSteps.size(), structuredSteps);
+        }
+
+        // 文本路（原 ReAct 文本解析循环，逻辑保持不变）
+        String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
+        String finalAnswer = null;
+        int iteration = 0;
+        List<AgentStep> steps = new ArrayList<>();
         while(true){
             iteration++;
 
@@ -139,13 +157,7 @@ public class AgentExecutor {
             finalAnswer = parseFinalAnswer(llmAnswer);
             if (TextUtil.hasText(finalAnswer)) {
                 log.info("第{}轮解析结果: thought={}, finalAnswer={}", iteration, parseThought(llmAnswer), finalAnswer);
-                shortTermMemory.append(resolvedSessionId, "Human", userMessage);
-                shortTermMemory.append(resolvedSessionId, "AI", finalAnswer);
-                if (summaryMemory.shouldSummarize(resolvedSessionId, shortTermMemory.getRecentMessages(resolvedSessionId))) {
-                    shortTermMemory.keepRecentMessages(resolvedSessionId, summaryMemory.getRetainedMessageCount());
-                    log.info("摘要记忆已达到触发条件，sessionId={}", resolvedSessionId);
-                }
-                tryExtractAndSaveLongTermMemory(resolvedUserId, resolvedSessionId, userMessage, finalAnswer);
+                persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, finalAnswer);
                 return new AgentChatResponse(resolvedSessionId, finalAnswer, null, steps.size(), steps);
             }
 
@@ -185,6 +197,91 @@ public class AgentExecutor {
                     .append(":")
                     .append(observation.result())
                     .append("\n\n");
+        }
+    }
+
+    /**
+     * 任务维度的一次性带工具推理入口，<b>不读写任何会话记忆</b>（短期 / 摘要 / 长期）。
+     * <p>
+     * 用于发布前优化等「先取证、再结构化合成」的内部场景：调用方传入一段自包含的任务说明，
+     * Agent 自主决定调用哪些工具取证，最终以 Final Answer 形式产出一段自由文本结论。
+     * <p>
+     * 为什么不复用 {@link #run}：run 会把对话写进短期记忆、按需触发摘要、并在 Final Answer 时
+     * 抽取长期记忆——那是「面向用户的聊天回合」的语义。而这里是任务内部的一次性中间步骤，
+     * 若写进会话记忆会污染用户的 /agent/chat 历史，并触发无意义的长期记忆抽取（多余的 LLM 调用与垃圾数据）。
+     * 因此单独承载，仅去掉记忆读写这一层；ReAct 解析、工具执行、系统提示词与 {@code ToolRegistry}
+     * 全部与 run 共用（同一内核、同一工具生态）。
+     * <p>
+     * 为什么文本路是新增方法而非抽取共享循环：run 的文本循环已稳定驱动 /agent/chat，为零回归保持其字节级不动，
+     * 故 run / runTask 的文本循环各保留一份。（5.4 的结构化路因新增 run + runTask 两个变体、越过 rule of three，
+     * 已抽取共享的 {@link #runStructuredLoop}；文本路仍各自保留以守零回归。）
+     *
+     * @param taskMessage 自包含的任务说明（含所需材料与取证目标），作为 ReAct 循环的初始 Human 输入
+     * @return ReAct 结果；finalAnswer 为自由文本结论，超出迭代上限时 error 非空、finalAnswer 可能为 null
+     */
+    public AgentChatResponse runTask(String taskMessage) {
+        // 结构化内核（5.4）：开关开则任务推理同样走结构化每步；默认关时走下方文本路
+        if (structuredKernelEnabled) {
+            String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
+            StringBuilder structuredConversation = new StringBuilder();
+            structuredConversation.append("Human:").append(taskMessage).append("\n\n");
+            List<AgentStep> structuredSteps = new ArrayList<>();
+            String structuredAnswer = runStructuredLoop(structuredSystemPrompt, structuredConversation, structuredSteps);
+            if (structuredAnswer == null) {
+                return new AgentChatResponse(null, null, "迭代次数超过上限", structuredSteps.size(), structuredSteps);
+            }
+            return new AgentChatResponse(null, structuredAnswer, null, structuredSteps.size(), structuredSteps);
+        }
+
+        // 工具集与系统提示词复用 run 的同一套：RAG 开启时 getAllTools() 自带 knowledge_search
+        String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
+        StringBuilder conversation = new StringBuilder();
+        // 不加载任何记忆，仅以任务说明作为对话起点
+        conversation.append("Human:").append(taskMessage).append("\n\n");
+
+        List<AgentStep> steps = new ArrayList<>();
+        String finalAnswer = null;
+        int iteration = 0;
+        while (true) {
+            iteration++;
+            // 迭代上限兜底：与 run 一致，防止无限循环耗尽资源
+            if (iteration > MAX_ITERATIONS) {
+                return new AgentChatResponse(null, finalAnswer, "迭代次数超过上限", steps.size(), steps);
+            }
+            log.info("任务模式 ReAct 第{}轮迭代...", iteration);
+
+            String llmAnswer = llmService.chat(systemPrompt, conversation.toString());
+
+            // 优先检测 Final Answer：拿到自由文本结论即终止，且全程不写任何记忆
+            finalAnswer = parseFinalAnswer(llmAnswer);
+            if (TextUtil.hasText(finalAnswer)) {
+                return new AgentChatResponse(null, finalAnswer, null, steps.size(), steps);
+            }
+
+            String thought = parseThought(llmAnswer);
+            if (TextUtil.isBlank(thought)) {
+                // 既无 Final Answer 也无合法 Thought：回喂格式错误让 LLM 重试（与 run 处理一致）
+                steps.add(new AgentStep(iteration, null, null, null, null));
+                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+            }
+
+            ToolCall action = parseAction(llmAnswer);
+            if (action == null) {
+                // 无合法 Action：回喂格式错误让 LLM 重试
+                steps.add(new AgentStep(iteration, thought, null, null, null));
+                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                continue;
+            }
+
+            Observation observation = toolExecutor.execute(action);
+            steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
+
+            // 将本轮 Thought/Action/Observation 拼回对话，供下一轮参考（拼接格式与 run 一致）
+            conversation.append("AI:\n").append("Thought:").append(thought).append("\n")
+                    .append("Action:").append(action.name()).append("\n")
+                    .append("Action Input:").append(action.arguments()).append("\n")
+                    .append("Observation:").append(observation.toolName()).append(":")
+                    .append(observation.result()).append("\n\n");
         }
     }
 
@@ -243,6 +340,69 @@ public class AgentExecutor {
         } catch (Exception exception) {
             log.warn("长期记忆保存失败，userId={}, memoryKey={}, error={}",
                     userId, candidate.memoryKey(), exception.getMessage());
+        }
+    }
+
+    /**
+     * 持久化一次「面向用户的聊天回合」：写短期记忆 + 按需触发摘要 + 抽取长期记忆。
+     * 抽成方法是因为文本路与结构化路（5.4）在拿到 finalAnswer 后都要做同一件事，避免两处重复。
+     */
+    private void persistChatTurn(String sessionId, String userId, String userMessage, String finalAnswer) {
+        shortTermMemory.append(sessionId, "Human", userMessage);
+        shortTermMemory.append(sessionId, "AI", finalAnswer);
+        if (summaryMemory.shouldSummarize(sessionId, shortTermMemory.getRecentMessages(sessionId))) {
+            shortTermMemory.keepRecentMessages(sessionId, summaryMemory.getRetainedMessageCount());
+            log.info("摘要记忆已达到触发条件，sessionId={}", sessionId);
+        }
+        tryExtractAndSaveLongTermMemory(userId, sessionId, userMessage, finalAnswer);
+    }
+
+    /**
+     * 结构化 ReAct 循环（阶段 5.4）：每步用 {@link LLMService#chatStructured} 产出受 schema 约束的 {@link ReActStep}，
+     * 取代「自由文本 + 正则解析」。工具执行 / 迭代上限 / 对话回灌与文本路一致——只换了「每步怎么从 LLM 拿决策」。
+     * <p>
+     * run 与 runTask 共用这一份结构化循环（记忆读写差异由各自承担）：文本路 + 结构化路 × run + runTask 若各写一份
+     * 会变成四份循环，到此 rule of three 已越过，抽取共享循环才划算（5.3b-1 时仅两个调用点故暂未抽）。
+     *
+     * @param steps 步骤追踪，原地累加供调用方组装响应
+     * @return 最终答案；超出迭代上限返回 null（由调用方转成「迭代次数超过上限」错误）
+     */
+    private String runStructuredLoop(String systemPrompt, StringBuilder conversation, List<AgentStep> steps) {
+        int iteration = 0;
+        while (true) {
+            iteration++;
+            // 迭代上限兜底：与文本路一致
+            if (iteration > MAX_ITERATIONS) {
+                return null;
+            }
+            log.info("结构化 ReAct 第{}轮迭代...", iteration);
+
+            // chatStructured 内部已对解析失败重试；仍失败则抛出（含成本 guard 的 400），交上层按错误返回，不在此吞掉
+            ReActStep step = llmService.chatStructured(systemPrompt, conversation.toString(), ReActStep.class);
+
+            // 优先终止：拿到非空 finalAnswer 即结束
+            if (step.isFinal()) {
+                return step.finalAnswer();
+            }
+
+            // 合法 JSON 但既无 finalAnswer 也无 action：回喂错误让模型补齐（与文本路格式错误同构）
+            if (!step.hasAction()) {
+                steps.add(new AgentStep(iteration, step.thought(), null, null, null));
+                conversation.append("ERROR：既未给出 finalAnswer 也未给出 action，请重试！\n\n");
+                continue;
+            }
+
+            // 执行工具（actionInput 缺省按空串，语义同文本路）
+            ToolCall action = new ToolCall(step.action(), step.actionInput() == null ? "" : step.actionInput());
+            Observation observation = toolExecutor.execute(action);
+            steps.add(new AgentStep(iteration, step.thought(), action.name(), action.arguments(), observation.result()));
+
+            // 对话历史用文本回灌即可（模型读历史无需结构化、省 token）；下一步仍按 schema 产出
+            conversation.append("AI:\n").append("Thought:").append(TextUtil.trimToDefault(step.thought(), "")).append("\n")
+                    .append("Action:").append(action.name()).append("\n")
+                    .append("Action Input:").append(action.arguments()).append("\n")
+                    .append("Observation:").append(observation.toolName()).append(":")
+                    .append(observation.result()).append("\n\n");
         }
     }
 
@@ -307,5 +467,26 @@ public class AgentExecutor {
             - 使用工具时，必须同时包含"Action:"和"Action Input:"。
             - 当你掌握了足够的信息，就输出"Final Answer:"。
         """.formatted(toolDescriptions);
+    }
+
+    /**
+     * 结构化内核的系统提示词（阶段 5.4）：列出工具 + 要求「每步要么调用工具(action+actionInput)、要么给 finalAnswer」。
+     * 不再写 Thought:/Action: 文本格式约定——具体 JSON schema 由 chatStructured 的 BeanOutputConverter 自动追加进 prompt。
+     */
+    private String buildStructuredSystemPrompt(Collection<Tool> tools) {
+        String toolDescriptions = tools.stream()
+                .map(t -> "- " + t.getName() + ": " + t.getDescription())
+                .collect(Collectors.joining("\n"));
+
+        return """
+            你是 LinkAgent，可以使用以下工具：
+
+            %s
+
+            请按 ReAct 方式逐步推理：每一步先在 thought 写下你的推理，然后二选一——
+            - 需要更多信息时：把 action 设为要调用的工具名、actionInput 设为该工具的输入，finalAnswer 留空；
+            - 信息已足够时：把 finalAnswer 设为给用户的最终回复，action 与 actionInput 留空。
+            每步只能调用一个工具；工具返回会作为 Observation 追加到对话，供你下一步参考。
+            """.formatted(toolDescriptions);
     }
 }

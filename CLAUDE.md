@@ -103,6 +103,15 @@
 | 阶段 4.3.1 - 创作工作台前端接入 | `/docs/develop/阶段4.3.1-创作工作台前端接入.md` |
 | 阶段 4.3.2 - 创作指导可编辑窗口 | `/docs/develop/阶段4.3.2-创作指导可编辑窗口.md` |
 | 阶段 4.3.3 - B 站评论弹幕样例采集脚本 | `/docs/develop/阶段4.3.3-B站评论弹幕样例采集脚本.md` |
+| 阶段 4.13 - 反馈追问证据链增强与 RAG 最小闭环 | `/docs/develop/阶段4.13-反馈追问证据链增强与RAG最小闭环.md` |
+| 阶段 4.14 - 复盘报告 Markdown 导出 | `/docs/develop/阶段4.14-复盘报告Markdown导出.md` |
+| 阶段 4.15 - AI 交互台浮窗化 | `/docs/develop/阶段4.15-AI交互台浮窗化.md` |
+| 阶段 5 - RAG 完整落地与 Agent 一体化总览 | `/docs/develop/阶段5-RAG完整落地与Agent一体化总览.md` |
+| 阶段 5.1 - 跨分区视频案例知识库 | `/docs/develop/阶段5.1-跨分区视频案例知识库.md` |
+| 阶段 5.2 - 高级检索链路 | `/docs/develop/阶段5.2-高级检索链路.md` |
+| 阶段 5.3 - Agent 工具化与内核统一 | `/docs/develop/阶段5.3-Agent工具化与内核统一.md` |
+| 阶段 5.4 - Agent 内核结构化输出升级 | `/docs/develop/阶段5.4-Agent内核结构化输出升级.md` |
+| 阶段 5.5 - 提示词模板 DB 化与热更新 | `/docs/develop/阶段5.5-提示词模板DB化与热更新.md` |
 | MVC 架构说明 | `/docs/reference/MVC架构说明.md` |
 | 阶段 4.1 - 创作任务与稿件输入接口说明 | `/docs/reference/创作任务与稿件输入接口说明.md` |
 | 创作任务材料文件导入接口说明 | `/docs/reference/创作任务材料文件导入接口说明.md` |
@@ -124,6 +133,11 @@
 | Prompt 版本评测闭环说明 | `/docs/reference/Prompt版本评测闭环说明.md` |
 | LLM 用量采集与评测统计口径说明 | `/docs/reference/LLM用量采集与评测统计口径说明.md` |
 | 创作者语境与建议质量升级说明 | `/docs/reference/创作者语境与建议质量升级说明.md` |
+| 反馈追问证据链与 RAG 最小闭环说明 | `/docs/reference/反馈追问证据链与RAG最小闭环说明.md` |
+| 复盘报告 Markdown 导出说明 | `/docs/reference/复盘报告Markdown导出说明.md` |
+| AI 交互台浮窗说明 | `/docs/reference/AI交互台浮窗说明.md` |
+| 跨分区视频案例知识库说明 | `/docs/reference/跨分区视频案例知识库说明.md` |
+| 高级检索链路说明 | `/docs/reference/高级检索链路说明.md` |
 | 阶段 4.0 - MVC 架构重整踩坑记录 | `/docs/error/阶段4.0-MVC架构重整踩坑记录.md` |
 | 阶段 4.1 - 创作任务与稿件输入踩坑记录 | `/docs/error/阶段4.1-创作任务与稿件输入踩坑记录.md` |
 | 阶段 4.1.1 - 创作任务材料文件导入踩坑记录 | `/docs/error/阶段4.1.1-创作任务材料文件导入踩坑记录.md` |
@@ -146,3 +160,8 @@
 | 阶段 4.9 - Prompt 版本评测闭环踩坑记录 | `/docs/error/阶段4.9-Prompt版本评测闭环踩坑记录.md` |
 | 阶段 4.10 - LLM 用量采集与评测统计口径踩坑记录 | `/docs/error/阶段4.10-LLM用量采集与评测统计口径踩坑记录.md` |
 | 阶段 4.11 - 创作者语境与建议质量升级踩坑记录 | `/docs/error/阶段4.11-创作者语境与建议质量升级踩坑记录.md` |
+| 阶段 4.13 - 反馈追问证据链增强与 RAG 最小闭环踩坑记录 | `/docs/error/阶段4.13-反馈追问证据链增强与RAG最小闭环踩坑记录.md` |
+| 阶段 4.14 - 复盘报告 Markdown 导出踩坑记录 | `/docs/error/阶段4.14-复盘报告Markdown导出踩坑记录.md` |
+| 阶段 4.15 - AI 交互台浮窗化踩坑记录 | `/docs/error/阶段4.15-AI交互台浮窗化踩坑记录.md` |
+| 阶段 5.1 - 跨分区视频案例知识库踩坑记录 | `/docs/error/阶段5.1-跨分区视频案例知识库踩坑记录.md` |
+| 阶段 5.2 - 高级检索链路踩坑记录 | `/docs/error/阶段5.2-高级检索链路踩坑记录.md` |

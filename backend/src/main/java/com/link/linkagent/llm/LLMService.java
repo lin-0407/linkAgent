@@ -4,6 +4,10 @@ import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.ResponseFormat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -19,6 +23,11 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 public class LLMService {
+
+    private static final Logger log = LoggerFactory.getLogger(LLMService.class);
+
+    /** 结构化解析失败的最大尝试次数：JSON 偶发漂移时重试，超过则抛出交调用方兜底。先用常量，必要时再外置。 */
+    private static final int STRUCTURED_MAX_ATTEMPTS = 3;
 
     private final ChatClient chatClient;
     private final LlmCallGuardProperties guardProperties;
@@ -71,6 +80,46 @@ public class LLMService {
                 .chatResponse();
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
         return toCallResult(chatResponse, elapsedMs);
+    }
+
+    /**
+     * 结构化对话：让 LLM 产出受目标类型 schema 约束的强类型对象，替代「提示词哄 JSON + 正则/字符串截取」（阶段 5.4）。
+     * <p>
+     * 确定性来自两层叠加：① {@code response_format=json_object} 由 DeepSeek 在 API 级保证返回合法 JSON 语法
+     *（也满足其「prompt 必须含 json」的硬性要求，因为 {@code .entity} 会把 schema 指令写进 prompt）；
+     * ② {@code .entity(type)} 内部用 {@code BeanOutputConverter} 依据目标类型生成 schema 指令并解析为强类型。
+     * json_object 只保证语法、不保证字段，故解析失败时重试 {@link #STRUCTURED_MAX_ATTEMPTS} 次。
+     * <p>
+     * 为什么放在 LLMService：结构化输出属于「调模型」能力，归 LLM 服务层最自然，并复用这里的成本 guard
+     *（{@link #validatePromptLength}），不让上层各自持有 ChatClient 选项细节。泛型以便 ReAct 步与业务 JSON 复用同一出口。
+     *
+     * @param type 目标类型（如 {@link com.link.linkagent.core.ReActStep} 或业务建议 record）
+     * @return 解析后的强类型对象
+     * @throws RuntimeException 连续重试仍解析失败时抛出最后一次异常，由调用方按场景兜底
+     */
+    public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> type) {
+        validatePromptLength(systemPrompt, userMessage);
+        // 仅设 responseFormat；model 等默认项由 Spring AI 在模型层合并保留（见 5.4 文档 §9 运行期待确认）
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
+                .responseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null))
+                .build();
+        RuntimeException lastError = null;
+        for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
+            try {
+                return chatClient
+                        .prompt()
+                        .system(systemPrompt)
+                        .user(userMessage)
+                        .options(options)
+                        .call()
+                        .entity(type);
+            } catch (RuntimeException ex) {
+                // json_object 只保证语法、不保证字段，偶发字段不符或空内容时重试；保留最后一次异常向上抛
+                lastError = ex;
+                log.warn("结构化输出第 {}/{} 次解析失败：{}", attempt, STRUCTURED_MAX_ATTEMPTS, ex.getMessage());
+            }
+        }
+        throw lastError;
     }
 
     void validatePromptLength(String systemPrompt, String userMessage) {
