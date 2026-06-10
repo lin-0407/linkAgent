@@ -14,6 +14,7 @@ import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.prompt.StubPromptService;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -41,7 +42,8 @@ class PrePublishSuggestionServiceTest {
                 suggestionMapper,
                 new CreatorPreferenceService(preferenceMapper),
                 llmService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                new StubPromptService());
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
@@ -71,7 +73,8 @@ class PrePublishSuggestionServiceTest {
                 suggestionMapper,
                 new CreatorPreferenceService(preferenceMapper),
                 llmService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                new StubPromptService());
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
@@ -132,7 +135,8 @@ class PrePublishSuggestionServiceTest {
                 suggestionMapper,
                 new CreatorPreferenceService(preferenceMapper),
                 llmService,
-                new ObjectMapper());
+                new ObjectMapper(),
+                new StubPromptService());
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
@@ -144,7 +148,7 @@ class PrePublishSuggestionServiceTest {
         assertThat(response.contentPositioning()).isEqualTo("内容定位");
         assertThat(response.actionableRevisionPlan()).contains("\"target\":\"开头\"");
         assertThat(response.titleSuggestions()).contains("\"viewerPsychology\":\"观众心理\"");
-        assertThat(llmService.lastSystemPrompt).contains("创作者真实决策压力");
+        assertThat(llmService.lastSystemPrompt).contains("pre_publish.system");
     }
 
     private CreatorTaskRecord createTaskRecord() {

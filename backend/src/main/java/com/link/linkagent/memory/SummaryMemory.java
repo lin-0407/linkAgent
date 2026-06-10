@@ -1,5 +1,6 @@
 package com.link.linkagent.memory;
 
+import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.ai.chat.model.ChatModel;
 import org.slf4j.Logger;
@@ -19,19 +20,15 @@ public class SummaryMemory {
 
     private static final Logger log = LoggerFactory.getLogger(SummaryMemory.class);
 
-    private static final String SYSTEM_PROMPT = """
-            你是一个摘要助手，负责将对话内容压缩成简洁的摘要，保留关键信息和上下文。
-            当对话消息数量过多时，你会被触发进行摘要压缩。
-            你的输出应该是对当前对话的总结，帮助后续对话理解上下文。
-            """;
-
     private final SummaryMemoryProperties properties;
     private final ChatModel memorySummaryModel;
+    private final PromptService promptService;
     private final Map<String, String> sessionSummaries = new ConcurrentHashMap<>();
 
-    public SummaryMemory(SummaryMemoryProperties properties, ChatModel memorySummaryModel) {
+    public SummaryMemory(SummaryMemoryProperties properties, ChatModel memorySummaryModel, PromptService promptService) {
         this.properties = properties;
         this.memorySummaryModel = memorySummaryModel;
+        this.promptService = promptService;
     }
 
     public String getSummary(String sessionId) {
@@ -57,7 +54,7 @@ public class SummaryMemory {
     }
 
     private String buildPrompt(List<MemoryMessage> messages) {
-        return SYSTEM_PROMPT + "\n\n" +
+        return promptService.get("summary_memory.system") + "\n\n" +
                 "当前对话消息如下：\n" +
                 messages.stream()
                         .map(message -> message.role() + ": " + message.content())

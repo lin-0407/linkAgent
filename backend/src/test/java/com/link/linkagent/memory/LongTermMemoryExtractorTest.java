@@ -1,6 +1,7 @@
 package com.link.linkagent.memory;
 
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.prompt.StubPromptService;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
@@ -13,7 +14,7 @@ class LongTermMemoryExtractorTest {
     void shouldParseValidMemoryCandidate() {
         LongTermMemoryExtractor extractor = new LongTermMemoryExtractor(new FixedLlmService("""
                 {"shouldRemember":true,"memoryKey":"user.preference.language","content":"用户偏好使用 Java 示例"}
-                """));
+                """), new StubPromptService());
 
         Optional<LongTermMemoryCandidate> candidate = extractor.extract("以后用 Java 举例", "好的");
 
@@ -26,7 +27,7 @@ class LongTermMemoryExtractorTest {
     void shouldSkipWhenModelSaysNoNeedToRemember() {
         LongTermMemoryExtractor extractor = new LongTermMemoryExtractor(new FixedLlmService("""
                 {"shouldRemember":false,"memoryKey":"","content":""}
-                """));
+                """), new StubPromptService());
 
         Optional<LongTermMemoryCandidate> candidate = extractor.extract("今天天气怎么样", "我无法确认实时天气");
 
@@ -35,7 +36,7 @@ class LongTermMemoryExtractorTest {
 
     @Test
     void shouldSkipWhenResponseIsInvalid() {
-        LongTermMemoryExtractor extractor = new LongTermMemoryExtractor(new FixedLlmService("不是合法 JSON"));
+        LongTermMemoryExtractor extractor = new LongTermMemoryExtractor(new FixedLlmService("不是合法 JSON"), new StubPromptService());
 
         Optional<LongTermMemoryCandidate> candidate = extractor.extract("hello", "hi");
 

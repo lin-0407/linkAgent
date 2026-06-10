@@ -3,6 +3,7 @@ package com.link.linkagent.knowledge.service;
 import com.link.linkagent.knowledge.config.KnowledgeRagProperties;
 import com.link.linkagent.knowledge.model.QueryEnhanceStrategy;
 import com.link.linkagent.knowledge.rag.HydeQueryTransformer;
+import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,7 +70,8 @@ public class KnowledgeQueryEnhancer {
     private final HydeQueryTransformer hydeQueryTransformer;
 
     public KnowledgeQueryEnhancer(ChatClient.Builder chatClientBuilder,
-                                  KnowledgeRagProperties knowledgeRagProperties) {
+                                  KnowledgeRagProperties knowledgeRagProperties,
+                                  PromptService promptService) {
         // numberOfQueries 至少为 1，二次防御配置被误设成 0 / 负数导致组件构造异常。
         int multiQueryCount = Math.max(1, knowledgeRagProperties.getQueryEnhancement().getMultiQueryCount());
         // 三个组件共用注入的 ChatClient.Builder：各自 build 出独立 ChatClient（框架文档推荐用法）。
@@ -84,7 +86,7 @@ public class KnowledgeQueryEnhancer {
                 .includeOriginal(true)
                 .promptTemplate(new PromptTemplate(MULTI_QUERY_PROMPT))
                 .build();
-        this.hydeQueryTransformer = new HydeQueryTransformer(chatClientBuilder);
+        this.hydeQueryTransformer = new HydeQueryTransformer(chatClientBuilder, promptService);
     }
 
     /**

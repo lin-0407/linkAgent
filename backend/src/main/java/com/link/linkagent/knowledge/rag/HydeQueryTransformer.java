@@ -1,5 +1,6 @@
 package com.link.linkagent.knowledge.rag;
 
+import com.link.linkagent.prompt.service.PromptService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -21,22 +22,14 @@ public class HydeQueryTransformer implements QueryTransformer {
 
     private static final Logger log = LoggerFactory.getLogger(HydeQueryTransformer.class);
 
-    /**
-     * 中文 HyDE 提示词。约束「只描述方法 / 共性、禁编造具体数据」，避免假设文档把幻觉带进检索语义。
-     */
-    private static final String SYSTEM_PROMPT = """
-            你是 B 站资深内容策划。请针对用户的问题，写一段「假设存在的优质视频案例的亮点摘要」，
-            用于在视频案例知识库里做语义检索。要求：
-            1. 用案例卡片的口吻：有标题感，点出该视频在这个问题上做得好的具体方法与要点；
-            2. 80~150 字，一段话，不要分点，不要前后缀说明；
-            3. 只描述通用方法与共性，严禁编造具体的 UP 主名、播放量、点赞数、BV 号等数据。
-            """;
-
     private final ChatClient chatClient;
+    private final PromptService promptService;
 
-    public HydeQueryTransformer(ChatClient.Builder chatClientBuilder) {
+    public HydeQueryTransformer(ChatClient.Builder chatClientBuilder, PromptService promptService) {
         Assert.notNull(chatClientBuilder, "chatClientBuilder 不能为空");
+        Assert.notNull(promptService, "promptService 不能为空");
         this.chatClient = chatClientBuilder.build();
+        this.promptService = promptService;
     }
 
     @Override
@@ -45,7 +38,7 @@ public class HydeQueryTransformer implements QueryTransformer {
         String original = query.text();
         try {
             String hypothetical = chatClient.prompt()
-                    .system(SYSTEM_PROMPT)
+                    .system(promptService.get("hyde.system"))
                     .user(original)
                     .call()
                     .content();

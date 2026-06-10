@@ -19,6 +19,7 @@ import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.prompt.StubPromptService;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -44,7 +45,8 @@ class CreatorCompetitorServiceTest {
                 new FakeCreatorFeedbackMapper(),
                 competitorMapper,
                 new FixedLlmService("{}"),
-                new ObjectMapper());
+                new ObjectMapper(),
+                new StubPromptService());
 
         CreatorCompetitorSampleResponse response = service.saveCompetitorVideo(
                 "task-1",
@@ -83,7 +85,8 @@ class CreatorCompetitorServiceTest {
                 new FixedLlmService("""
                         {"competitorSummary":"竞品更强调结果","competitorAdvantages":[{"advantage":"标题更直接","evidence":"样例标题都突出收益","lesson":"标题前置结果"}],"ownAdvantages":[{"advantage":"解释更细","evidence":"文稿结构完整"}],"ownDisadvantages":[{"disadvantage":"卖点不够前置","evidence":"标题偏平","risk":"点击弱"}],"gapAnalysis":[{"dimension":"标题","gap":"结果感弱","priority":"HIGH"}],"improvementSuggestions":[{"suggestion":"标题突出收益","reason":"竞品样例有效","action":"重写标题"}],"differentiationStrategy":"主打可复制步骤"}
                         """),
-                new ObjectMapper());
+                new ObjectMapper(),
+                new StubPromptService());
 
         CreatorCompetitorReportResponse response = service.analyze(
                 "task-1",
@@ -107,7 +110,8 @@ class CreatorCompetitorServiceTest {
                 new FakeCreatorFeedbackMapper(),
                 new FakeCreatorCompetitorMapper(),
                 new FixedLlmService("{}"),
-                new ObjectMapper());
+                new ObjectMapper(),
+                new StubPromptService());
 
         assertThatThrownBy(() -> service.analyze("task-1", new CreatorCompetitorAnalyzeRequest(null, null, null)))
                 .isInstanceOf(ResponseStatusException.class)

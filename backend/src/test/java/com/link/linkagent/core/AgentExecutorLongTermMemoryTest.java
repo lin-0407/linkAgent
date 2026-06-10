@@ -10,6 +10,7 @@ import com.link.linkagent.memory.LongTermMemoryRecord;
 import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.memory.SummaryMemory;
 import com.link.linkagent.memory.SummaryMemoryProperties;
+import com.link.linkagent.prompt.StubPromptService;
 import com.link.linkagent.tool.ToolExecutionProperties;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
@@ -34,7 +35,7 @@ class AgentExecutorLongTermMemoryTest {
                 new ToolRegistry(List.of()),
                 emptyToolExecutor(),
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
-                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of())),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of()), new StubPromptService()),
                 new LongTermMemory(mapper),
                 new NoopLongTermMemoryExtractor()
         );
@@ -57,7 +58,7 @@ class AgentExecutorLongTermMemoryTest {
                 new ToolRegistry(List.of()),
                 emptyToolExecutor(),
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
-                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of())),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of()), new StubPromptService()),
                 new LongTermMemory(mapper),
                 new NoopLongTermMemoryExtractor()
         );
@@ -76,7 +77,7 @@ class AgentExecutorLongTermMemoryTest {
                 new ToolRegistry(List.of()),
                 emptyToolExecutor(),
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
-                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of())),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of()), new StubPromptService()),
                 new LongTermMemory(mapper),
                 new FixedLongTermMemoryExtractor()
         );
@@ -141,7 +142,7 @@ class AgentExecutorLongTermMemoryTest {
     private static class NoopLongTermMemoryExtractor extends LongTermMemoryExtractor {
 
         NoopLongTermMemoryExtractor() {
-            super(new CapturingLlmService());
+            super(new CapturingLlmService(), new StubPromptService());
         }
 
         @Override
@@ -153,7 +154,7 @@ class AgentExecutorLongTermMemoryTest {
     private static class FixedLongTermMemoryExtractor extends LongTermMemoryExtractor {
 
         FixedLongTermMemoryExtractor() {
-            super(new CapturingLlmService());
+            super(new CapturingLlmService(), new StubPromptService());
         }
 
         @Override

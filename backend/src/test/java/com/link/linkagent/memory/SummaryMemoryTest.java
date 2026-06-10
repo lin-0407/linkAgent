@@ -1,5 +1,6 @@
 package com.link.linkagent.memory;
 
+import com.link.linkagent.prompt.StubPromptService;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -16,7 +17,7 @@ class SummaryMemoryTest {
 
     @Test
     void shouldReturnEmptySummaryWhenDisabled() {
-        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), fixedSummaryModel("summary"));
+        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), fixedSummaryModel("summary"), new StubPromptService());
 
         memory.saveSummary("session-1", "user likes Java");
 
@@ -25,7 +26,7 @@ class SummaryMemoryTest {
 
     @Test
     void shouldKeepManualSummaryWhenEnabled() {
-        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 8, 2), fixedSummaryModel("summary"));
+        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 8, 2), fixedSummaryModel("summary"), new StubPromptService());
 
         memory.saveSummary("session-1", " user likes Java ");
 
@@ -35,7 +36,7 @@ class SummaryMemoryTest {
     @Test
     void shouldNotSummarizeWhenMessageCountDoesNotReachThreshold() {
         AtomicInteger callCount = new AtomicInteger();
-        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 2, 2), countingModel(callCount));
+        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 2, 2), countingModel(callCount), new StubPromptService());
 
         boolean summarized = memory.shouldSummarize("session-1", List.of(
                 new MemoryMessage("Human", "first"),
@@ -50,7 +51,7 @@ class SummaryMemoryTest {
     @Test
     void shouldSummarizeAndSaveSummaryWhenMessageCountExceedsThreshold() {
         AtomicInteger callCount = new AtomicInteger();
-        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 2, 2), countingModel(callCount));
+        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 2, 2), countingModel(callCount), new StubPromptService());
 
         boolean summarized = memory.shouldSummarize("session-1", List.of(
                 new MemoryMessage("Human", "first"),
@@ -65,7 +66,7 @@ class SummaryMemoryTest {
 
     @Test
     void shouldReturnNonNegativeRetainedMessageCount() {
-        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 2, -1), fixedSummaryModel("summary"));
+        SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 2, -1), fixedSummaryModel("summary"), new StubPromptService());
 
         assertThat(memory.getRetainedMessageCount()).isZero();
     }
