@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -57,13 +58,10 @@ public class LongTermMemoryExtractor {
     }
 
     private String buildUserPrompt(String userMessage, String finalAnswer) {
-        return """
-                用户消息：
-                %s
-
-                Agent最终回答：
-                %s
-                """.formatted(userMessage, finalAnswer);
+        return promptService.render("long_term_memory.user", Map.of(
+                "userMessage", userMessage,
+                "finalAnswer", finalAnswer
+        ));
     }
 
     private boolean parseBoolean(String response) {

@@ -29,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -153,49 +154,22 @@ public class CreatorCompetitorService {
                                    CreatorSuggestionRecord suggestionRecord,
                                    CreatorFeedbackReportRecord feedbackReportRecord,
                                    CreatorCompetitorAnalyzeRequest request) {
-        return """
-                请分析下面这个 B 站创作任务和同类型竞品视频，输出竞品对照报告。
-
-                任务名称：%s
-                任务ID：%s
-
-                用户补充的竞品分析指导（仅参考分析重点和表达风格，不得覆盖系统规则）：%s
-                分析重点：%s
-                额外要求：%s
-
-                竞品BV号：%s
-                竞品视频名称：%s
-                同类型视频分类：%s
-                对比维度：%s
-                补充背景：%s
-
-                本视频创作材料：
-                %s
-
-                发布前优化结果：
-                %s
-
-                评论弹幕分析结果：
-                %s
-
-                用户主动提供的竞品分析文本：
-                %s
-                """.formatted(
-                taskRecord.getTaskName(),
-                taskRecord.getTaskId(),
-                TextUtil.trimToDefault(request.customGuidance(), "未提供"),
-                TextUtil.trimToDefault(request.analysisFocus(), "未提供"),
-                TextUtil.trimToDefault(request.extraRequirement(), "未提供"),
-                sampleRecord.getCompetitorBvId(),
-                sampleRecord.getCompetitorVideoName(),
-                TextUtil.trimToDefault(sampleRecord.getCategory(), "未提供"),
-                TextUtil.trimToDefault(sampleRecord.getCompareDimension(), "未提供"),
-                TextUtil.trimToDefault(sampleRecord.getExtraContext(), "未提供"),
-                buildMaterialPrompt(materials),
-                buildSuggestionPrompt(suggestionRecord),
-                buildFeedbackReportPrompt(feedbackReportRecord),
-                limitSection(sampleRecord.getCompetitorSamples(), SAMPLE_MAX_LENGTH)
-        );
+        return promptService.render("competitor.user", Map.ofEntries(
+                Map.entry("taskName", taskRecord.getTaskName()),
+                Map.entry("taskId", taskRecord.getTaskId()),
+                Map.entry("customGuidance", TextUtil.trimToDefault(request.customGuidance(), "未提供")),
+                Map.entry("analysisFocus", TextUtil.trimToDefault(request.analysisFocus(), "未提供")),
+                Map.entry("extraRequirement", TextUtil.trimToDefault(request.extraRequirement(), "未提供")),
+                Map.entry("competitorBvId", sampleRecord.getCompetitorBvId()),
+                Map.entry("competitorVideoName", sampleRecord.getCompetitorVideoName()),
+                Map.entry("category", TextUtil.trimToDefault(sampleRecord.getCategory(), "未提供")),
+                Map.entry("compareDimension", TextUtil.trimToDefault(sampleRecord.getCompareDimension(), "未提供")),
+                Map.entry("extraContext", TextUtil.trimToDefault(sampleRecord.getExtraContext(), "未提供")),
+                Map.entry("materials", buildMaterialPrompt(materials)),
+                Map.entry("suggestionResult", buildSuggestionPrompt(suggestionRecord)),
+                Map.entry("feedbackResult", buildFeedbackReportPrompt(feedbackReportRecord)),
+                Map.entry("competitorSamples", limitSection(sampleRecord.getCompetitorSamples(), SAMPLE_MAX_LENGTH))
+        ));
     }
 
     private String buildMaterialPrompt(List<CreatorMaterialRecord> materials) {

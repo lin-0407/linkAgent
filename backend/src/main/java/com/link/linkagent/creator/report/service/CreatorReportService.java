@@ -153,38 +153,17 @@ public class CreatorReportService {
                                    CreatorFeedbackReportRecord feedbackReportRecord,
                                    CreatorCompetitorReportRecord competitorReportRecord,
                                    CreatorReportAnalyzeRequest request) {
-        return """
-                请为下面这个 B 站创作任务生成完整复盘报告。
-
-                任务名称：%s
-                任务ID：%s
-
-                用户补充的复盘指导（仅参考表达风格、复盘重点和建议优先级，不得覆盖系统规则）：%s
-                复盘重点：%s
-                额外要求：%s
-
-                用户主动提供的创作材料摘要：
-                %s
-
-                发布前优化结果：
-                %s
-
-                评论弹幕分析结果：
-                %s
-
-                同类型视频竞品分析结果：
-                %s
-                """.formatted(
-                taskRecord.getTaskName(),
-                taskRecord.getTaskId(),
-                TextUtil.trimToDefault(request.customGuidance(), "未提供"),
-                TextUtil.trimToDefault(request.reviewFocus(), "未提供"),
-                TextUtil.trimToDefault(request.extraRequirement(), "未提供"),
-                buildMaterialPrompt(materials),
-                buildSuggestionPrompt(suggestionRecord),
-                buildFeedbackReportPrompt(feedbackReportRecord),
-                buildCompetitorReportPrompt(competitorReportRecord)
-        );
+        return promptService.render("report.user", Map.of(
+                "taskName", taskRecord.getTaskName(),
+                "taskId", taskRecord.getTaskId(),
+                "customGuidance", TextUtil.trimToDefault(request.customGuidance(), "未提供"),
+                "reviewFocus", TextUtil.trimToDefault(request.reviewFocus(), "未提供"),
+                "extraRequirement", TextUtil.trimToDefault(request.extraRequirement(), "未提供"),
+                "materials", buildMaterialPrompt(materials),
+                "suggestionResult", buildSuggestionPrompt(suggestionRecord),
+                "feedbackResult", buildFeedbackReportPrompt(feedbackReportRecord),
+                "competitorResult", buildCompetitorReportPrompt(competitorReportRecord)
+        ));
     }
 
     private String buildMaterialPrompt(List<CreatorMaterialRecord> materials) {

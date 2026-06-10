@@ -3,6 +3,7 @@ package com.link.linkagent.core;
 import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.memory.LongTermMemory;
+import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.memory.LongTermMemoryCandidate;
 import com.link.linkagent.memory.LongTermMemoryExtractor;
 import com.link.linkagent.memory.LongTermMemoryRecord;
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -43,6 +45,7 @@ public class AgentExecutor {
     private final SummaryMemory summaryMemory;
     private final LongTermMemory longTermMemory;
     private final LongTermMemoryExtractor longTermMemoryExtractor;
+    private final PromptService promptService;
 
     /** 结构化内核开关（阶段 5.4）：开则 ReAct 每步走 schema 约束的 ReActStep，关则走原文本解析路。默认关 = 零回归。 */
     @Value("${agent.kernel.structured.enabled:false}")
@@ -79,7 +82,8 @@ public class AgentExecutor {
     public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
                          ShortTermMemory shortTermMemory,
                          SummaryMemory summaryMemory, LongTermMemory longTermMemory,
-                         LongTermMemoryExtractor longTermMemoryExtractor) {
+                         LongTermMemoryExtractor longTermMemoryExtractor,
+                         PromptService promptService) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
@@ -87,6 +91,7 @@ public class AgentExecutor {
         this.summaryMemory = summaryMemory;
         this.longTermMemory = longTermMemory;
         this.longTermMemoryExtractor = longTermMemoryExtractor;
+        this.promptService = promptService;
     }
 
     /**
@@ -444,29 +449,7 @@ public class AgentExecutor {
         String toolDescriptions = tools.stream()
                 .map(t -> "- " + t.getName() + ": " + t.getDescription())
                 .collect(Collectors.joining("\n"));
-
-        return """
-            你是LinkAgent，可以使用以下工具:
-        
-        %s
-        
-            请使用以下格式回复:
-        
-            Thought:你对接下来要做什么的推理
-            Action:工具名称
-            Action Input:工具的输入内容
-        
-            或者当你已经获得最终答案时:
-        
-            Thought:我现在已经掌握了所需信息
-            Final Answer:你对Human的最终回复
-        
-            规则:
-            - 每次只使用一个工具。
-            - 始终以"Thought:"开头来解释你的推理。
-            - 使用工具时，必须同时包含"Action:"和"Action Input:"。
-            - 当你掌握了足够的信息，就输出"Final Answer:"。
-        """.formatted(toolDescriptions);
+        return promptService.render("agent_executor.system", Map.of("toolList", toolDescriptions));
     }
 
     /**
@@ -477,16 +460,6 @@ public class AgentExecutor {
         String toolDescriptions = tools.stream()
                 .map(t -> "- " + t.getName() + ": " + t.getDescription())
                 .collect(Collectors.joining("\n"));
-
-        return """
-            你是 LinkAgent，可以使用以下工具：
-
-            %s
-
-            请按 ReAct 方式逐步推理：每一步先在 thought 写下你的推理，然后二选一——
-            - 需要更多信息时：把 action 设为要调用的工具名、actionInput 设为该工具的输入，finalAnswer 留空；
-            - 信息已足够时：把 finalAnswer 设为给用户的最终回复，action 与 actionInput 留空。
-            每步只能调用一个工具；工具返回会作为 Observation 追加到对话，供你下一步参考。
-            """.formatted(toolDescriptions);
+        return promptService.render("agent_executor_structured.system", Map.of("toolList", toolDescriptions));
     }
 }

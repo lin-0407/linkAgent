@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 提示词取词 / 改词服务。
@@ -46,6 +47,19 @@ public class PromptService {
      */
     public List<PromptTemplate> listAll() {
         return promptTemplateMapper.listAll();
+    }
+
+    /**
+     * 渲染 USER 提示词：取模板正文，将 {varName} 形式的命名占位符替换为 vars 中对应值。
+     * 缺值时原样留 {varName} 可见；推荐调用方传入前用 TextUtil.trimToDefault 处理 null，
+     * 避免 Map.of() 因 null value 抛 NullPointerException。
+     */
+    public String render(String key, Map<String, String> vars) {
+        String template = get(key);
+        for (Map.Entry<String, String> entry : vars.entrySet()) {
+            template = template.replace("{" + entry.getKey() + "}", entry.getValue());
+        }
+        return template;
     }
 
     /**
