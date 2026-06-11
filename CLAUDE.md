@@ -18,54 +18,35 @@
 |------|-------------------------------------------|
 | 框架   | Spring Boot 3.5.11 + Spring AI 1.1.4      |
 | JDK  | 21                                        |
-| LLM  | Qwen3 / DeepSeek-v4-pro（国内可用）+ Claude（可选） |
+| LLM  | DeepSeek-v4-pro |
 | 向量库  | Milvus（性能）                                |
 | 记忆存储 | Redis（短期） + MySQL（长期）                     |
 | 可观测  | Langfuse（开源自部署）                           |
 | MCP  | `io.modelcontextprotocol:java-sdk`        |
 | 前端   | Vue3 + SSE + TypeScript                   |
-| 部署   | Docker Compose + 阿里云轻量服务器                 |
+| 部署   | Docker Compose                |
 
 ## 关键约束
 - 本项目优先参照 `E:\linkAgent\linkAgent\docs` 下项目文档进行开发；底层 Agent 原理可参考 `E:\linkAgent\docs` 下说明书。
-- 当前转向总纲以 `E:\linkAgent\linkAgent\docs\develop\阶段4-UP主智能工作台总流程大纲.md` 为准。
+- 本项目开发环境是windows，而mysql、redis、milvus等是部署于linux虚拟机docker容器里
 - 所有注释必须使用中文，且要清晰解释为什么这么做，而不是做了什么。
 - 表设计必须把对应字段注释以中文形式说明清楚
 - 所有引入的第三方方法必须是真实可用的，不能是过时的或者不兼容当前技术栈的，如果当前没有此方法，必须联网搜索对应解决方案。
 - 所有对外 API 必须有入参校验（Jakarta Validation @Valid / @NotBlank 等）
 - 禁止引入额外的第三方 validation 库（Spring Boot 自带的 Jakarta + Hibernate Validator 已足够）
-- 数据库 Schema 统一维护在 `sql/` 目录下，直接修改脚本文件，暂不引入迁移框架
-- 涉及平台数据时默认走用户输入、上传文件或显式触发的单 BV 限量样例采集路线；不默认实现批量爬虫、定时同步或绕过平台限制。
+- 数据库 Schema 统一维护在 `sql/` 目录下，直接修改脚本文件，暂不引入迁移框架 。
 - 所有前后端所有的编译和测试以及运行任务必须交给作者执行，由开发者将结果告知你
 
 ## 协作约定（请严格遵守）
 开发流程: 必须严格按照开发流程文档的步骤进行：`E:\linkAgent\skills\develop_process\SKILL.md`
-
-作者画像:
-
-- Java 后端方向学习者，已有 Spring Boot / Spring AI 使用经验
-- 职业目标：成为 **"AI 应用开发 + 后端开发"** 复合型工程师
-- 本项目定位：**面向 B 站内容创作者的 AI 应用作品集项目（找工作导向）**
-- 技术栈偏好：主栈 Java + Spring AI（差异化），Python + LangGraph 留作后续第二作品
-
-1. **学习模式（Learning Style）**：作者正处于技术成长期，你不是"全代人"而是"教练 + 搭档"。
-2. **Insight 习惯**：关键实现前后用以下格式给 至少3 条代码洞察（非泛泛教程，聚焦当前代码与架构）：
-   ```
-   ★ Insight ─────────────────────────────────────
-   ...
-   ─────────────────────────────────────────────────
-   ```
-3. **原则**：多写注释、不做过度设计、先跑通再优化、不要引入没用到的抽象。
-    - **简单优先**：所有东西先按最基础最简单的方案来做，等到确实发现架构问题导致的冗余和堆砌时再进行重构。这才是正确的学习进程，不能一上来就过度设计。
-    - **单一职责**：当开始执行一个新任务时，必须先进行任务拆分，然后根据拆分结果每次只解决一个问题，充分保证让开发者真正理解问题和处理方案。
-4. **语言**：中文回复，代码英文命名。
 
 ## 不要改
 - `package.json` 里的 node 版本
 
 ## 代码风格
 - 命名符合阿里java开发规范
-- 代码逻辑清晰，可读性要强
+- 代码逻辑清晰，可读性要强，不可以过度炫技，代码可读性比一切都重要
+- 任何时候都要考虑代码的可维护性和可扩展性，不能写一次性代码，必须写出能支持未来功能迭代的代码
 
 ## 遇到不确定的时候
 - 必须先向作者告诉自己的疑问，通过作者的指引去处理问题
@@ -103,15 +84,6 @@
 | 阶段 4.3.1 - 创作工作台前端接入 | `/docs/develop/阶段4.3.1-创作工作台前端接入.md` |
 | 阶段 4.3.2 - 创作指导可编辑窗口 | `/docs/develop/阶段4.3.2-创作指导可编辑窗口.md` |
 | 阶段 4.3.3 - B 站评论弹幕样例采集脚本 | `/docs/develop/阶段4.3.3-B站评论弹幕样例采集脚本.md` |
-| 阶段 4.13 - 反馈追问证据链增强与 RAG 最小闭环 | `/docs/develop/阶段4.13-反馈追问证据链增强与RAG最小闭环.md` |
-| 阶段 4.14 - 复盘报告 Markdown 导出 | `/docs/develop/阶段4.14-复盘报告Markdown导出.md` |
-| 阶段 4.15 - AI 交互台浮窗化 | `/docs/develop/阶段4.15-AI交互台浮窗化.md` |
-| 阶段 5 - RAG 完整落地与 Agent 一体化总览 | `/docs/develop/阶段5-RAG完整落地与Agent一体化总览.md` |
-| 阶段 5.1 - 跨分区视频案例知识库 | `/docs/develop/阶段5.1-跨分区视频案例知识库.md` |
-| 阶段 5.2 - 高级检索链路 | `/docs/develop/阶段5.2-高级检索链路.md` |
-| 阶段 5.3 - Agent 工具化与内核统一 | `/docs/develop/阶段5.3-Agent工具化与内核统一.md` |
-| 阶段 5.4 - Agent 内核结构化输出升级 | `/docs/develop/阶段5.4-Agent内核结构化输出升级.md` |
-| 阶段 5.5 - 提示词模板 DB 化与热更新 | `/docs/develop/阶段5.5-提示词模板DB化与热更新.md` |
 | MVC 架构说明 | `/docs/reference/MVC架构说明.md` |
 | 阶段 4.1 - 创作任务与稿件输入接口说明 | `/docs/reference/创作任务与稿件输入接口说明.md` |
 | 创作任务材料文件导入接口说明 | `/docs/reference/创作任务材料文件导入接口说明.md` |
@@ -133,11 +105,6 @@
 | Prompt 版本评测闭环说明 | `/docs/reference/Prompt版本评测闭环说明.md` |
 | LLM 用量采集与评测统计口径说明 | `/docs/reference/LLM用量采集与评测统计口径说明.md` |
 | 创作者语境与建议质量升级说明 | `/docs/reference/创作者语境与建议质量升级说明.md` |
-| 反馈追问证据链与 RAG 最小闭环说明 | `/docs/reference/反馈追问证据链与RAG最小闭环说明.md` |
-| 复盘报告 Markdown 导出说明 | `/docs/reference/复盘报告Markdown导出说明.md` |
-| AI 交互台浮窗说明 | `/docs/reference/AI交互台浮窗说明.md` |
-| 跨分区视频案例知识库说明 | `/docs/reference/跨分区视频案例知识库说明.md` |
-| 高级检索链路说明 | `/docs/reference/高级检索链路说明.md` |
 | 阶段 4.0 - MVC 架构重整踩坑记录 | `/docs/error/阶段4.0-MVC架构重整踩坑记录.md` |
 | 阶段 4.1 - 创作任务与稿件输入踩坑记录 | `/docs/error/阶段4.1-创作任务与稿件输入踩坑记录.md` |
 | 阶段 4.1.1 - 创作任务材料文件导入踩坑记录 | `/docs/error/阶段4.1.1-创作任务材料文件导入踩坑记录.md` |
@@ -160,8 +127,22 @@
 | 阶段 4.9 - Prompt 版本评测闭环踩坑记录 | `/docs/error/阶段4.9-Prompt版本评测闭环踩坑记录.md` |
 | 阶段 4.10 - LLM 用量采集与评测统计口径踩坑记录 | `/docs/error/阶段4.10-LLM用量采集与评测统计口径踩坑记录.md` |
 | 阶段 4.11 - 创作者语境与建议质量升级踩坑记录 | `/docs/error/阶段4.11-创作者语境与建议质量升级踩坑记录.md` |
+| 阶段 4.13 - 反馈追问证据链增强与 RAG 最小闭环 | `/docs/develop/阶段4.13-反馈追问证据链增强与RAG最小闭环.md` |
+| 反馈追问证据链与 RAG 最小闭环说明 | `/docs/reference/反馈追问证据链与RAG最小闭环说明.md` |
 | 阶段 4.13 - 反馈追问证据链增强与 RAG 最小闭环踩坑记录 | `/docs/error/阶段4.13-反馈追问证据链增强与RAG最小闭环踩坑记录.md` |
+| 阶段 4.14 - 复盘报告 Markdown 导出 | `/docs/develop/阶段4.14-复盘报告Markdown导出.md` |
+| 复盘报告 Markdown 导出说明 | `/docs/reference/复盘报告Markdown导出说明.md` |
 | 阶段 4.14 - 复盘报告 Markdown 导出踩坑记录 | `/docs/error/阶段4.14-复盘报告Markdown导出踩坑记录.md` |
+| 阶段 4.15 - AI 交互台浮窗化 | `/docs/develop/阶段4.15-AI交互台浮窗化.md` |
+| AI 交互台浮窗说明 | `/docs/reference/AI交互台浮窗说明.md` |
 | 阶段 4.15 - AI 交互台浮窗化踩坑记录 | `/docs/error/阶段4.15-AI交互台浮窗化踩坑记录.md` |
+| 阶段 5 - RAG 完整落地与 Agent 一体化总览 | `/docs/develop/阶段5-RAG完整落地与Agent一体化总览.md` |
+| 阶段 5.1 - 跨分区视频案例知识库 | `/docs/develop/阶段5.1-跨分区视频案例知识库.md` |
+| 跨分区视频案例知识库说明 | `/docs/reference/跨分区视频案例知识库说明.md` |
 | 阶段 5.1 - 跨分区视频案例知识库踩坑记录 | `/docs/error/阶段5.1-跨分区视频案例知识库踩坑记录.md` |
+| 阶段 5.2 - 高级检索链路 | `/docs/develop/阶段5.2-高级检索链路.md` |
+| 高级检索链路说明 | `/docs/reference/高级检索链路说明.md` |
 | 阶段 5.2 - 高级检索链路踩坑记录 | `/docs/error/阶段5.2-高级检索链路踩坑记录.md` |
+| 阶段 5.3 - Agent 工具化与内核统一 | `/docs/develop/阶段5.3-Agent工具化与内核统一.md` |
+| 阶段 5.4 - Agent 内核结构化输出升级 | `/docs/develop/阶段5.4-Agent内核结构化输出升级.md` |
+| 阶段 5.5 - 提示词模板 DB 化与热更新 | `/docs/develop/阶段5.5-提示词模板DB化与热更新.md` |

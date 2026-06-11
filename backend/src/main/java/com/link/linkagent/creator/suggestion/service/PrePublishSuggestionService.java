@@ -135,7 +135,7 @@ public class PrePublishSuggestionService {
     }
 
     private String buildSystemPrompt() {
-        return promptService.get(“pre_publish.system”);
+        return promptService.get("pre_publish.system");
     }
 
     private String buildUserPrompt(CreatorTaskRecord taskRecord,

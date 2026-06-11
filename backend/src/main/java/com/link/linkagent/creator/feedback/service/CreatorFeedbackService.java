@@ -1103,12 +1103,12 @@ public class CreatorFeedbackService {
                                        CreatorFeedbackReportRecord reportRecord,
                                        List<CreatorFeedbackItemRecord> evidenceRecords,
                                        String question) {
-        return promptService.render(“feedback_chat.user”, Map.of(
-                “taskName”, taskRecord.getTaskName(),
-                “taskId”, taskRecord.getTaskId(),
-                “question”, TextUtil.trimToDefault(question, “未提供”),
-                “reportContext”, buildChatReportContext(reportRecord),
-                “evidenceContext”, buildChatEvidenceContext(evidenceRecords)
+        return promptService.render("feedback_chat.user", Map.of(
+                "taskName", taskRecord.getTaskName(),
+                "taskId", taskRecord.getTaskId(),
+                "question", TextUtil.trimToDefault(question, "未提供"),
+                "reportContext", buildChatReportContext(reportRecord),
+                "evidenceContext", buildChatEvidenceContext(evidenceRecords)
         ));
     }
 
