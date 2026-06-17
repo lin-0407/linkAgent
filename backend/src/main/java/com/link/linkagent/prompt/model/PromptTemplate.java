@@ -5,7 +5,7 @@ import java.time.LocalDateTime;
 /**
  * 提示词模板实体，对应 llm_prompt_template 表的一行。
  * 把原本写死在各 Service 里的大模型提示词搬到数据库后，调用方按 promptKey 取词，
- * 改一句提示词不必再改代码、重新打包发版，配合 PromptService 的缓存刷新即可运行期热更新。
+ * 改一句提示词不必再改代码、重新打包发版；PromptService 每次直接查库，所以运行期改库后下一次调用就生效。
  * 各字段含义以建表语句里的列 COMMENT 为准，这里不重复注释，避免两处说明漂移。
  */
 public class PromptTemplate {

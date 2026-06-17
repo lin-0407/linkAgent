@@ -1,6 +1,7 @@
 package com.link.linkagent.knowledge.rag;
 
 import com.link.linkagent.knowledge.config.KnowledgeRagProperties;
+import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +38,7 @@ public class KnowledgeRerankClient {
     private static final Logger log = LoggerFactory.getLogger(KnowledgeRerankClient.class);
 
     private final KnowledgeRagProperties properties;
+    private final RuntimeSettingService runtimeSettingService;
     /** 预构建的 RestClient：只配超时、不设 baseUrl；构建本身不建连接，关 rerank 时也不会真正发请求。 */
     private final RestClient restClient;
     /**
@@ -47,8 +49,10 @@ public class KnowledgeRerankClient {
      */
     private final String endpoint;
 
-    public KnowledgeRerankClient(KnowledgeRagProperties properties) {
+    public KnowledgeRerankClient(KnowledgeRagProperties properties,
+                                 RuntimeSettingService runtimeSettingService) {
         this.properties = properties;
+        this.runtimeSettingService = runtimeSettingService;
         KnowledgeRagProperties.Rerank rerank = properties.getRerank();
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         // 连接 / 读取都设超时：rerank 是检索链路里的同步外部调用，慢响应不能拖垮整个 /search。
@@ -74,7 +78,7 @@ public class KnowledgeRerankClient {
     public List<Integer> rerank(String query, List<String> documents) {
         KnowledgeRagProperties.Rerank rerank = properties.getRerank();
         // 关、无 Key、或候选不足 2 条（无需精排）都直接短路，不发外部请求。
-        if (!rerank.isEnabled() || !TextUtil.hasText(rerank.getApiKey())
+        if (!runtimeSettingService.isKnowledgeRerankEnabled() || !TextUtil.hasText(rerank.getApiKey())
                 || documents == null || documents.size() <= 1) {
             return List.of();
         }

@@ -2,23 +2,13 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   fetchImportReferenceVideo,
-  getReferenceVideoHybridIndexStatus,
-  getReferenceVideoIndexStatus,
-  getReferenceVideoItemHybridIndexStatus,
-  getReferenceVideoItemIndexStatus,
   listReferenceVideos,
-  rebuildReferenceVideoHybridIndex,
-  rebuildReferenceVideoIndex,
-  rebuildReferenceVideoItemHybridIndex,
-  rebuildReferenceVideoItemIndex,
   searchReferenceVideos,
 } from '@/api/knowledge'
 import type {
   ReferenceVideo,
   ReferenceVideoEvidenceItem,
   ReferenceVideoImportResult,
-  ReferenceVideoIndexResult,
-  ReferenceVideoIndexStatus,
   ReferenceVideoSearchResult,
 } from '@/types/knowledge'
 
@@ -56,39 +46,6 @@ const filterTier = ref('')
 const filterCategory = ref('')
 const listLoading = ref(false)
 const listError = ref('')
-
-// 向量索引状态与重建（5.1c）。RAG 关闭时 indexStatus.vectorStoreReady=false，重建按钮禁用。
-const indexStatus = ref<ReferenceVideoIndexStatus | null>(null)
-const indexLoading = ref(false)
-const indexStatusError = ref('')
-const indexing = ref(false)
-const indexResult = ref<ReferenceVideoIndexResult | null>(null)
-const indexError = ref('')
-
-// 子条目向量索引状态与重建（5.2c-1，small-to-big 的 small 端）。与父索引状态同形，复用同一套类型；
-// vectorStoreReady 在此语义下表示「子向量库是否就绪」，子集合未就绪时重建按钮禁用。
-const itemIndexStatus = ref<ReferenceVideoIndexStatus | null>(null)
-const itemIndexLoading = ref(false)
-const itemIndexStatusError = ref('')
-const itemIndexing = ref(false)
-const itemIndexResult = ref<ReferenceVideoIndexResult | null>(null)
-const itemIndexError = ref('')
-
-// 原生 hybrid 索引状态与重灌（5.2d-1）。复用同形类型；vectorStoreReady=hybrid 库是否就绪，关时重灌按钮禁用。
-const hybridIndexStatus = ref<ReferenceVideoIndexStatus | null>(null)
-const hybridIndexLoading = ref(false)
-const hybridIndexStatusError = ref('')
-const hybridIndexing = ref(false)
-const hybridIndexResult = ref<ReferenceVideoIndexResult | null>(null)
-const hybridIndexError = ref('')
-
-// 子条目原生 hybrid 索引状态与重灌（5.2d-3）。复用同形类型；vectorStoreReady=子 hybrid 库是否就绪，关时重灌按钮禁用。
-const childHybridIndexStatus = ref<ReferenceVideoIndexStatus | null>(null)
-const childHybridIndexLoading = ref(false)
-const childHybridIndexStatusError = ref('')
-const childHybridIndexing = ref(false)
-const childHybridIndexResult = ref<ReferenceVideoIndexResult | null>(null)
-const childHybridIndexError = ref('')
 
 // 案例检索（5.2a）：query 必填，tier / category 为可选过滤；topK 不在前端暴露，用后端默认（knowledge.rag.top-k=8）。
 const searchQuery = ref('')
@@ -213,133 +170,8 @@ function changePage(delta: number) {
   void loadList()
 }
 
-async function loadIndexStatus() {
-  indexLoading.value = true
-  indexStatusError.value = ''
-  try {
-    indexStatus.value = await getReferenceVideoIndexStatus()
-  } catch (error) {
-    indexStatusError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    indexLoading.value = false
-  }
-}
-
-async function rebuildIndex() {
-  if (indexing.value) {
-    return
-  }
-  indexing.value = true
-  indexError.value = ''
-  indexResult.value = null
-  try {
-    indexResult.value = await rebuildReferenceVideoIndex()
-    // 重建后刷新状态与列表：卡片上的「已索引/待索引」标记随之更新
-    await loadIndexStatus()
-    await loadList()
-  } catch (error) {
-    indexError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    indexing.value = false
-  }
-}
-
-async function loadItemIndexStatus() {
-  itemIndexLoading.value = true
-  itemIndexStatusError.value = ''
-  try {
-    itemIndexStatus.value = await getReferenceVideoItemIndexStatus()
-  } catch (error) {
-    itemIndexStatusError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    itemIndexLoading.value = false
-  }
-}
-
-async function rebuildItemIndex() {
-  if (itemIndexing.value) {
-    return
-  }
-  itemIndexing.value = true
-  itemIndexError.value = ''
-  itemIndexResult.value = null
-  try {
-    itemIndexResult.value = await rebuildReferenceVideoItemIndex()
-    // 子条目索引只影响子集合、不改父卡片的 embedding 标记，故只刷新子索引状态、不必重载案例列表。
-    await loadItemIndexStatus()
-  } catch (error) {
-    itemIndexError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    itemIndexing.value = false
-  }
-}
-
-async function loadHybridIndexStatus() {
-  hybridIndexLoading.value = true
-  hybridIndexStatusError.value = ''
-  try {
-    hybridIndexStatus.value = await getReferenceVideoHybridIndexStatus()
-  } catch (error) {
-    hybridIndexStatusError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    hybridIndexLoading.value = false
-  }
-}
-
-async function rebuildHybridIndex() {
-  if (hybridIndexing.value) {
-    return
-  }
-  hybridIndexing.value = true
-  hybridIndexError.value = ''
-  hybridIndexResult.value = null
-  try {
-    // 整库重灌：drop 旧 hybrid 集合 → 自建 schema 重建 → 从 MySQL 重灌，耗时随案例数增长。
-    hybridIndexResult.value = await rebuildReferenceVideoHybridIndex()
-    await loadHybridIndexStatus()
-  } catch (error) {
-    hybridIndexError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    hybridIndexing.value = false
-  }
-}
-
-async function loadChildHybridIndexStatus() {
-  childHybridIndexLoading.value = true
-  childHybridIndexStatusError.value = ''
-  try {
-    childHybridIndexStatus.value = await getReferenceVideoItemHybridIndexStatus()
-  } catch (error) {
-    childHybridIndexStatusError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    childHybridIndexLoading.value = false
-  }
-}
-
-async function rebuildChildHybridIndex() {
-  if (childHybridIndexing.value) {
-    return
-  }
-  childHybridIndexing.value = true
-  childHybridIndexError.value = ''
-  childHybridIndexResult.value = null
-  try {
-    // 整库重灌子集合：drop 旧子 hybrid 集合 → 自建 schema 重建 → 从 MySQL 重灌未删子条目。
-    childHybridIndexResult.value = await rebuildReferenceVideoItemHybridIndex()
-    await loadChildHybridIndexStatus()
-  } catch (error) {
-    childHybridIndexError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    childHybridIndexing.value = false
-  }
-}
-
-function retrievalModeLabel(mode: string) {
-  return mode === 'VECTOR' ? '向量检索' : 'SQL 检索'
-}
-
-// 检索结果的实际模式标签（三态），与索引状态的两态预测 retrievalModeLabel 刻意分开：
-// 这里多一个「向量 + SQL 兜底」，对应后端向量命中不足、合并兜底补足的情况，硬复用会丢掉这个信号。
+// 检索结果的实际模式标签（三态）：这里多一个「向量 + SQL 兜底」，
+// 对应后端向量命中不足、合并兜底补足的情况。
 function searchModeLabel(mode: string) {
   switch (mode) {
     case 'VECTOR':
@@ -412,10 +244,6 @@ async function submitSearch() {
 
 onMounted(() => {
   void loadList()
-  void loadIndexStatus()
-  void loadItemIndexStatus()
-  void loadHybridIndexStatus()
-  void loadChildHybridIndexStatus()
 })
 </script>
 
@@ -486,199 +314,6 @@ onMounted(() => {
         <strong>采集失败</strong>
         <span>{{ importError }}</span>
       </div>
-    </section>
-
-    <section class="creator-section">
-      <div class="creator-section-head">
-        <h3>向量索引</h3>
-        <div class="knowledge-toolbar">
-          <button type="button" class="creator-secondary-action" :disabled="indexLoading" @click="loadIndexStatus">
-            {{ indexLoading ? '刷新中…' : '刷新状态' }}
-          </button>
-          <button
-            type="button"
-            class="creator-primary-button"
-            :disabled="indexing || !indexStatus?.vectorStoreReady"
-            @click="rebuildIndex"
-          >
-            {{ indexing ? '索引中…' : '重建索引' }}
-          </button>
-        </div>
-      </div>
-      <p class="creator-inline-note">
-        把案例卡片写入向量库供语义检索（5.2 用）。需开启 knowledge.rag 并配置 Embedding 与 Milvus；关闭时此处显示降级状态、重建按钮不可用。
-      </p>
-
-      <div v-if="indexStatusError" class="creator-alert error-alert">
-        <strong>状态加载失败</strong>
-        <span>{{ indexStatusError }}</span>
-      </div>
-      <div v-else-if="indexStatus" class="creator-chip-list">
-        <b>{{ indexStatus.ragEnabled ? 'RAG 已启用' : 'RAG 关闭' }}</b>
-        <b>{{ indexStatus.vectorStoreReady ? '向量库就绪' : '向量库未就绪' }}</b>
-        <b>检索模式 {{ retrievalModeLabel(indexStatus.retrievalMode) }}</b>
-        <b>已索引 {{ indexStatus.indexedCount }}</b>
-        <b>待索引 {{ indexStatus.pendingCount }}</b>
-        <b v-if="indexStatus.failedCount > 0">失败 {{ indexStatus.failedCount }}</b>
-        <b>共 {{ indexStatus.totalCount }}</b>
-      </div>
-
-      <div v-if="indexResult" class="creator-alert success-alert">
-        <strong>重建完成</strong>
-        <span>
-          本次索引 {{ indexResult.indexedCount }} 条<template v-if="indexResult.failedCount > 0">，失败 {{ indexResult.failedCount }} 条</template>。
-        </span>
-      </div>
-      <div v-if="indexError" class="creator-alert error-alert">
-        <strong>重建失败</strong>
-        <span>{{ indexError }}</span>
-      </div>
-      <ul v-if="indexResult && indexResult.warnings.length" class="knowledge-warnings">
-        <li v-for="(warning, idx) in indexResult.warnings" :key="idx">{{ warning }}</li>
-      </ul>
-    </section>
-
-    <section class="creator-section">
-      <div class="creator-section-head">
-        <h3>子条目索引</h3>
-        <div class="knowledge-toolbar">
-          <button type="button" class="creator-secondary-action" :disabled="itemIndexLoading" @click="loadItemIndexStatus">
-            {{ itemIndexLoading ? '刷新中…' : '刷新状态' }}
-          </button>
-          <button
-            type="button"
-            class="creator-primary-button"
-            :disabled="itemIndexing || !itemIndexStatus?.vectorStoreReady"
-            @click="rebuildItemIndex"
-          >
-            {{ itemIndexing ? '索引中…' : '重建子条目索引' }}
-          </button>
-        </div>
-      </div>
-      <p class="creator-inline-note">
-        把优质评论 / 弹幕原文写入独立子集合，作为「父子召回（small-to-big）」的小颗粒召回端（5.2c 检索侧用）。与上方父集合索引相互独立：子集合未就绪只影响子召回、不影响案例检索。
-      </p>
-
-      <div v-if="itemIndexStatusError" class="creator-alert error-alert">
-        <strong>状态加载失败</strong>
-        <span>{{ itemIndexStatusError }}</span>
-      </div>
-      <div v-else-if="itemIndexStatus" class="creator-chip-list">
-        <b>{{ itemIndexStatus.ragEnabled ? 'RAG 已启用' : 'RAG 关闭' }}</b>
-        <b>{{ itemIndexStatus.vectorStoreReady ? '子向量库就绪' : '子向量库未就绪' }}</b>
-        <b>已索引 {{ itemIndexStatus.indexedCount }}</b>
-        <b>待索引 {{ itemIndexStatus.pendingCount }}</b>
-        <b v-if="itemIndexStatus.failedCount > 0">失败 {{ itemIndexStatus.failedCount }}</b>
-        <b>共 {{ itemIndexStatus.totalCount }}</b>
-      </div>
-
-      <div v-if="itemIndexResult" class="creator-alert success-alert">
-        <strong>重建完成</strong>
-        <span>
-          本次索引 {{ itemIndexResult.indexedCount }} 条子条目<template v-if="itemIndexResult.failedCount > 0">，失败 {{ itemIndexResult.failedCount }} 条</template>。
-        </span>
-      </div>
-      <div v-if="itemIndexError" class="creator-alert error-alert">
-        <strong>重建失败</strong>
-        <span>{{ itemIndexError }}</span>
-      </div>
-      <ul v-if="itemIndexResult && itemIndexResult.warnings.length" class="knowledge-warnings">
-        <li v-for="(warning, idx) in itemIndexResult.warnings" :key="idx">{{ warning }}</li>
-      </ul>
-    </section>
-
-    <section class="creator-section">
-      <div class="creator-section-head">
-        <h3>原生 hybrid 索引</h3>
-        <div class="knowledge-toolbar">
-          <button type="button" class="creator-secondary-action" :disabled="hybridIndexLoading" @click="loadHybridIndexStatus">
-            {{ hybridIndexLoading ? '刷新中…' : '刷新状态' }}
-          </button>
-          <button
-            type="button"
-            class="creator-primary-button"
-            :disabled="hybridIndexing || !hybridIndexStatus?.vectorStoreReady"
-            @click="rebuildHybridIndex"
-          >
-            {{ hybridIndexing ? '重灌中…' : '重建 hybrid 索引（重灌）' }}
-          </button>
-        </div>
-      </div>
-      <p class="creator-inline-note">
-        把案例卡片灌入自建 schema 的 hybrid 集合（dense 语义 + BM25 关键词），供原生混合检索用。需 Milvus 服务端 ≥2.5 并开启 knowledge.rag.hybrid；整库重灌（drop 后从 MySQL 重建，无损）。关闭时此处显示未就绪、按钮不可用。
-      </p>
-
-      <div v-if="hybridIndexStatusError" class="creator-alert error-alert">
-        <strong>状态加载失败</strong>
-        <span>{{ hybridIndexStatusError }}</span>
-      </div>
-      <div v-else-if="hybridIndexStatus" class="creator-chip-list">
-        <b>{{ hybridIndexStatus.ragEnabled ? 'RAG 已启用' : 'RAG 关闭' }}</b>
-        <b>{{ hybridIndexStatus.vectorStoreReady ? 'hybrid 库就绪' : 'hybrid 库未就绪' }}</b>
-        <b>检索模式 {{ hybridIndexStatus.retrievalMode }}</b>
-        <b>可重灌案例 {{ hybridIndexStatus.totalCount }}</b>
-      </div>
-
-      <div v-if="hybridIndexResult" class="creator-alert success-alert">
-        <strong>重灌完成</strong>
-        <span>
-          本次灌入 {{ hybridIndexResult.indexedCount }} 条案例<template v-if="hybridIndexResult.failedCount > 0">，失败 {{ hybridIndexResult.failedCount }} 条</template>。
-        </span>
-      </div>
-      <div v-if="hybridIndexError" class="creator-alert error-alert">
-        <strong>重灌失败</strong>
-        <span>{{ hybridIndexError }}</span>
-      </div>
-      <ul v-if="hybridIndexResult && hybridIndexResult.warnings.length" class="knowledge-warnings">
-        <li v-for="(warning, idx) in hybridIndexResult.warnings" :key="idx">{{ warning }}</li>
-      </ul>
-    </section>
-
-    <section class="creator-section">
-      <div class="creator-section-head">
-        <h3>子条目 hybrid 索引</h3>
-        <div class="knowledge-toolbar">
-          <button type="button" class="creator-secondary-action" :disabled="childHybridIndexLoading" @click="loadChildHybridIndexStatus">
-            {{ childHybridIndexLoading ? '刷新中…' : '刷新状态' }}
-          </button>
-          <button
-            type="button"
-            class="creator-primary-button"
-            :disabled="childHybridIndexing || !childHybridIndexStatus?.vectorStoreReady"
-            @click="rebuildChildHybridIndex"
-          >
-            {{ childHybridIndexing ? '重灌中…' : '重建子 hybrid 索引（重灌）' }}
-          </button>
-        </div>
-      </div>
-      <p class="creator-inline-note">
-        把优质评论 / 弹幕原文灌入子 hybrid 集合（dense 语义 + BM25 关键词），hybrid 开启时 small-to-big 子召回走它。需开启 knowledge.rag.hybrid；整库重灌（drop 后从 MySQL 重建，无损）。关闭时此处显示未就绪、按钮不可用。
-      </p>
-
-      <div v-if="childHybridIndexStatusError" class="creator-alert error-alert">
-        <strong>状态加载失败</strong>
-        <span>{{ childHybridIndexStatusError }}</span>
-      </div>
-      <div v-else-if="childHybridIndexStatus" class="creator-chip-list">
-        <b>{{ childHybridIndexStatus.ragEnabled ? 'RAG 已启用' : 'RAG 关闭' }}</b>
-        <b>{{ childHybridIndexStatus.vectorStoreReady ? '子 hybrid 库就绪' : '子 hybrid 库未就绪' }}</b>
-        <b>检索模式 {{ childHybridIndexStatus.retrievalMode }}</b>
-        <b>可重灌子条目 {{ childHybridIndexStatus.totalCount }}</b>
-      </div>
-
-      <div v-if="childHybridIndexResult" class="creator-alert success-alert">
-        <strong>重灌完成</strong>
-        <span>
-          本次灌入 {{ childHybridIndexResult.indexedCount }} 条子条目<template v-if="childHybridIndexResult.failedCount > 0">，失败 {{ childHybridIndexResult.failedCount }} 条</template>。
-        </span>
-      </div>
-      <div v-if="childHybridIndexError" class="creator-alert error-alert">
-        <strong>重灌失败</strong>
-        <span>{{ childHybridIndexError }}</span>
-      </div>
-      <ul v-if="childHybridIndexResult && childHybridIndexResult.warnings.length" class="knowledge-warnings">
-        <li v-for="(warning, idx) in childHybridIndexResult.warnings" :key="idx">{{ warning }}</li>
-      </ul>
     </section>
 
     <section class="creator-section">
@@ -872,25 +507,25 @@ onMounted(() => {
 }
 
 .creator-section + .creator-section {
-  margin-top: 14px;
+  margin-top: var(--s4);
 }
 
 .knowledge-form {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(140px, 0.6fr) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(260px, 1fr) minmax(140px, 0.34fr) minmax(220px, 0.66fr);
+  gap: var(--s4);
 }
 
 .knowledge-form label {
   display: grid;
   align-content: start;
-  gap: 7px;
+  gap: var(--s2);
 }
 
 .knowledge-form label > span {
-  color: var(--color-ink-2);
+  color: var(--text);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: var(--fw-semibold);
 }
 
 .knowledge-form input,
@@ -899,11 +534,11 @@ onMounted(() => {
 .knowledge-toolbar select {
   width: 100%;
   min-height: 44px;
-  padding: 0 12px;
-  color: #111827;
-  background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(15, 23, 42, 0.12);
-  border-radius: 8px;
+  padding: 0 var(--s3);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
   outline: none;
 }
 
@@ -911,15 +546,17 @@ onMounted(() => {
 .knowledge-form select:focus,
 .knowledge-toolbar input:focus,
 .knowledge-toolbar select:focus {
-  border-color: rgba(0, 174, 236, 0.58);
-  box-shadow: 0 0 0 4px rgba(0, 174, 236, 0.12);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
 .knowledge-toolbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--s2);
   align-items: center;
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--border);
 }
 
 .knowledge-toolbar input,
@@ -931,8 +568,8 @@ onMounted(() => {
 
 /* 检索框是该工具栏的主输入，让它拉伸占据主要宽度，过滤项与按钮跟随其后 */
 .knowledge-search-input {
-  flex: 1 1 280px;
-  min-width: 240px;
+  flex: 1 1 360px;
+  min-width: 280px;
 }
 
 /* 扩展查询回显：让 LLM 实际扩出的查询可见，便于核对增强是否合理 */
@@ -940,56 +577,56 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--s2);
   margin: 0;
 }
 
 .knowledge-enhanced-label {
-  color: var(--color-ink-2);
+  color: var(--muted);
   font-size: 12px;
-  font-weight: 900;
+  font-weight: var(--fw-semibold);
 }
 
 .knowledge-enhanced-item {
   padding: 2px 8px;
-  color: rgba(44, 55, 74, 0.78);
-  background: rgba(0, 174, 236, 0.08);
-  border: 1px solid rgba(0, 174, 236, 0.2);
-  border-radius: 999px;
+  color: var(--text);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
   font-size: 12px;
 }
 
 .knowledge-card-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: var(--s4);
 }
 
 .knowledge-card {
   display: grid;
   align-content: start;
-  gap: 8px;
-  padding: 14px;
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid rgba(15, 23, 42, 0.09);
-  border-radius: 8px;
+  gap: var(--s3);
+  padding: var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
 }
 
 .knowledge-card > strong {
-  color: var(--color-ink);
+  color: var(--ink);
   font-size: 15px;
   line-height: 1.45;
 }
 
 .knowledge-card small {
-  color: rgba(63, 38, 49, 0.58);
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
 }
 
 .knowledge-card p {
   margin: 0;
-  color: var(--color-ink-2);
+  color: var(--text);
   font-size: 14px;
   line-height: 1.62;
 }
@@ -997,42 +634,42 @@ onMounted(() => {
 .knowledge-stats {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--s2);
 }
 
 .knowledge-stats span {
   padding: 3px 9px;
-  color: rgba(44, 55, 74, 0.7);
-  background: rgba(248, 250, 252, 0.85);
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
   font-size: 12px;
-  font-weight: 850;
+  font-weight: var(--fw-medium);
 }
 
 /* 召回证据（5.2c-2）：small-to-big 命中的观众原话，以「引用条」形式展示，正/负向用左色条区分。
    选择器特意带父类 .knowledge-evidence 提高特异性，压过更泛的 .knowledge-card p（否则字号/颜色被它覆盖）。 */
 .knowledge-evidence {
   display: grid;
-  gap: 5px;
-  margin-top: 2px;
-  padding-top: 8px;
+  gap: var(--s2);
+  margin-top: var(--s1);
+  padding-top: var(--s3);
   border-top: 1px dashed rgba(15, 23, 42, 0.12);
 }
 
 .knowledge-evidence-label {
-  color: var(--color-ink-2);
+  color: var(--muted);
   font-size: 12px;
-  font-weight: 900;
+  font-weight: var(--fw-semibold);
 }
 
 .knowledge-evidence .knowledge-evidence-item {
   margin: 0;
   padding: 6px 10px;
   border-left: 3px solid transparent;
-  border-radius: 6px;
-  background: rgba(248, 250, 252, 0.85);
-  color: var(--color-ink-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-sub);
+  color: var(--text);
   font-size: 13px;
   line-height: 1.55;
 }
@@ -1040,23 +677,23 @@ onMounted(() => {
 .knowledge-evidence .knowledge-evidence-item > b {
   margin-right: 6px;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: var(--fw-semibold);
 }
 
 .knowledge-evidence .knowledge-evidence-item.is-positive {
-  border-left-color: rgba(34, 197, 94, 0.66);
+  border-left-color: var(--ok);
 }
 
 .knowledge-evidence .knowledge-evidence-item.is-positive > b {
-  color: rgba(21, 128, 61, 0.92);
+  color: var(--ok);
 }
 
 .knowledge-evidence .knowledge-evidence-item.is-negative {
-  border-left-color: rgba(239, 68, 68, 0.6);
+  border-left-color: var(--danger);
 }
 
 .knowledge-evidence .knowledge-evidence-item.is-negative > b {
-  color: rgba(185, 28, 28, 0.92);
+  color: var(--danger);
 }
 
 .knowledge-pager {
@@ -1065,18 +702,8 @@ onMounted(() => {
   justify-content: center;
   gap: 14px;
   margin-top: 2px;
-  color: rgba(63, 38, 49, 0.66);
+  color: var(--muted);
   font-size: 13px;
-}
-
-.knowledge-warnings {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding-left: 18px;
-  color: rgba(63, 38, 49, 0.7);
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 @media (max-width: 820px) {

@@ -2324,3 +2324,21 @@ Final Answer:你对Human的最终回复
 - 信息已足够时：把 finalAnswer 设为给用户的最终回复，action 与 actionInput 留空。
 每步只能调用一个工具；工具返回会作为 Observation 追加到对话，供你下一步参考。
 ', '结构化 ReAct 内核（5.4 起）的系统提示词：告知模型工具列表与 JSON schema 约束的 ReActStep 格式');
+
+-- ------------------------------------------------------------
+-- 23. 运行期设置表（阶段 5.6）
+--     只保存服务端白名单允许动态修改的开关覆盖值；没有覆盖值时后端回退 application.yml，避免初始化脚本误覆盖环境配置。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS app_runtime_setting
+(
+    id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    setting_key   VARCHAR(128) NOT NULL COMMENT '设置键，只允许服务端白名单内的运行期开关',
+    setting_value VARCHAR(64)  NOT NULL COMMENT '设置值，布尔开关统一保存 true 或 false',
+    description   VARCHAR(255) NOT NULL COMMENT '中文说明，帮助后续维护者理解这个开关影响什么能力',
+    create_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_runtime_setting_key (setting_key)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '运行期设置表';

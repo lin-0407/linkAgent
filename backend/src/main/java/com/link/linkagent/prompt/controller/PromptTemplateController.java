@@ -55,7 +55,7 @@ public class PromptTemplateController {
 
     /**
      * 改写一条提示词的正文，改完即时生效（热更新）。
-     * 写库后 PromptService 会把缓存里这条直接换成新值，下一次模型调用就用上新词、无需重启。
+     * PromptService 不做内存缓存，写库后下一次模型调用会直接读到新词、无需重启。
      * key 不存在时返回 404：只能改已存在的提示词，不允许凭空新建——key 与代码调用处一一对应。
      */
     @PutMapping("/{key}")

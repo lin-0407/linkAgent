@@ -2271,7 +2271,6 @@ function showError(error: unknown) {
 
     <header class="creator-header">
       <div>
-        <p class="creator-kicker">Creator Copilot</p>
         <h2>UP 主智能工作台</h2>
         <p>从稿件输入到发布前优化，再到评论弹幕复盘，直接在同一个页面验证后端闭环。</p>
       </div>
@@ -2536,7 +2535,6 @@ function showError(error: unknown) {
         <section v-if="activeStep === 'task'" class="creator-section">
           <div class="creator-section-head">
             <div>
-              <p class="creator-kicker">Step 1</p>
               <h3>{{ taskFormTitle }}</h3>
             </div>
             <div class="creator-action-row">
@@ -2565,7 +2563,6 @@ function showError(error: unknown) {
           <div class="creator-import-panel">
             <div class="creator-import-head">
               <div>
-                <p class="creator-kicker">Import</p>
                 <h4>本地文本文件导入</h4>
               </div>
               <button
@@ -2668,7 +2665,6 @@ function showError(error: unknown) {
             >
               <header class="creator-result-modal-head creator-dev-test-head">
                 <div>
-                  <p class="creator-kicker">Dev Test</p>
                   <h3>开发者功能测试</h3>
                 </div>
                 <div class="creator-action-row">
@@ -2710,7 +2706,6 @@ function showError(error: unknown) {
             <section class="creator-eval-list-panel" aria-label="评测样例列表">
               <header class="creator-workflow-head">
                 <div>
-                  <p class="creator-kicker">Cases</p>
                   <h4>样例列表</h4>
                 </div>
                 <span class="creator-parse-status">{{ filteredEvalCases.length }} 个</span>
@@ -2739,7 +2734,6 @@ function showError(error: unknown) {
             <section v-if="selectedEvalCase" class="creator-eval-detail-panel" aria-label="评测样例详情">
               <header class="creator-workflow-head">
                 <div>
-                  <p class="creator-kicker">{{ evalStageLabel(selectedEvalCase.targetStage) }}</p>
                   <h4>{{ selectedEvalCase.caseName }}</h4>
                 </div>
                 <span class="creator-parse-status">{{ selectedEvalCase.status }}</span>
@@ -2932,7 +2926,6 @@ function showError(error: unknown) {
               <section class="creator-eval-results" aria-label="评测结果列表">
                 <header class="creator-workflow-head">
                   <div>
-                    <p class="creator-kicker">Results</p>
                     <h4>最近结果</h4>
                   </div>
                   <button
@@ -3023,7 +3016,6 @@ function showError(error: unknown) {
         <section v-if="activeStep === 'prePublish'" class="creator-section">
           <div class="creator-section-head">
             <div>
-              <p class="creator-kicker">Step 2</p>
               <h3>发布前优化 Agent</h3>
             </div>
             <div class="creator-action-row">
@@ -3057,7 +3049,6 @@ function showError(error: unknown) {
             <section class="creator-workflow-stream" aria-label="发布前优化消息流">
               <header class="creator-workflow-head">
                 <div>
-                  <p class="creator-kicker">Workflow</p>
                   <h4>发布前优化消息流</h4>
                 </div>
                 <div class="creator-workflow-head-actions">
@@ -3112,7 +3103,6 @@ function showError(error: unknown) {
             <section class="creator-workflow-detail" aria-label="工作流消息详情">
               <header class="creator-workflow-head">
                 <div>
-                  <p class="creator-kicker">Detail</p>
                   <h4>消息详情</h4>
                 </div>
                 <span v-if="selectedWorkflowMessage" class="creator-parse-status">
@@ -3147,7 +3137,6 @@ function showError(error: unknown) {
             <section class="creator-workflow-steps" aria-label="工作流步骤回放">
               <header class="creator-workflow-head">
                 <div>
-                  <p class="creator-kicker">Replay</p>
                   <h4>步骤回放</h4>
                 </div>
                 <div class="creator-workflow-head-actions">
@@ -3303,7 +3292,6 @@ function showError(error: unknown) {
         <section v-if="activeStep === 'feedback'" class="creator-section">
           <div class="creator-section-head">
             <div>
-              <p class="creator-kicker">Step 3</p>
               <h3>评论弹幕样例</h3>
             </div>
             <div class="creator-action-row">
@@ -3485,7 +3473,6 @@ function showError(error: unknown) {
         <section v-if="activeStep === 'report'" class="creator-section">
           <div class="creator-section-head">
             <div>
-              <p class="creator-kicker">Step 4</p>
               <h3>反馈与复盘结果</h3>
             </div>
             <div v-if="selectedTaskId" class="creator-action-row">
@@ -4110,7 +4097,6 @@ function showError(error: unknown) {
         >
       <header class="creator-feedback-drawer-head">
         <div>
-          <p class="creator-kicker">Ask Report</p>
           <h3>反馈追问</h3>
         </div>
         <button type="button" class="creator-ghost-button" @click="closeFeedbackChatDrawer">

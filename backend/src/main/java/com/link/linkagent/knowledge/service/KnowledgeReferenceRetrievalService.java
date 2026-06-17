@@ -13,6 +13,7 @@ import com.link.linkagent.knowledge.model.ReferenceVideoResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchResponse;
 import com.link.linkagent.knowledge.rag.KnowledgeRerankClient;
+import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -88,19 +89,23 @@ public class KnowledgeReferenceRetrievalService {
     private final KnowledgeRerankClient knowledgeRerankClient;
     /** 原生 hybrid 存储（5.2d）：hybrid 开关开且就绪时，父/子召回都改走它的 dense+BM25+RRF。 */
     private final KnowledgeHybridStore knowledgeHybridStore;
+    /** 运行期设置服务：rerank 是否启用由设置页动态控制，其他检索参数仍沿用配置类。 */
+    private final RuntimeSettingService runtimeSettingService;
 
     public KnowledgeReferenceRetrievalService(KnowledgeRagProperties knowledgeRagProperties,
                                               KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper,
                                               KnowledgeVectorStore knowledgeVectorStore,
                                               KnowledgeQueryEnhancer knowledgeQueryEnhancer,
                                               KnowledgeRerankClient knowledgeRerankClient,
-                                              KnowledgeHybridStore knowledgeHybridStore) {
+                                              KnowledgeHybridStore knowledgeHybridStore,
+                                              RuntimeSettingService runtimeSettingService) {
         this.knowledgeRagProperties = knowledgeRagProperties;
         this.knowledgeReferenceVideoMapper = knowledgeReferenceVideoMapper;
         this.knowledgeVectorStore = knowledgeVectorStore;
         this.knowledgeQueryEnhancer = knowledgeQueryEnhancer;
         this.knowledgeRerankClient = knowledgeRerankClient;
         this.knowledgeHybridStore = knowledgeHybridStore;
+        this.runtimeSettingService = runtimeSettingService;
     }
 
     /**
@@ -142,7 +147,7 @@ public class KnowledgeReferenceRetrievalService {
         List<String> enhancedQueries = (strategy == QueryEnhanceStrategy.NONE) ? List.of() : searchTexts;
 
         // 候选池宽度：开 rerank 时按更宽的 candidatePoolSize 召回（retrieve-wide → rerank → 截 topK），关时即 topK。
-        boolean rerankEnabled = knowledgeRagProperties.getRerank().isEnabled();
+        boolean rerankEnabled = runtimeSettingService.isKnowledgeRerankEnabled();
         int candidateK = rerankEnabled
                 ? Math.min(MAX_TOP_K, Math.max(topK, knowledgeRagProperties.getRerank().getCandidatePoolSize()))
                 : topK;

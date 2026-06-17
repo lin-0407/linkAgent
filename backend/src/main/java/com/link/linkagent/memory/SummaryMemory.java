@@ -1,7 +1,9 @@
 package com.link.linkagent.memory;
 
 import com.link.linkagent.prompt.service.PromptService;
+import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.chat.model.ChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,23 +25,36 @@ public class SummaryMemory {
     private final SummaryMemoryProperties properties;
     private final ChatModel memorySummaryModel;
     private final PromptService promptService;
+    private final RuntimeSettingService runtimeSettingService;
     private final Map<String, String> sessionSummaries = new ConcurrentHashMap<>();
+
+    @Autowired
+    public SummaryMemory(SummaryMemoryProperties properties,
+                         ChatModel memorySummaryModel,
+                         PromptService promptService,
+                         RuntimeSettingService runtimeSettingService) {
+        this.properties = properties;
+        this.memorySummaryModel = memorySummaryModel;
+        this.promptService = promptService;
+        this.runtimeSettingService = runtimeSettingService;
+    }
 
     public SummaryMemory(SummaryMemoryProperties properties, ChatModel memorySummaryModel, PromptService promptService) {
         this.properties = properties;
         this.memorySummaryModel = memorySummaryModel;
         this.promptService = promptService;
+        this.runtimeSettingService = null;
     }
 
     public String getSummary(String sessionId) {
-        if (!properties.enabled()) {
+        if (!isSummaryMemoryEnabled()) {
             return "";
         }
         return sessionSummaries.getOrDefault(sessionId, "");
     }
 
     public boolean shouldSummarize(String sessionId, List<MemoryMessage> messages) {
-        if (!properties.enabled() || messages.size() <= properties.triggerMessageCount()) {
+        if (!isSummaryMemoryEnabled() || messages.size() <= properties.triggerMessageCount()) {
             return false;
         }
         try {
@@ -63,7 +78,7 @@ public class SummaryMemory {
     }
 
     public void saveSummary(String sessionId, String summary) {
-        if (!properties.enabled() || TextUtil.isBlank(summary)) {
+        if (!isSummaryMemoryEnabled() || TextUtil.isBlank(summary)) {
             return;
         }
         sessionSummaries.put(sessionId, summary.trim());
@@ -71,5 +86,12 @@ public class SummaryMemory {
 
     public int getRetainedMessageCount() {
         return Math.max(0, properties.retainedMessageCount());
+    }
+
+    private boolean isSummaryMemoryEnabled() {
+        // 测试构造器不注入设置服务时，回退原配置值，避免单元测试必须感知设置模块。
+        return runtimeSettingService == null
+                ? properties.enabled()
+                : runtimeSettingService.isSummaryMemoryEnabled();
     }
 }

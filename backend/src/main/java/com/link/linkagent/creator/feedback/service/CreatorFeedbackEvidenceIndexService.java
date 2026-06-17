@@ -11,6 +11,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord;
 import com.link.linkagent.creator.feedback.util.CreatorFeedbackLabelUtil;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
+import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,15 +65,18 @@ public class CreatorFeedbackEvidenceIndexService {
     private final CreatorFeedbackMapper creatorFeedbackMapper;
     // 可选 VectorStore：默认 VECTOR_STORE_TYPE=none 时不存在该 Bean，用 ObjectProvider 避免启动强依赖。
     private final ObjectProvider<VectorStore> vectorStoreProvider;
+    private final RuntimeSettingService runtimeSettingService;
 
     public CreatorFeedbackEvidenceIndexService(CreatorFeedbackRagProperties ragProperties,
                                                CreatorTaskMapper creatorTaskMapper,
                                                CreatorFeedbackMapper creatorFeedbackMapper,
-                                               ObjectProvider<VectorStore> vectorStoreProvider) {
+                                               ObjectProvider<VectorStore> vectorStoreProvider,
+                                               RuntimeSettingService runtimeSettingService) {
         this.ragProperties = ragProperties;
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.vectorStoreProvider = vectorStoreProvider;
+        this.runtimeSettingService = runtimeSettingService;
     }
 
     /**
@@ -83,9 +87,9 @@ public class CreatorFeedbackEvidenceIndexService {
      */
     public CreatorFeedbackEvidenceIndexResponse rebuild(String taskId, CreatorFeedbackEvidenceIndexRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
-        if (!ragProperties.isEnabled()) {
+        if (!runtimeSettingService.isCreatorFeedbackRagEnabled()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "反馈追问 RAG 业务开关未启用，请先设置 CREATOR_FEEDBACK_RAG_ENABLED=true");
+                    "反馈追问 RAG 业务开关未启用，请先在设置面板打开 creator.feedback.rag.enabled");
         }
         VectorStore vectorStore = vectorStoreProvider.getIfAvailable();
         if (vectorStore == null) {
@@ -158,7 +162,7 @@ public class CreatorFeedbackEvidenceIndexService {
      */
     public CreatorFeedbackEvidenceIndexStatusResponse status(String taskId) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
-        boolean ragEnabled = ragProperties.isEnabled();
+        boolean ragEnabled = runtimeSettingService.isCreatorFeedbackRagEnabled();
         boolean vectorStoreReady = ragEnabled && vectorStoreProvider.getIfAvailable() != null;
 
         long total = 0;

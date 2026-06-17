@@ -4,6 +4,7 @@ import com.link.linkagent.creator.feedback.config.CreatorFeedbackRagProperties;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackEvidenceRetrievalResult;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord;
+import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,13 +48,16 @@ public class CreatorFeedbackEvidenceRetrievalService {
     private final CreatorFeedbackMapper creatorFeedbackMapper;
     // 用 ObjectProvider 获取可选 VectorStore：默认 VECTOR_STORE_TYPE=none 时没有这个 Bean，不能强依赖，否则启动直接失败。
     private final ObjectProvider<VectorStore> vectorStoreProvider;
+    private final RuntimeSettingService runtimeSettingService;
 
     public CreatorFeedbackEvidenceRetrievalService(CreatorFeedbackRagProperties ragProperties,
                                                    CreatorFeedbackMapper creatorFeedbackMapper,
-                                                   ObjectProvider<VectorStore> vectorStoreProvider) {
+                                                   ObjectProvider<VectorStore> vectorStoreProvider,
+                                                   RuntimeSettingService runtimeSettingService) {
         this.ragProperties = ragProperties;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.vectorStoreProvider = vectorStoreProvider;
+        this.runtimeSettingService = runtimeSettingService;
     }
 
     /**
@@ -66,7 +70,7 @@ public class CreatorFeedbackEvidenceRetrievalService {
     public CreatorFeedbackEvidenceRetrievalResult retrieve(String taskId,
                                                            String question,
                                                            List<CreatorFeedbackItemRecord> items) {
-        boolean ragEnabled = ragProperties.isEnabled();
+        boolean ragEnabled = runtimeSettingService.isCreatorFeedbackRagEnabled();
         // 只有业务开关打开时才尝试取 VectorStore；关着时连基础设施都不碰，保证默认演示路径零成本。
         VectorStore vectorStore = ragEnabled ? vectorStoreProvider.getIfAvailable() : null;
         if (vectorStore == null) {

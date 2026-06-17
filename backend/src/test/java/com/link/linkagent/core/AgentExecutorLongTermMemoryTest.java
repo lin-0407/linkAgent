@@ -37,7 +37,8 @@ class AgentExecutorLongTermMemoryTest {
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
                 new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of()), new StubPromptService()),
                 new LongTermMemory(mapper),
-                new NoopLongTermMemoryExtractor()
+                new NoopLongTermMemoryExtractor(),
+                new StubPromptService()
         );
 
         executor.run("session-1", "请根据我的偏好回答");
@@ -60,7 +61,8 @@ class AgentExecutorLongTermMemoryTest {
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
                 new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of()), new StubPromptService()),
                 new LongTermMemory(mapper),
-                new NoopLongTermMemoryExtractor()
+                new NoopLongTermMemoryExtractor(),
+                new StubPromptService()
         );
 
         executor.run("session-1", " user-1 ", "hello");
@@ -79,7 +81,8 @@ class AgentExecutorLongTermMemoryTest {
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
                 new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of()), new StubPromptService()),
                 new LongTermMemory(mapper),
-                new FixedLongTermMemoryExtractor()
+                new FixedLongTermMemoryExtractor(),
+                new StubPromptService()
         );
 
         executor.run("session-1", "user-1", "以后请优先用 Java 举例");

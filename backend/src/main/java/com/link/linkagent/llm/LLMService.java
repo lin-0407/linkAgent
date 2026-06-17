@@ -1,13 +1,14 @@
 package com.link.linkagent.llm;
 
+import com.link.linkagent.settings.service.RuntimeSettingService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.ResponseFormat;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -31,21 +32,27 @@ public class LLMService {
 
     private final ChatClient chatClient;
     private final LlmCallGuardProperties guardProperties;
+    private final RuntimeSettingService runtimeSettingService;
 
     protected LLMService() {
         this.chatClient = null;
         this.guardProperties = new LlmCallGuardProperties();
+        this.runtimeSettingService = null;
     }
 
     @Autowired
-    public LLMService(ChatClient.Builder builder, LlmCallGuardProperties guardProperties) {
+    public LLMService(ChatClient.Builder builder,
+                      LlmCallGuardProperties guardProperties,
+                      RuntimeSettingService runtimeSettingService) {
         this.chatClient = builder.build();
         this.guardProperties = guardProperties;
+        this.runtimeSettingService = runtimeSettingService;
     }
 
     LLMService(LlmCallGuardProperties guardProperties) {
         this.chatClient = null;
         this.guardProperties = guardProperties;
+        this.runtimeSettingService = null;
     }
 
     public String chat(String userMessage) {
@@ -123,7 +130,7 @@ public class LLMService {
     }
 
     void validatePromptLength(String systemPrompt, String userMessage) {
-        if (!guardProperties.isEnabled()) {
+        if (!isGuardEnabled()) {
             return;
         }
         // 关闭保护必须显式设置 enabled=false，避免字符上限误配成 0 时反而绕过成本保护。
@@ -137,6 +144,13 @@ public class LLMService {
                 HttpStatus.BAD_REQUEST,
                 "本次 AI 分析输入过长，当前限制为 " + maxPromptChars + " 个字符，请先精简文稿、评论或弹幕样例后重试。"
         );
+    }
+
+    private boolean isGuardEnabled() {
+        // 测试构造器不注入设置服务时，回退原配置值，避免单元测试必须感知设置模块。
+        return runtimeSettingService == null
+                ? guardProperties.isEnabled()
+                : runtimeSettingService.isLlmGuardEnabled();
     }
 
     private int safeLength(String text) {
