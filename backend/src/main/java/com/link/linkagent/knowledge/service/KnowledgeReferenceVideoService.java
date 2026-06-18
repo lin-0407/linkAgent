@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.knowledge.mapper.KnowledgeReferenceVideoMapper;
 import com.link.linkagent.knowledge.model.ReferenceVideoImportRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoImportResponse;
+import com.link.linkagent.knowledge.model.ReferenceVideoChunkRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoItemRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoPageResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
@@ -52,15 +53,18 @@ public class KnowledgeReferenceVideoService {
 
     private final KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper;
     private final KnowledgeReferenceCleaningService knowledgeReferenceCleaningService;
+    private final KnowledgeReferenceChunkService knowledgeReferenceChunkService;
     private final KnowledgeQualityScoringService knowledgeQualityScoringService;
     private final ObjectMapper objectMapper;
 
     public KnowledgeReferenceVideoService(KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper,
                                           KnowledgeReferenceCleaningService knowledgeReferenceCleaningService,
+                                          KnowledgeReferenceChunkService knowledgeReferenceChunkService,
                                           KnowledgeQualityScoringService knowledgeQualityScoringService,
                                           ObjectMapper objectMapper) {
         this.knowledgeReferenceVideoMapper = knowledgeReferenceVideoMapper;
         this.knowledgeReferenceCleaningService = knowledgeReferenceCleaningService;
+        this.knowledgeReferenceChunkService = knowledgeReferenceChunkService;
         this.knowledgeQualityScoringService = knowledgeQualityScoringService;
         this.objectMapper = objectMapper;
     }
@@ -117,6 +121,11 @@ public class KnowledgeReferenceVideoService {
             knowledgeReferenceVideoMapper.insertReferenceVideo(record);
             for (ReferenceVideoItemRecord item : cleaning.items()) {
                 knowledgeReferenceVideoMapper.insertReferenceVideoItem(item);
+            }
+            // 同步生成主题中块，形成「父视频 / 主题中块 / 原始证据小块」三层结构。
+            // 中块只整理已入库材料，不额外调用 LLM，避免导入链路因为主题摘要而引入额外成本和编造风险。
+            for (ReferenceVideoChunkRecord chunk : knowledgeReferenceChunkService.buildChunks(record, cleaning.items())) {
+                knowledgeReferenceVideoMapper.insertReferenceVideoChunk(chunk);
             }
             imported++;
             if (bvId != null) {

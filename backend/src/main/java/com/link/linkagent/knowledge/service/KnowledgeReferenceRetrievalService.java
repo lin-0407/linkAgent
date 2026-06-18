@@ -169,6 +169,19 @@ public class KnowledgeReferenceRetrievalService {
         // 子-small-to-big 召回：hybrid 开走子集合 hybrid（5.2d-3），关走 Spring AI 子集合（5.2c-2）。
         // 独立 try，子集合异常只退「父-only」、绝不中断父检索（small-to-big 是锦上添花）。
         // childMap：videoId → 命中的 itemId（有序、每卡截到 MAX_EVIDENCE_PER_VIDEO）；keySet 喂合并、values 喂证据回查。
+        List<String> chunkVideoIds = new ArrayList<>();
+        if (!hybridEnabled && knowledgeVectorStore.isChunkReady()) {
+            VectorStore chunkStore = knowledgeVectorStore.getChunkVectorStore().orElse(null);
+            if (chunkStore != null) {
+                try {
+                    chunkVideoIds = chunkSearchMulti(chunkStore, searchTexts, category, tier, candidateK);
+                } catch (Exception exception) {
+                    log.warn("案例库主题中块召回失败，退回父子两层检索。query={}", TextUtil.preview(query, 60, ""), exception);
+                    chunkVideoIds = List.of();
+                }
+            }
+        }
+
         LinkedHashMap<String, List<String>> childMap = new LinkedHashMap<>();
         if (hybridEnabled) {
             try {
@@ -189,8 +202,9 @@ public class KnowledgeReferenceRetrievalService {
             }
         }
 
-        // 合并 videoId：父在前（卡片直接匹配），子派生在后，LinkedHashSet 去重取前 candidateK（无 RRF；rerank 后再截 topK）。
-        List<String> orderedVideoIds = mergeVideoIds(parentVideoIds, childMap.keySet(), candidateK);
+        // 合并 videoId：父卡片在前（整案直接匹配），主题中块其次（中粒度语义），子派生在后（原始证据小块），
+        // LinkedHashSet 去重取前 candidateK（无跨层 RRF；rerank 后再截 topK）。
+        List<String> orderedVideoIds = mergeVideoIds(parentVideoIds, chunkVideoIds, childMap.keySet(), candidateK);
 
         // 事实来源回查：向量库只给 videoId，父表才是真身；is_deleted=0 过滤掉旧批次/已删案例。
         List<ReferenceVideoRecord> vectorRecords = orderedVideoIds.isEmpty()
@@ -374,6 +388,45 @@ public class KnowledgeReferenceRetrievalService {
     }
 
     /**
+     * 多路主题中块召回：对每条检索文本查中块集合，命中后按 videoId 上卷回父表案例卡片。
+     * 中块没有原始证据展示职责，只贡献召回候选；最终证据仍由子条目召回提供。
+     */
+    private List<String> chunkSearchMulti(VectorStore chunkStore, List<String> searchTexts,
+                                          String category, String tier, int topK) {
+        Filter.Expression filter = buildFilter(category, tier);
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        for (String text : searchTexts) {
+            var builder = SearchRequest.builder().query(text).topK(topK);
+            if (filter != null) {
+                builder.filterExpression(filter);
+            }
+            List<Document> documents = chunkStore.similaritySearch(builder.build());
+            if (documents == null) {
+                continue;
+            }
+            for (Document document : documents) {
+                String videoId = extractChunkVideoId(document);
+                if (videoId != null) {
+                    merged.add(videoId);
+                }
+            }
+        }
+        List<String> result = new ArrayList<>(merged);
+        return result.size() > topK ? new ArrayList<>(result.subList(0, topK)) : result;
+    }
+
+    /**
+     * 主题中块文档 id 是 chunkId，不能回退 document.getId()，否则会把 chunkId 当成 videoId。
+     */
+    private String extractChunkVideoId(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return null;
+        }
+        Object value = document.getMetadata().get("videoId");
+        return (value != null && TextUtil.hasText(value.toString())) ? value.toString() : null;
+    }
+
+    /**
      * 多路子集合 hybrid 召回（5.2d-3）：对每条检索文本查子 hybrid 集合，按 videoId 聚合命中 itemId（small-to-big 的 small 端）。
      * 与 {@link #childSearchMulti} 唯一差异是召回源换成 {@link KnowledgeHybridStore#childHybridSearch}（dense+BM25+RRF）；
      * 聚合口径完全一致：videoId→itemId 有序、每卡截 {@link #MAX_EVIDENCE_PER_VIDEO}、itemId 去重。
@@ -411,8 +464,10 @@ public class KnowledgeReferenceRetrievalService {
     /**
      * 合并父 / 子召回的 videoId：父在前、子在后，{@link LinkedHashSet} 去重保序，取前 topK（无 RRF，正式融合留 5.2d）。
      */
-    private List<String> mergeVideoIds(List<String> parentVideoIds, Set<String> childVideoIds, int topK) {
+    private List<String> mergeVideoIds(List<String> parentVideoIds, List<String> chunkVideoIds,
+                                       Set<String> childVideoIds, int topK) {
         LinkedHashSet<String> merged = new LinkedHashSet<>(parentVideoIds);
+        merged.addAll(chunkVideoIds);
         merged.addAll(childVideoIds);
         List<String> result = new ArrayList<>(merged);
         return result.size() > topK ? new ArrayList<>(result.subList(0, topK)) : result;

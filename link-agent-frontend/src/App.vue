@@ -45,7 +45,7 @@ const settingsOpen = ref(false)
 
     <CreatorWorkspace v-if="activeSurface === 'creator'" />
     <KnowledgeWorkspace v-else />
-    <AgentFloatingWindow v-if="activeSurface === 'creator'" />
+    <AgentFloatingWindow />
     <SettingsDrawer v-model:open="settingsOpen" />
   </div>
 </template>

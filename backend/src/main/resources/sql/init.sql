@@ -1927,7 +1927,37 @@ CREATE TABLE IF NOT EXISTS creator_reference_video
   COMMENT = '跨分区视频案例主表';
 
 -- ------------------------------------------------------------
--- 20. 跨分区视频案例优质评论弹幕子表（知识库子表，阶段 5.1 起用）
+-- 20. 跨分区视频案例主题中块表（三层分块中间层）
+--     位于父表整张案例卡片和子表原始评论弹幕之间，承载标题包装、内容定位、观众反馈等创作者常问的主题。
+--     这样检索能先命中“这条视频在哪个创作维度值得参考”，再回到父视频和原始证据。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_reference_video_chunk
+(
+    id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    chunk_id              VARCHAR(64)  NOT NULL COMMENT '主题中块唯一标识（UUID）；作为中块向量文档 ID，便于和 Milvus 文档一一对应',
+    video_id              VARCHAR(64)  NOT NULL COMMENT '关联 creator_reference_video.video_id；中块命中后用它回到完整视频案例',
+    chunk_type            VARCHAR(32)  NOT NULL COMMENT '中块类型：TITLE_PACKAGE=标题包装，CONTENT_POSITIONING=内容定位，AUDIENCE_FEEDBACK_SUMMARY=观众反馈主题；类型化是为了让检索能区分创作者问题属于哪个维度',
+    chunk_title           VARCHAR(128)          DEFAULT NULL COMMENT '中块展示标题；用于解释这个中块为什么被召回',
+    chunk_content         LONGTEXT     NOT NULL COMMENT '中块正文；由标题、简介、标签、亮点摘要和已清洗反馈确定性拼装，不额外让 LLM 编造新结论',
+    source_item_ids       LONGTEXT              DEFAULT NULL COMMENT '来源子条目 item_id 的 JSON 数组；只有观众反馈主题块会填写，用于后续追踪原始评论弹幕来源',
+    embedding_id          VARCHAR(128)          DEFAULT NULL COMMENT 'Milvus 文档 ID，默认复用 chunk_id，让向量文档与主题中块一一对应',
+    embedding_status      VARCHAR(32)  NOT NULL DEFAULT 'PENDING' COMMENT '向量索引状态：PENDING=待索引，INDEXED=已索引，FAILED=失败，SKIPPED=跳过；默认 PENDING 不依赖 Milvus',
+    embedding_error       VARCHAR(512)          DEFAULT NULL COMMENT '最近一次索引失败原因摘要，便于排查 Embedding 或 Milvus 异常；只存截断摘要不存完整堆栈',
+    embedding_update_time DATETIME              DEFAULT NULL COMMENT '最近一次索引状态更新时间，未索引时为空',
+    create_time           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted            TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_chunk_id (chunk_id),
+    -- 当前每个视频每类主题只保留一个中块，唯一约束能防止历史补齐或重复导入产生重复主题块
+    UNIQUE KEY uk_video_chunk_type (video_id, chunk_type),
+    -- 索引重建按状态批量扫描待索引主题中块
+    KEY idx_chunk_embedding_status (embedding_status)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '跨分区视频案例主题中块表';
+
+-- ------------------------------------------------------------
+-- 21. 跨分区视频案例优质评论弹幕子表（知识库子表，阶段 5.1 起用）
 --     结构对标 creator_feedback_item，但外键是 video_id（跨任务）而非 task_id。
 --     只保留清洗后「非噪声且正 / 负向」的优质短文本，为 5.2 的父子召回（small-to-big）提供可被精确召回的子文档。
 -- ------------------------------------------------------------
@@ -1962,7 +1992,7 @@ CREATE TABLE IF NOT EXISTS creator_reference_video_item
 
 
 -- ------------------------------------------------------------
--- 21. 提示词模板表（阶段 5.5 起用）
+-- 22. 提示词模板表（阶段 5.5 起用）
 --     把原本硬编码在各 Service 里的大模型提示词搬到数据库，调用方按 prompt_key 取词，
 --     支持运行期热更新和前端自定义，避免改一句提示词就要改代码、重新打包发布。
 --     版本追踪不在本表：评测结果表 creator_eval_result 已自带 prompt_hash / prompt_snapshot，
@@ -2179,7 +2209,7 @@ memoryKey 只能从下面 5 个值里选择：
 ', '会话摘要助手的系统提示词：把过长对话压缩成简洁摘要');
 
 -- ------------------------------------------------------------
--- 22. 提示词模板补充种子（阶段 5.5-3）
+-- 23. 提示词模板补充种子（阶段 5.5-3）
 --     USER 提示词（6 条）+ AgentExecutor 2 条带占位符的系统提示词。
 --     命名占位符格式：{varName}，render(key, Map) 做字符串替换。
 --     AgentExecutor 原文本块有 4 空格缩进伪影，此处存清洁版（左对齐），LLM 行为不受影响。
@@ -2326,7 +2356,7 @@ Final Answer:你对Human的最终回复
 ', '结构化 ReAct 内核（5.4 起）的系统提示词：告知模型工具列表与 JSON schema 约束的 ReActStep 格式');
 
 -- ------------------------------------------------------------
--- 23. 运行期设置表（阶段 5.6）
+-- 24. 运行期设置表（阶段 5.6）
 --     只保存服务端白名单允许动态修改的开关覆盖值；没有覆盖值时后端回退 application.yml，避免初始化脚本误覆盖环境配置。
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS app_runtime_setting

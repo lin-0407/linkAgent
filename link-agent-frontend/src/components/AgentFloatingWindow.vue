@@ -5,6 +5,15 @@ import ErrorNotice from '@/components/ErrorNotice.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import { useAgentChat } from '@/composables/useAgentChat'
 import type { SessionListItem } from '@/types/agent'
+import type {
+  ReferenceVideoAnalysisContext,
+  ReferenceVideoEvidenceItem,
+  ReferenceVideoMatchedTopic,
+} from '@/types/knowledge'
+import {
+  KNOWLEDGE_VIDEO_CONTEXT_EVENT,
+  type KnowledgeVideoContextEventDetail,
+} from '@/utils/agentContext'
 
 type WindowRect = {
   left: number
@@ -50,6 +59,8 @@ const isOpen = ref(false)
 const isMinimized = ref(false)
 const isDragging = ref(false)
 const isResizing = ref(false)
+const knowledgeContext = ref<ReferenceVideoAnalysisContext | null>(null)
+const knowledgeContextQuery = ref('')
 const windowRect = ref<WindowRect>({
   left: 0,
   top: 0,
@@ -88,13 +99,26 @@ const floatingWindowStyle = computed(() => ({
   height: isMinimized.value ? 'auto' : `${windowRect.value.height}px`,
 }))
 
+const floatingWindowSubtitle = computed(() => {
+  const title = knowledgeContext.value?.video.title
+  if (title) {
+    return clipText(title, 26)
+  }
+  return isLoading.value ? 'Agent 正在思考' : activeSessionLabel.value
+})
+
+const visibleKnowledgeTopics = computed(() => knowledgeContext.value?.topics.slice(0, 4) ?? [])
+const visibleKnowledgeEvidence = computed(() => knowledgeContext.value?.evidenceItems.slice(0, 5) ?? [])
+
 onMounted(() => {
   placeWindowAtDefaultPosition()
   window.addEventListener('resize', keepWindowInsideViewport)
+  window.addEventListener(KNOWLEDGE_VIDEO_CONTEXT_EVENT, handleKnowledgeVideoContext)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', keepWindowInsideViewport)
+  window.removeEventListener(KNOWLEDGE_VIDEO_CONTEXT_EVENT, handleKnowledgeVideoContext)
   removePointerListeners()
 })
 
@@ -117,11 +141,15 @@ function toggleMinimized() {
 
 function startNewConversation() {
   startNewSession()
+  knowledgeContext.value = null
+  knowledgeContextQuery.value = ''
   isSessionsOpen.value = false
   focusComposer()
 }
 
 async function openAgentSession(session: SessionListItem) {
+  knowledgeContext.value = null
+  knowledgeContextQuery.value = ''
   await openSession(session)
   focusComposer()
 }
@@ -132,9 +160,57 @@ function usePromptExample(example: string) {
 }
 
 async function sendFloatingMessage() {
-  await sendMessage()
+  const displayMessage = inputMessage.value.trim()
+  await sendMessage({
+    displayMessage,
+    outboundMessage: buildKnowledgeContextMessage(displayMessage),
+  })
   await nextTick()
   composerRef.value?.adjustInputHeight()
+}
+
+function handleKnowledgeVideoContext(event: Event) {
+  const detail = (event as CustomEvent<KnowledgeVideoContextEventDetail>).detail
+  if (!detail?.context?.video) {
+    return
+  }
+
+  // 选中一张视频卡片时新开会话，避免不同视频的评论弹幕混在同一轮上下文里。
+  startNewSession()
+  knowledgeContext.value = detail.context
+  knowledgeContextQuery.value = detail.query.trim()
+  inputMessage.value = '基于这个视频的主题和观众反馈，分析它值得参考的点，并给我 3 条可直接改到我新视频里的建议。'
+  openFloatingWindow()
+}
+
+function buildKnowledgeContextMessage(userMessage: string) {
+  const context = knowledgeContext.value
+  if (!context) {
+    return userMessage
+  }
+
+  const video = context.video
+  const topicLines = context.topics.slice(0, 8).map(formatTopicForPrompt)
+  const evidenceLines = context.evidenceItems.slice(0, 18).map(formatEvidenceForPrompt)
+
+  // 每次追问都带上当前视频上下文，因为普通 Agent 会话本身不知道用户刚点击了哪张案例卡片。
+  return [
+    '你是面向 B 站 UP 主的创作案例分析助手。',
+    '请优先依据下面的视频案例上下文回答；如果证据不足，请明确指出不足，不要编造评论或弹幕。',
+    `用户原问题：${userMessage}`,
+    '',
+    '【已选视频】',
+    `标题：${video.title}`,
+    `BV：${video.bvId || '无'}；分区：${video.category || '未标注'}；层级：${tierLabel(video.tier)}；质量分：${video.qualityScore ?? '无'}`,
+    `数据：播放 ${formatReferenceCount(video.viewCount)}，点赞 ${formatReferenceCount(video.likeCount)}，投币 ${formatReferenceCount(video.coinCount)}，收藏 ${formatReferenceCount(video.favoriteCount)}，弹幕 ${formatReferenceCount(video.danmakuCount)}，评论 ${formatReferenceCount(video.replyCount)}`,
+    `摘要：${clipText(video.highlightSummary || video.description || '暂无摘要', 520)}`,
+    '',
+    '【主题中块】',
+    topicLines.length ? topicLines.join('\n') : '暂无主题中块。',
+    '',
+    '【评论弹幕证据】',
+    evidenceLines.length ? evidenceLines.join('\n') : '暂无评论弹幕证据。',
+  ].join('\n')
 }
 
 function startDrag(event: PointerEvent) {
@@ -368,6 +444,73 @@ function formatSessionPreview(value: string) {
 
   return value.length <= 34 ? value : `${value.slice(0, 34)}...`
 }
+
+function formatTopicForPrompt(topic: ReferenceVideoMatchedTopic, index: number) {
+  return `${index + 1}. ${chunkTypeLabel(topic.chunkType)}｜${topic.chunkTitle}：${clipText(topic.preview, 420)}`
+}
+
+function formatEvidenceForPrompt(item: ReferenceVideoEvidenceItem, index: number) {
+  return `${index + 1}. ${sourceTypeLabel(item.sourceType)}｜${sentimentLabel(item.sentiment)}：${clipText(item.content, 240)}`
+}
+
+function chunkTypeLabel(chunkType: string) {
+  switch (chunkType) {
+    case 'TITLE_PACKAGE':
+      return '标题包装'
+    case 'CONTENT_POSITIONING':
+      return '内容定位'
+    case 'AUDIENCE_FEEDBACK_SUMMARY':
+      return '观众反馈'
+    default:
+      return chunkType || '主题'
+  }
+}
+
+function sentimentLabel(sentiment: string) {
+  switch (sentiment) {
+    case 'POSITIVE':
+      return '正向'
+    case 'NEGATIVE':
+      return '负向'
+    default:
+      return sentiment || '中性'
+  }
+}
+
+function sourceTypeLabel(sourceType: string) {
+  return sourceType === 'DANMAKU' ? '弹幕' : '评论'
+}
+
+function tierLabel(value: string) {
+  switch (value) {
+    case 'BENCHMARK':
+      return '标杆案例'
+    case 'COMPETITOR':
+      return '竞品案例'
+    case 'OWN_HISTORY':
+      return '自己历史'
+    default:
+      return value || '未标注'
+  }
+}
+
+function formatReferenceCount(value: number | null) {
+  if (value === null || value === undefined) {
+    return '无'
+  }
+  if (value >= 10000) {
+    return `${(value / 10000).toFixed(1)}万`
+  }
+  return String(value)
+}
+
+function clipText(value: string, maxLength: number) {
+  const text = value.trim()
+  if (text.length <= maxLength) {
+    return text
+  }
+  return `${text.slice(0, maxLength)}...`
+}
 </script>
 
 <template>
@@ -395,7 +538,7 @@ function formatSessionPreview(value: string) {
           <span class="agent-floating-status" :class="{ running: isLoading }"></span>
           <div>
             <strong>AI 交互台</strong>
-            <small>{{ isLoading ? 'Agent 正在思考' : activeSessionLabel }}</small>
+            <small>{{ floatingWindowSubtitle }}</small>
           </div>
         </div>
         <div class="agent-floating-actions">
@@ -437,6 +580,34 @@ function formatSessionPreview(value: string) {
             <p v-if="sessions.length === 0" class="agent-floating-session-empty">还没有保存的会话</p>
           </template>
           <p v-if="sessionsError" class="agent-floating-session-error">{{ sessionsError }}</p>
+        </section>
+
+        <section v-if="knowledgeContext" class="agent-floating-context-panel" aria-label="已加载的视频上下文">
+          <div class="agent-floating-context-head">
+            <div>
+              <span>已加载视频上下文</span>
+              <strong>{{ knowledgeContext.video.title }}</strong>
+            </div>
+            <b>{{ knowledgeContext.evidenceItems.length }} 条评论弹幕</b>
+          </div>
+          <div class="agent-floating-context-meta">
+            <span v-if="knowledgeContextQuery">检索：{{ knowledgeContextQuery }}</span>
+            <span>{{ tierLabel(knowledgeContext.video.tier) }}</span>
+            <span v-if="knowledgeContext.video.category">{{ knowledgeContext.video.category }}</span>
+            <span v-if="knowledgeContext.video.qualityScore !== null">质量分 {{ knowledgeContext.video.qualityScore }}</span>
+          </div>
+          <div class="agent-floating-context-grid">
+            <p v-for="topic in visibleKnowledgeTopics" :key="topic.chunkId">
+              <b>{{ chunkTypeLabel(topic.chunkType) }}</b>
+              {{ topic.chunkTitle }}
+            </p>
+          </div>
+          <div v-if="visibleKnowledgeEvidence.length" class="agent-floating-context-evidence">
+            <p v-for="item in visibleKnowledgeEvidence" :key="item.itemId">
+              <b>{{ sourceTypeLabel(item.sourceType) }}</b>
+              {{ clipText(item.content, 72) }}
+            </p>
+          </div>
         </section>
 
         <div ref="messageListRef" class="message-list agent-floating-message-list">

@@ -130,6 +130,8 @@ knowledge:
     collection-name: ${KNOWLEDGE_RAG_COLLECTION_NAME:creator_reference_video}
     # 5.2c 子集合：存优质评论弹幕原文（small 端），与父集合物理隔离；与父集合共用同一 Milvus 连接与维度，仅集合名不同
     child-collection-name: ${KNOWLEDGE_RAG_CHILD_COLLECTION_NAME:creator_reference_video_item}
+    # 主题中块集合：存标题包装 / 内容定位 / 观众反馈主题块，位于父卡片和原始子条目之间
+    chunk-collection-name: ${KNOWLEDGE_RAG_CHUNK_COLLECTION_NAME:creator_reference_video_chunk}
     # 必须与 Embedding 输出维度严格一致；启用知识库时请把 LLM_EMBEDDING_DIMENSIONS 一并设为 1024（Qwen text-embedding-v4 推荐值）
     embedding-dimension: ${LLM_EMBEDDING_DIMENSIONS:1024}
     # Qwen text-embedding-v3/v4 OpenAI 兼容模式单批硬上限为 10，知识库索引批次不能照抄反馈侧的 25

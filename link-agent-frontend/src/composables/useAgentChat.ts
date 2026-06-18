@@ -13,6 +13,11 @@ type ScrollContainer = {
   scrollTo: (options: ScrollToOptions) => void
 }
 
+type SendMessageOptions = {
+  outboundMessage?: string
+  displayMessage?: string
+}
+
 export function useAgentChat() {
   const inputMessage = ref('')
   const sessionId = ref('')
@@ -51,9 +56,10 @@ export function useAgentChat() {
     },
   )
 
-  async function sendMessage() {
-    const message = inputMessage.value.trim()
-    if (!message || isLoading.value) {
+  async function sendMessage(options: SendMessageOptions = {}) {
+    const displayMessage = (options.displayMessage ?? inputMessage.value).trim()
+    const outboundMessage = (options.outboundMessage ?? displayMessage).trim()
+    if (!displayMessage || !outboundMessage || isLoading.value) {
       return
     }
 
@@ -62,14 +68,15 @@ export function useAgentChat() {
     messages.value.push({
       id: Date.now(),
       role: 'user',
-      content: message,
+      content: displayMessage,
     })
 
     await scrollToBottom()
     isLoading.value = true
 
     try {
-      const data = await sendAgentMessage(sessionId.value, message)
+      // 前端可以把上下文拼进实际出站消息，但聊天窗口只显示用户原问题，避免界面被大段事实材料刷屏。
+      const data = await sendAgentMessage(sessionId.value, outboundMessage)
       sessionId.value = data.sessionId
       persistSessionId(data.sessionId)
       await loadSessions()

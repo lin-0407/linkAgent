@@ -92,12 +92,31 @@ export type ReferenceVideoSearchPayload = {
   strategy?: string
 }
 
+// 主题优先检索入参：page 表示“第几批卡片”，后端限制 1-4，每批最多 5 张。
+export type ReferenceVideoTopicSearchPayload = {
+  query: string
+  tier?: string
+  category?: string
+  page?: number
+  size?: number
+  strategy?: string
+}
+
 // 单条召回证据（5.2c-2）：small-to-big 中命中的优质评论 / 弹幕原文。
 export type ReferenceVideoEvidenceItem = {
   itemId: string
   content: string
   sentiment: string
   sourceType: string
+}
+
+// 主题中块命中摘要：前端用它解释卡片为什么被召回，真正的视频排序仍按质量分走 MySQL。
+export type ReferenceVideoMatchedTopic = {
+  chunkId: string
+  videoId: string
+  chunkType: string
+  chunkTitle: string
+  preview: string
 }
 
 // 按 videoId 分组的召回证据（5.2c-2，方案 a）：这张案例卡片是被哪几条子条目召回的。
@@ -117,4 +136,24 @@ export type ReferenceVideoSearchResult = {
   items: ReferenceVideo[]
   evidence: ReferenceVideoEvidence[]
   reranked: boolean
+}
+
+// 主题优先检索响应：cards 是当前批次要展示的视频卡片，matchedTopics 是这些卡片对应的主题命中解释。
+export type ReferenceVideoTopicSearchResult = {
+  mode: string
+  strategy: string
+  enhancedQueries: string[]
+  page: number
+  size: number
+  maxPage: number
+  hasMore: boolean
+  matchedTopics: ReferenceVideoMatchedTopic[]
+  cards: ReferenceVideo[]
+}
+
+// 单视频分析上下文：点击卡片后加载进 AI 交互台，让后续追问围绕这个视频的主题和观众反馈展开。
+export type ReferenceVideoAnalysisContext = {
+  video: ReferenceVideo
+  topics: ReferenceVideoMatchedTopic[]
+  evidenceItems: ReferenceVideoEvidenceItem[]
 }

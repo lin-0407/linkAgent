@@ -2,15 +2,20 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   fetchImportReferenceVideo,
+  getReferenceVideoAnalysisContext,
   listReferenceVideos,
-  searchReferenceVideos,
+  topicSearchReferenceVideos,
 } from '@/api/knowledge'
 import type {
   ReferenceVideo,
-  ReferenceVideoEvidenceItem,
   ReferenceVideoImportResult,
-  ReferenceVideoSearchResult,
+  ReferenceVideoMatchedTopic,
+  ReferenceVideoTopicSearchResult,
 } from '@/types/knowledge'
+import {
+  KNOWLEDGE_VIDEO_CONTEXT_EVENT,
+  type KnowledgeVideoContextEventDetail,
+} from '@/utils/agentContext'
 
 // 案例层级选项：与后端 ALLOWED_TIERS 一致。
 const TIER_OPTIONS = [
@@ -29,6 +34,7 @@ const STRATEGY_OPTIONS = [
 ] as const
 
 const PAGE_SIZE = 12
+const TOPIC_SEARCH_PAGE_SIZE = 5
 
 const form = reactive({
   bvInput: '',
@@ -47,21 +53,25 @@ const filterCategory = ref('')
 const listLoading = ref(false)
 const listError = ref('')
 
-// 案例检索（5.2a）：query 必填，tier / category 为可选过滤；topK 不在前端暴露，用后端默认（knowledge.rag.top-k=8）。
+// 主题优先检索：query 命中主题中块，后端再按质量分返回每批 5 张视频卡片。
 const searchQuery = ref('')
 const searchTier = ref('')
 const searchCategory = ref('')
 const searchStrategy = ref('')
 const searching = ref(false)
 const searchError = ref('')
-const searchResult = ref<ReferenceVideoSearchResult | null>(null)
+const searchResult = ref<ReferenceVideoTopicSearchResult | null>(null)
+const analysisLoadingVideoId = ref('')
+const analysisError = ref('')
 
-// 证据按 videoId 建查找表（5.2c-2，响应方案 a）：响应里 evidence 与 items 平级、按 videoId 关联，
-// 这里转成 map 让卡片渲染时 O(1) 取到「这张卡片被哪几条子条目召回」。
-const evidenceByVideoId = computed(() => {
-  const map: Record<string, ReferenceVideoEvidenceItem[]> = {}
-  for (const group of searchResult.value?.evidence ?? []) {
-    map[group.videoId] = group.items
+// 当前批次主题命中按 videoId 分组。卡片只展示和自己有关的主题，避免把未展示候选的主题解释混进来。
+const matchedTopicsByVideoId = computed(() => {
+  const map: Record<string, ReferenceVideoMatchedTopic[]> = {}
+  for (const topic of searchResult.value?.matchedTopics ?? []) {
+    if (!map[topic.videoId]) {
+      map[topic.videoId] = []
+    }
+    map[topic.videoId].push(topic)
   }
   return map
 })
@@ -97,6 +107,19 @@ function embeddingLabel(status: string | null) {
       return '待索引'
     default:
       return status ?? '待索引'
+  }
+}
+
+function chunkTypeLabel(chunkType: string) {
+  switch (chunkType) {
+    case 'TITLE_PACKAGE':
+      return '标题包装'
+    case 'CONTENT_POSITIONING':
+      return '内容定位'
+    case 'AUDIENCE_FEEDBACK_SUMMARY':
+      return '观众反馈'
+    default:
+      return chunkType || '主题'
   }
 }
 
@@ -170,20 +193,15 @@ function changePage(delta: number) {
   void loadList()
 }
 
-// 检索结果的实际模式标签（三态）：这里多一个「向量 + SQL 兜底」，
-// 对应后端向量命中不足、合并兜底补足的情况。
+// 检索结果的实际模式标签：主题向量不可用时，后端会退回 SQL 质量分兜底。
 function searchModeLabel(mode: string) {
   switch (mode) {
-    case 'VECTOR':
-      return '向量语义检索'
-    case 'VECTOR_WITH_SQL_FALLBACK':
-      return '向量 + SQL 兜底'
-    case 'HYBRID':
-      return '原生 hybrid（dense+BM25）'
-    case 'HYBRID_WITH_SQL_FALLBACK':
-      return 'hybrid + SQL 兜底'
+    case 'TOPIC_VECTOR':
+      return '主题向量检索'
+    case 'SQL':
+      return 'SQL 质量分兜底'
     default:
-      return 'SQL 关键词检索'
+      return mode || 'SQL 质量分兜底'
   }
 }
 
@@ -203,35 +221,23 @@ function strategyLabel(strategy: string) {
   }
 }
 
-// 证据情绪 / 来源标签（5.2c-2）：把后端枚举转中文，正负向在样式上区分。
-function sentimentLabel(sentiment: string) {
-  switch (sentiment) {
-    case 'POSITIVE':
-      return '正向'
-    case 'NEGATIVE':
-      return '负向'
-    default:
-      return sentiment
-  }
-}
-
-function sourceTypeLabel(sourceType: string) {
-  return sourceType === 'DANMAKU' ? '弹幕' : '评论'
-}
-
-async function submitSearch() {
+// targetPage 表示第几批结果：1=top1-5，2=top6-10，最多由后端限制到 4。
+async function submitSearch(targetPage = 1) {
   const query = searchQuery.value.trim()
   if (!query || searching.value) {
     return
   }
   searching.value = true
   searchError.value = ''
+  analysisError.value = ''
   try {
-    searchResult.value = await searchReferenceVideos({
+    searchResult.value = await topicSearchReferenceVideos({
       query,
       tier: searchTier.value,
       category: searchCategory.value,
       strategy: searchStrategy.value,
+      page: targetPage,
+      size: TOPIC_SEARCH_PAGE_SIZE,
     })
   } catch (error) {
     // 检索失败清掉旧结果，避免把上一次命中误当本次结果展示。
@@ -239,6 +245,36 @@ async function submitSearch() {
     searchError.value = error instanceof Error ? error.message : String(error)
   } finally {
     searching.value = false
+  }
+}
+
+function refreshSearchCards() {
+  if (!searchResult.value || searching.value) {
+    return
+  }
+  if (!searchResult.value.hasMore) {
+    return
+  }
+  void submitSearch(searchResult.value.page + 1)
+}
+
+async function openVideoAnalysis(hit: ReferenceVideo) {
+  if (analysisLoadingVideoId.value) {
+    return
+  }
+  analysisLoadingVideoId.value = hit.videoId
+  analysisError.value = ''
+  try {
+    const context = await getReferenceVideoAnalysisContext(hit.videoId)
+    const detail: KnowledgeVideoContextEventDetail = {
+      query: searchQuery.value.trim(),
+      context,
+    }
+    window.dispatchEvent(new CustomEvent(KNOWLEDGE_VIDEO_CONTEXT_EVENT, { detail }))
+  } catch (error) {
+    analysisError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    analysisLoadingVideoId.value = ''
   }
 }
 
@@ -328,7 +364,7 @@ onMounted(() => {
           class="knowledge-search-input"
           placeholder="想参考什么？例如：美食视频封面怎么做更吸引人"
           :disabled="searching"
-          @keyup.enter="submitSearch"
+          @keyup.enter="submitSearch()"
         />
         <select v-model="searchTier" :disabled="searching">
           <option value="">全部层级</option>
@@ -341,7 +377,7 @@ onMounted(() => {
           type="text"
           placeholder="按分区筛选（可选）"
           :disabled="searching"
-          @keyup.enter="submitSearch"
+          @keyup.enter="submitSearch()"
         />
         <select v-model="searchStrategy" :disabled="searching" title="查询增强策略">
           <option v-for="option in STRATEGY_OPTIONS" :key="option.value" :value="option.value">
@@ -352,7 +388,7 @@ onMounted(() => {
           type="button"
           class="creator-primary-button"
           :disabled="searching || !searchQuery.trim()"
-          @click="submitSearch"
+          @click="submitSearch()"
         >
           {{ searching ? '检索中…' : '检索' }}
         </button>
@@ -362,56 +398,82 @@ onMounted(() => {
         <strong>检索失败</strong>
         <span>{{ searchError }}</span>
       </div>
-      <template v-else-if="searchResult">
+      <div v-if="analysisError" class="creator-alert error-alert">
+        <strong>上下文加载失败</strong>
+        <span>{{ analysisError }}</span>
+      </div>
+      <template v-if="!searchError && searchResult">
         <div class="creator-chip-list">
           <b>检索模式 {{ searchModeLabel(searchResult.mode) }}</b>
           <b>增强策略 {{ strategyLabel(searchResult.strategy) }}</b>
-          <b v-if="searchResult.reranked">已精排 · qwen3-rerank</b>
-          <b>命中 {{ searchResult.items.length }} 条</b>
+          <b>第 {{ searchResult.page }} / {{ searchResult.maxPage }} 批</b>
+          <b>展示 {{ searchResult.cards.length }} 张</b>
         </div>
         <p v-if="searchResult.enhancedQueries.length" class="knowledge-enhanced">
           <span class="knowledge-enhanced-label">扩展查询</span>
           <span v-for="(q, i) in searchResult.enhancedQueries" :key="i" class="knowledge-enhanced-item">{{ q }}</span>
         </p>
-        <p v-if="!searchResult.items.length" class="creator-muted">
+        <p v-if="!searchResult.cards.length" class="creator-muted">
           没有匹配的案例，换个说法，或先在上方采集 / 索引更多案例。
         </p>
         <div v-else class="knowledge-card-list">
-          <article v-for="hit in searchResult.items" :key="hit.id" class="knowledge-card">
-            <strong>{{ hit.title }}</strong>
-            <div class="creator-chip-list">
+          <button
+            v-for="hit in searchResult.cards"
+            :key="hit.id"
+            type="button"
+            class="knowledge-card knowledge-card-button"
+            :disabled="!!analysisLoadingVideoId"
+            @click="openVideoAnalysis(hit)"
+          >
+            <span class="knowledge-card-title">{{ hit.title }}</span>
+            <span class="creator-chip-list">
               <b>{{ tierLabel(hit.tier) }}</b>
               <b v-if="hit.category">{{ hit.category }}</b>
               <b v-if="hit.qualityScore !== null">质量分 {{ hit.qualityScore }}</b>
               <b>{{ embeddingLabel(hit.embeddingStatus) }}</b>
-            </div>
+            </span>
             <small>
               {{ hit.bvId || '无 BV' }} · {{ hit.source }}
               <template v-if="hit.publishTimeText"> · {{ hit.publishTimeText }}</template>
             </small>
-            <p v-if="hit.highlightSummary">{{ hit.highlightSummary }}</p>
-            <p v-else class="creator-muted">（暂无亮点摘要）</p>
-            <div class="knowledge-stats">
+            <span v-if="hit.highlightSummary" class="knowledge-card-summary">
+              {{ hit.highlightSummary }}
+            </span>
+            <span v-else class="knowledge-card-summary creator-muted">（暂无亮点摘要）</span>
+            <span class="knowledge-stats">
               <span>播放 {{ formatCount(hit.viewCount) }}</span>
               <span>点赞 {{ formatCount(hit.likeCount) }}</span>
               <span>投币 {{ formatCount(hit.coinCount) }}</span>
               <span>收藏 {{ formatCount(hit.favoriteCount) }}</span>
               <span>弹幕 {{ formatCount(hit.danmakuCount) }}</span>
               <span>评论 {{ formatCount(hit.replyCount) }}</span>
-            </div>
-            <div v-if="evidenceByVideoId[hit.videoId]?.length" class="knowledge-evidence">
-              <span class="knowledge-evidence-label">召回证据 · 观众原话</span>
-              <p
-                v-for="ev in evidenceByVideoId[hit.videoId]"
-                :key="ev.itemId"
-                class="knowledge-evidence-item"
-                :class="ev.sentiment === 'NEGATIVE' ? 'is-negative' : 'is-positive'"
+            </span>
+            <span v-if="matchedTopicsByVideoId[hit.videoId]?.length" class="knowledge-topic-hits">
+              <span class="knowledge-topic-hits-label">命中主题</span>
+              <span
+                v-for="topic in matchedTopicsByVideoId[hit.videoId]"
+                :key="topic.chunkId"
+                class="knowledge-topic-hit"
               >
-                <b>{{ sourceTypeLabel(ev.sourceType) }} · {{ sentimentLabel(ev.sentiment) }}</b>
-                {{ ev.content }}
-              </p>
-            </div>
-          </article>
+                <b>{{ chunkTypeLabel(topic.chunkType) }} · {{ topic.chunkTitle }}</b>
+                {{ topic.preview }}
+              </span>
+            </span>
+            <span class="knowledge-card-action">
+              {{ analysisLoadingVideoId === hit.videoId ? '加载视频上下文…' : '打开 AI 分析' }}
+            </span>
+          </button>
+        </div>
+        <div v-if="searchResult.cards.length" class="knowledge-pager">
+          <button
+            type="button"
+            class="creator-secondary-action"
+            :disabled="searching || !searchResult.hasMore"
+            @click="refreshSearchCards"
+          >
+            {{ searchResult.hasMore ? '换一批' : '没有更多' }}
+          </button>
+          <span>最多展示 4 批，共覆盖 top20 候选</span>
         </div>
       </template>
     </section>
@@ -607,14 +669,44 @@ onMounted(() => {
   align-content: start;
   gap: var(--s3);
   padding: var(--s4);
+  color: inherit;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
 }
 
+.knowledge-card-button {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease;
+}
+
+.knowledge-card-button:hover:not(:disabled),
+.knowledge-card-button:focus-visible {
+  background: #fff;
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent), var(--sh-sm);
+}
+
+.knowledge-card-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
 .knowledge-card > strong {
   color: var(--ink);
   font-size: 15px;
+  line-height: 1.45;
+}
+
+.knowledge-card-title {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
   line-height: 1.45;
 }
 
@@ -624,7 +716,8 @@ onMounted(() => {
   line-height: 1.5;
 }
 
-.knowledge-card p {
+.knowledge-card p,
+.knowledge-card-summary {
   margin: 0;
   color: var(--text);
   font-size: 14px;
@@ -645,6 +738,50 @@ onMounted(() => {
   border-radius: var(--r-pill);
   font-size: 12px;
   font-weight: var(--fw-medium);
+}
+
+.knowledge-topic-hits {
+  display: grid;
+  gap: var(--s2);
+  padding-top: var(--s3);
+  border-top: 1px dashed rgba(15, 23, 42, 0.12);
+}
+
+.knowledge-topic-hits-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+
+.knowledge-topic-hit {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.knowledge-topic-hit b {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+
+.knowledge-card-action {
+  justify-self: start;
+  min-height: 34px;
+  padding: 7px 12px;
+  color: var(--accent);
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
 }
 
 /* 召回证据（5.2c-2）：small-to-big 命中的观众原话，以「引用条」形式展示，正/负向用左色条区分。

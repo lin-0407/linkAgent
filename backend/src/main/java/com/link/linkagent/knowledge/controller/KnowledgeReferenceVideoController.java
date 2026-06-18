@@ -1,6 +1,7 @@
 package com.link.linkagent.knowledge.controller;
 
 import com.link.linkagent.knowledge.model.ReferenceVideoFetchImportRequest;
+import com.link.linkagent.knowledge.model.ReferenceVideoAnalysisContextResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoImportRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoImportResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexRequest;
@@ -9,19 +10,25 @@ import com.link.linkagent.knowledge.model.ReferenceVideoIndexStatusResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoPageResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchResponse;
+import com.link.linkagent.knowledge.model.ReferenceVideoTopicSearchRequest;
+import com.link.linkagent.knowledge.model.ReferenceVideoTopicSearchResponse;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceFetchService;
+import com.link.linkagent.knowledge.service.KnowledgeReferenceChunkIndexService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceHybridIndexService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceIndexService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceItemHybridIndexService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceItemIndexService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceRetrievalService;
+import com.link.linkagent.knowledge.service.KnowledgeReferenceTopicSearchService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceVideoService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -41,25 +48,31 @@ public class KnowledgeReferenceVideoController {
     private final KnowledgeReferenceVideoService knowledgeReferenceVideoService;
     private final KnowledgeReferenceFetchService knowledgeReferenceFetchService;
     private final KnowledgeReferenceIndexService knowledgeReferenceIndexService;
+    private final KnowledgeReferenceChunkIndexService knowledgeReferenceChunkIndexService;
     private final KnowledgeReferenceItemIndexService knowledgeReferenceItemIndexService;
     private final KnowledgeReferenceHybridIndexService knowledgeReferenceHybridIndexService;
     private final KnowledgeReferenceItemHybridIndexService knowledgeReferenceItemHybridIndexService;
     private final KnowledgeReferenceRetrievalService knowledgeReferenceRetrievalService;
+    private final KnowledgeReferenceTopicSearchService knowledgeReferenceTopicSearchService;
 
     public KnowledgeReferenceVideoController(KnowledgeReferenceVideoService knowledgeReferenceVideoService,
                                              KnowledgeReferenceFetchService knowledgeReferenceFetchService,
                                              KnowledgeReferenceIndexService knowledgeReferenceIndexService,
+                                             KnowledgeReferenceChunkIndexService knowledgeReferenceChunkIndexService,
                                              KnowledgeReferenceItemIndexService knowledgeReferenceItemIndexService,
                                              KnowledgeReferenceHybridIndexService knowledgeReferenceHybridIndexService,
                                              KnowledgeReferenceItemHybridIndexService knowledgeReferenceItemHybridIndexService,
-                                             KnowledgeReferenceRetrievalService knowledgeReferenceRetrievalService) {
+                                             KnowledgeReferenceRetrievalService knowledgeReferenceRetrievalService,
+                                             KnowledgeReferenceTopicSearchService knowledgeReferenceTopicSearchService) {
         this.knowledgeReferenceVideoService = knowledgeReferenceVideoService;
         this.knowledgeReferenceFetchService = knowledgeReferenceFetchService;
         this.knowledgeReferenceIndexService = knowledgeReferenceIndexService;
+        this.knowledgeReferenceChunkIndexService = knowledgeReferenceChunkIndexService;
         this.knowledgeReferenceItemIndexService = knowledgeReferenceItemIndexService;
         this.knowledgeReferenceHybridIndexService = knowledgeReferenceHybridIndexService;
         this.knowledgeReferenceItemHybridIndexService = knowledgeReferenceItemHybridIndexService;
         this.knowledgeReferenceRetrievalService = knowledgeReferenceRetrievalService;
+        this.knowledgeReferenceTopicSearchService = knowledgeReferenceTopicSearchService;
     }
 
     /**
@@ -89,6 +102,28 @@ public class KnowledgeReferenceVideoController {
     public ReferenceVideoSearchResponse searchReferenceVideos(
             @Valid @RequestBody ReferenceVideoSearchRequest request) {
         return knowledgeReferenceRetrievalService.search(request);
+    }
+
+    /**
+     * 主题优先检索：先用 RAG 命中主题中块，再按质量分展示 top5 视频卡片。
+     * 刷新时传 page=2/3/4，分别展示 top6-10、top11-15、top16-20。
+     */
+    @PostMapping("/topic-search")
+    public ReferenceVideoTopicSearchResponse topicSearchReferenceVideos(
+            @Valid @RequestBody ReferenceVideoTopicSearchRequest request) {
+        return knowledgeReferenceTopicSearchService.topicSearch(request);
+    }
+
+    /**
+     * 点击某张视频卡片后，加载该视频的主题中块和评论弹幕上下文，供 AI 交互台自动进入该视频分析。
+     */
+    @GetMapping("/{videoId}/analysis-context")
+    public ReferenceVideoAnalysisContextResponse referenceVideoAnalysisContext(
+            @PathVariable
+            @NotBlank(message = "videoId 不能为空")
+            @Size(max = 64, message = "videoId 长度不能超过64个字符")
+            String videoId) {
+        return knowledgeReferenceTopicSearchService.analysisContext(videoId);
     }
 
     /**
@@ -132,6 +167,25 @@ public class KnowledgeReferenceVideoController {
     @GetMapping("/index/status")
     public ReferenceVideoIndexStatusResponse referenceVideoIndexStatus() {
         return knowledgeReferenceIndexService.status();
+    }
+
+    /**
+     * 重建（增量）主题中块向量索引：把标题包装 / 内容定位 / 观众反馈主题块写入中块集合并回写状态。
+     * 与父表、子条目索引平行，三层分块各自独立，任一层不可用时都能单独降级。
+     */
+    @PostMapping("/index/chunks/rebuild")
+    public ReferenceVideoIndexResponse rebuildReferenceVideoChunkIndex(
+            @Valid @RequestBody(required = false) ReferenceVideoIndexRequest request) {
+        return knowledgeReferenceChunkIndexService.rebuildChunks(request);
+    }
+
+    /**
+     * 查询主题中块向量索引状态：各状态计数、最近成功索引时间、检索模式预测。
+     * RAG 关闭时也正常返回（ragEnabled=false），用于确认中块层降级是否符合预期。
+     */
+    @GetMapping("/index/chunks/status")
+    public ReferenceVideoIndexStatusResponse referenceVideoChunkIndexStatus() {
+        return knowledgeReferenceChunkIndexService.chunkStatus();
     }
 
     /**

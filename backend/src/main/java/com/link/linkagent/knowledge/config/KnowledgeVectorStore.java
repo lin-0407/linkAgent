@@ -50,6 +50,13 @@ public class KnowledgeVectorStore {
     private MilvusVectorStore childVectorStore;
     private volatile boolean childReady = false;
 
+    /**
+     * 主题中块集合向量库与就绪位。中块是父卡片和子原文之间的第三种粒度，
+     * 独立集合能让它单独降级：中块建库失败时，父卡片和子条目检索仍然照常工作。
+     */
+    private MilvusVectorStore chunkVectorStore;
+    private volatile boolean chunkReady = false;
+
     public KnowledgeVectorStore(KnowledgeRagProperties properties,
                                 ObjectProvider<EmbeddingModel> embeddingModelProvider) {
         this.properties = properties;
@@ -117,6 +124,26 @@ public class KnowledgeVectorStore {
                 this.childReady = false;
                 log.warn("知识库子条目向量库初始化失败，子召回不可用（父集合检索不受影响）。请检查子集合维度是否匹配。", exception);
             }
+
+            try {
+                MilvusVectorStore chunkStore = MilvusVectorStore.builder(milvusClient, embeddingModel)
+                        .collectionName(properties.getChunkCollectionName())
+                        .databaseName(properties.getMilvus().getDatabaseName())
+                        .embeddingDimension(properties.getEmbeddingDimension())
+                        .indexType(IndexType.IVF_FLAT)
+                        .metricType(MetricType.COSINE)
+                        .initializeSchema(properties.isInitializeSchema())
+                        .build();
+                // 同父 / 子集合：非 Spring 托管 Bean，必须手动 afterPropertiesSet 才会真正建出中块集合 schema。
+                chunkStore.afterPropertiesSet();
+                this.chunkVectorStore = chunkStore;
+                this.chunkReady = true;
+                log.info("知识库主题中块向量库就绪：chunkCollection={}, dimension={}。",
+                        properties.getChunkCollectionName(), properties.getEmbeddingDimension());
+            } catch (Exception exception) {
+                this.chunkReady = false;
+                log.warn("知识库主题中块向量库初始化失败，中块召回不可用（父/子集合检索不受影响）。请检查中块集合维度是否匹配。", exception);
+            }
         }
     }
 
@@ -161,6 +188,20 @@ public class KnowledgeVectorStore {
      */
     public Optional<VectorStore> getChildVectorStore() {
         return Optional.ofNullable(childVectorStore);
+    }
+
+    /**
+     * 主题中块向量库是否就绪。中块召回是增强层，未就绪时检索自动退回父卡片 + 子条目召回。
+     */
+    public boolean isChunkReady() {
+        return chunkReady;
+    }
+
+    /**
+     * 把主题中块向量库交给索引 / 检索服务使用；未就绪时返回空，调用方据此降级。
+     */
+    public Optional<VectorStore> getChunkVectorStore() {
+        return Optional.ofNullable(chunkVectorStore);
     }
 
     @PreDestroy

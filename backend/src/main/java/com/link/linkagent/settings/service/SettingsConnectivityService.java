@@ -7,6 +7,7 @@ import com.link.linkagent.settings.dto.ConnectivityItemResponse;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -76,7 +77,7 @@ public class SettingsConnectivityService {
             return disabled("redis", "Redis", "当前没有 StringRedisTemplate Bean，可能未启用 Redis 自动配置");
         }
         try {
-            redisTemplate.execute(connection -> {
+            redisTemplate.execute((RedisCallback<Object>) connection -> {
                 connection.serverCommands().info();
                 return null;
             });

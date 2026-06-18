@@ -870,6 +870,101 @@ textarea:focus {
   color: var(--danger);
 }
 
+.agent-floating-context-panel {
+  display: grid;
+  max-height: 220px;
+  gap: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-floating-context-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-floating-context-head div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.agent-floating-context-head span,
+.agent-floating-context-head b,
+.agent-floating-context-meta span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+
+.agent-floating-context-head strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-floating-context-head b {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+
+.agent-floating-context-meta,
+.agent-floating-context-grid,
+.agent-floating-context-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agent-floating-context-meta span {
+  max-width: 100%;
+  padding: 3px 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+
+.agent-floating-context-grid p,
+.agent-floating-context-evidence p {
+  margin: 0;
+  padding: 7px 9px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-floating-context-grid p {
+  flex: 1 1 180px;
+}
+
+.agent-floating-context-evidence p {
+  flex: 1 1 220px;
+}
+
+.agent-floating-context-grid b,
+.agent-floating-context-evidence b {
+  margin-right: 5px;
+  color: var(--accent);
+  font-weight: var(--fw-semibold);
+}
+
 .agent-floating-message-list {
   gap: 12px;
   padding: 4px 14px 14px;

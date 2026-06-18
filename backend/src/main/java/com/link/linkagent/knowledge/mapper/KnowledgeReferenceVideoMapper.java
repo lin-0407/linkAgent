@@ -1,6 +1,8 @@
 package com.link.linkagent.knowledge.mapper;
 
 import com.link.linkagent.knowledge.model.ReferenceVideoEmbeddingStatusCount;
+import com.link.linkagent.knowledge.model.ReferenceVideoChunkIndexRow;
+import com.link.linkagent.knowledge.model.ReferenceVideoChunkRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoItemIndexRow;
 import com.link.linkagent.knowledge.model.ReferenceVideoItemRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
@@ -103,36 +105,61 @@ public interface KnowledgeReferenceVideoMapper {
     int insertReferenceVideoItem(ReferenceVideoItemRecord record);
 
     /**
+     * 插入一个视频案例的主题中块。
+     * 中块由导入链路基于父表字段和清洗后的子条目同步生成，embedding_* 仍走 DDL 默认 PENDING，
+     * 让向量索引和导入解耦：RAG 关闭时也能先把结构化中块落库。
+     */
+    @Insert("""
+            INSERT IGNORE INTO creator_reference_video_chunk (
+                chunk_id,
+                video_id,
+                chunk_type,
+                chunk_title,
+                chunk_content,
+                source_item_ids
+            )
+            VALUES (
+                #{chunkId},
+                #{videoId},
+                #{chunkType},
+                #{chunkTitle},
+                #{chunkContent},
+                #{sourceItemIds}
+            )
+            """)
+    int insertReferenceVideoChunk(ReferenceVideoChunkRecord record);
+
+    /**
      * 分页查询案例列表，支持按分区、层级可选过滤。
      * 按 id 倒序让最近导入的案例排在前面，便于导入后立即在列表确认结果。
      */
     @Select("""
-            SELECT id,
-                   video_id,
-                   bv_id,
-                   tier,
-                   category,
-                   title,
-                   description,
-                   tags,
-                   view_count,
-                   like_count,
-                   coin_count,
-                   favorite_count,
-                   danmaku_count,
-                   reply_count,
-                   highlight_summary,
-                   quality_score,
-                   source,
-                   publish_time_text,
-                   embedding_status,
-                   create_time,
-                   update_time
-            FROM creator_reference_video
-            WHERE is_deleted = 0
-              AND (#{category} IS NULL OR category = #{category})
-              AND (#{tier} IS NULL OR tier = #{tier})
-            ORDER BY id DESC
+            SELECT v.id,
+                   v.video_id,
+                   v.bv_id,
+                   v.tier,
+                   v.category,
+                   v.title,
+                   v.description,
+                   v.tags,
+                   v.view_count,
+                   v.like_count,
+                   v.coin_count,
+                   v.favorite_count,
+                   v.danmaku_count,
+                   v.reply_count,
+                   v.highlight_summary,
+                   v.quality_score,
+                   v.source,
+                   v.publish_time_text,
+                   v.embedding_status,
+                   v.create_time,
+                   v.update_time
+            FROM creator_reference_video v
+            WHERE v.is_deleted = 0
+              AND (#{category} IS NULL OR v.category = #{category})
+              AND (#{tier} IS NULL OR v.tier = #{tier})
+            ORDER BY v.id DESC
             LIMIT #{limit} OFFSET #{offset}
             """)
     @Results(id = "ReferenceVideoRecordMap", value = {
@@ -198,6 +225,35 @@ public interface KnowledgeReferenceVideoMapper {
             """)
     @ResultMap("ReferenceVideoRecordMap")
     List<ReferenceVideoRecord> listByVideoIds(@Param("videoIds") List<String> videoIds);
+
+    /**
+     * 对主题中块召回得到的视频候选按质量分分页。
+     * RAG 在这里只负责“找到相关主题的视频集合”，真正展示顺序交给质量分，符合创作者挑案例时优先看高质量样本的习惯。
+     */
+    @Select("""
+            <script>
+            SELECT id, video_id, bv_id, tier, category, title, description, tags,
+                   view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
+                   highlight_summary, quality_score, source, publish_time_text,
+                   embedding_status, create_time, update_time
+            FROM creator_reference_video
+            WHERE is_deleted = 0
+              AND (#{category} IS NULL OR category = #{category})
+              AND (#{tier} IS NULL OR tier = #{tier})
+              AND video_id IN
+              <foreach item='vid' collection='videoIds' open='(' separator=',' close=')'>
+                  #{vid}
+              </foreach>
+            ORDER BY quality_score DESC, id DESC
+            LIMIT #{limit} OFFSET #{offset}
+            </script>
+            """)
+    @ResultMap("ReferenceVideoRecordMap")
+    List<ReferenceVideoRecord> listByVideoIdsOrderByQuality(@Param("videoIds") List<String> videoIds,
+                                                            @Param("category") String category,
+                                                            @Param("tier") String tier,
+                                                            @Param("offset") int offset,
+                                                            @Param("limit") int limit);
 
     /**
      * SQL 关键词兜底检索父表（5.2a）：RAG 关闭或向量库不可用时走这里。
@@ -296,31 +352,31 @@ public interface KnowledgeReferenceVideoMapper {
      * 复用 listReferenceVideos 的 ReferenceVideoRecordMap，故 SELECT 列须与之保持一致。
      */
     @Select("""
-            SELECT id,
-                   video_id,
-                   bv_id,
-                   tier,
-                   category,
-                   title,
-                   description,
-                   tags,
-                   view_count,
-                   like_count,
-                   coin_count,
-                   favorite_count,
-                   danmaku_count,
-                   reply_count,
-                   highlight_summary,
-                   quality_score,
-                   source,
-                   publish_time_text,
-                   embedding_status,
-                   create_time,
-                   update_time
-            FROM creator_reference_video
-            WHERE is_deleted = 0
-              AND embedding_status IN ('PENDING', 'FAILED')
-            ORDER BY id DESC
+            SELECT v.id,
+                   v.video_id,
+                   v.bv_id,
+                   v.tier,
+                   v.category,
+                   v.title,
+                   v.description,
+                   v.tags,
+                   v.view_count,
+                   v.like_count,
+                   v.coin_count,
+                   v.favorite_count,
+                   v.danmaku_count,
+                   v.reply_count,
+                   v.highlight_summary,
+                   v.quality_score,
+                   v.source,
+                   v.publish_time_text,
+                   v.embedding_status,
+                   v.create_time,
+                   v.update_time
+            FROM creator_reference_video v
+            WHERE v.is_deleted = 0
+              AND v.embedding_status IN ('PENDING', 'FAILED')
+            ORDER BY v.id DESC
             LIMIT #{limit}
             """)
     @ResultMap("ReferenceVideoRecordMap")
@@ -532,4 +588,230 @@ public interface KnowledgeReferenceVideoMapper {
             @Result(column = "source_type", property = "sourceType")
     })
     List<ReferenceVideoItemRecord> listItemsByItemIds(@Param("itemIds") List<String> itemIds);
+
+    // ============================ 主题中块向量索引（三层分块中间层） ============================
+
+    /**
+     * 查询缺少可生成主题中块的历史视频案例，用于中块索引重建前补齐老数据。
+     * 观众反馈块依赖已清洗评论 / 弹幕，不能把无反馈素材的视频强行判定为缺块，否则会反复扫描同一批视频。
+     * 这样上线前已导入或曾经补齐中断的案例也能进入三层分块，而不需要作者重新采集或重新导入。
+     * 复用 listReferenceVideos 的 ReferenceVideoRecordMap，故 SELECT 列须与之保持一致。
+     */
+    @Select("""
+            SELECT v.id,
+                   v.video_id,
+                   v.bv_id,
+                   v.tier,
+                   v.category,
+                   v.title,
+                   v.description,
+                   v.tags,
+                   v.view_count,
+                   v.like_count,
+                   v.coin_count,
+                   v.favorite_count,
+                   v.danmaku_count,
+                   v.reply_count,
+                   v.highlight_summary,
+                   v.quality_score,
+                   v.source,
+                   v.publish_time_text,
+                   v.embedding_status,
+                   v.create_time,
+                   v.update_time
+            FROM creator_reference_video v
+            WHERE v.is_deleted = 0
+              AND (
+                  NOT EXISTS (
+                      SELECT 1
+                      FROM creator_reference_video_chunk c
+                      WHERE c.video_id = v.video_id
+                        AND c.chunk_type = 'TITLE_PACKAGE'
+                        AND c.is_deleted = 0
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM creator_reference_video_chunk c
+                      WHERE c.video_id = v.video_id
+                        AND c.chunk_type = 'CONTENT_POSITIONING'
+                        AND c.is_deleted = 0
+                  )
+                  OR (
+                      EXISTS (
+                          SELECT 1
+                          FROM creator_reference_video_item i
+                          WHERE i.video_id = v.video_id
+                            AND i.is_deleted = 0
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM creator_reference_video_chunk c
+                          WHERE c.video_id = v.video_id
+                            AND c.chunk_type = 'AUDIENCE_FEEDBACK_SUMMARY'
+                            AND c.is_deleted = 0
+                      )
+                  )
+              )
+            ORDER BY v.id DESC
+            LIMIT #{limit}
+            """)
+    @ResultMap("ReferenceVideoRecordMap")
+    List<ReferenceVideoRecord> listVideosMissingChunks(@Param("limit") int limit);
+
+    /**
+     * 查询某视频下可用于生成观众反馈主题块的优质子条目。
+     * 只取主题中块生成需要的字段，避免把完整子表对象的无关字段带进服务层。
+     */
+    @Select("""
+            SELECT item_id, video_id, content, sentiment, source_type
+            FROM creator_reference_video_item
+            WHERE video_id = #{videoId}
+              AND is_deleted = 0
+            ORDER BY id
+            LIMIT #{limit}
+            """)
+    @Results(value = {
+            @Result(column = "item_id", property = "itemId"),
+            @Result(column = "video_id", property = "videoId"),
+            @Result(column = "content", property = "content"),
+            @Result(column = "sentiment", property = "sentiment"),
+            @Result(column = "source_type", property = "sourceType")
+    })
+    List<ReferenceVideoItemRecord> listItemsByVideoId(@Param("videoId") String videoId,
+                                                      @Param("limit") int limit);
+
+    /**
+     * 查询单个视频下的主题中块，供点击卡片后的分析窗口默认加载上下文。
+     * 不依赖向量库再次检索，因为用户已经选定 videoId，此时直接读 MySQL 事实源更稳定。
+     */
+    @Select("""
+            SELECT chunk_id,
+                   video_id,
+                   chunk_type,
+                   chunk_title,
+                   chunk_content,
+                   source_item_ids,
+                   embedding_status,
+                   create_time,
+                   update_time
+            FROM creator_reference_video_chunk
+            WHERE video_id = #{videoId}
+              AND is_deleted = 0
+            ORDER BY FIELD(chunk_type, 'TITLE_PACKAGE', 'CONTENT_POSITIONING', 'AUDIENCE_FEEDBACK_SUMMARY'), id
+            """)
+    @Results(id = "ReferenceVideoChunkRecordMap", value = {
+            @Result(column = "chunk_id", property = "chunkId"),
+            @Result(column = "video_id", property = "videoId"),
+            @Result(column = "chunk_type", property = "chunkType"),
+            @Result(column = "chunk_title", property = "chunkTitle"),
+            @Result(column = "chunk_content", property = "chunkContent"),
+            @Result(column = "source_item_ids", property = "sourceItemIds"),
+            @Result(column = "embedding_status", property = "embeddingStatus"),
+            @Result(column = "create_time", property = "createTime"),
+            @Result(column = "update_time", property = "updateTime")
+    })
+    List<ReferenceVideoChunkRecord> listChunksByVideoId(@Param("videoId") String videoId);
+
+    /**
+     * 查询单个视频下可分析的评论 / 弹幕证据。
+     * 点击卡片后默认给 AI 交互台加载一小批高价值原文，避免一开始把整条视频所有反馈都塞给模型。
+     */
+    @Select("""
+            SELECT item_id, video_id, content, sentiment, source_type
+            FROM creator_reference_video_item
+            WHERE video_id = #{videoId}
+              AND is_deleted = 0
+            ORDER BY id
+            LIMIT #{limit}
+            """)
+    @ResultMap("ReferenceVideoItemEvidenceMap")
+    List<ReferenceVideoItemRecord> listEvidenceItemsByVideoId(@Param("videoId") String videoId,
+                                                              @Param("limit") int limit);
+
+    /**
+     * 查询待索引的主题中块。
+     * JOIN 父表是为了过滤父表已删除的孤儿中块，并把 category/tier 反范式带出写入 metadata，
+     * 让中块召回与父卡片、子条目使用同一套分区和层级过滤。
+     */
+    @Select("""
+            SELECT c.chunk_id        AS chunk_id,
+                   c.video_id        AS video_id,
+                   c.chunk_type      AS chunk_type,
+                   c.chunk_title     AS chunk_title,
+                   c.chunk_content   AS chunk_content,
+                   c.source_item_ids AS source_item_ids,
+                   v.category        AS category,
+                   v.tier            AS tier
+            FROM creator_reference_video_chunk c
+            JOIN creator_reference_video v
+                 ON v.video_id = c.video_id AND v.is_deleted = 0
+            WHERE c.is_deleted = 0
+              AND c.embedding_status IN ('PENDING', 'FAILED')
+            ORDER BY c.id
+            LIMIT #{limit}
+            """)
+    @Results(id = "ReferenceVideoChunkIndexRowMap", value = {
+            @Result(column = "chunk_id", property = "chunkId"),
+            @Result(column = "video_id", property = "videoId"),
+            @Result(column = "chunk_type", property = "chunkType"),
+            @Result(column = "chunk_title", property = "chunkTitle"),
+            @Result(column = "chunk_content", property = "chunkContent"),
+            @Result(column = "source_item_ids", property = "sourceItemIds"),
+            @Result(column = "category", property = "category"),
+            @Result(column = "tier", property = "tier")
+    })
+    List<ReferenceVideoChunkIndexRow> listIndexableChunks(@Param("limit") int limit);
+
+    /**
+     * 标记某主题中块已成功写入向量库：embedding_id 复用 chunk_id，让向量文档与中块表一一对应。
+     */
+    @Update("""
+            UPDATE creator_reference_video_chunk
+            SET embedding_id = #{embeddingId},
+                embedding_status = 'INDEXED',
+                embedding_error = NULL,
+                embedding_update_time = CURRENT_TIMESTAMP
+            WHERE chunk_id = #{chunkId}
+              AND is_deleted = 0
+            """)
+    int updateChunkEmbeddingIndexed(@Param("chunkId") String chunkId,
+                                    @Param("embeddingId") String embeddingId);
+
+    /**
+     * 标记某主题中块索引失败，保存截断后的失败原因摘要，便于排查 Embedding / Milvus 异常。
+     */
+    @Update("""
+            UPDATE creator_reference_video_chunk
+            SET embedding_status = 'FAILED',
+                embedding_error = #{errorMessage},
+                embedding_update_time = CURRENT_TIMESTAMP
+            WHERE chunk_id = #{chunkId}
+              AND is_deleted = 0
+            """)
+    int updateChunkEmbeddingFailed(@Param("chunkId") String chunkId,
+                                   @Param("errorMessage") String errorMessage);
+
+    /**
+     * 按向量索引状态分组统计主题中块，供中块索引 status 汇总各状态数量。复用父侧同形 map。
+     */
+    @Select("""
+            SELECT embedding_status AS status,
+                   COUNT(1) AS count
+            FROM creator_reference_video_chunk
+            WHERE is_deleted = 0
+            GROUP BY embedding_status
+            """)
+    @ResultMap("ReferenceVideoEmbeddingStatusCountMap")
+    List<ReferenceVideoEmbeddingStatusCount> countChunkEmbeddingStatus();
+
+    /**
+     * 主题中块最近一次成功索引时间（仅看 INDEXED），无成功索引时返回 null。
+     */
+    @Select("""
+            SELECT MAX(embedding_update_time)
+            FROM creator_reference_video_chunk
+            WHERE embedding_status = 'INDEXED'
+              AND is_deleted = 0
+            """)
+    LocalDateTime findLastChunkEmbeddingUpdateTime();
 }

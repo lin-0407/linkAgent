@@ -93,9 +93,7 @@ function statusLabel(status: string) {
         <aside class="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title">
           <header class="settings-header">
             <div>
-              <p class="creator-kicker">系统设置</p>
-              <h2 id="settings-title">运行状态与运维</h2>
-              <p>动态开关即时生效；启动期配置只读展示，修改配置后需重启。</p>
+              <h2 id="settings-title">设置</h2>
             </div>
             <button type="button" class="settings-close" aria-label="关闭设置面板" @click="closeDrawer">
               ×
@@ -110,9 +108,6 @@ function statusLabel(status: string) {
                   {{ loading ? '刷新中…' : '刷新' }}
                 </button>
               </div>
-              <p class="creator-inline-note">
-                这些开关在业务调用前读取，适合运行期调整。设置会写入数据库，重启后仍保留。
-              </p>
 
               <div v-if="loadError" class="creator-alert error-alert">
                 <strong>设置加载失败</strong>
@@ -134,7 +129,7 @@ function statusLabel(status: string) {
                     :aria-pressed="toggle.enabled"
                     @click="toggleSetting(toggle.key, !toggle.enabled)"
                   >
-                    <span>{{ savingKey === toggle.key ? '保存中' : toggle.enabled ? '开启' : '关闭' }}</span>
+                    <span>{{ savingKey === toggle.key ? '保存中' : toggle.enabled ? '已开启' : '开启' }}</span>
                   </button>
                 </article>
               </div>
@@ -142,9 +137,6 @@ function statusLabel(status: string) {
 
             <section class="creator-section settings-section">
               <div class="creator-section-head"><h3>只读状态</h3></div>
-              <p class="creator-inline-note">
-                这些配置影响 Spring 启动期 Bean 装配。设置页只展示当前值，不在运行期修改。
-              </p>
               <div class="settings-readonly-grid">
                 <article v-for="item in readonlySettings" :key="item.key" class="settings-readonly-card">
                   <strong>{{ item.name }}</strong>
@@ -167,9 +159,6 @@ function statusLabel(status: string) {
                   {{ connectivityLoading ? '检测中…' : '检测连接' }}
                 </button>
               </div>
-              <p class="creator-inline-note">
-                检测只验证连接或 Bean 是否存在，不主动调用 LLM 或 Embedding，避免设置页产生模型成本。
-              </p>
               <div v-if="connectivityError" class="creator-alert error-alert">
                 <strong>检测失败</strong>
                 <span>{{ connectivityError }}</span>
@@ -191,9 +180,6 @@ function statusLabel(status: string) {
 
             <section class="creator-section settings-section">
               <div class="creator-section-head"><h3>知识库索引</h3></div>
-              <p class="creator-inline-note">
-                这里集中处理案例库索引运维。案例库页面只保留采集、检索和列表。
-              </p>
               <KnowledgeIndexPanels />
             </section>
           </main>
@@ -209,47 +195,45 @@ function statusLabel(status: string) {
   inset: 0;
   z-index: 80;
   display: flex;
-  justify-content: flex-end;
-  background: rgba(15, 23, 42, 0.36);
-  backdrop-filter: blur(8px);
+  align-items: center;
+  justify-content: center;
+  padding: var(--s5);
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(6px);
 }
 
 .settings-drawer {
-  width: min(760px, calc(100vw - 18px));
-  height: 100vh;
+  width: min(820px, calc(100vw - 32px));
+  max-height: min(840px, calc(100vh - 40px));
   overflow: hidden;
   color: var(--ink);
-  background:
-    radial-gradient(circle at 12% 0%, rgba(34, 197, 94, 0.12), transparent 32%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
-  border-left: 1px solid var(--border);
-  box-shadow: -24px 0 70px rgba(15, 23, 42, 0.24);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
 }
 
 .settings-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: var(--s4);
-  padding: var(--s5);
+  padding: var(--s4) var(--s5);
   border-bottom: 1px solid var(--border);
 }
 
 .settings-header h2 {
   margin: 0;
-  font-size: clamp(24px, 3vw, 36px);
-}
-
-.settings-header p {
-  margin: var(--s2) 0 0;
-  color: var(--muted);
-  line-height: 1.6;
+  font-size: 20px;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0;
 }
 
 .settings-close {
   display: inline-grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -268,9 +252,9 @@ function statusLabel(status: string) {
 .settings-body {
   display: grid;
   gap: var(--s4);
-  height: calc(100vh - 142px);
+  max-height: calc(min(840px, 100vh - 40px) - 69px);
   overflow-y: auto;
-  padding: var(--s4) var(--s5) var(--s6);
+  padding: var(--s4) var(--s5) var(--s5);
 }
 
 .settings-section {
@@ -285,26 +269,33 @@ function statusLabel(status: string) {
   gap: var(--s3);
 }
 
+.settings-toggle-list {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
 .settings-toggle-card,
 .settings-readonly-card,
 .settings-connectivity-card {
   display: grid;
-  gap: var(--s2);
-  padding: var(--s4);
+  gap: 6px;
+  padding: var(--s3) var(--s4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
 }
 
 .settings-toggle-card {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
+  column-gap: var(--s4);
 }
 
 .settings-toggle-card strong,
 .settings-readonly-card strong,
 .settings-connectivity-card strong {
   color: var(--ink);
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
 }
 
 .settings-toggle-card small,
@@ -318,22 +309,23 @@ function statusLabel(status: string) {
 .settings-toggle-card p,
 .settings-readonly-card p,
 .settings-connectivity-card p {
-  margin: var(--s2) 0 0;
+  margin: 0;
   color: var(--text);
   font-size: 13px;
   line-height: 1.55;
 }
 
 .settings-switch {
-  min-width: 88px;
-  min-height: 44px;
-  padding: 0 16px;
-  color: var(--muted);
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
+  min-width: 76px;
+  min-height: 34px;
+  padding: 0 14px;
+  color: var(--surface);
+  background: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--r-sm);
   cursor: pointer;
   font-weight: var(--fw-semibold);
+  font-size: 14px;
   transition:
     background 180ms ease,
     color 180ms ease,
@@ -341,9 +333,9 @@ function statusLabel(status: string) {
 }
 
 .settings-switch.enabled {
-  color: white;
-  background: var(--accent);
-  border-color: var(--accent);
+  color: var(--muted);
+  background: var(--surface-sub);
+  border-color: var(--border);
 }
 
 .settings-switch:disabled {
@@ -420,12 +412,15 @@ function statusLabel(status: string) {
 
 .settings-fade-enter-active .settings-drawer,
 .settings-fade-leave-active .settings-drawer {
-  transition: transform 220ms ease;
+  transition:
+    opacity 180ms ease,
+    transform 220ms ease;
 }
 
 .settings-fade-enter-from .settings-drawer,
 .settings-fade-leave-to .settings-drawer {
-  transform: translateX(28px);
+  opacity: 0;
+  transform: translateY(14px) scale(0.98);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -438,12 +433,22 @@ function statusLabel(status: string) {
 }
 
 @media (max-width: 640px) {
+  .settings-layer {
+    padding: var(--s3);
+  }
+
+  .settings-drawer {
+    width: 100%;
+    max-height: calc(100vh - 24px);
+  }
+
   .settings-header,
   .settings-body {
     padding-left: var(--s4);
     padding-right: var(--s4);
   }
 
+  .settings-toggle-list,
   .settings-toggle-card {
     grid-template-columns: 1fr;
   }

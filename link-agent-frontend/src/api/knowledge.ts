@@ -1,4 +1,5 @@
 import type {
+  ReferenceVideoAnalysisContext,
   ReferenceVideoFetchImportPayload,
   ReferenceVideoImportResult,
   ReferenceVideoIndexResult,
@@ -7,6 +8,8 @@ import type {
   ReferenceVideoPage,
   ReferenceVideoSearchPayload,
   ReferenceVideoSearchResult,
+  ReferenceVideoTopicSearchPayload,
+  ReferenceVideoTopicSearchResult,
 } from '@/types/knowledge'
 
 // 案例库接口封装。requestJson / readErrorMessage 与 api/creator.ts 同款：
@@ -157,4 +160,39 @@ export function searchReferenceVideos(payload: ReferenceVideoSearchPayload) {
     method: 'POST',
     body: JSON.stringify(body),
   })
+}
+
+// 主题优先检索：先召回主题中块，再由后端按视频质量分分页返回卡片。
+// page/size 只在前端做批次控制，真正的 top20 截断规则由后端统一兜底。
+export function topicSearchReferenceVideos(payload: ReferenceVideoTopicSearchPayload) {
+  const body: Record<string, string | number> = { query: payload.query.trim() }
+  const tier = payload.tier?.trim()
+  const category = payload.category?.trim()
+  const strategy = payload.strategy?.trim()
+  if (tier) {
+    body.tier = tier
+  }
+  if (category) {
+    body.category = category
+  }
+  if (payload.page != null) {
+    body.page = payload.page
+  }
+  if (payload.size != null) {
+    body.size = payload.size
+  }
+  if (strategy) {
+    body.strategy = strategy
+  }
+  return requestJson<ReferenceVideoTopicSearchResult>('/api/knowledge/reference-videos/topic-search', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+// 点击某张视频卡片后加载 MySQL 事实源上下文，不要求用户再手动打开 RAG。
+export function getReferenceVideoAnalysisContext(videoId: string) {
+  return requestJson<ReferenceVideoAnalysisContext>(
+    `/api/knowledge/reference-videos/${encodeURIComponent(videoId)}/analysis-context`,
+  )
 }

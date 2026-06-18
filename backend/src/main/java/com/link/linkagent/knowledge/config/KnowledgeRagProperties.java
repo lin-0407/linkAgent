@@ -35,6 +35,12 @@ public class KnowledgeRagProperties {
     private String childCollectionName = "creator_reference_video_item";
 
     /**
+     * 知识库专用 Milvus <b>主题中块集合</b>名。主题中块位于父卡片和子条目之间，
+     * 独立集合能避免标题包装 / 内容定位 / 观众反馈这类中粒度文档与父子两种粒度互相污染。
+     */
+    private String chunkCollectionName = "creator_reference_video_chunk";
+
+    /**
      * 向量维度，必须与 Embedding 输出维度严格一致。默认 1024 对应 Qwen text-embedding-v4 的推荐维度；
      * 不一致会在写入时报维度冲突，所以 application.yml 里把它绑定到 LLM_EMBEDDING_DIMENSIONS 同一变量。
      */
@@ -110,6 +116,14 @@ public class KnowledgeRagProperties {
 
     public void setChildCollectionName(String childCollectionName) {
         this.childCollectionName = childCollectionName;
+    }
+
+    public String getChunkCollectionName() {
+        return chunkCollectionName;
+    }
+
+    public void setChunkCollectionName(String chunkCollectionName) {
+        this.chunkCollectionName = chunkCollectionName;
     }
 
     public int getEmbeddingDimension() {
