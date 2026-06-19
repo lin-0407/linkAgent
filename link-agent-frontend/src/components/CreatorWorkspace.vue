@@ -2710,7 +2710,7 @@ function showError(error: unknown) {
 
     <div class="creator-layout">
       <aside class="creator-task-rail">
-        <div v-if="selectedTask" class="creator-panel compact-panel">
+        <div v-if="selectedTask" class="creator-panel compact-panel creator-current-task-card">
           <div class="creator-panel-title">
             <div>
               <span>当前任务</span>

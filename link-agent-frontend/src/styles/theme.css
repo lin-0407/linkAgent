@@ -1545,7 +1545,7 @@ textarea:focus {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--s6);
-  max-width: 1360px;
+  max-width: 1540px;
   margin: 0 auto var(--s4);
   padding: var(--s4) var(--s5);
   overflow: hidden;
@@ -1699,9 +1699,9 @@ textarea:focus {
 
 .creator-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
   gap: var(--s5);
-  max-width: 1360px;
+  max-width: 1540px;
   margin: 0 auto;
 }
 
@@ -2049,6 +2049,29 @@ textarea:focus {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s2);
+}
+
+.creator-current-task-card .creator-panel-title {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--s3);
+}
+
+.creator-current-task-card .creator-panel-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  padding-top: var(--s2);
+  border-top: 1px solid var(--border);
+}
+
+.creator-current-task-card .creator-panel-actions button {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  justify-content: center;
+  padding-inline: var(--s2);
+  white-space: nowrap;
 }
 
 .creator-task-rail > .creator-panel {
@@ -4235,7 +4258,7 @@ textarea:focus {
 }
 
 .creator-layout {
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
   gap: var(--s5);
 }
 
