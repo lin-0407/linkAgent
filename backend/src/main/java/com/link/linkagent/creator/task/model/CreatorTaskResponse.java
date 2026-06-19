@@ -8,6 +8,7 @@ public record CreatorTaskResponse(
         String taskId,
         String userId,
         String taskName,
+        String videoType,
         String status,
         LocalDateTime createTime,
         LocalDateTime updateTime,

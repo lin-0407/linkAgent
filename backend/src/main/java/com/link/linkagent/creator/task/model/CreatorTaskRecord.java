@@ -12,6 +12,7 @@ public class CreatorTaskRecord {
     private String taskId;
     private String userId;
     private String taskName;
+    private String videoType;
     private String status;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
@@ -46,6 +47,14 @@ public class CreatorTaskRecord {
 
     public void setTaskName(String taskName) {
         this.taskName = taskName;
+    }
+
+    public String getVideoType() {
+        return videoType;
+    }
+
+    public void setVideoType(String videoType) {
+        this.videoType = videoType;
     }
 
     public String getStatus() {

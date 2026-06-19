@@ -8,6 +8,7 @@ import {
 } from '@/api/knowledge'
 import type {
   ReferenceVideo,
+  ReferenceVideoEvidenceItem,
   ReferenceVideoImportResult,
   ReferenceVideoMatchedTopic,
   ReferenceVideoTopicSearchResult,
@@ -76,6 +77,15 @@ const matchedTopicsByVideoId = computed(() => {
   return map
 })
 
+// 当前批次相关评论弹幕按 videoId 分组。它比主题更接近排序依据，所以卡片里直接展示。
+const evidenceByVideoId = computed(() => {
+  const map: Record<string, ReferenceVideoEvidenceItem[]> = {}
+  for (const group of searchResult.value?.evidence ?? []) {
+    map[group.videoId] = group.items
+  }
+  return map
+})
+
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
 // 导入结果分三种情况给文案：真入库 / 因 BV 重复跳过 / 脚本没采到视频。
@@ -121,6 +131,21 @@ function chunkTypeLabel(chunkType: string) {
     default:
       return chunkType || '主题'
   }
+}
+
+function sentimentLabel(sentiment: string) {
+  switch (sentiment) {
+    case 'POSITIVE':
+      return '正向'
+    case 'NEGATIVE':
+      return '负向'
+    default:
+      return sentiment || '中性'
+  }
+}
+
+function sourceTypeLabel(sourceType: string) {
+  return sourceType === 'DANMAKU' ? '弹幕' : '评论'
 }
 
 // 大数字压成「万」更易读；空值用占位符，避免显示 null。
@@ -198,6 +223,8 @@ function searchModeLabel(mode: string) {
   switch (mode) {
     case 'TOPIC_VECTOR':
       return '主题向量检索'
+    case 'TOPIC_HYBRID':
+      return '主题混合检索'
     case 'SQL':
       return 'SQL 质量分兜底'
     default:
@@ -355,7 +382,7 @@ onMounted(() => {
     <section class="creator-section">
       <div class="creator-section-head"><h3>案例检索</h3></div>
       <p class="creator-inline-note">
-        用一句话按语义检索最相关的案例（如「开场如何快速留住观众」）。RAG 关闭或向量库未就绪时自动降级为关键词检索（SQL 兜底），结果上方标签会标明本次实际走的检索模式。
+        用一句话按语义检索最相关的案例（如「开场如何快速留住观众」）。hybrid 就绪时会补充 BM25 关键词召回；RAG 关闭或向量库未就绪时自动降级为关键词检索（SQL 兜底），结果上方标签会标明本次实际走的检索模式。
       </p>
       <div class="knowledge-toolbar">
         <input
@@ -406,6 +433,7 @@ onMounted(() => {
         <div class="creator-chip-list">
           <b>检索模式 {{ searchModeLabel(searchResult.mode) }}</b>
           <b>增强策略 {{ strategyLabel(searchResult.strategy) }}</b>
+          <b v-if="searchResult.reranked">已精排 · qwen3-rerank</b>
           <b>第 {{ searchResult.page }} / {{ searchResult.maxPage }} 批</b>
           <b>展示 {{ searchResult.cards.length }} 张</b>
         </div>
@@ -457,6 +485,18 @@ onMounted(() => {
               >
                 <b>{{ chunkTypeLabel(topic.chunkType) }} · {{ topic.chunkTitle }}</b>
                 {{ topic.preview }}
+              </span>
+            </span>
+            <span v-if="evidenceByVideoId[hit.videoId]?.length" class="knowledge-evidence">
+              <span class="knowledge-evidence-label">相关评论弹幕</span>
+              <span
+                v-for="ev in evidenceByVideoId[hit.videoId]"
+                :key="ev.itemId"
+                class="knowledge-evidence-item"
+                :class="ev.sentiment === 'NEGATIVE' ? 'is-negative' : 'is-positive'"
+              >
+                <b>{{ sourceTypeLabel(ev.sourceType) }} · {{ sentimentLabel(ev.sentiment) }}</b>
+                {{ ev.content }}
               </span>
             </span>
             <span class="knowledge-card-action">

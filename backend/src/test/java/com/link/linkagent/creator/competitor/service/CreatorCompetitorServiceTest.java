@@ -9,8 +9,10 @@ import com.link.linkagent.creator.competitor.model.CreatorCompetitorSaveRequest;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorSampleRecord;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorSampleResponse;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
@@ -224,6 +226,11 @@ class CreatorCompetitorServiceTest {
         }
 
         @Override
+        public int updateTaskBasicInfo(String taskId, String taskName, String videoType) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public int deleteTask(String taskId, String status) {
             throw new UnsupportedOperationException();
         }
@@ -333,6 +340,36 @@ class CreatorCompetitorServiceTest {
         @Override
         public Optional<com.link.linkagent.creator.feedback.model.CreatorFeedbackMetricRecord> findMetricByTaskId(String taskId) {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<CreatorFeedbackItemRecord> listIndexableItemsByTaskId(String taskId, int limit, boolean includeNoise) {
+            return List.of();
+        }
+
+        @Override
+        public int updateItemEmbeddingIndexed(String taskId, String itemId, String embeddingId) {
+            return 0;
+        }
+
+        @Override
+        public int updateItemEmbeddingFailed(String taskId, String itemId, String errorMessage) {
+            return 0;
+        }
+
+        @Override
+        public List<CreatorFeedbackStatRecord> countEmbeddingStatusByTaskId(String taskId) {
+            return List.of();
+        }
+
+        @Override
+        public LocalDateTime findLastEmbeddingUpdateTime(String taskId) {
+            return null;
+        }
+
+        @Override
+        public List<CreatorFeedbackItemRecord> listItemsByTaskIdAndItemIds(String taskId, List<String> itemIds) {
+            return List.of();
         }
     }
 

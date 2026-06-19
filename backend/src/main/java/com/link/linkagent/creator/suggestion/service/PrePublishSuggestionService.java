@@ -3,6 +3,7 @@ package com.link.linkagent.creator.suggestion.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.context.service.CreatorContextService;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
@@ -41,6 +42,7 @@ public class PrePublishSuggestionService {
     private final CreatorTaskMapper creatorTaskMapper;
     private final CreatorSuggestionMapper creatorSuggestionMapper;
     private final CreatorPreferenceService creatorPreferenceService;
+    private final CreatorContextService creatorContextService;
     private final LLMService llmService;
     private final ObjectMapper objectMapper;
     private final PromptService promptService;
@@ -48,12 +50,14 @@ public class PrePublishSuggestionService {
     public PrePublishSuggestionService(CreatorTaskMapper creatorTaskMapper,
                                        CreatorSuggestionMapper creatorSuggestionMapper,
                                        CreatorPreferenceService creatorPreferenceService,
+                                       CreatorContextService creatorContextService,
                                        LLMService llmService,
                                        ObjectMapper objectMapper,
                                        PromptService promptService) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorPreferenceService = creatorPreferenceService;
+        this.creatorContextService = creatorContextService;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
         this.promptService = promptService;
@@ -157,14 +161,20 @@ public class PrePublishSuggestionService {
     private String buildPreferencePromptContext(CreatorTaskRecord taskRecord, PrePublishAnalyzeRequest request) {
         String preferenceMode = normalizePreferenceMode(request.preferenceMode());
         if (PREFERENCE_MODE_IGNORE_HISTORY.equals(preferenceMode)) {
-            return "本次选择不使用历史创作者偏好，请只参考本期用户输入和任务材料。";
+            return "本次选择不使用历史创作者偏好和视频类型语境库，请只参考本期用户输入和任务材料。";
         }
 
         String promptContext = creatorPreferenceService.buildPromptContext(taskRecord.getUserId());
+        String typeContext = creatorContextService.buildPromptContext(
+                taskRecord.getUserId(),
+                taskRecord.getVideoType(),
+                "PRE_PUBLISH"
+        );
+        String mergedContext = promptContext + "\n\n当前视频类型语境库：\n" + typeContext;
         if (PREFERENCE_MODE_EXPERIMENT.equals(preferenceMode)) {
-            return promptContext + "\n本次选择试验新方向：历史偏好只用于避开明显不适配点，本期用户手动要求优先。";
+            return mergedContext + "\n本次选择试验新方向：历史偏好和语境库只用于避开明显不适配点，本期用户手动要求优先。";
         }
-        return promptContext;
+        return mergedContext;
     }
 
     private String normalizePreferenceMode(String preferenceMode) {

@@ -72,6 +72,149 @@ CATEGORY_RID = {
     "时尚": 155,
 }
 
+# B 站视频详情接口正常会返回 tname；少数视频会出现 tname 为空但 tid 仍存在。
+# 这里用 tid 做有限兜底，是为了避免案例库分区为空后无法参与分区质量分和同赛道过滤。
+TID_CATEGORY_FALLBACK = {
+    1: "动画",
+    11: "电视剧",
+    13: "番剧",
+    17: "单机游戏",
+    19: "Mugen",
+    20: "宅舞",
+    21: "日常",
+    22: "鬼畜调教",
+    23: "电影",
+    24: "MAD·AMV",
+    25: "MMD·3D",
+    26: "音MAD",
+    27: "动画综合",
+    28: "原创音乐",
+    29: "音乐现场",
+    30: "VOCALOID·UTAU",
+    31: "翻唱",
+    32: "完结动画",
+    33: "连载动画",
+    36: "知识",
+    37: "人文·历史纪录片",
+    47: "短片·手书·配音",
+    51: "番剧资讯",
+    59: "演奏",
+    65: "网络游戏",
+    71: "综艺",
+    75: "动物综合",
+    76: "美食制作",
+    83: "其他国家电影",
+    85: "短片",
+    86: "特摄",
+    95: "数码",
+    119: "鬼畜",
+    121: "GMV",
+    122: "野生技能协会",
+    124: "社科·法律·心理",
+    126: "人力VOCALOID",
+    127: "教程演示",
+    129: "舞蹈",
+    130: "音乐综合",
+    136: "音游",
+    137: "明星综合",
+    138: "搞笑",
+    145: "欧美电影",
+    146: "日本电影",
+    147: "华语电影",
+    152: "官方延伸",
+    153: "国产动画",
+    154: "舞蹈综合",
+    155: "时尚",
+    156: "舞蹈教程",
+    157: "美妆护肤",
+    158: "穿搭",
+    159: "时尚潮流",
+    160: "生活",
+    161: "手工",
+    162: "绘画",
+    164: "健身",
+    167: "国创",
+    168: "国产原创相关",
+    169: "布袋戏",
+    170: "国创资讯",
+    171: "电子竞技",
+    172: "手机游戏",
+    173: "桌游棋牌",
+    176: "汽车生活",
+    177: "纪录片",
+    178: "科学·探索·自然",
+    179: "军事",
+    180: "社会·美食·旅行",
+    181: "影视",
+    182: "影视杂谈",
+    183: "影视剪辑",
+    184: "预告·资讯",
+    185: "国产剧",
+    187: "海外剧",
+    188: "科技",
+    192: "T台",
+    193: "MV",
+    195: "动态漫·广播剧",
+    198: "街舞",
+    199: "明星舞蹈",
+    200: "中国舞",
+    201: "科学科普",
+    202: "资讯",
+    203: "热点",
+    204: "环球",
+    205: "社会",
+    206: "资讯综合",
+    207: "财经商业",
+    208: "校园学习",
+    209: "职业职场",
+    210: "手办·模玩",
+    211: "美食",
+    212: "美食侦探",
+    213: "美食测评",
+    214: "田园美食",
+    215: "美食记录",
+    216: "鬼畜剧场",
+    217: "动物圈",
+    218: "喵星人",
+    219: "汪星人",
+    220: "大熊猫",
+    221: "野生动物",
+    222: "爬宠",
+    223: "汽车",
+    224: "汽车文化",
+    225: "汽车极客",
+    226: "智能出行",
+    227: "购车攻略",
+    228: "人文历史",
+    230: "软件应用",
+    231: "计算机技术",
+    232: "科工机械",
+    233: "极客DIY",
+    234: "运动",
+    235: "篮球",
+    236: "竞技体育",
+    237: "运动文化",
+    238: "运动综合",
+    239: "家居房产",
+    240: "摩托车",
+    241: "娱乐杂谈",
+    242: "粉丝创作",
+    243: "乐评盘点",
+    244: "音乐教学",
+    245: "赛车",
+    246: "改装玩车",
+    247: "新能源车",
+    248: "房车",
+    249: "足球",
+    250: "风尚标",
+    252: "仿妆cos",
+    253: "动漫杂谈",
+    254: "亲子",
+    255: "游戏赛事",
+    256: "小剧场",
+    262: "影视整活",
+}
+
 # WBI 签名用的固定置换表（来自公开算法，非登录态）。
 MIXIN_KEY_ENC_TAB = [
     46, 47, 18, 2, 53, 8, 23, 32,
@@ -332,7 +475,7 @@ def build_video_item(
         "title": video_info.get("title") or "",
         "description": video_info.get("desc"),
         "tags": None,  # 标签需额外接口，案例检索（5.1c+）才用到，此处先留空，保持采集轻量
-        "category": video_info.get("tname"),
+        "category": resolve_video_category(video_info, warnings),
         "publishTimeText": to_publish_text(video_info.get("pubdate")),
         "stats": {
             "view": stat.get("view"),
@@ -353,6 +496,31 @@ def fetch_video_info(bvid: str, timeout: int) -> dict[str, Any]:
     if not data:
         raise BiliApiError("视频信息为空")
     return data
+
+
+def resolve_video_category(video_info: dict[str, Any], warnings: list[str]) -> str | None:
+    tname = video_info.get("tname")
+    if isinstance(tname, str) and tname.strip():
+        return tname.strip()
+
+    tid = parse_positive_int(video_info.get("tid"))
+    bvid = video_info.get("bvid") or "未知 BV"
+    if tid is not None:
+        fallback = TID_CATEGORY_FALLBACK.get(tid, f"B站分区{tid}")
+        warnings.append(f"视频 {bvid} 的 tname 为空，已用 tid={tid} 兜底为「{fallback}」")
+        return fallback
+
+    warnings.append(f"视频 {bvid} 未返回 tname/tid，分区将保持为空")
+    return None
+
+
+def parse_positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed if parsed > 0 else None
+    return None
 
 
 def collect_root_comments(

@@ -7,6 +7,7 @@ public record CreatorTaskSummaryResponse(
         String taskId,
         String userId,
         String taskName,
+        String videoType,
         String status,
         Integer materialCount,
         LocalDateTime createTime,

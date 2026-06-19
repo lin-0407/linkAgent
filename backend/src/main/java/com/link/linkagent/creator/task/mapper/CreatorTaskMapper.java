@@ -16,8 +16,8 @@ import java.util.Optional;
 public interface CreatorTaskMapper {
 
     @Insert("""
-            INSERT INTO creator_task (task_id, user_id, task_name, status)
-            VALUES (#{taskId}, #{userId}, #{taskName}, #{status})
+            INSERT INTO creator_task (task_id, user_id, task_name, video_type, status)
+            VALUES (#{taskId}, #{userId}, #{taskName}, #{videoType}, #{status})
             """)
     int insertTask(CreatorTaskRecord record);
 
@@ -42,7 +42,7 @@ public interface CreatorTaskMapper {
     int deleteMaterialByType(@Param("taskId") String taskId, @Param("materialType") String materialType);
 
     @Select("""
-            SELECT id, task_id, user_id, task_name, status, create_time, update_time
+            SELECT id, task_id, user_id, task_name, video_type, status, create_time, update_time
             FROM creator_task
             WHERE task_id = #{taskId}
               AND is_deleted = 0
@@ -53,6 +53,7 @@ public interface CreatorTaskMapper {
             @Result(column = "task_id", property = "taskId"),
             @Result(column = "user_id", property = "userId"),
             @Result(column = "task_name", property = "taskName"),
+            @Result(column = "video_type", property = "videoType"),
             @Result(column = "status", property = "status"),
             @Result(column = "create_time", property = "createTime"),
             @Result(column = "update_time", property = "updateTime")
@@ -81,6 +82,7 @@ public interface CreatorTaskMapper {
                    task.task_id,
                    task.user_id,
                    task.task_name,
+                   task.video_type,
                    task.status,
                    COUNT(material.id) AS material_count,
                    task.create_time,
@@ -91,7 +93,7 @@ public interface CreatorTaskMapper {
                   AND material.is_deleted = 0
             WHERE task.user_id = #{userId}
               AND task.is_deleted = 0
-            GROUP BY task.id, task.task_id, task.user_id, task.task_name, task.status, task.create_time, task.update_time
+            GROUP BY task.id, task.task_id, task.user_id, task.task_name, task.video_type, task.status, task.create_time, task.update_time
             ORDER BY task.update_time DESC, task.id DESC
             LIMIT #{limit}
             """)
@@ -100,6 +102,7 @@ public interface CreatorTaskMapper {
             @Result(column = "task_id", property = "taskId"),
             @Result(column = "user_id", property = "userId"),
             @Result(column = "task_name", property = "taskName"),
+            @Result(column = "video_type", property = "videoType"),
             @Result(column = "status", property = "status"),
             @Result(column = "material_count", property = "materialCount"),
             @Result(column = "create_time", property = "createTime"),
@@ -112,6 +115,7 @@ public interface CreatorTaskMapper {
                    task.task_id,
                    task.user_id,
                    task.task_name,
+                   task.video_type,
                    task.status,
                    COUNT(material.id) AS material_count,
                    task.create_time,
@@ -121,7 +125,7 @@ public interface CreatorTaskMapper {
                    ON task.task_id = material.task_id
                   AND material.is_deleted = 0
             WHERE task.is_deleted = 0
-            GROUP BY task.id, task.task_id, task.user_id, task.task_name, task.status, task.create_time, task.update_time
+            GROUP BY task.id, task.task_id, task.user_id, task.task_name, task.video_type, task.status, task.create_time, task.update_time
             ORDER BY task.update_time DESC, task.id DESC
             LIMIT #{limit}
             """)
@@ -145,6 +149,18 @@ public interface CreatorTaskMapper {
               AND is_deleted = 0
             """)
     int updateTaskName(@Param("taskId") String taskId, @Param("taskName") String taskName);
+
+    @Update("""
+            UPDATE creator_task
+            SET task_name = #{taskName},
+                video_type = #{videoType},
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            """)
+    int updateTaskBasicInfo(@Param("taskId") String taskId,
+                            @Param("taskName") String taskName,
+                            @Param("videoType") String videoType);
 
     @Update("""
             UPDATE creator_task

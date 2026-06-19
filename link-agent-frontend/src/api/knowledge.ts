@@ -90,6 +90,23 @@ export function rebuildReferenceVideoIndex(maxItems?: number) {
   })
 }
 
+// 查询主题中块向量索引状态。topic-search 先查这一层；只看父表“已索引”不能代表主题检索可用。
+export function getReferenceVideoChunkIndexStatus() {
+  return requestJson<ReferenceVideoIndexStatus>('/api/knowledge/reference-videos/index/chunks/status')
+}
+
+// 触发（增量）重建主题中块索引；会先为历史案例补齐中块，再写入中块集合。
+export function rebuildReferenceVideoChunkIndex(maxItems?: number) {
+  const body: Record<string, number> = {}
+  if (maxItems != null) {
+    body.maxItems = maxItems
+  }
+  return requestJson<ReferenceVideoIndexResult>('/api/knowledge/reference-videos/index/chunks/rebuild', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
 // 查询子条目向量索引状态（5.2c-1）。与父索引状态同形，复用 ReferenceVideoIndexStatus；RAG 关闭时也正常返回。
 export function getReferenceVideoItemIndexStatus() {
   return requestJson<ReferenceVideoIndexStatus>('/api/knowledge/reference-videos/index/items/status')

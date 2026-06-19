@@ -13,6 +13,7 @@ export type CreatorTask = {
   taskId: string
   userId: string
   taskName: string
+  videoType: string
   status: string
   createTime: string
   updateTime: string
@@ -24,6 +25,7 @@ export type CreatorTaskSummary = {
   taskId: string
   userId: string
   taskName: string
+  videoType: string
   status: string
   materialCount: number
   createTime: string
@@ -33,6 +35,7 @@ export type CreatorTaskSummary = {
 export type CreatorTaskCreatePayload = {
   userId?: string
   taskName?: string
+  videoType?: string
   titleDraft?: string
   descriptionDraft?: string
   manuscript?: string
@@ -41,6 +44,7 @@ export type CreatorTaskCreatePayload = {
 
 export type CreatorTaskUpdatePayload = {
   taskName?: string
+  videoType?: string
   titleDraft?: string
   descriptionDraft?: string
   manuscript?: string
@@ -168,6 +172,67 @@ export type CreatorPreference = {
   preferenceContent: string
   createTime: string
   updateTime: string
+}
+
+export type CreatorContextTermType =
+  | 'KEYWORD'
+  | 'SLANG'
+  | 'MEME'
+  | 'TABOO'
+  | 'TITLE_PATTERN'
+  | 'AUDIENCE_CONCERN'
+
+export type CreatorContextPolarity = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL'
+
+export type CreatorContextSourceType =
+  | 'USER_SAVE'
+  | 'AI_ACCEPTED'
+  | 'COMMENT_EXTRACTED'
+  | 'USER_REJECTED'
+  | 'VIDEO_SUCCESS'
+
+export type CreatorContextTerm = {
+  id: number
+  termId: string
+  userId: string
+  videoType: string
+  term: string
+  termType: CreatorContextTermType
+  polarity: CreatorContextPolarity
+  sourceType: CreatorContextSourceType
+  sourceTaskId: string | null
+  evidenceText: string | null
+  weight: number
+  usageCount: number
+  acceptCount: number
+  rejectCount: number
+  enabled: boolean
+  createTime: string
+  updateTime: string
+}
+
+export type CreatorContextTermPayload = {
+  userId?: string
+  videoType: string
+  term: string
+  termType?: CreatorContextTermType
+  polarity?: CreatorContextPolarity
+  sourceType?: CreatorContextSourceType
+  sourceTaskId?: string
+  evidenceText?: string
+}
+
+export type CreatorContextBundle = {
+  userId: string
+  videoType: string
+  scene: string
+  terms: CreatorContextTerm[]
+  keywords: string[]
+  slangTerms: string[]
+  titlePatterns: string[]
+  audienceConcerns: string[]
+  tabooTerms: string[]
+  promptContext: string
 }
 
 export type CreatorSuggestion = {

@@ -125,16 +125,45 @@ CREATE TABLE IF NOT EXISTS creator_task
     task_id     VARCHAR(64)  NOT NULL COMMENT '创作任务唯一标识（UUID）',
     user_id     VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识，第一版允许默认用户方便本地演示',
     task_name   VARCHAR(128) NOT NULL COMMENT '任务名称，用于列表页快速识别本次创作',
+    video_type  VARCHAR(64)  NOT NULL DEFAULT '未分类' COMMENT '视频类型，用于按创作赛道加载对应语境库',
     status      VARCHAR(32)  NOT NULL DEFAULT 'DRAFT' COMMENT '任务状态：DRAFT=草稿，PRE_PUBLISH_ANALYZED=已完成发布前分析，FEEDBACK_ANALYZED=已完成反馈分析，COMPETITOR_ANALYZED=已完成竞品分析，ANALYZED=已完成复盘，ARCHIVED=已归档',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted  TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
     UNIQUE KEY uk_task_id (task_id),
     KEY idx_user_id (user_id),
+    KEY idx_user_video_type_update_time (user_id, video_type, update_time),
     KEY idx_user_update_time (user_id, update_time)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '创作任务表';
+
+-- 已建过旧版 creator_task 的本地库需要补齐视频类型字段，否则语境库无法按类型隔离。
+SET @add_creator_task_video_type_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_task ADD COLUMN video_type VARCHAR(64) NOT NULL DEFAULT ''未分类'' COMMENT ''视频类型，用于按创作赛道加载对应语境库'' AFTER task_name',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_task'
+      AND COLUMN_NAME = 'video_type'
+);
+PREPARE add_creator_task_video_type_stmt FROM @add_creator_task_video_type_sql;
+EXECUTE add_creator_task_video_type_stmt;
+DEALLOCATE PREPARE add_creator_task_video_type_stmt;
+
+SET @add_creator_task_video_type_index_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE creator_task ADD INDEX idx_user_video_type_update_time (user_id, video_type, update_time)',
+              'SELECT 1')
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'creator_task'
+      AND INDEX_NAME = 'idx_user_video_type_update_time'
+);
+PREPARE add_creator_task_video_type_index_stmt FROM @add_creator_task_video_type_index_sql;
+EXECUTE add_creator_task_video_type_index_stmt;
+DEALLOCATE PREPARE add_creator_task_video_type_index_stmt;
 
 -- ------------------------------------------------------------
 -- 7. 创作材料表
@@ -618,6 +647,39 @@ CREATE TABLE IF NOT EXISTS creator_preference
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '创作者长期偏好表';
+
+-- ------------------------------------------------------------
+-- 13.2 创作者视频类型语境词条表
+--      保存用户在不同视频类型下沉淀的关键词、黑话、标题套路和慎用表达
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_context_term
+(
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    term_id         VARCHAR(64)  NOT NULL COMMENT '语境词条唯一标识（UUID）',
+    user_id         VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识，用于隔离不同创作者的私有语境',
+    video_type      VARCHAR(64)  NOT NULL COMMENT '视频类型：GLOBAL=全局通用，其它值对应具体创作赛道',
+    term            VARCHAR(128) NOT NULL COMMENT '词条展示文本，例如关键词、黑话、标题套路或慎用表达',
+    normalized_term VARCHAR(128) NOT NULL COMMENT '归一化词条，用于同类型下去重，避免大小写或空白导致重复',
+    term_type       VARCHAR(32)  NOT NULL COMMENT '词条类型：KEYWORD=关键词，SLANG=小圈子黑话，MEME=梗，TABOO=慎用词，TITLE_PATTERN=标题套路，AUDIENCE_CONCERN=观众关注点',
+    polarity        VARCHAR(16)  NOT NULL DEFAULT 'NEUTRAL' COMMENT '使用倾向：POSITIVE=推荐使用，NEGATIVE=慎用或避免，NEUTRAL=中性参考',
+    source_type     VARCHAR(32)  NOT NULL DEFAULT 'USER_SAVE' COMMENT '来源类型：USER_SAVE=用户保存，AI_ACCEPTED=采纳AI建议，COMMENT_EXTRACTED=评论弹幕候选，USER_REJECTED=用户否定，VIDEO_SUCCESS=高质量历史视频',
+    source_task_id  VARCHAR(64)           DEFAULT NULL COMMENT '来源任务ID，用于追溯词条来自哪一期内容',
+    evidence_text   VARCHAR(1000)         DEFAULT NULL COMMENT '证据说明，用来解释为什么这个词适合或不适合该类型视频',
+    weight          INT          NOT NULL DEFAULT 50 COMMENT '权重，越高越优先注入提示词，用户保存和采纳会提高权重',
+    usage_count     INT          NOT NULL DEFAULT 0 COMMENT '使用次数，用于判断词条是否持续有效',
+    accept_count    INT          NOT NULL DEFAULT 0 COMMENT '被用户接受次数，用于提高可信度',
+    reject_count    INT          NOT NULL DEFAULT 0 COMMENT '被用户拒绝次数，用于降权或禁用',
+    enabled         TINYINT      NOT NULL DEFAULT 1 COMMENT '是否启用：1=参与检索和提示词注入，0=保留记录但不再使用',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_context_term_id (term_id),
+    UNIQUE KEY uk_context_identity (user_id, video_type, normalized_term, term_type),
+    KEY idx_context_user_type_weight (user_id, video_type, enabled, weight, update_time),
+    KEY idx_context_source_task (source_task_id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作者视频类型语境词条表';
 
 SET @add_competitor_comparison_sql = (
     SELECT IF(COUNT(*) = 0,

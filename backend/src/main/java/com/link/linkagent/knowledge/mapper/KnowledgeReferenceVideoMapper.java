@@ -227,8 +227,8 @@ public interface KnowledgeReferenceVideoMapper {
     List<ReferenceVideoRecord> listByVideoIds(@Param("videoIds") List<String> videoIds);
 
     /**
-     * 对主题中块召回得到的视频候选按质量分分页。
-     * RAG 在这里只负责“找到相关主题的视频集合”，真正展示顺序交给质量分，符合创作者挑案例时优先看高质量样本的习惯。
+     * 对主题中块召回得到的视频候选按质量分取候选池。
+     * RAG 在这里只负责“找到相关主题的视频集合”，质量分先兜住基础排序；rerank 开启时服务层再结合评论弹幕精排。
      */
     @Select("""
             <script>
@@ -259,10 +259,12 @@ public interface KnowledgeReferenceVideoMapper {
      * SQL 关键词兜底检索父表（5.2a）：RAG 关闭或向量库不可用时走这里。
      * keyword 为空则不加关键词条件（退化为「按质量分取前 N」）；title/description/highlight_summary 任一命中即返回。
      * 排序 quality_score DESC：5.1c 的归一化质量分让兜底也优先高质量案例；MySQL 中 NULL 在 DESC 下排最后（未打分案例垫底）。
-     * 刻意不做中文分词打分：父表是「案例卡片」粒度、量级小，整串 LIKE + 质量分排序已够；真正的关键词召回留给 5.2d 原生 BM25。
+     * keywords 是从 query 中抽出来的核心词，避免整串 LIKE 因空格 / 标点 / 括号差异导致标题明明存在却搜不到。
+     * 真正的关键词相关性打分留给 5.2d 原生 BM25；这里仍只是兜底召回，按质量分排序。
      * 复用 listReferenceVideos 的 ReferenceVideoRecordMap，故 SELECT 列须与之保持一致。
      */
     @Select("""
+            <script>
             SELECT id, video_id, bv_id, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, quality_score, source, publish_time_text,
@@ -271,17 +273,33 @@ public interface KnowledgeReferenceVideoMapper {
             WHERE is_deleted = 0
               AND (#{category} IS NULL OR category = #{category})
               AND (#{tier} IS NULL OR tier = #{tier})
-              AND (#{keyword} IS NULL
-                   OR title LIKE CONCAT('%', #{keyword}, '%')
-                   OR description LIKE CONCAT('%', #{keyword}, '%')
-                   OR highlight_summary LIKE CONCAT('%', #{keyword}, '%'))
+              <choose>
+                  <when test='keywords != null and keywords.size() > 0'>
+                  AND
+                  <foreach item='token' collection='keywords' open='(' separator=' AND ' close=')'>
+                      (title LIKE CONCAT('%', #{token}, '%')
+                       OR description LIKE CONCAT('%', #{token}, '%')
+                       OR highlight_summary LIKE CONCAT('%', #{token}, '%')
+                       OR bv_id LIKE CONCAT('%', #{token}, '%'))
+                  </foreach>
+                  </when>
+                  <otherwise>
+                  AND (#{keyword} IS NULL
+                       OR title LIKE CONCAT('%', #{keyword}, '%')
+                       OR description LIKE CONCAT('%', #{keyword}, '%')
+                       OR highlight_summary LIKE CONCAT('%', #{keyword}, '%')
+                       OR bv_id LIKE CONCAT('%', #{keyword}, '%'))
+                  </otherwise>
+              </choose>
             ORDER BY quality_score DESC, id DESC
             LIMIT #{limit}
+            </script>
             """)
     @ResultMap("ReferenceVideoRecordMap")
     List<ReferenceVideoRecord> searchByKeyword(@Param("category") String category,
                                                @Param("tier") String tier,
                                                @Param("keyword") String keyword,
+                                               @Param("keywords") List<String> keywords,
                                                @Param("limit") int limit);
 
     /**
@@ -727,6 +745,54 @@ public interface KnowledgeReferenceVideoMapper {
     @ResultMap("ReferenceVideoItemEvidenceMap")
     List<ReferenceVideoItemRecord> listEvidenceItemsByVideoId(@Param("videoId") String videoId,
                                                               @Param("limit") int limit);
+
+    /**
+     * 批量查询候选视频的代表评论 / 弹幕，供 topic-search rerank 使用。
+     * 使用 MySQL 8 窗口函数一次性按 video_id + source_type 分组取前 N 条，避免评论点赞数完全压过弹幕。
+     */
+    @Select("""
+            <script>
+            SELECT item_id, video_id, content, sentiment, source_type, like_count, reply_count
+            FROM (
+                SELECT i.item_id,
+                       i.video_id,
+                       i.content,
+                       i.sentiment,
+                       i.source_type,
+                       i.like_count,
+                       i.reply_count,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY i.video_id, i.source_type
+                           ORDER BY COALESCE(i.like_count, 0) DESC,
+                                    COALESCE(i.reply_count, 0) DESC,
+                                    i.id
+                       ) AS row_num
+                FROM creator_reference_video_item i
+                WHERE i.is_deleted = 0
+                  AND i.video_id IN
+                  <foreach item='vid' collection='videoIds' open='(' separator=',' close=')'>
+                      #{vid}
+                  </foreach>
+            ) ranked
+            WHERE ranked.row_num &lt;= #{limitPerSource}
+            ORDER BY FIELD(video_id
+                <foreach item='vid' collection='videoIds' separator=''>
+                    , #{vid}
+                </foreach>
+            ), FIELD(source_type, 'COMMENT', 'DANMAKU'), row_num
+            </script>
+            """)
+    @Results(value = {
+            @Result(column = "item_id", property = "itemId"),
+            @Result(column = "video_id", property = "videoId"),
+            @Result(column = "content", property = "content"),
+            @Result(column = "sentiment", property = "sentiment"),
+            @Result(column = "source_type", property = "sourceType"),
+            @Result(column = "like_count", property = "likeCount"),
+            @Result(column = "reply_count", property = "replyCount")
+    })
+    List<ReferenceVideoItemRecord> listTopEvidenceItemsByVideoIds(@Param("videoIds") List<String> videoIds,
+                                                                  @Param("limitPerSource") int limitPerSource);
 
     /**
      * 查询待索引的主题中块。

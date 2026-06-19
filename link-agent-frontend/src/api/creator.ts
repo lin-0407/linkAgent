@@ -15,6 +15,9 @@ import type {
   CreatorEvalPromptVersionStats,
   CreatorEvalResult,
   CreatorEvalResultPayload,
+  CreatorContextBundle,
+  CreatorContextTerm,
+  CreatorContextTermPayload,
   CreatorPreference,
   CreatorFeedbackSavePayload,
   CreatorSuggestion,
@@ -170,6 +173,57 @@ export function listCreatorPreferences(userId = 'default', limit = 10) {
     limit: String(limit),
   })
   return requestJson<CreatorPreference[]>(`/api/creator/preferences?${params.toString()}`)
+}
+
+export function listCreatorContextTerms(
+  userId = 'default',
+  videoType?: string,
+  includeDisabled = false,
+  limit = 50,
+) {
+  const params = new URLSearchParams({
+    userId,
+    includeDisabled: String(includeDisabled),
+    limit: String(limit),
+  })
+  if (videoType) {
+    params.set('videoType', videoType)
+  }
+  return requestJson<CreatorContextTerm[]>(`/api/creator/context/terms?${params.toString()}`)
+}
+
+export function getCreatorContextBundle(userId = 'default', videoType?: string, scene = 'PRE_PUBLISH') {
+  const params = new URLSearchParams({
+    userId,
+    scene,
+  })
+  if (videoType) {
+    params.set('videoType', videoType)
+  }
+  return requestJson<CreatorContextBundle>(`/api/creator/context/bundle?${params.toString()}`)
+}
+
+export function saveCreatorContextTerm(payload: CreatorContextTermPayload) {
+  return requestJson<CreatorContextTerm>('/api/creator/context/terms', {
+    method: 'POST',
+    body: JSON.stringify(cleanPayload(payload)),
+  })
+}
+
+export function disableCreatorContextTerm(termId: string) {
+  return requestJson<CreatorContextTerm>(`/api/creator/context/terms/${encodeURIComponent(termId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function recordCreatorContextTermFeedback(termId: string, accepted: boolean) {
+  return requestJson<CreatorContextTerm>(
+    `/api/creator/context/terms/${encodeURIComponent(termId)}/feedback`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ accepted }),
+    },
+  )
 }
 
 export function analyzePrePublish(taskId: string, payload: PrePublishAnalyzePayload) {

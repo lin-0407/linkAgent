@@ -55,6 +55,9 @@ spring:
       embedding:
         api-key: ${LLM_EMBEDDING_API_KEY:${LLM_API_KEY}}
         base-url: ${LLM_EMBEDDING_BASE_URL:${LLM_BASE_URL}}
+        # Spring AI 默认 embeddings-path 是 /v1/embeddings；DashScope 的 OpenAI 兼容路径多一层 compatible-mode。
+        # 这里单独暴露 path，是为了避免把 /compatible-mode/v1 写进 base-url 后被 RestClient 的绝对路径规则覆盖，导致请求打到错误地址而 404。
+        embeddings-path: ${LLM_EMBEDDING_PATH:/compatible-mode/v1/embeddings}
         options:
           model: ${LLM_EMBEDDING_MODEL:text-embedding-3-small}
           dimensions: ${LLM_EMBEDDING_DIMENSIONS:1536}

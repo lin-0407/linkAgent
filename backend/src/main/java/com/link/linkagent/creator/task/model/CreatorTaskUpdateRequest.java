@@ -12,6 +12,9 @@ public record CreatorTaskUpdateRequest(
         @Size(max = 128, message = "任务名称长度不能超过128个字符")
         String taskName,
 
+        @Size(max = 64, message = "视频类型长度不能超过64个字符")
+        String videoType,
+
         @Size(max = 200, message = "标题草稿长度不能超过200个字符")
         String titleDraft,
 

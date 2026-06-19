@@ -33,6 +33,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 跨分区视频案例库检索服务（阶段 5.2a：最小检索闭环）。
@@ -75,6 +77,8 @@ public class KnowledgeReferenceRetrievalService {
 
     /** 送 rerank 的单条候选文本上限（5.2e）：远低于 qwen3-rerank 单文档 4000 token 限制，防超长卡片撑大请求。 */
     private static final int RERANK_DOC_MAX_CHARS = 1500;
+
+    private static final Pattern SQL_KEYWORD_PATTERN = Pattern.compile("[\\p{IsHan}A-Za-z0-9]+");
 
     /** 允许的案例层级过滤值，与父表 tier 语义一致；非法过滤直接 400 而非静默空结果，避免误判“没数据”。 */
     private static final Set<String> ALLOWED_TIERS = Set.of("BENCHMARK", "COMPETITOR", "OWN_HISTORY");
@@ -565,11 +569,27 @@ public class KnowledgeReferenceRetrievalService {
     }
 
     private List<ReferenceVideoRecord> sqlFallbackRecords(String query, String category, String tier, int topK) {
-        // 5.2a 最简策略：折叠空白后整串 LIKE；为空则退化为「按质量分取前 N」（mapper 内 keyword 为 null 即不加关键词条件）。
-        // 刻意不做中文 2/3-gram 打分：父表是「案例卡片」粒度、量级小，整串 LIKE + 质量分排序已够；
-        // 真正的关键词/分词召回留给 5.2d 原生 BM25，避免在兜底里堆注定被替换的临时分词逻辑。
+        // 兜底不能只整串 LIKE：用户常输入带空格 / 标点的标题，分词片段能避免强关键词被符号差异误杀。
+        // 这里仍不做复杂打分，排序继续交给质量分；真正的关键词相关性打分留给 5.2d 原生 BM25。
         String keyword = TextUtil.trimToNull(TextUtil.collapseWhitespace(query));
-        return knowledgeReferenceVideoMapper.searchByKeyword(category, tier, keyword, topK);
+        return knowledgeReferenceVideoMapper.searchByKeyword(category, tier, keyword, extractSqlKeywords(keyword), topK);
+    }
+
+    private List<String> extractSqlKeywords(String query) {
+        String normalized = TextUtil.trimToNull(query);
+        if (normalized == null) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        Matcher matcher = SQL_KEYWORD_PATTERN.matcher(normalized);
+        while (matcher.find() && result.size() < 6) {
+            String token = matcher.group();
+            if (token.length() < 2 || result.contains(token)) {
+                continue;
+            }
+            result.add(token);
+        }
+        return result;
     }
 
     // ============================ 合并 / 截断 / 组装 ============================

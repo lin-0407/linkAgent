@@ -1840,6 +1840,7 @@ textarea:focus {
 .creator-task-toolbar input:focus,
 .creator-task-toolbar select:focus,
 .creator-form-grid input:focus,
+.creator-form-grid select:focus,
 .creator-form-grid textarea:focus,
 .creator-workflow-composer textarea:focus,
 .creator-eval-filter select:focus,
@@ -2309,6 +2310,7 @@ textarea:focus {
 }
 
 .creator-form-grid input,
+.creator-form-grid select,
 .creator-form-grid textarea {
   width: 100%;
   color: var(--ink);
@@ -2319,9 +2321,14 @@ textarea:focus {
   box-shadow: none;
 }
 
-.creator-form-grid input {
+.creator-form-grid input,
+.creator-form-grid select {
   min-height: 44px;
   padding: 0 var(--s3);
+}
+
+.creator-form-grid select {
+  cursor: pointer;
 }
 
 .creator-file-field input {
@@ -2504,12 +2511,14 @@ textarea:focus {
 }
 
 .creator-form-grid input:focus,
+.creator-form-grid select:focus,
 .creator-form-grid textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
 .creator-form-grid input::placeholder,
+.creator-form-grid select::placeholder,
 .creator-form-grid textarea::placeholder,
 .creator-prompt-field textarea::placeholder {
   color: var(--faint);
@@ -2517,6 +2526,7 @@ textarea:focus {
 }
 
 .creator-form-grid input:focus::placeholder,
+.creator-form-grid select:focus::placeholder,
 .creator-form-grid textarea:focus::placeholder,
 .creator-prompt-field textarea:focus::placeholder {
   color: var(--faint);
@@ -2601,6 +2611,54 @@ textarea:focus {
   border-radius: var(--r-pill);
   font-size: 13px;
   font-weight: var(--fw-medium);
+}
+
+.creator-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.creator-context-chip button {
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.creator-context-chip button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.creator-context-modal {
+  max-width: 980px;
+}
+
+.creator-context-form {
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid var(--border);
+}
+
+.creator-context-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s3);
+}
+
+.creator-result-block.muted {
+  opacity: 0.58;
+}
+
+.creator-result-block small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .creator-metric-grid {
@@ -4062,6 +4120,7 @@ textarea:focus {
 .creator-task-toolbar input,
 .creator-task-toolbar select,
 .creator-form-grid input,
+.creator-form-grid select,
 .creator-form-grid textarea,
 .creator-workflow-composer textarea,
 .creator-prompt-field textarea {
@@ -4237,6 +4296,7 @@ textarea:focus {
   .creator-form-grid,
   .creator-import-grid,
   .creator-result-grid,
+  .creator-context-list,
   .creator-script-grid,
   .creator-workflow-grid,
   .creator-workflow-composer,

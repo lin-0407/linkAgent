@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.suggestion.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.context.service.CreatorContextService;
 import com.link.linkagent.creator.preference.mapper.CreatorPreferenceMapper;
 import com.link.linkagent.creator.preference.model.CreatorPreferenceRecord;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
@@ -41,6 +42,7 @@ class PrePublishSuggestionServiceTest {
                 taskMapper,
                 suggestionMapper,
                 new CreatorPreferenceService(preferenceMapper),
+                emptyContextService(),
                 llmService,
                 new ObjectMapper(),
                 new StubPromptService());
@@ -72,6 +74,7 @@ class PrePublishSuggestionServiceTest {
                 taskMapper,
                 suggestionMapper,
                 new CreatorPreferenceService(preferenceMapper),
+                emptyContextService(),
                 llmService,
                 new ObjectMapper(),
                 new StubPromptService());
@@ -134,6 +137,7 @@ class PrePublishSuggestionServiceTest {
                 taskMapper,
                 suggestionMapper,
                 new CreatorPreferenceService(preferenceMapper),
+                emptyContextService(),
                 llmService,
                 new ObjectMapper(),
                 new StubPromptService());
@@ -157,10 +161,20 @@ class PrePublishSuggestionServiceTest {
         record.setTaskId("task-1");
         record.setUserId("default");
         record.setTaskName("发布前优化任务");
+        record.setVideoType("知识科普");
         record.setStatus(CreatorTaskStatus.DRAFT.name());
         record.setCreateTime(LocalDateTime.now());
         record.setUpdateTime(LocalDateTime.now());
         return record;
+    }
+
+    private CreatorContextService emptyContextService() {
+        return new CreatorContextService(null) {
+            @Override
+            public String buildPromptContext(String userId, String videoType, String scene) {
+                return "当前视频类型【" + videoType + "】暂无已沉淀语境。";
+            }
+        };
     }
 
     private CreatorMaterialRecord createMaterialRecord() {
@@ -253,6 +267,11 @@ class PrePublishSuggestionServiceTest {
 
         @Override
         public int updateTaskName(String taskId, String taskName) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int updateTaskBasicInfo(String taskId, String taskName, String videoType) {
             throw new UnsupportedOperationException();
         }
 

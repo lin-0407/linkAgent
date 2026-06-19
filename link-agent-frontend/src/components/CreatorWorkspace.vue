@@ -18,6 +18,8 @@ import {
   fetchCreatorFeedbackByBv,
   importCreatorFeedbackFile,
   importCreatorTaskMaterialFile,
+  disableCreatorContextTerm,
+  listCreatorContextTerms,
   listCreatorEvalCases,
   listCreatorEvalPromptVersionStats,
   listCreatorEvalResults,
@@ -25,8 +27,10 @@ import {
   listCreatorTasks,
   listWorkflowMessages,
   listWorkflowSteps,
+  recordCreatorContextTermFeedback,
   recordCreatorEvalResult,
   rebuildCreatorFeedbackEvidenceIndex,
+  saveCreatorContextTerm,
   saveCreatorFeedback,
   sendWorkflowMessage,
   startPrePublishWorkflow,
@@ -42,6 +46,10 @@ import type {
   CreatorEvalCase,
   CreatorEvalPromptVersionStats,
   CreatorEvalResult,
+  CreatorContextPolarity,
+  CreatorContextTerm,
+  CreatorContextTermPayload,
+  CreatorContextTermType,
   CreatorPreference,
   CreatorPreferenceMode,
   CreatorMaterialType,
@@ -68,6 +76,11 @@ type CreatorWorkspaceState = {
 type PreferenceChip = {
   text: string
   sourceTaskId: string
+}
+type ContextTermOption = {
+  value: CreatorContextTermType
+  label: string
+  polarity: CreatorContextPolarity
 }
 
 const guidanceStorageKey = 'link-agent-creator-guidance'
@@ -109,6 +122,25 @@ const taskStatusOptions: Array<{
   { value: 'COMPETITOR_ANALYZED', label: '竞品分析完成' },
   { value: 'ANALYZED', label: '复盘完成' },
 ]
+const videoTypeOptions = [
+  '未分类',
+  'GLOBAL',
+  '知识科普',
+  '游戏实况',
+  '游戏攻略',
+  '数码测评',
+  '影视杂谈',
+  '生活记录',
+  '鬼畜娱乐',
+]
+const contextTermOptions: ContextTermOption[] = [
+  { value: 'KEYWORD', label: '关键词', polarity: 'POSITIVE' },
+  { value: 'SLANG', label: '圈内黑话', polarity: 'POSITIVE' },
+  { value: 'MEME', label: '梗表达', polarity: 'POSITIVE' },
+  { value: 'TITLE_PATTERN', label: '标题套路', polarity: 'POSITIVE' },
+  { value: 'AUDIENCE_CONCERN', label: '观众关注点', polarity: 'POSITIVE' },
+  { value: 'TABOO', label: '慎用表达', polarity: 'NEGATIVE' },
+]
 const taskMaterialImportOptions: Array<{
   value: CreatorMaterialType
   label: string
@@ -138,6 +170,7 @@ const evalScoreOptions = [1, 2, 3, 4, 5]
 
 const taskForm = reactive({
   taskName: '',
+  videoType: '未分类',
   titleDraft: '',
   descriptionDraft: '',
   manuscript: '',
@@ -227,6 +260,12 @@ const feedbackEvidenceIndexWarnings = ref<string[]>([])
 const feedbackDashboard = ref<CreatorFeedbackDashboard | null>(null)
 const feedbackFetchResult = ref<CreatorFeedbackFetchResult | null>(null)
 const creatorPreferences = ref<CreatorPreference[]>([])
+const creatorContextTerms = ref<CreatorContextTerm[]>([])
+const contextTermForm = reactive({
+  term: '',
+  termType: 'KEYWORD' as CreatorContextTermType,
+  evidenceText: '',
+})
 const taskMaterialImportType = ref<CreatorMaterialType>('MANUSCRIPT')
 const taskMaterialImportFile = ref<File | null>(null)
 const taskMaterialImportInputVersion = ref(0)
@@ -262,6 +301,10 @@ const isRebuildingFeedbackEvidenceIndex = ref(false)
 const isLoadingFeedbackEvidenceIndexStatus = ref(false)
 const isExportingReportMarkdown = ref(false)
 const isLoadingCreatorPreferences = ref(false)
+const isLoadingCreatorContextTerms = ref(false)
+const isSavingCreatorContextTerm = ref(false)
+const isContextLibraryOpen = ref(false)
+const savingContextTermKey = ref('')
 const lastPrePublishPreferenceMode = ref<CreatorPreferenceMode>('USE_HISTORY')
 const hasPrePublishPreferenceModeSnapshot = ref(false)
 const guidanceEditorTarget = ref<GuidanceEditorTarget | null>(null)
@@ -320,7 +363,7 @@ const filteredTasks = computed(() => {
     if (!keyword) {
       return true
     }
-    const searchableText = [task.taskName, task.taskId, statusLabel(task.status)]
+    const searchableText = [task.taskName, task.videoType, task.taskId, statusLabel(task.status)]
       .join(' ')
       .toLowerCase()
     return searchableText.includes(keyword)
@@ -465,6 +508,26 @@ const historicalPreferenceChips = computed<PreferenceChip[]>(() =>
     )
     .filter((item) => item.text.length > 0)
     .slice(0, 8),
+)
+const currentVideoType = computed(() => {
+  if (selectedTask.value?.videoType) {
+    return selectedTask.value.videoType
+  }
+  return taskForm.videoType || '未分类'
+})
+const activeContextTerms = computed(() => creatorContextTerms.value.filter((term) => term.enabled))
+const contextTermChips = computed(() =>
+  activeContextTerms.value
+    .slice(0, 10)
+    .map((term) => ({
+      id: term.termId,
+      text: term.term,
+      label: contextTermTypeLabel(term.termType),
+      title: term.evidenceText || `${term.videoType} · ${contextTermTypeLabel(term.termType)}`,
+    })),
+)
+const canSaveContextTerm = computed(
+  () => hasText(contextTermForm.term) && hasText(currentVideoType.value) && !isSavingCreatorContextTerm.value,
 )
 const selectedPreferenceModeLabel = computed(
   () =>
@@ -832,6 +895,7 @@ async function submitEvalResult() {
 
 function resetTaskForm() {
   taskForm.taskName = ''
+  taskForm.videoType = '未分类'
   taskForm.titleDraft = ''
   taskForm.descriptionDraft = ''
   taskForm.manuscript = ''
@@ -841,6 +905,7 @@ function resetTaskForm() {
 
 function fillTaskForm(task: CreatorTask) {
   taskForm.taskName = task.taskName
+  taskForm.videoType = task.videoType || '未分类'
   taskForm.titleDraft = getMaterialContent(task, 'TITLE_DRAFT')
   taskForm.descriptionDraft = getMaterialContent(task, 'DESCRIPTION_DRAFT')
   taskForm.manuscript = getMaterialContent(task, 'MANUSCRIPT')
@@ -940,6 +1005,7 @@ function applyTaskMaterialImportToForm(materialType: CreatorMaterialType, conten
 
 function hasTaskMaterialChanged(task: CreatorTask) {
   return (
+    (task.videoType || '未分类') !== taskForm.videoType.trim() ||
     getMaterialContent(task, 'TITLE_DRAFT') !== taskForm.titleDraft.trim() ||
     getMaterialContent(task, 'DESCRIPTION_DRAFT') !== taskForm.descriptionDraft.trim() ||
     getMaterialContent(task, 'MANUSCRIPT') !== taskForm.manuscript.trim() ||
@@ -980,6 +1046,7 @@ async function submitTask() {
   try {
     const task = await createCreatorTask({
       taskName: taskForm.taskName,
+      videoType: taskForm.videoType,
       titleDraft: taskForm.titleDraft,
       descriptionDraft: taskForm.descriptionDraft,
       manuscript: taskForm.manuscript,
@@ -991,6 +1058,7 @@ async function submitTask() {
     resetPrePublishPreferenceMode()
     resetGeneratedTaskResults()
     await loadCreatorPreferences(task.userId)
+    await loadCreatorContextTerms(task.userId, task.videoType)
     persistWorkspaceState({ taskId: task.taskId })
     await loadPrePublishWorkflow(task.taskId)
     resetTaskForm()
@@ -1013,6 +1081,7 @@ async function updateTask() {
   const materialChanged = hasTaskMaterialChanged(selectedTask.value)
   const payload: CreatorTaskUpdatePayload = {
     taskName: taskForm.taskName,
+    videoType: taskForm.videoType,
     titleDraft: taskForm.titleDraft,
     descriptionDraft: taskForm.descriptionDraft,
     manuscript: taskForm.manuscript,
@@ -1024,6 +1093,7 @@ async function updateTask() {
     taskManageMode.value = 'edit'
     persistWorkspaceState({ taskId: task.taskId })
     await loadCreatorPreferences(task.userId)
+    await loadCreatorContextTerms(task.userId, task.videoType)
     if (materialChanged) {
       resetGeneratedTaskResults()
       await loadPrePublishWorkflow(task.taskId, false)
@@ -1097,6 +1167,7 @@ function askDeleteSelectedTask() {
     taskId: selectedTask.value.taskId,
     userId: selectedTask.value.userId,
     taskName: selectedTask.value.taskName,
+    videoType: selectedTask.value.videoType,
     status: selectedTask.value.status,
     materialCount: selectedTask.value.materials.length,
     createTime: selectedTask.value.createTime,
@@ -1150,6 +1221,7 @@ async function selectTask(taskId: string) {
     resetPrePublishPreferenceMode()
     persistWorkspaceState({ taskId: task.taskId })
     await loadCreatorPreferences(task.userId)
+    await loadCreatorContextTerms(task.userId, task.videoType)
     await loadOptionalResults(task)
     await loadPrePublishWorkflow(taskId)
     closeTaskManager()
@@ -1190,6 +1262,121 @@ async function loadCreatorPreferences(userId?: string) {
     creatorPreferences.value = []
   } finally {
     isLoadingCreatorPreferences.value = false
+  }
+}
+
+async function loadCreatorContextTerms(userId?: string, videoType?: string) {
+  isLoadingCreatorContextTerms.value = true
+  try {
+    creatorContextTerms.value = await listCreatorContextTerms(
+      userId || selectedTask.value?.userId || 'default',
+      videoType || selectedTask.value?.videoType || currentVideoType.value,
+      true,
+      80,
+    )
+  } catch {
+    // 语境库是增强上下文，加载失败不能阻断任务主流程。
+    creatorContextTerms.value = []
+  } finally {
+    isLoadingCreatorContextTerms.value = false
+  }
+}
+
+function resetContextTermForm() {
+  contextTermForm.term = ''
+  contextTermForm.termType = 'KEYWORD'
+  contextTermForm.evidenceText = ''
+}
+
+async function saveManualContextTerm() {
+  if (!canSaveContextTerm.value) {
+    return
+  }
+  await saveContextTerm({
+    term: contextTermForm.term,
+    termType: contextTermForm.termType,
+    polarity: contextTermPolarity(contextTermForm.termType),
+    sourceType: 'USER_SAVE',
+    evidenceText: contextTermForm.evidenceText,
+  })
+  resetContextTermForm()
+}
+
+async function saveContextTermFromSuggestion(
+  term: string,
+  termType: CreatorContextTermType,
+  evidenceText?: string,
+) {
+  if (!hasText(term)) {
+    return
+  }
+  await saveContextTerm({
+    term,
+    termType,
+    polarity: contextTermPolarity(termType),
+    sourceType: 'AI_ACCEPTED',
+    evidenceText,
+  })
+}
+
+async function saveContextTerm(payload: Omit<CreatorContextTermPayload, 'videoType'>) {
+  if (!selectedTask.value && !hasText(taskForm.videoType)) {
+    return
+  }
+  const normalizedTerm = normalizeContextTermText(payload.term)
+  if (!normalizedTerm) {
+    return
+  }
+  const saveKey = `${payload.termType || 'KEYWORD'}-${normalizedTerm}`
+  savingContextTermKey.value = saveKey
+  isSavingCreatorContextTerm.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    await saveCreatorContextTerm({
+      userId: selectedTask.value?.userId || 'default',
+      videoType: currentVideoType.value,
+      sourceTaskId: selectedTaskId.value || undefined,
+      ...payload,
+      term: normalizedTerm,
+      evidenceText: payload.evidenceText || payload.term,
+    })
+    await loadCreatorContextTerms(selectedTask.value?.userId, currentVideoType.value)
+    successMessage.value = '已保存到当前视频类型语境库。'
+  } catch (error) {
+    showError(error)
+  } finally {
+    isSavingCreatorContextTerm.value = false
+    savingContextTermKey.value = ''
+  }
+}
+
+function normalizeContextTermText(value: string) {
+  const text = value.trim().replace(/\s+/g, ' ')
+  return text.length > 128 ? text.slice(0, 128) : text
+}
+
+async function disableContextTerm(term: CreatorContextTerm) {
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    await disableCreatorContextTerm(term.termId)
+    await loadCreatorContextTerms(term.userId, term.videoType)
+    successMessage.value = '语境词条已禁用。'
+  } catch (error) {
+    showError(error)
+  }
+}
+
+async function feedbackContextTerm(term: CreatorContextTerm, accepted: boolean) {
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    await recordCreatorContextTermFeedback(term.termId, accepted)
+    await loadCreatorContextTerms(term.userId, term.videoType)
+    successMessage.value = accepted ? '已提高该词条权重。' : '已降低该词条权重。'
+  } catch (error) {
+    showError(error)
   }
 }
 
@@ -1599,6 +1786,46 @@ function retrievalModeLabel(mode: string | null | undefined) {
   }
 }
 
+function contextTermTypeLabel(termType: CreatorContextTermType | string) {
+  switch (termType) {
+    case 'SLANG':
+      return '圈内黑话'
+    case 'MEME':
+      return '梗表达'
+    case 'TABOO':
+      return '慎用表达'
+    case 'TITLE_PATTERN':
+      return '标题套路'
+    case 'AUDIENCE_CONCERN':
+      return '观众关注点'
+    default:
+      return '关键词'
+  }
+}
+
+function contextTermSourceLabel(sourceType: string) {
+  switch (sourceType) {
+    case 'AI_ACCEPTED':
+      return '采纳建议'
+    case 'COMMENT_EXTRACTED':
+      return '评论弹幕'
+    case 'USER_REJECTED':
+      return '用户否定'
+    case 'VIDEO_SUCCESS':
+      return '高质量视频'
+    default:
+      return '手动保存'
+  }
+}
+
+function contextTermPolarity(termType: CreatorContextTermType): CreatorContextPolarity {
+  return termType === 'TABOO' ? 'NEGATIVE' : 'POSITIVE'
+}
+
+function contextSaveKey(term: string, termType: CreatorContextTermType) {
+  return `${termType}-${normalizeContextTermText(term)}`
+}
+
 async function optionalRequest<T>(request: () => Promise<T>) {
   try {
     return await request()
@@ -1635,6 +1862,7 @@ function resetSelectedWorkspace() {
   feedbackDashboard.value = null
   feedbackFetchResult.value = null
   creatorPreferences.value = []
+  creatorContextTerms.value = []
   feedbackImportFile.value = null
   feedbackImportWarnings.value = []
   isFetchingFeedback.value = false
@@ -2389,7 +2617,7 @@ function showError(error: unknown) {
                 >
                   <button type="button" class="creator-task-select" @click="selectTask(task.taskId)">
                     <strong>{{ task.taskName }}</strong>
-                    <span>{{ statusLabel(task.status) }} · {{ task.materialCount }} 份材料</span>
+                    <span>{{ task.videoType }} · {{ statusLabel(task.status) }} · {{ task.materialCount }} 份材料</span>
                     <small>{{ shortId(task.taskId) }} · {{ formatDate(task.updateTime) }}</small>
                   </button>
                   <div class="creator-task-actions">
@@ -2462,6 +2690,7 @@ function showError(error: unknown) {
             </div>
           </div>
           <div class="creator-current-task-meta">
+            <span>{{ selectedTask.videoType || '未分类' }}</span>
             <span>{{ statusLabel(selectedTask.status) }}</span>
             <span>{{ selectedTask.materials.length }} 份材料</span>
             <span>{{ formatDate(selectedTask.updateTime) }}</span>
@@ -2611,6 +2840,14 @@ function showError(error: unknown) {
                 maxlength="128"
                 placeholder="填写本期视频主题"
               />
+            </label>
+            <label>
+              <span>视频类型</span>
+              <select v-model="taskForm.videoType">
+                <option v-for="option in videoTypeOptions" :key="option" :value="option">
+                  {{ option === 'GLOBAL' ? '全局通用' : option }}
+                </option>
+              </select>
             </label>
             <label>
               <span>标题草稿</span>
@@ -3239,6 +3476,32 @@ function showError(error: unknown) {
             </div>
           </article>
 
+          <article class="creator-preference-panel">
+            <div class="creator-preference-head">
+              <div>
+                <span>类型语境库</span>
+                <strong>{{ currentVideoType === 'GLOBAL' ? '全局通用' : currentVideoType }}</strong>
+              </div>
+              <button
+                type="button"
+                class="creator-secondary-action creator-mini-button"
+                @click="isContextLibraryOpen = true"
+              >
+                管理语境
+              </button>
+            </div>
+
+            <div class="creator-preference-tags">
+              <span v-for="chip in contextTermChips" :key="chip.id" :title="chip.title">
+                {{ chip.label }} · {{ chip.text }}
+              </span>
+              <em v-if="!isLoadingCreatorContextTerms && contextTermChips.length === 0">
+                当前类型暂无语境词
+              </em>
+              <em v-else-if="isLoadingCreatorContextTerms">读取中</em>
+            </div>
+          </article>
+
           <div class="creator-form-grid">
             <label>
               <span>创作者偏好</span>
@@ -3617,10 +3880,40 @@ function showError(error: unknown) {
               <article class="creator-result-block">
                 <span>目标受众</span>
                 <p>{{ suggestion.audienceProfile || '未解析到受众判断' }}</p>
+                <button
+                  v-if="suggestion.audienceProfile"
+                  type="button"
+                  class="creator-ghost-button creator-mini-button"
+                  :disabled="isSavingCreatorContextTerm"
+                  @click="
+                    saveContextTermFromSuggestion(
+                      suggestion.audienceProfile || '',
+                      'AUDIENCE_CONCERN',
+                      '来自发布前优化的目标受众判断',
+                    )
+                  "
+                >
+                  保存为观众关注点
+                </button>
               </article>
               <article class="creator-result-block">
                 <span>观众钩子</span>
                 <p>{{ suggestion.audienceHook || '未解析到观众钩子' }}</p>
+                <button
+                  v-if="suggestion.audienceHook"
+                  type="button"
+                  class="creator-ghost-button creator-mini-button"
+                  :disabled="isSavingCreatorContextTerm"
+                  @click="
+                    saveContextTermFromSuggestion(
+                      suggestion.audienceHook || '',
+                      'AUDIENCE_CONCERN',
+                      '来自发布前优化的观众钩子判断',
+                    )
+                  "
+                >
+                  保存为观众关注点
+                </button>
               </article>
               <article class="creator-result-block span-full">
                 <span>内容定位</span>
@@ -3677,6 +3970,27 @@ function showError(error: unknown) {
                     <p v-if="getRecordText(item, 'risk')">
                       风险：{{ getRecordText(item, 'risk') }}
                     </p>
+                    <button
+                      type="button"
+                      class="creator-ghost-button creator-mini-button"
+                      :disabled="
+                        isSavingCreatorContextTerm &&
+                        savingContextTermKey ===
+                          contextSaveKey(
+                            getRecordText(item, 'title') || formatValue(item),
+                            'TITLE_PATTERN',
+                          )
+                      "
+                      @click="
+                        saveContextTermFromSuggestion(
+                          getRecordText(item, 'title') || formatValue(item),
+                          'TITLE_PATTERN',
+                          getRecordText(item, 'reason') || getRecordText(item, 'clickReason'),
+                        )
+                      "
+                    >
+                      保存为标题套路
+                    </button>
                   </section>
                 </div>
               </article>
@@ -3697,9 +4011,22 @@ function showError(error: unknown) {
               <article class="creator-result-block">
                 <span>标签建议</span>
                 <div class="creator-chip-list">
-                  <b v-for="(item, index) in tagSuggestions" :key="index">
-                    {{ formatValue(item) }}
-                  </b>
+                  <span v-for="(item, index) in tagSuggestions" :key="index" class="creator-context-chip">
+                    <b>{{ formatValue(item) }}</b>
+                    <button
+                      type="button"
+                      :disabled="isSavingCreatorContextTerm"
+                      @click="
+                        saveContextTermFromSuggestion(
+                          formatValue(item),
+                          'KEYWORD',
+                          '来自发布前优化的标签建议',
+                        )
+                      "
+                    >
+                      保存
+                    </button>
+                  </span>
                 </div>
               </article>
               <article class="creator-result-block">
@@ -4212,6 +4539,115 @@ function showError(error: unknown) {
         </button>
       </form>
         </aside>
+      </section>
+    </div>
+
+    <div v-if="isContextLibraryOpen" class="creator-modal-backdrop" role="presentation">
+      <section
+        class="creator-result-modal creator-context-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="类型语境库"
+      >
+        <header class="creator-result-modal-head">
+          <div>
+            <p class="creator-kicker">类型语境库</p>
+            <h3>{{ currentVideoType === 'GLOBAL' ? '全局通用' : currentVideoType }}</h3>
+          </div>
+          <button type="button" class="creator-ghost-button" @click="isContextLibraryOpen = false">
+            关闭
+          </button>
+        </header>
+
+        <div class="creator-result-modal-body">
+          <form class="creator-form-grid creator-context-form" @submit.prevent="saveManualContextTerm">
+            <label>
+              <span>词条</span>
+              <input
+                v-model="contextTermForm.term"
+                type="text"
+                maxlength="128"
+                placeholder="输入关键词、黑话、梗或慎用表达"
+              />
+            </label>
+            <label>
+              <span>类型</span>
+              <select v-model="contextTermForm.termType">
+                <option
+                  v-for="option in contextTermOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+            <label class="span-full">
+              <span>证据说明</span>
+              <textarea
+                v-model="contextTermForm.evidenceText"
+                maxlength="1000"
+                placeholder="为什么这个词适合或不适合当前类型"
+              ></textarea>
+            </label>
+            <div class="creator-action-row span-full">
+              <button
+                type="submit"
+                class="creator-primary-button creator-mini-button"
+                :disabled="!canSaveContextTerm"
+              >
+                {{ isSavingCreatorContextTerm ? '保存中...' : '保存词条' }}
+              </button>
+              <button type="button" class="creator-ghost-button creator-mini-button" @click="resetContextTermForm">
+                清空
+              </button>
+            </div>
+          </form>
+
+          <div class="creator-context-list">
+            <article
+              v-for="term in creatorContextTerms"
+              :key="term.termId"
+              class="creator-result-block"
+              :class="{ muted: !term.enabled }"
+            >
+              <span>{{ contextTermTypeLabel(term.termType) }}</span>
+              <strong>{{ term.term }}</strong>
+              <p v-if="term.evidenceText">{{ term.evidenceText }}</p>
+              <small>
+                {{ contextTermSourceLabel(term.sourceType) }} · 权重 {{ term.weight }} ·
+                接受 {{ term.acceptCount }} · 拒绝 {{ term.rejectCount }}
+              </small>
+              <div class="creator-action-row">
+                <button
+                  type="button"
+                  class="creator-ghost-button creator-mini-button"
+                  @click="feedbackContextTerm(term, true)"
+                >
+                  提高权重
+                </button>
+                <button
+                  type="button"
+                  class="creator-ghost-button creator-mini-button"
+                  @click="feedbackContextTerm(term, false)"
+                >
+                  降低权重
+                </button>
+                <button
+                  v-if="term.enabled"
+                  type="button"
+                  class="creator-danger-action creator-mini-button"
+                  @click="disableContextTerm(term)"
+                >
+                  禁用
+                </button>
+              </div>
+            </article>
+            <p v-if="!isLoadingCreatorContextTerms && creatorContextTerms.length === 0" class="creator-muted">
+              当前类型还没有语境词条。
+            </p>
+          </div>
+        </div>
       </section>
     </div>
 

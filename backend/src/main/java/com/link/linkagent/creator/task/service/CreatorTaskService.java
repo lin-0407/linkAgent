@@ -36,6 +36,7 @@ import java.util.UUID;
 public class CreatorTaskService {
 
     private static final String DEFAULT_USER_ID = "default";
+    private static final String DEFAULT_VIDEO_TYPE = "未分类";
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
     private static final long MATERIAL_IMPORT_FILE_MAX_SIZE = 5 * 1024 * 1024L;
@@ -55,11 +56,13 @@ public class CreatorTaskService {
         String taskId = UUID.randomUUID().toString();
         String userId = normalizeUserId(request.userId());
         String taskName = normalizeTaskName(request.taskName(), request.titleDraft());
+        String videoType = normalizeVideoType(request.videoType());
 
         CreatorTaskRecord taskRecord = new CreatorTaskRecord();
         taskRecord.setTaskId(taskId);
         taskRecord.setUserId(userId);
         taskRecord.setTaskName(taskName);
+        taskRecord.setVideoType(videoType);
         taskRecord.setStatus(CreatorTaskStatus.DRAFT.name());
         creatorTaskMapper.insertTask(taskRecord);
 
@@ -77,11 +80,13 @@ public class CreatorTaskService {
         List<CreatorMaterialRecord> currentMaterials = creatorTaskMapper.listMaterialsByTaskId(safeTaskId);
         boolean materialChanged = isMaterialChanged(currentMaterials, request);
         String taskName = normalizeTaskName(request.taskName(), request.titleDraft());
+        String videoType = normalizeVideoType(request.videoType());
+        boolean videoTypeChanged = !videoType.equals(normalizeVideoType(taskRecord.getVideoType()));
 
-        creatorTaskMapper.updateTaskName(taskRecord.getTaskId(), taskName);
+        creatorTaskMapper.updateTaskBasicInfo(taskRecord.getTaskId(), taskName, videoType);
         refreshMaterials(taskRecord.getTaskId(), request);
-        if (materialChanged) {
-            // 材料变化后旧发布建议和复盘结论不应继续被状态链默认认可，因此退回草稿态让用户重新生成。
+        if (materialChanged || videoTypeChanged) {
+            // 材料或视频类型变化后，旧建议对应的分析输入已经不同，必须退回草稿态让用户重新生成。
             creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.DRAFT.name());
         }
 
@@ -195,6 +200,7 @@ public class CreatorTaskService {
                 record.getTaskId(),
                 record.getUserId(),
                 record.getTaskName(),
+                normalizeVideoType(record.getVideoType()),
                 record.getStatus(),
                 record.getCreateTime(),
                 record.getUpdateTime(),
@@ -218,6 +224,7 @@ public class CreatorTaskService {
                 record.getTaskId(),
                 record.getUserId(),
                 record.getTaskName(),
+                normalizeVideoType(record.getVideoType()),
                 record.getStatus(),
                 record.getMaterialCount(),
                 record.getCreateTime(),
@@ -237,6 +244,10 @@ public class CreatorTaskService {
             return TextUtil.abbreviate(titleDraft.trim(), 40);
         }
         return "未命名创作任务";
+    }
+
+    private String normalizeVideoType(String videoType) {
+        return TextUtil.trimToDefault(videoType, DEFAULT_VIDEO_TYPE);
     }
 
     private CreatorTaskRecord getTaskRecord(String taskId) {

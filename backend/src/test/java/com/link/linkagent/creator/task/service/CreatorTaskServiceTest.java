@@ -33,10 +33,11 @@ class CreatorTaskServiceTest {
 
         CreatorTaskResponse response = service.updateTask(
                 "task-1",
-                new CreatorTaskUpdateRequest("新任务名", "新标题", "新简介", "新文稿", "")
+                new CreatorTaskUpdateRequest("新任务名", "知识科普", "新标题", "新简介", "新文稿", "")
         );
 
         assertThat(mapper.updatedTaskName).isEqualTo("新任务名");
+        assertThat(mapper.updatedVideoType).isEqualTo("知识科普");
         assertThat(mapper.updatedStatuses).contains(CreatorTaskStatus.DRAFT.name());
         assertThat(mapper.deletedMaterialTypes).contains(CreatorMaterialType.SUBTITLE.name());
         assertThat(mapper.materialsByType.get(CreatorMaterialType.TITLE_DRAFT.name()).getContent())
@@ -67,7 +68,7 @@ class CreatorTaskServiceTest {
         assertThatThrownBy(() ->
                 service.updateTask(
                         "missing-task",
-                        new CreatorTaskUpdateRequest("任务名", "标题", "简介", "文稿", null)
+                        new CreatorTaskUpdateRequest("任务名", "知识科普", "标题", "简介", "文稿", null)
                 ))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("创作任务不存在");
@@ -79,6 +80,7 @@ class CreatorTaskServiceTest {
         record.setTaskId("task-1");
         record.setUserId("default");
         record.setTaskName("旧任务名");
+        record.setVideoType("未分类");
         record.setStatus(CreatorTaskStatus.DRAFT.name());
         return record;
     }
@@ -100,6 +102,7 @@ class CreatorTaskServiceTest {
         private final List<String> deletedMaterialTypes = new ArrayList<>();
         private final Map<String, CreatorMaterialRecord> materialsByType = new HashMap<>();
         private String updatedTaskName;
+        private String updatedVideoType;
         private String deletedTaskStatus;
         private boolean deletedTaskFlag;
         private boolean materialsDeletedFlag;
@@ -168,6 +171,17 @@ class CreatorTaskServiceTest {
             updatedTaskName = taskName;
             if (taskRecord != null) {
                 taskRecord.setTaskName(taskName);
+            }
+            return 1;
+        }
+
+        @Override
+        public int updateTaskBasicInfo(String taskId, String taskName, String videoType) {
+            updatedTaskName = taskName;
+            updatedVideoType = videoType;
+            if (taskRecord != null) {
+                taskRecord.setTaskName(taskName);
+                taskRecord.setVideoType(videoType);
             }
             return 1;
         }

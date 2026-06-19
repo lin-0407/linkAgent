@@ -138,7 +138,8 @@ export type ReferenceVideoSearchResult = {
   reranked: boolean
 }
 
-// 主题优先检索响应：cards 是当前批次要展示的视频卡片，matchedTopics 是这些卡片对应的主题命中解释。
+// 主题优先检索响应：cards 是当前批次要展示的视频卡片，matchedTopics/evidence 解释为什么命中和排序。
+// reranked 表示后端是否对 top20 候选做过 qwen3-rerank 精排。
 export type ReferenceVideoTopicSearchResult = {
   mode: string
   strategy: string
@@ -148,7 +149,9 @@ export type ReferenceVideoTopicSearchResult = {
   maxPage: number
   hasMore: boolean
   matchedTopics: ReferenceVideoMatchedTopic[]
+  evidence: ReferenceVideoEvidence[]
   cards: ReferenceVideo[]
+  reranked: boolean
 }
 
 // 单视频分析上下文：点击卡片后加载进 AI 交互台，让后续追问围绕这个视频的主题和观众反馈展开。

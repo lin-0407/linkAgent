@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import {
+  getReferenceVideoChunkIndexStatus,
   getReferenceVideoHybridIndexStatus,
   getReferenceVideoIndexStatus,
   getReferenceVideoItemHybridIndexStatus,
   getReferenceVideoItemIndexStatus,
+  rebuildReferenceVideoChunkIndex,
   rebuildReferenceVideoHybridIndex,
   rebuildReferenceVideoIndex,
   rebuildReferenceVideoItemHybridIndex,
@@ -19,6 +21,14 @@ const indexStatusError = ref('')
 const indexing = ref(false)
 const indexResult = ref<ReferenceVideoIndexResult | null>(null)
 const indexError = ref('')
+
+// 主题中块索引状态与重建。topic-search 先查中块集合，父表已索引不代表主题检索可用。
+const chunkIndexStatus = ref<ReferenceVideoIndexStatus | null>(null)
+const chunkIndexLoading = ref(false)
+const chunkIndexStatusError = ref('')
+const chunkIndexing = ref(false)
+const chunkIndexResult = ref<ReferenceVideoIndexResult | null>(null)
+const chunkIndexError = ref('')
 
 // 子条目向量索引状态与重建。子集合未就绪时重建按钮禁用。
 const itemIndexStatus = ref<ReferenceVideoIndexStatus | null>(null)
@@ -70,6 +80,35 @@ async function rebuildIndex() {
     indexError.value = error instanceof Error ? error.message : String(error)
   } finally {
     indexing.value = false
+  }
+}
+
+async function loadChunkIndexStatus() {
+  chunkIndexLoading.value = true
+  chunkIndexStatusError.value = ''
+  try {
+    chunkIndexStatus.value = await getReferenceVideoChunkIndexStatus()
+  } catch (error) {
+    chunkIndexStatusError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    chunkIndexLoading.value = false
+  }
+}
+
+async function rebuildChunkIndex() {
+  if (chunkIndexing.value) {
+    return
+  }
+  chunkIndexing.value = true
+  chunkIndexError.value = ''
+  chunkIndexResult.value = null
+  try {
+    chunkIndexResult.value = await rebuildReferenceVideoChunkIndex()
+    await loadChunkIndexStatus()
+  } catch (error) {
+    chunkIndexError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    chunkIndexing.value = false
   }
 }
 
@@ -167,6 +206,7 @@ function retrievalModeLabel(mode: string) {
 
 onMounted(() => {
   void loadIndexStatus()
+  void loadChunkIndexStatus()
   void loadItemIndexStatus()
   void loadHybridIndexStatus()
   void loadChildHybridIndexStatus()
@@ -222,6 +262,56 @@ onMounted(() => {
       </div>
       <ul v-if="indexResult && indexResult.warnings.length" class="knowledge-warnings">
         <li v-for="(warning, idx) in indexResult.warnings" :key="idx">{{ warning }}</li>
+      </ul>
+    </section>
+
+    <section class="creator-section settings-index-section">
+      <div class="creator-section-head">
+        <h3>主题中块索引</h3>
+        <div class="knowledge-toolbar">
+          <button type="button" class="creator-secondary-action" :disabled="chunkIndexLoading" @click="loadChunkIndexStatus">
+            {{ chunkIndexLoading ? '刷新中…' : '刷新状态' }}
+          </button>
+          <button
+            type="button"
+            class="creator-primary-button"
+            :disabled="chunkIndexing || !chunkIndexStatus?.vectorStoreReady"
+            @click="rebuildChunkIndex"
+          >
+            {{ chunkIndexing ? '索引中…' : '重建主题中块索引' }}
+          </button>
+        </div>
+      </div>
+      <p class="creator-inline-note">
+        把标题包装、内容定位和观众反馈主题写入中块集合。案例检索的主题优先模式先查这一层，父表已索引不等于中块已索引。
+      </p>
+
+      <div v-if="chunkIndexStatusError" class="creator-alert error-alert">
+        <strong>状态加载失败</strong>
+        <span>{{ chunkIndexStatusError }}</span>
+      </div>
+      <div v-else-if="chunkIndexStatus" class="creator-chip-list">
+        <b>{{ chunkIndexStatus.ragEnabled ? 'RAG 已启用' : 'RAG 关闭' }}</b>
+        <b>{{ chunkIndexStatus.vectorStoreReady ? '中块向量库就绪' : '中块向量库未就绪' }}</b>
+        <b>检索模式 {{ retrievalModeLabel(chunkIndexStatus.retrievalMode) }}</b>
+        <b>已索引 {{ chunkIndexStatus.indexedCount }}</b>
+        <b>待索引 {{ chunkIndexStatus.pendingCount }}</b>
+        <b v-if="chunkIndexStatus.failedCount > 0">失败 {{ chunkIndexStatus.failedCount }}</b>
+        <b>共 {{ chunkIndexStatus.totalCount }}</b>
+      </div>
+
+      <div v-if="chunkIndexResult" class="creator-alert success-alert">
+        <strong>重建完成</strong>
+        <span>
+          本次索引 {{ chunkIndexResult.indexedCount }} 条主题中块<template v-if="chunkIndexResult.failedCount > 0">，失败 {{ chunkIndexResult.failedCount }} 条</template>。
+        </span>
+      </div>
+      <div v-if="chunkIndexError" class="creator-alert error-alert">
+        <strong>重建失败</strong>
+        <span>{{ chunkIndexError }}</span>
+      </div>
+      <ul v-if="chunkIndexResult && chunkIndexResult.warnings.length" class="knowledge-warnings">
+        <li v-for="(warning, idx) in chunkIndexResult.warnings" :key="idx">{{ warning }}</li>
       </ul>
     </section>
 
