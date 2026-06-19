@@ -93,6 +93,67 @@ class AgentExecutorLongTermMemoryTest {
         assertThat(mapper.savedRecord.getSourceSessionId()).isEqualTo("session-1");
     }
 
+    @Test
+    void shouldRecordSingleDiagnosticStepWhenLlmMissesReactFormat() {
+        SequencedLlmService llmService = new SequencedLlmService(
+                "我直接给你一个没有 ReAct 标记的回答",
+                """
+                        Thought:我现在已经掌握了所需信息
+                        Final Answer:已经恢复为正确格式
+                        """
+        );
+        FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
+        AgentExecutor executor = new AgentExecutor(
+                llmService,
+                new ToolRegistry(List.of()),
+                emptyToolExecutor(),
+                new ShortTermMemory(new InMemoryShortTermMemoryStore()),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of()), new StubPromptService()),
+                new LongTermMemory(mapper),
+                new NoopLongTermMemoryExtractor(),
+                new StubPromptService()
+        );
+
+        var response = executor.run("session-1", "user-1", "测试格式漂移");
+
+        assertThat(response.finalAnswer()).isEqualTo("已经恢复为正确格式");
+        assertThat(response.steps()).hasSize(1);
+        AgentStep step = response.steps().get(0);
+        assertThat(step.stepNumber()).isEqualTo(1);
+        assertThat(step.thought()).contains("未解析到 Thought");
+        assertThat(step.observation()).contains("格式错误");
+        assertThat(llmService.callCount).isEqualTo(2);
+    }
+
+    @Test
+    void shouldUseStructuredKernelWhenDefaultEnabled() {
+        StructuredLlmService llmService = new StructuredLlmService(new ReActStep(
+                "我已经掌握了所需信息",
+                null,
+                null,
+                "结构化回答"
+        ));
+        FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
+        AgentExecutor executor = new AgentExecutor(
+                llmService,
+                new ToolRegistry(List.of()),
+                emptyToolExecutor(),
+                new ShortTermMemory(new InMemoryShortTermMemoryStore()),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2), prompt -> new ChatResponse(List.of()), new StubPromptService()),
+                new LongTermMemory(mapper),
+                new NoopLongTermMemoryExtractor(),
+                new StubPromptService(),
+                true
+        );
+
+        var response = executor.run("session-1", "user-1", "测试结构化内核");
+
+        assertThat(response.finalAnswer()).isEqualTo("结构化回答");
+        assertThat(response.steps()).isEmpty();
+        assertThat(llmService.structuredCallCount).isEqualTo(1);
+        assertThat(llmService.textCallCount).isZero();
+    }
+
     private static class CapturingLlmService extends LLMService {
 
         private String lastUserMessage;
@@ -108,6 +169,51 @@ class AgentExecutorLongTermMemoryTest {
                     Thought:我现在已经掌握了所需信息
                     Final Answer:好的
                     """;
+        }
+    }
+
+    private static class SequencedLlmService extends LLMService {
+
+        private final List<String> responses;
+        private int callCount;
+
+        SequencedLlmService(String... responses) {
+            super();
+            this.responses = List.of(responses);
+        }
+
+        @Override
+        public String chat(String systemPrompt, String userMessage) {
+            String response = responses.get(Math.min(callCount, responses.size() - 1));
+            callCount++;
+            return response;
+        }
+    }
+
+    private static class StructuredLlmService extends LLMService {
+
+        private final ReActStep response;
+        private int structuredCallCount;
+        private int textCallCount;
+
+        StructuredLlmService(ReActStep response) {
+            super();
+            this.response = response;
+        }
+
+        @Override
+        public String chat(String systemPrompt, String userMessage) {
+            textCallCount++;
+            return """
+                    Thought:我现在已经掌握了所需信息
+                    Final Answer:文本回答
+                    """;
+        }
+
+        @Override
+        public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> type) {
+            structuredCallCount++;
+            return type.cast(response);
         }
     }
 

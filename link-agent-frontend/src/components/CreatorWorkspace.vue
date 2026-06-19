@@ -18,7 +18,6 @@ import {
   getPrePublishSuggestion,
   fetchCreatorFeedbackByBv,
   importCreatorFeedbackFile,
-  importCreatorTaskMaterialFile,
   disableCreatorContextTerm,
   listCreatorContextTerms,
   listCreatorEvalCases,
@@ -54,7 +53,6 @@ import type {
   CreatorContextTermType,
   CreatorPreference,
   CreatorPreferenceMode,
-  CreatorMaterialType,
   CreatorSuggestion,
   CreatorTask,
   CreatorTaskSummary,
@@ -148,22 +146,6 @@ const contextTermOptions: ContextTermOption[] = [
   { value: 'AUDIENCE_CONCERN', label: '观众关注点', polarity: 'POSITIVE' },
   { value: 'TABOO', label: '慎用表达', polarity: 'NEGATIVE' },
 ]
-const taskMaterialImportOptions: Array<{
-  value: CreatorMaterialType
-  label: string
-}> = [
-  { value: 'TITLE_DRAFT', label: '标题草稿' },
-  { value: 'DESCRIPTION_DRAFT', label: '简介草稿' },
-  { value: 'MANUSCRIPT', label: '文稿' },
-  { value: 'SUBTITLE', label: '字幕' },
-]
-const taskMaterialLengthLimitMap: Record<CreatorMaterialType, number> = {
-  TITLE_DRAFT: 200,
-  DESCRIPTION_DRAFT: 2000,
-  MANUSCRIPT: 20000,
-  SUBTITLE: 20000,
-}
-const taskMaterialImportMaxBytes = 5 * 1024 * 1024
 const evalStageOptions: Array<{
   value: 'ALL' | CreatorWorkflowStage
   label: string
@@ -282,9 +264,6 @@ const contextTermForm = reactive({
   termType: 'KEYWORD' as CreatorContextTermType,
   evidenceText: '',
 })
-const taskMaterialImportType = ref<CreatorMaterialType>('MANUSCRIPT')
-const taskMaterialImportFile = ref<File | null>(null)
-const taskMaterialImportInputVersion = ref(0)
 const feedbackImportFile = ref<File | null>(null)
 const feedbackImportWarnings = ref<string[]>([])
 const usageSummary = ref<LlmApiUsageSummary | null>(null)
@@ -312,7 +291,6 @@ const isConfirmingPrePublish = ref(false)
 const isLoadingWorkflow = ref(false)
 const isSendingWorkflowMessage = ref(false)
 const isSavingFeedback = ref(false)
-const isImportingTaskMaterial = ref(false)
 const isImportingFeedback = ref(false)
 const isFetchingFeedback = ref(false)
 const isAnalyzingFeedback = ref(false)
@@ -349,24 +327,6 @@ const activeStepIndex = computed(() => {
 const activeStepStyle = computed<Record<string, string>>(() => ({
   '--creator-active-step-index': String(activeStepIndex.value),
 }))
-const canImportTaskMaterial = computed(
-  () => taskManageMode.value === 'create' || selectedTaskId.value.length > 0,
-)
-const taskMaterialImportInputKey = computed(
-  () =>
-    `${taskManageMode.value}-${selectedTaskId.value || 'empty'}-${taskMaterialImportType.value}-${taskMaterialImportInputVersion.value}`,
-)
-const taskMaterialImportButtonLabel = computed(() => {
-  if (isImportingTaskMaterial.value) {
-    return '导入中'
-  }
-  return taskManageMode.value === 'edit' ? '导入材料' : '导入到表单'
-})
-const taskMaterialImportHint = computed(() =>
-  taskManageMode.value === 'edit'
-    ? '支持 TXT、MD、SRT、ASS；导入后会覆盖当前任务对应材料，并清空旧分析结果。'
-    : '支持 TXT、MD、SRT、ASS；首次创建时会先填入下方表单，点击创建任务后再保存到后端。',
-)
 const hasTaskMaterialInput = computed(
   () =>
     hasText(taskForm.titleDraft) ||
@@ -422,7 +382,7 @@ const taskFormTitle = computed(() =>
 const taskFormHint = computed(() =>
   taskManageMode.value === 'edit'
     ? '编辑当前任务后，旧材料会被覆盖，后续分析请重新生成。'
-    : '可以先导入本地文稿或字幕到表单，再补齐任务名称和其他字段后创建任务。',
+    : '先填写任务主题、视频类型和已有材料，后续由 Agent 继续推荐标题、简介和优化方向。',
 )
 const pendingDeleteTaskName = computed(() => pendingDeleteTask.value?.taskName ?? '')
 const hasFeedbackSampleInput = computed(
@@ -993,7 +953,6 @@ function resetTaskForm() {
   taskForm.descriptionDraft = ''
   taskForm.manuscript = ''
   taskForm.subtitle = ''
-  resetTaskMaterialImport()
 }
 
 function fillTaskForm(task: CreatorTask) {
@@ -1007,93 +966,6 @@ function fillTaskForm(task: CreatorTask) {
 
 function getMaterialContent(task: CreatorTask, materialType: string) {
   return task.materials.find((item) => item.materialType === materialType)?.content ?? ''
-}
-
-function handleTaskMaterialFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  taskMaterialImportFile.value = input.files?.[0] ?? null
-}
-
-function resetTaskMaterialImport() {
-  taskMaterialImportFile.value = null
-  taskMaterialImportInputVersion.value += 1
-}
-
-async function importTaskMaterialFile() {
-  if (!canImportTaskMaterial.value || !taskMaterialImportFile.value) {
-    return
-  }
-
-  isImportingTaskMaterial.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    const importedFile = taskMaterialImportFile.value
-    if (taskManageMode.value === 'create') {
-      const content = await readTaskMaterialImportContent(importedFile, taskMaterialImportType.value)
-      applyTaskMaterialImportToForm(taskMaterialImportType.value, content)
-      resetTaskMaterialImport()
-      successMessage.value = `已将 ${importedFile.name} 导入到${materialLabel(taskMaterialImportType.value)}输入框，检查表单后即可创建任务。`
-      return
-    }
-
-    if (!selectedTaskId.value) {
-      throw new Error('请先选择要编辑的任务')
-    }
-
-    const task = await importCreatorTaskMaterialFile(
-      selectedTaskId.value,
-      taskMaterialImportType.value,
-      importedFile,
-    )
-    selectedTask.value = task
-    fillTaskForm(task)
-    resetGeneratedTaskResults()
-    persistWorkspaceState({ taskId: task.taskId })
-    await refreshTasks()
-    resetTaskMaterialImport()
-    successMessage.value = `已将 ${importedFile.name} 导入为${materialLabel(taskMaterialImportType.value)}，任务内容已更新。`
-  } catch (error) {
-    showError(error)
-  } finally {
-    isImportingTaskMaterial.value = false
-  }
-}
-
-async function readTaskMaterialImportContent(file: File, materialType: CreatorMaterialType) {
-  if (file.size <= 0) {
-    throw new Error('导入文件不能为空')
-  }
-  if (file.size > taskMaterialImportMaxBytes) {
-    throw new Error('导入文件不能超过 5MB')
-  }
-
-  const content = (await file.text()).replace(/^\uFEFF/, '')
-  if (!content.trim()) {
-    throw new Error('导入文件没有可用文本内容')
-  }
-
-  const maxLength = taskMaterialLengthLimitMap[materialType]
-  if (content.length > maxLength) {
-    throw new Error(`${materialLabel(materialType)}最多 ${maxLength} 个字符，请先精简文件内容`)
-  }
-  return content
-}
-
-function applyTaskMaterialImportToForm(materialType: CreatorMaterialType, content: string) {
-  if (materialType === 'TITLE_DRAFT') {
-    taskForm.titleDraft = content
-    return
-  }
-  if (materialType === 'DESCRIPTION_DRAFT') {
-    taskForm.descriptionDraft = content
-    return
-  }
-  if (materialType === 'MANUSCRIPT') {
-    taskForm.manuscript = content
-    return
-  }
-  taskForm.subtitle = content
 }
 
 function hasTaskMaterialChanged(task: CreatorTask) {
@@ -1194,7 +1066,6 @@ async function updateTask() {
       await loadPrePublishWorkflow(task.taskId)
     }
     await refreshTasks()
-    resetTaskMaterialImport()
     successMessage.value = materialChanged
       ? '任务内容已更新，旧建议已清空，请重新生成。'
       : '任务名称已更新。'
@@ -1221,7 +1092,6 @@ async function startEditTask(taskId: string) {
   const task = selectedTask.value?.taskId === taskId ? selectedTask.value : null
   if (task) {
     taskManageMode.value = 'edit'
-    resetTaskMaterialImport()
     fillTaskForm(task)
     activeStep.value = 'task'
     pendingDeleteTask.value = null
@@ -2977,48 +2847,6 @@ function showError(error: unknown) {
           </div>
 
           <p class="creator-inline-note">{{ taskFormHint }}</p>
-
-          <div class="creator-import-panel">
-            <div class="creator-import-head">
-              <div>
-                <h4>本地文本文件导入</h4>
-              </div>
-              <button
-                type="button"
-                class="creator-secondary-action creator-mini-button"
-                :disabled="!canImportTaskMaterial || !taskMaterialImportFile || isImportingTaskMaterial"
-                @click="importTaskMaterialFile"
-              >
-                {{ taskMaterialImportButtonLabel }}
-              </button>
-            </div>
-            <div class="creator-import-grid">
-              <label>
-                <span>导入到</span>
-                <select v-model="taskMaterialImportType" :disabled="isImportingTaskMaterial">
-                  <option
-                    v-for="option in taskMaterialImportOptions"
-                    :key="option.value"
-                    :value="option.value"
-                  >
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-              <label class="creator-file-field">
-                <span>文本文件</span>
-                <!-- 切换任务或导入完成后重建输入框，避免浏览器保留旧文件对象。 -->
-                <input
-                  :key="taskMaterialImportInputKey"
-                  type="file"
-                  accept=".txt,.md,.srt,.ass,text/plain,text/markdown"
-                  :disabled="!canImportTaskMaterial || isImportingTaskMaterial"
-                  @change="handleTaskMaterialFileChange"
-                />
-                <small>{{ taskMaterialImportHint }}</small>
-              </label>
-            </div>
-          </div>
 
           <div class="creator-form-grid">
             <label>

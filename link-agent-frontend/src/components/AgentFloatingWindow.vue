@@ -47,9 +47,9 @@ const promptExamples = [
 ]
 const capabilityTags = ['会话记忆', '工具调用', '推理轨迹']
 const viewportMargin = 18
-const minWindowWidth = 420
+const minWindowWidth = 520
 const minWindowHeight = 420
-const maxWindowWidth = 920
+const maxWindowWidth = 1040
 const maxWindowHeight = 760
 const resizeDirections: ResizeDirection[] = ['n', 'e', 's', 'w', 'ne', 'nw', 'sw']
 
@@ -64,8 +64,8 @@ const knowledgeContextQuery = ref('')
 const windowRect = ref<WindowRect>({
   left: 0,
   top: 0,
-  width: 560,
-  height: 640,
+  width: 720,
+  height: 660,
 })
 
 let dragState: DragState | null = null
@@ -303,8 +303,8 @@ function stopResize(event?: PointerEvent) {
 
 function placeWindowAtDefaultPosition() {
   const maxSize = getViewportBoundedSize()
-  const width = clampNumber(560, minWindowWidth, maxSize.width)
-  const height = clampNumber(640, minWindowHeight, maxSize.height)
+  const width = clampNumber(720, minWindowWidth, maxSize.width)
+  const height = clampNumber(660, minWindowHeight, maxSize.height)
   windowRect.value = constrainRect({
     left: window.innerWidth - width - 28,
     top: window.innerHeight - height - 28,
@@ -384,12 +384,11 @@ function constrainResizeRect(state: ResizeState, event: PointerEvent): WindowRec
 
 function getViewportBoundedSize() {
   // 拖拽和缩放都依赖同一组上限，避免 CSS 限制尺寸但脚本仍把窗口拖出视口。
+  const availableWidth = Math.max(320, window.innerWidth - viewportMargin * 2)
+  const availableHeight = Math.max(minWindowHeight, window.innerHeight - viewportMargin * 2)
   return {
-    width: Math.max(minWindowWidth, Math.min(maxWindowWidth, window.innerWidth - viewportMargin * 2)),
-    height: Math.max(
-      minWindowHeight,
-      Math.min(maxWindowHeight, window.innerHeight - viewportMargin * 2),
-    ),
+    width: Math.min(maxWindowWidth, availableWidth),
+    height: Math.min(maxWindowHeight, availableHeight),
   }
 }
 

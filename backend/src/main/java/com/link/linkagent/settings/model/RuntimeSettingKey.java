@@ -17,6 +17,10 @@ public enum RuntimeSettingKey {
             "agent.memory.summary.enabled",
             "摘要记忆",
             "对话过长时压缩历史消息，减少后续上下文长度"),
+    AGENT_STRUCTURED_KERNEL_ENABLED(
+            "agent.kernel.structured.enabled",
+            "结构化 Agent 内核",
+            "通用 Agent 每步使用 ReActStep 结构化输出，减少对文本格式提示词的依赖"),
     KNOWLEDGE_RAG_RERANK_ENABLED(
             "knowledge.rag.rerank.enabled",
             "案例库 rerank 精排",

@@ -48,13 +48,13 @@ public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> ty
 
 ### 2.3 `AgentExecutor` 双路并存
 
-`AgentExecutor` 新增开关：
+`AgentExecutor` 使用结构化内核开关：
 
 ```properties
-agent.kernel.structured.enabled=false
+agent.kernel.structured.enabled=true
 ```
 
-默认 `false`，继续走原文本 ReAct 路径，保证现有 `/api/agent/chat` 零回归。
+默认 `true`，通用 Agent 和任务内部推理优先走结构化 ReAct。这个开关已经接入设置面板运行期开关，修改后下一次 Agent 调用生效。
 
 设置为 `true` 时：
 
@@ -64,6 +64,8 @@ agent.kernel.structured.enabled=false
 4. 若有 `action` 则用同一套 `ToolExecutor` 执行工具。
 5. 工具结果作为 `Observation` 追加回对话，供下一轮模型参考。
 
+设置为 `false` 时，后端回退到原文本 ReAct 路径，作为结构化输出兼容性异常时的兜底。
+
 ## 3. 与阶段 5.3 的关系
 
 阶段 5.3 已经新增 `runTask()`，为发布前优化 Agent 化准备「不读写会话记忆」的任务级推理入口。
@@ -72,7 +74,7 @@ agent.kernel.structured.enabled=false
 
 ## 4. 验证结论
 
-根据阶段 5.5 文档记录，作者已在 2026-06-09 完成阶段 5.4 的编译与开关两态自测。
+根据阶段 5.5 文档记录，作者已在 2026-06-09 完成阶段 5.4 的编译与开关两态自测。后续已把结构化内核改为默认启用，并接入设置面板动态开关。
 
 建议回归命令仍然是：
 
@@ -83,12 +85,12 @@ mvn -q -DskipTests compile
 
 判断标准：
 
-- 默认不设置 `agent.kernel.structured.enabled` 时，`/api/agent/chat` 走原文本 ReAct 路径。
-- 设置 `agent.kernel.structured.enabled=true` 后，ReAct 每步通过 `ReActStep` 结构化输出，工具调用和最终回答正常。
+- 默认不设置 `agent.kernel.structured.enabled` 时，`/api/agent/chat` 走结构化 ReAct 路径。
+- 在设置面板关闭 `agent.kernel.structured.enabled` 后，`/api/agent/chat` 回退文本 ReAct 路径。
 - 成本护栏仍然生效，超长输入会在调用模型前被拦截。
 
 ## 5. 维护注意
 
-- 不要删除文本 ReAct 路径。它仍是默认兜底路径。
+- 不要删除文本 ReAct 路径。它仍是结构化输出异常时的兜底路径。
 - 新业务如果只需要内部取证，优先用 `runTask()`，避免污染用户会话记忆。
 - 结构化输出失败不要在 `AgentExecutor` 里吞掉。`chatStructured` 已做重试，最终失败应暴露给调用方，方便定位模型或 schema 问题。

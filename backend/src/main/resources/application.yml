@@ -91,6 +91,10 @@ spring:
           #     endpoint: /mcp
 
 agent:
+  kernel:
+    # 默认启用结构化 ReAct：每步输出 ReActStep 对象，减少对 Thought:/Action: 文本格式的依赖。
+    structured:
+      enabled: ${AGENT_KERNEL_STRUCTURED_ENABLED:true}
   llm:
     guard:
       enabled: ${LLM_GUARD_ENABLED:true}

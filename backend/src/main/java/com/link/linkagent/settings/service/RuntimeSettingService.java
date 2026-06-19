@@ -73,6 +73,10 @@ public class RuntimeSettingService {
         return isEnabled(RuntimeSettingKey.SUMMARY_MEMORY_ENABLED, summaryMemoryProperties.enabled());
     }
 
+    public boolean isStructuredKernelEnabled() {
+        return isEnabled(RuntimeSettingKey.AGENT_STRUCTURED_KERNEL_ENABLED, agentStructuredKernelDefaultEnabled());
+    }
+
     public boolean isKnowledgeRerankEnabled() {
         return isEnabled(RuntimeSettingKey.KNOWLEDGE_RAG_RERANK_ENABLED, knowledgeRagProperties.getRerank().isEnabled());
     }
@@ -86,6 +90,7 @@ public class RuntimeSettingService {
         return List.of(
                 toToggle(RuntimeSettingKey.LLM_GUARD_ENABLED, defaults),
                 toToggle(RuntimeSettingKey.SUMMARY_MEMORY_ENABLED, defaults),
+                toToggle(RuntimeSettingKey.AGENT_STRUCTURED_KERNEL_ENABLED, defaults),
                 toToggle(RuntimeSettingKey.KNOWLEDGE_RAG_RERANK_ENABLED, defaults),
                 toToggle(RuntimeSettingKey.CREATOR_FEEDBACK_RAG_ENABLED, defaults)
         );
@@ -104,6 +109,7 @@ public class RuntimeSettingService {
         Map<RuntimeSettingKey, Boolean> defaults = new EnumMap<>(RuntimeSettingKey.class);
         defaults.put(RuntimeSettingKey.LLM_GUARD_ENABLED, llmCallGuardProperties.isEnabled());
         defaults.put(RuntimeSettingKey.SUMMARY_MEMORY_ENABLED, summaryMemoryProperties.enabled());
+        defaults.put(RuntimeSettingKey.AGENT_STRUCTURED_KERNEL_ENABLED, agentStructuredKernelDefaultEnabled());
         defaults.put(RuntimeSettingKey.KNOWLEDGE_RAG_RERANK_ENABLED, knowledgeRagProperties.getRerank().isEnabled());
         defaults.put(RuntimeSettingKey.CREATOR_FEEDBACK_RAG_ENABLED, creatorFeedbackRagProperties.isEnabled());
         return defaults;
@@ -122,16 +128,15 @@ public class RuntimeSettingService {
                         Boolean.toString(knowledgeRagProperties.getHybrid().isEnabled()),
                         "启动期决定 hybrid 客户端初始化，修改配置后需重启"),
                 new ReadonlySettingResponse(
-                        "agent.kernel.structured.enabled",
-                        "结构化 Agent 内核",
-                        environment.getProperty("agent.kernel.structured.enabled", "false"),
-                        "当前由 @Value 启动注入，修改配置后需重启"),
-                new ReadonlySettingResponse(
                         "agent.memory.short-term.store-type",
                         "短期记忆存储",
                         environment.getProperty("agent.memory.short-term.store-type", "memory"),
                         "memory/redis 是启动期 Bean 二选一，修改配置后需重启")
         );
+    }
+
+    private boolean agentStructuredKernelDefaultEnabled() {
+        return Boolean.parseBoolean(environment.getProperty("agent.kernel.structured.enabled", "true"));
     }
 
     private boolean isEnabled(RuntimeSettingKey key, boolean defaultValue) {

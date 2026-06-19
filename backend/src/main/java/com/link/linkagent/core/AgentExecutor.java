@@ -13,8 +13,9 @@ import com.link.linkagent.memory.SummaryMemory;
 import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
+import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -31,7 +32,7 @@ import org.slf4j.LoggerFactory;
 /**
  * ReAct 主循环 —— 驱动 Thought → Action → Observation 迭代。
  * <p>
- * 核心设计：经典 ReAct（默认文本解析，5.4 起可由开关切换为 schema 约束的结构化每步；两者均非模型原生 Tool Calling），模型无关。
+ * 核心设计：默认结构化 ReAct，每步由 schema 约束的 {@link ReActStep} 承载；文本 ReAct 保留为运行期可切换的兜底路径。
  */
 @Component
 public class AgentExecutor {
@@ -46,12 +47,14 @@ public class AgentExecutor {
     private final LongTermMemory longTermMemory;
     private final LongTermMemoryExtractor longTermMemoryExtractor;
     private final PromptService promptService;
-
-    /** 结构化内核开关（阶段 5.4）：开则 ReAct 每步走 schema 约束的 ReActStep，关则走原文本解析路。默认关 = 零回归。 */
-    @Value("${agent.kernel.structured.enabled:false}")
-    private boolean structuredKernelEnabled;
+    private final RuntimeSettingService runtimeSettingService;
+    /** 生产环境从运行期设置读取结构化开关；单测不注入设置服务时回退到构造器默认值。 */
+    private final boolean structuredKernelDefaultEnabled;
 
     private static final int MAX_ITERATIONS = 10;
+
+    private static final String FORMAT_ERROR_OBSERVATION =
+            "LLM 本轮输出未遵守 ReAct 文本格式，已回传格式错误提示并要求模型重试。";
 
     /**
      * 匹配 "Final Answer: 正文" 整行，捕获冒号后的所有文本（跨行）。
@@ -79,11 +82,43 @@ public class AgentExecutor {
     private static final Pattern THOUGHT = Pattern.compile(
             "Thought:\\s*(.*?)(?:\\n|$)", Pattern.CASE_INSENSITIVE);
 
+    @Autowired
+    public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
+                         ShortTermMemory shortTermMemory,
+                         SummaryMemory summaryMemory, LongTermMemory longTermMemory,
+                         LongTermMemoryExtractor longTermMemoryExtractor,
+                         PromptService promptService,
+                         RuntimeSettingService runtimeSettingService) {
+        this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
+                longTermMemoryExtractor, promptService, runtimeSettingService, true);
+    }
+
     public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
                          ShortTermMemory shortTermMemory,
                          SummaryMemory summaryMemory, LongTermMemory longTermMemory,
                          LongTermMemoryExtractor longTermMemoryExtractor,
                          PromptService promptService) {
+        this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
+                longTermMemoryExtractor, promptService, null, false);
+    }
+
+    AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
+                  ShortTermMemory shortTermMemory,
+                  SummaryMemory summaryMemory, LongTermMemory longTermMemory,
+                  LongTermMemoryExtractor longTermMemoryExtractor,
+                  PromptService promptService,
+                  boolean structuredKernelDefaultEnabled) {
+        this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
+                longTermMemoryExtractor, promptService, null, structuredKernelDefaultEnabled);
+    }
+
+    private AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
+                          ShortTermMemory shortTermMemory,
+                          SummaryMemory summaryMemory, LongTermMemory longTermMemory,
+                          LongTermMemoryExtractor longTermMemoryExtractor,
+                          PromptService promptService,
+                          RuntimeSettingService runtimeSettingService,
+                          boolean structuredKernelDefaultEnabled) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
@@ -92,6 +127,8 @@ public class AgentExecutor {
         this.longTermMemory = longTermMemory;
         this.longTermMemoryExtractor = longTermMemoryExtractor;
         this.promptService = promptService;
+        this.runtimeSettingService = runtimeSettingService;
+        this.structuredKernelDefaultEnabled = structuredKernelDefaultEnabled;
     }
 
     /**
@@ -127,8 +164,8 @@ public class AgentExecutor {
         appendMemory(conversation, recentMessages);
         conversation.append("Human:").append(userMessage).append("\n\n");
 
-        // 结构化内核（5.4）：开关开则每步走受 schema 约束的 ReActStep；默认关时走下方文本路 = 零回归
-        if (structuredKernelEnabled) {
+        // 结构化内核（5.4+）：开关开则每步走受 schema 约束的 ReActStep；关闭时回退文本 ReAct 兜底。
+        if (isStructuredKernelEnabled()) {
             String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
             List<AgentStep> structuredSteps = new ArrayList<>();
             String structuredAnswer = runStructuredLoop(structuredSystemPrompt, conversation, structuredSteps);
@@ -171,8 +208,10 @@ public class AgentExecutor {
             if (TextUtil.isBlank(thought)) {
                 // LLM 既未给出 Final Answer 也未给出合法 Thought，反馈错误让 LLM 重试
                 log.warn("第{}轮未解析到合法 Thought，rawResponse={}", iteration, llmAnswer);
-                steps.add(new AgentStep(iteration, null, null, null, null));
+                steps.add(new AgentStep(iteration, "未解析到 Thought，模型可能没有按提示词要求输出。", null, null,
+                        FORMAT_ERROR_OBSERVATION));
                 conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                continue;
             }
             log.info("第{}轮解析到 Thought: {}", iteration, thought);
 
@@ -225,8 +264,8 @@ public class AgentExecutor {
      * @return ReAct 结果；finalAnswer 为自由文本结论，超出迭代上限时 error 非空、finalAnswer 可能为 null
      */
     public AgentChatResponse runTask(String taskMessage) {
-        // 结构化内核（5.4）：开关开则任务推理同样走结构化每步；默认关时走下方文本路
-        if (structuredKernelEnabled) {
+        // 结构化内核（5.4+）：任务推理同样优先走结构化每步；关闭时走下方文本路兜底。
+        if (isStructuredKernelEnabled()) {
             String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
             StringBuilder structuredConversation = new StringBuilder();
             structuredConversation.append("Human:").append(taskMessage).append("\n\n");
@@ -266,8 +305,10 @@ public class AgentExecutor {
             String thought = parseThought(llmAnswer);
             if (TextUtil.isBlank(thought)) {
                 // 既无 Final Answer 也无合法 Thought：回喂格式错误让 LLM 重试（与 run 处理一致）
-                steps.add(new AgentStep(iteration, null, null, null, null));
+                steps.add(new AgentStep(iteration, "未解析到 Thought，模型可能没有按提示词要求输出。", null, null,
+                        FORMAT_ERROR_OBSERVATION));
                 conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                continue;
             }
 
             ToolCall action = parseAction(llmAnswer);
@@ -418,6 +459,13 @@ public class AgentExecutor {
         conversation.append("Conversation summary:\n")
                 .append(summary.trim())
                 .append("\n\n");
+    }
+
+    private boolean isStructuredKernelEnabled() {
+        // 生产环境走运行期设置，方便结构化输出异常时快速切回文本兜底；单测构造器不强迫注入设置模块。
+        return runtimeSettingService == null
+                ? structuredKernelDefaultEnabled
+                : runtimeSettingService.isStructuredKernelEnabled();
     }
 
     /**

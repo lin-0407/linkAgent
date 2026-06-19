@@ -698,7 +698,8 @@ textarea:focus {
   position: fixed;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  min-width: 420px;
+  width: min(720px, calc(100vw - 36px));
+  min-width: 520px;
   min-height: 420px;
   overflow: hidden;
   color: var(--ink);
@@ -723,9 +724,9 @@ textarea:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 58px;
-  gap: 12px;
-  padding: 10px 12px 10px 14px;
+  min-height: 50px;
+  gap: 10px;
+  padding: 8px 10px 8px 12px;
   color: var(--ink);
   cursor: grab;
   user-select: none;
@@ -742,7 +743,7 @@ textarea:focus {
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 10px;
+  gap: 9px;
 }
 
 .agent-floating-title div {
@@ -755,7 +756,7 @@ textarea:focus {
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-display);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -790,13 +791,13 @@ textarea:focus {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .agent-floating-actions button {
-  min-width: 42px;
-  min-height: 36px;
-  padding: 0 10px;
+  min-width: 40px;
+  min-height: 32px;
+  padding: 0 9px;
   color: var(--text);
   cursor: pointer;
   background: var(--surface);
@@ -966,49 +967,68 @@ textarea:focus {
 }
 
 .agent-floating-message-list {
-  gap: 12px;
-  padding: 4px 14px 14px;
+  gap: 10px;
+  padding: 8px 12px 12px;
   background: var(--canvas);
 }
 
 .agent-floating-message-list .message {
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 9px;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 8px;
+  max-width: 100%;
 }
 
 .agent-floating-message-list .message.user {
-  grid-template-columns: minmax(0, 1fr) 34px;
+  grid-template-columns: minmax(0, min(76%, 620px)) 30px;
 }
 
 .agent-floating-message-list .avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
   box-shadow: none;
   font-size: 12px;
 }
 
 .agent-floating-message-list .bubble {
-  padding: 12px 13px;
-  border-radius: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
   box-shadow: var(--sh-sm);
 }
 
 .agent-floating-message-list .markdown-body {
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 13.5px;
+  line-height: 1.64;
 }
 
 .agent-floating-message-list .markdown-body h1 {
-  font-size: 19px;
-}
-
-.agent-floating-message-list .markdown-body h2 {
   font-size: 17px;
 }
 
+.agent-floating-message-list .markdown-body h2 {
+  font-size: 15.5px;
+}
+
 .agent-floating-message-list .markdown-body h3 {
-  font-size: 15px;
+  font-size: 14px;
+}
+
+.agent-floating-message-list .markdown-body p {
+  margin-bottom: 9px;
+}
+
+.agent-floating-message-list .markdown-body ul,
+.agent-floating-message-list .markdown-body ol {
+  margin: 8px 0 10px;
+  padding-left: 20px;
+}
+
+.agent-floating-message-list .markdown-body li {
+  margin: 4px 0;
+}
+
+.agent-floating-message-list .markdown-body strong {
+  font-weight: 700;
 }
 
 .agent-floating-empty {
@@ -1065,7 +1085,7 @@ textarea:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 6px 12px;
   color: var(--muted);
   background: var(--surface-sub);
   border-top: 1px solid var(--border);
@@ -1073,26 +1093,28 @@ textarea:focus {
 }
 
 .agent-floating-window .error {
-  margin: 0 14px 10px;
-  padding: 10px 12px;
+  margin: 0 12px 8px;
+  padding: 9px 11px;
   border-radius: 8px;
   box-shadow: none;
 }
 
 .agent-floating-window .composer {
-  grid-template-columns: minmax(0, 1fr) 88px;
-  gap: 8px;
-  padding: 10px 14px 14px;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  gap: 7px;
+  padding: 8px 12px 12px;
   background: var(--surface);
 }
 
 .agent-floating-window textarea {
-  min-height: 60px;
-  max-height: 130px;
-  padding: 10px 12px 26px;
+  min-height: 54px;
+  max-height: 120px;
+  padding: 9px 11px 24px;
   resize: none;
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: none;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .agent-floating-window textarea:focus {
@@ -1106,9 +1128,10 @@ textarea:focus {
 }
 
 .agent-floating-window .composer button {
-  min-height: 60px;
-  border-radius: 10px;
+  min-height: 54px;
+  border-radius: 8px;
   box-shadow: none;
+  font-size: 14px;
 }
 
 .agent-floating-window .composer button:hover:not(:disabled) {
@@ -1337,6 +1360,19 @@ textarea:focus {
 
   .message.user {
     grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .agent-floating-window {
+    min-width: 0;
+  }
+
+  .agent-floating-actions {
+    gap: 4px;
+  }
+
+  .agent-floating-actions button {
+    min-width: 34px;
+    padding: 0 7px;
   }
 
   .avatar {
@@ -2341,66 +2377,6 @@ textarea:focus {
 .creator-file-field small {
   color: var(--muted);
   line-height: 1.5;
-}
-
-.creator-import-panel {
-  display: grid;
-  gap: var(--s3);
-  margin-top: 0;
-  padding: 0 0 var(--s4);
-  background: transparent;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-}
-
-.creator-import-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.creator-import-head h4 {
-  margin: 2px 0 0;
-  color: var(--ink);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
-.creator-import-grid {
-  display: grid;
-  grid-template-columns: minmax(160px, 0.36fr) minmax(0, 1fr);
-  gap: var(--s4);
-}
-
-.creator-import-grid label {
-  display: grid;
-  align-content: start;
-  gap: 7px;
-}
-
-.creator-import-grid label > span {
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.creator-import-grid select {
-  min-height: 46px;
-  padding: 0 12px;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  outline: none;
-  cursor: pointer;
-}
-
-.creator-import-grid select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .creator-script-panel {
@@ -4554,7 +4530,6 @@ textarea:focus {
   .creator-task-toolbar,
   .creator-task-overview,
   .creator-form-grid,
-  .creator-import-grid,
   .creator-result-grid,
   .creator-context-list,
   .creator-script-grid,
