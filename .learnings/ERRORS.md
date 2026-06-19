@@ -4,6 +4,39 @@ Command failures and integration errors.
 
 ---
 
+## [ERR-20260620-001] unauthorized_maven_compile
+
+**Logged**: 2026-06-20T01:33:17+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Summary
+阶段 5.9 开发中误执行了 `mvn -q -DskipTests compile`，违反项目约定“编译和测试由作者执行”。
+
+### Error
+```text
+LlmApiUsageService record(...) 重载 null 参数歧义；
+MeteredEmbeddingModel 中 EmbeddingModel 与 DocumentEmbeddingModel 类型判断不兼容。
+```
+
+### Context
+- 命令只做了编译检查，没有连接外部服务。
+- 已根据编译报错修复：重命名内部重载为 recordWithException / recordWithErrorMessage；移除不兼容的 DocumentEmbeddingModel 分支。
+
+### Suggested Fix
+后续本项目只做静态阅读和必要的 `javap` 核准，最终编译命令交给作者执行。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/src/main/java/com/link/linkagent/llm/usage/LlmApiUsageService.java, backend/src/main/java/com/link/linkagent/llm/usage/MeteredEmbeddingModel.java
+
+### Resolution
+- **Resolved**: 2026-06-20T01:33:17+08:00
+- **Notes**: 已修复已知编译报错，并停止继续执行 Maven 编译。
+
+---
+
 ## [ERR-20260617-001] git_safe_directory_and_javap_classpath
 
 **Logged**: 2026-06-17T23:00:00+08:00

@@ -8,6 +8,7 @@ import com.link.linkagent.knowledge.model.ReferenceVideoIndexRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexStatusResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -112,7 +113,9 @@ public class KnowledgeReferenceHybridIndexService {
                         .map(video -> new HybridParentDoc(
                                 video.getVideoId(), buildDocumentText(video), video.getCategory(), video.getTier()))
                         .toList();
-                indexed += knowledgeHybridStore.insertParentDocs(docs);
+                try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库 hybrid 父卡片索引")) {
+                    indexed += knowledgeHybridStore.insertParentDocs(docs);
+                }
             } catch (Exception exception) {
                 failed += chunk.size();
                 if (warnings.size() < MAX_WARNINGS) {

@@ -1,5 +1,6 @@
 package com.link.linkagent.llm;
 
+import com.link.linkagent.llm.usage.LlmApiUsageService;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,26 +34,31 @@ public class LLMService {
     private final ChatClient chatClient;
     private final LlmCallGuardProperties guardProperties;
     private final RuntimeSettingService runtimeSettingService;
+    private final LlmApiUsageService llmApiUsageService;
 
     protected LLMService() {
         this.chatClient = null;
         this.guardProperties = new LlmCallGuardProperties();
         this.runtimeSettingService = null;
+        this.llmApiUsageService = null;
     }
 
     @Autowired
     public LLMService(ChatClient.Builder builder,
                       LlmCallGuardProperties guardProperties,
-                      RuntimeSettingService runtimeSettingService) {
+                      RuntimeSettingService runtimeSettingService,
+                      LlmApiUsageService llmApiUsageService) {
         this.chatClient = builder.build();
         this.guardProperties = guardProperties;
         this.runtimeSettingService = runtimeSettingService;
+        this.llmApiUsageService = llmApiUsageService;
     }
 
     LLMService(LlmCallGuardProperties guardProperties) {
         this.chatClient = null;
         this.guardProperties = guardProperties;
         this.runtimeSettingService = null;
+        this.llmApiUsageService = null;
     }
 
     public String chat(String userMessage) {
@@ -79,14 +85,22 @@ public class LLMService {
     public LlmCallResult chatWithUsage(String systemPrompt, String userMessage) {
         validatePromptLength(systemPrompt, userMessage);
         long startNanos = System.nanoTime();
-        ChatResponse chatResponse = chatClient
-                .prompt()
-                .system(systemPrompt)
-                .user(userMessage)
-                .call()
-                .chatResponse();
-        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-        return toCallResult(chatResponse, elapsedMs);
+        try {
+            ChatResponse chatResponse = chatClient
+                    .prompt()
+                    .system(systemPrompt)
+                    .user(userMessage)
+                    .call()
+                    .chatResponse();
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            LlmCallResult result = toCallResult(chatResponse, elapsedMs);
+            recordTextSuccess(result);
+            return result;
+        } catch (RuntimeException exception) {
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            recordTextFailure(elapsedMs, exception);
+            throw exception;
+        }
     }
 
     /**
@@ -112,15 +126,22 @@ public class LLMService {
                 .build();
         RuntimeException lastError = null;
         for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
+            long startNanos = System.nanoTime();
             try {
-                return chatClient
+                T result = chatClient
                         .prompt()
                         .system(systemPrompt)
                         .user(userMessage)
                         .options(options)
                         .call()
                         .entity(type);
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+                // entity(...) 不暴露 ChatResponse usage；这里仍记录一次真实调用和耗时，token 保持未知，避免伪造成本数据。
+                recordStructuredTextSuccess(elapsedMs);
+                return result;
             } catch (RuntimeException ex) {
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+                recordTextFailure(elapsedMs, ex);
                 // json_object 只保证语法、不保证字段，偶发字段不符或空内容时重试；保留最后一次异常向上抛
                 lastError = ex;
                 log.warn("结构化输出第 {}/{} 次解析失败：{}", attempt, STRUCTURED_MAX_ATTEMPTS, ex.getMessage());
@@ -209,6 +230,33 @@ public class LLMService {
             return null;
         }
         return value.trim();
+    }
+
+    private void recordTextSuccess(LlmCallResult result) {
+        if (llmApiUsageService == null || result == null) {
+            return;
+        }
+        llmApiUsageService.recordTextSuccess(
+                result.modelName(),
+                result.promptTokens(),
+                result.completionTokens(),
+                result.totalTokens(),
+                result.elapsedMs()
+        );
+    }
+
+    private void recordStructuredTextSuccess(long elapsedMs) {
+        if (llmApiUsageService == null) {
+            return;
+        }
+        llmApiUsageService.recordTextSuccess(null, null, null, null, elapsedMs);
+    }
+
+    private void recordTextFailure(long elapsedMs, RuntimeException exception) {
+        if (llmApiUsageService == null) {
+            return;
+        }
+        llmApiUsageService.recordTextFailure(elapsedMs, exception);
     }
 
     private String buildSystemPrompt() {

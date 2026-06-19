@@ -11,6 +11,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord;
 import com.link.linkagent.creator.feedback.util.CreatorFeedbackLabelUtil;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
@@ -119,7 +120,9 @@ public class CreatorFeedbackEvidenceIndexService {
                 List<Document> documents = chunk.stream()
                         .map(item -> toDocument(taskRecord.getTaskId(), item))
                         .toList();
-                vectorStore.add(documents);
+                try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "反馈证据向量索引")) {
+                    vectorStore.add(documents);
+                }
                 for (CreatorFeedbackItemRecord item : chunk) {
                     // embedding_id 复用 item_id，让向量文档与 MySQL 明细天然一一对应，回查时无需额外映射。
                     creatorFeedbackMapper.updateItemEmbeddingIndexed(

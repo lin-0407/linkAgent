@@ -13,6 +13,7 @@ import com.link.linkagent.knowledge.model.ReferenceVideoResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchResponse;
 import com.link.linkagent.knowledge.rag.KnowledgeRerankClient;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
@@ -271,11 +272,15 @@ public class KnowledgeReferenceRetrievalService {
      */
     private List<String> hybridSearchMulti(List<String> searchTexts, String category, String tier, int topK) {
         if (searchTexts.size() == 1) {
-            return knowledgeHybridStore.hybridSearch(searchTexts.get(0), category, tier, topK);
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库 hybrid 父卡片检索")) {
+                return knowledgeHybridStore.hybridSearch(searchTexts.get(0), category, tier, topK);
+            }
         }
         LinkedHashSet<String> merged = new LinkedHashSet<>();
         for (String text : searchTexts) {
-            merged.addAll(knowledgeHybridStore.hybridSearch(text, category, tier, topK));
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库 hybrid 父卡片检索")) {
+                merged.addAll(knowledgeHybridStore.hybridSearch(text, category, tier, topK));
+            }
         }
         List<String> result = new ArrayList<>(merged);
         return result.size() > topK ? new ArrayList<>(result.subList(0, topK)) : result;
@@ -290,7 +295,10 @@ public class KnowledgeReferenceRetrievalService {
         if (filter != null) {
             builder.filterExpression(filter);
         }
-        List<Document> documents = vectorStore.similaritySearch(builder.build());
+        List<Document> documents;
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库父卡片向量检索")) {
+            documents = vectorStore.similaritySearch(builder.build());
+        }
         if (documents == null || documents.isEmpty()) {
             return List.of();
         }
@@ -370,7 +378,10 @@ public class KnowledgeReferenceRetrievalService {
             if (filter != null) {
                 builder.filterExpression(filter);
             }
-            List<Document> documents = childStore.similaritySearch(builder.build());
+            List<Document> documents;
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库子条目向量检索")) {
+                documents = childStore.similaritySearch(builder.build());
+            }
             if (documents == null) {
                 continue;
             }
@@ -404,7 +415,10 @@ public class KnowledgeReferenceRetrievalService {
             if (filter != null) {
                 builder.filterExpression(filter);
             }
-            List<Document> documents = chunkStore.similaritySearch(builder.build());
+            List<Document> documents;
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库主题中块向量检索")) {
+                documents = chunkStore.similaritySearch(builder.build());
+            }
             if (documents == null) {
                 continue;
             }
@@ -439,7 +453,11 @@ public class KnowledgeReferenceRetrievalService {
                                                                        String category, String tier, int topK) {
         LinkedHashMap<String, List<String>> videoToItems = new LinkedHashMap<>();
         for (String text : searchTexts) {
-            for (KnowledgeHybridStore.HybridChildHit hit : knowledgeHybridStore.childHybridSearch(text, category, tier, topK)) {
+            List<KnowledgeHybridStore.HybridChildHit> hits;
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库 hybrid 子条目检索")) {
+                hits = knowledgeHybridStore.childHybridSearch(text, category, tier, topK);
+            }
+            for (KnowledgeHybridStore.HybridChildHit hit : hits) {
                 String videoId = hit.videoId();
                 String itemId = hit.itemId();
                 if (videoId == null || itemId == null) {

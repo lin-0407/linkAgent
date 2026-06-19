@@ -20,6 +20,7 @@ import com.link.linkagent.creator.task.model.CreatorMaterialType;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.LlmJsonUtil;
 import com.link.linkagent.util.TextUtil;
@@ -97,10 +98,13 @@ public class CreatorCompetitorService {
         CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId()).orElse(null);
         CreatorFeedbackReportRecord feedbackReportRecord = creatorFeedbackMapper.findReportByTaskId(taskRecord.getTaskId()).orElse(null);
 
-        String rawOutput = llmService.chat(
-                buildSystemPrompt(),
-                buildUserPrompt(taskRecord, materials, sampleRecord, suggestionRecord, feedbackReportRecord, request)
-        );
+        String rawOutput;
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "同类型视频竞品分析")) {
+            rawOutput = llmService.chat(
+                    buildSystemPrompt(),
+                    buildUserPrompt(taskRecord, materials, sampleRecord, suggestionRecord, feedbackReportRecord, request)
+            );
+        }
         CreatorCompetitorReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
         creatorCompetitorMapper.upsertReport(reportRecord);
         creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.COMPETITOR_ANALYZED.name());

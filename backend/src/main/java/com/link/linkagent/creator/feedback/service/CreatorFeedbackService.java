@@ -31,6 +31,7 @@ import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.LlmCallResult;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.LlmJsonUtil;
 import com.link.linkagent.util.TextUtil;
@@ -140,7 +141,10 @@ public class CreatorFeedbackService {
         CreatorFeedbackRecord feedbackRecord = creatorFeedbackMapper.findFeedbackByTaskId(taskRecord.getTaskId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先提交评论或弹幕样例"));
 
-        String rawOutput = llmService.chat(buildSystemPrompt(), buildUserPrompt(taskRecord, feedbackRecord, request));
+        String rawOutput;
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "评论弹幕分析")) {
+            rawOutput = llmService.chat(buildSystemPrompt(), buildUserPrompt(taskRecord, feedbackRecord, request));
+        }
         CreatorFeedbackReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
         creatorFeedbackMapper.upsertReport(reportRecord);
         creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.FEEDBACK_ANALYZED.name());
@@ -259,13 +263,18 @@ public class CreatorFeedbackService {
 
         // 证据选择交给检索服务：内部根据 RAG 开关和 Milvus 可用性决定走向量检索还是 SQL 轻量匹配，
         // 但无论哪条路径，返回的 evidenceRecords 都来自 MySQL 当前有效明细，保证证据是事实而非向量库脏数据。
-        CreatorFeedbackEvidenceRetrievalResult retrievalResult =
-                evidenceRetrievalService.retrieve(taskRecord.getTaskId(), request.question(), items);
+        CreatorFeedbackEvidenceRetrievalResult retrievalResult;
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "反馈追问证据检索")) {
+            retrievalResult = evidenceRetrievalService.retrieve(taskRecord.getTaskId(), request.question(), items);
+        }
         List<CreatorFeedbackItemRecord> evidenceRecords = retrievalResult.evidenceRecords();
-        LlmCallResult llmCallResult = llmService.chatWithUsage(
-                buildChatSystemPrompt(),
-                buildChatUserPrompt(taskRecord, reportRecord, evidenceRecords, request.question())
-        );
+        LlmCallResult llmCallResult;
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "反馈追问回答")) {
+            llmCallResult = llmService.chatWithUsage(
+                    buildChatSystemPrompt(),
+                    buildChatUserPrompt(taskRecord, reportRecord, evidenceRecords, request.question())
+            );
+        }
         return new CreatorFeedbackChatResponse(
                 taskRecord.getTaskId(),
                 request.question().trim(),

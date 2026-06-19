@@ -2434,3 +2434,36 @@ CREATE TABLE IF NOT EXISTS app_runtime_setting
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '运行期设置表';
+
+-- ------------------------------------------------------------
+-- 25. 模型 API 调用流水表（阶段 5.9）
+--     记录文本 LLM、Embedding、Rerank 的真实调用开销，支撑任务级全链路追溯。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS llm_api_call_log
+(
+    id                BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    call_id           VARCHAR(64)  NOT NULL COMMENT '单次模型 API 调用唯一标识，用于明细追踪',
+    task_id           VARCHAR(64)           DEFAULT NULL COMMENT '关联创作任务 ID；通用 Agent 或后台能力没有任务时允许为空',
+    trace_id          VARCHAR(64)           DEFAULT NULL COMMENT '一次业务链路的追踪 ID，用于把同一任务请求内多次模型调用串起来',
+    request_id        VARCHAR(64)           DEFAULT NULL COMMENT '一次前端或后端请求 ID，用于排查同一 HTTP 请求产生的多次调用',
+    model_category    VARCHAR(32)  NOT NULL COMMENT '模型分类：TEXT=文本大模型，EMBEDDING=向量化模型，RERANK=重排序模型',
+    scene             VARCHAR(64)           DEFAULT NULL COMMENT '调用场景，例如发布前优化、反馈追问、知识库检索或向量索引',
+    model_name        VARCHAR(128)          DEFAULT NULL COMMENT '模型名称；供应商未返回时允许为空',
+    prompt_tokens     INT                   DEFAULT NULL COMMENT '输入 token 数；只有供应商返回精确 usage 时才填写',
+    completion_tokens INT                   DEFAULT NULL COMMENT '输出 token 数；Embedding 和 Rerank 通常为空',
+    total_tokens      INT                   DEFAULT NULL COMMENT '总 token 数；未知时保持为空，避免把未知误认为零消耗',
+    elapsed_ms        BIGINT                DEFAULT NULL COMMENT '本次调用耗时毫秒；用于定位慢调用',
+    status            VARCHAR(32)  NOT NULL COMMENT '调用状态：SUCCESS=成功，FAILED=失败，SKIPPED=因开关或候选不足跳过',
+    error_message     VARCHAR(512)          DEFAULT NULL COMMENT '失败原因摘要，截断保存以避免异常堆栈撑爆表',
+    input_count       INT                   DEFAULT NULL COMMENT '本次输入条数，例如 Embedding 文档数或 Rerank 候选文档数',
+    create_time       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted        TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_llm_api_call_id (call_id),
+    KEY idx_llm_api_task_time (task_id, create_time),
+    KEY idx_llm_api_task_category_time (task_id, model_category, create_time),
+    KEY idx_llm_api_trace_id (trace_id),
+    KEY idx_llm_api_status_time (status, create_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '模型 API 调用流水表';

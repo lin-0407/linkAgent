@@ -8,6 +8,7 @@ import com.link.linkagent.knowledge.model.ReferenceVideoIndexRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexStatusResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -111,7 +112,9 @@ public class KnowledgeReferenceIndexService {
             try {
                 List<Document> documents = chunk.stream().map(this::toDocument).toList();
                 // 一次 add 把整批文本一起向量化，比逐条写大幅减少 Embedding 调用次数
-                vectorStore.add(documents);
+                try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库案例向量索引")) {
+                    vectorStore.add(documents);
+                }
                 for (ReferenceVideoRecord video : chunk) {
                     // embedding_id 复用 video_id，让向量文档与父表案例天然一一对应，5.2 回查时无需额外映射
                     knowledgeReferenceVideoMapper.updateVideoEmbeddingIndexed(video.getVideoId(), video.getVideoId());

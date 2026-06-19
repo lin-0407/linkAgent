@@ -517,3 +517,59 @@ export type CreatorFeedbackEvidenceIndexStatus = {
   lastIndexedAt: string | null
   retrievalMode: string
 }
+
+export type LlmApiModelCategory = 'TEXT' | 'EMBEDDING' | 'RERANK'
+
+export type LlmApiCallStatus = 'SUCCESS' | 'FAILED' | 'SKIPPED'
+
+export type LlmApiUsageCategorySummary = {
+  modelCategory: LlmApiModelCategory
+  callCount: number
+  successCount: number
+  failedCount: number
+  skippedCount: number
+  totalTokens: number | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalElapsedMs: number | null
+  averageElapsedMs: number | null
+}
+
+export type LlmApiUsageSummary = {
+  taskId: string
+  callCount: number
+  successCount: number
+  failedCount: number
+  skippedCount: number
+  totalTokens: number | null
+  totalElapsedMs: number | null
+  averageElapsedMs: number | null
+  categories: LlmApiUsageCategorySummary[]
+}
+
+export type LlmApiCallRecord = {
+  id: number
+  callId: string
+  taskId: string | null
+  traceId: string | null
+  requestId: string | null
+  modelCategory: LlmApiModelCategory
+  scene: string | null
+  modelName: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  elapsedMs: number | null
+  status: LlmApiCallStatus
+  errorMessage: string | null
+  inputCount: number | null
+  createTime: string
+}
+
+export type LlmApiCallPage = {
+  taskId: string
+  page: number
+  pageSize: number
+  total: number
+  items: LlmApiCallRecord[]
+}

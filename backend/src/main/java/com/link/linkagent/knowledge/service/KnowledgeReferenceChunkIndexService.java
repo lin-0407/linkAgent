@@ -11,6 +11,7 @@ import com.link.linkagent.knowledge.model.ReferenceVideoIndexResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexStatusResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoItemRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,7 +93,9 @@ public class KnowledgeReferenceChunkIndexService {
             List<ReferenceVideoChunkIndexRow> chunk = rows.subList(start, end);
             try {
                 List<Document> documents = chunk.stream().map(this::toChunkDocument).toList();
-                chunkStore.add(documents);
+                try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库主题中块向量索引")) {
+                    chunkStore.add(documents);
+                }
                 for (ReferenceVideoChunkIndexRow row : chunk) {
                     knowledgeReferenceVideoMapper.updateChunkEmbeddingIndexed(row.getChunkId(), row.getChunkId());
                     indexed++;

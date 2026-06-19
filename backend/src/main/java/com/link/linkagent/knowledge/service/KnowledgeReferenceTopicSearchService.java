@@ -16,6 +16,7 @@ import com.link.linkagent.knowledge.model.ReferenceVideoResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoTopicSearchRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoTopicSearchResponse;
 import com.link.linkagent.knowledge.rag.KnowledgeRerankClient;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
@@ -254,7 +255,10 @@ public class KnowledgeReferenceTopicSearchService {
             if (filter != null) {
                 builder.filterExpression(filter);
             }
-            List<Document> documents = chunkStore.similaritySearch(builder.build());
+            List<Document> documents;
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库主题优先中块检索")) {
+                documents = chunkStore.similaritySearch(builder.build());
+            }
             if (documents == null) {
                 continue;
             }
@@ -271,7 +275,9 @@ public class KnowledgeReferenceTopicSearchService {
     private List<String> hybridSearchMulti(List<String> searchTexts, String category, String tier, int topK) {
         LinkedHashSet<String> merged = new LinkedHashSet<>();
         for (String text : searchTexts) {
-            merged.addAll(knowledgeHybridStore.hybridSearch(text, category, tier, topK));
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库主题优先 hybrid 父检索")) {
+                merged.addAll(knowledgeHybridStore.hybridSearch(text, category, tier, topK));
+            }
         }
         return limitStrings(new ArrayList<>(merged), topK);
     }
@@ -282,7 +288,11 @@ public class KnowledgeReferenceTopicSearchService {
                                                              int topK) {
         Map<String, List<String>> result = new LinkedHashMap<>();
         for (String text : searchTexts) {
-            for (KnowledgeHybridStore.HybridChildHit hit : knowledgeHybridStore.childHybridSearch(text, category, tier, topK)) {
+            List<KnowledgeHybridStore.HybridChildHit> hits;
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库主题优先 hybrid 子检索")) {
+                hits = knowledgeHybridStore.childHybridSearch(text, category, tier, topK);
+            }
+            for (KnowledgeHybridStore.HybridChildHit hit : hits) {
                 String videoId = hit.videoId();
                 String itemId = hit.itemId();
                 if (!TextUtil.hasText(videoId) || !TextUtil.hasText(itemId)) {
@@ -454,7 +464,10 @@ public class KnowledgeReferenceTopicSearchService {
             if (filter != null) {
                 builder.filterExpression(filter);
             }
-            List<Document> documents = childStore.similaritySearch(builder.build());
+            List<Document> documents;
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("知识库主题优先相关证据检索")) {
+                documents = childStore.similaritySearch(builder.build());
+            }
             if (documents == null) {
                 continue;
             }

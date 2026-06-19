@@ -1,6 +1,7 @@
 package com.link.linkagent.memory;
 
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
@@ -38,7 +39,10 @@ public class LongTermMemoryExtractor {
 
     public Optional<LongTermMemoryCandidate> extract(String userMessage, String finalAnswer) {
         try {
-            String response = llmService.chat(promptService.get("long_term_memory.system"), buildUserPrompt(userMessage, finalAnswer));
+            String response;
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("长期记忆抽取")) {
+                response = llmService.chat(promptService.get("long_term_memory.system"), buildUserPrompt(userMessage, finalAnswer));
+            }
             LongTermMemoryCandidate candidate = parseCandidate(response);
             if (!candidate.isValid()) {
                 return Optional.empty();

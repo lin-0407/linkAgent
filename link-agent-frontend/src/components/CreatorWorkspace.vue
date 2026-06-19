@@ -14,6 +14,7 @@ import {
   getCreatorFeedbackEvidenceIndexStatus,
   getCreatorFeedbackReport,
   getCreatorTask,
+  getTaskLlmUsageSummary,
   getPrePublishSuggestion,
   fetchCreatorFeedbackByBv,
   importCreatorFeedbackFile,
@@ -23,6 +24,7 @@ import {
   listCreatorEvalCases,
   listCreatorEvalPromptVersionStats,
   listCreatorEvalResults,
+  listTaskLlmApiCalls,
   listCreatorPreferences,
   listCreatorTasks,
   listWorkflowMessages,
@@ -63,13 +65,18 @@ import type {
   CreatorWorkflowStatus,
   CreatorWorkflowStep,
   CreatorWorkflowStage,
+  LlmApiCallPage,
+  LlmApiCallRecord,
+  LlmApiModelCategory,
+  LlmApiUsageCategorySummary,
+  LlmApiUsageSummary,
 } from '@/types/creator'
 
 type UnknownRecord = Record<string, unknown>
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
 type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | 'feedbackReport'
 type TaskManageMode = 'create' | 'edit'
-type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report'
+type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report' | 'usage'
 type CreatorWorkspaceState = {
   taskId?: string | null
 }
@@ -167,6 +174,15 @@ const evalStageOptions: Array<{
   { value: 'REPORT', label: '复盘报告' },
 ]
 const evalScoreOptions = [1, 2, 3, 4, 5]
+const usageCategoryOptions: Array<{
+  value: 'ALL' | LlmApiModelCategory
+  label: string
+}> = [
+  { value: 'ALL', label: '全部模型' },
+  { value: 'TEXT', label: '文本 LLM' },
+  { value: 'EMBEDDING', label: '向量化' },
+  { value: 'RERANK', label: 'Rerank' },
+]
 
 const taskForm = reactive({
   taskName: '',
@@ -271,6 +287,10 @@ const taskMaterialImportFile = ref<File | null>(null)
 const taskMaterialImportInputVersion = ref(0)
 const feedbackImportFile = ref<File | null>(null)
 const feedbackImportWarnings = ref<string[]>([])
+const usageSummary = ref<LlmApiUsageSummary | null>(null)
+const usageCallPage = ref<LlmApiCallPage | null>(null)
+const usageCategoryFilter = ref<'ALL' | LlmApiModelCategory>('ALL')
+const usageCurrentPage = ref(1)
 const workflowSession = ref<CreatorWorkflowSession | null>(null)
 const workflowMessages = ref<CreatorWorkflowMessage[]>([])
 const workflowSteps = ref<CreatorWorkflowStep[]>([])
@@ -300,6 +320,7 @@ const isAskingFeedbackChat = ref(false)
 const isRebuildingFeedbackEvidenceIndex = ref(false)
 const isLoadingFeedbackEvidenceIndexStatus = ref(false)
 const isExportingReportMarkdown = ref(false)
+const isLoadingUsageStats = ref(false)
 const isLoadingCreatorPreferences = ref(false)
 const isLoadingCreatorContextTerms = ref(false)
 const isSavingCreatorContextTerm = ref(false)
@@ -322,7 +343,7 @@ const selectedTaskId = computed(() => selectedTask.value?.taskId ?? '')
 const hasSelectedTask = computed(() => selectedTaskId.value.length > 0)
 const hasSelectedTaskMaterials = computed(() => (selectedTask.value?.materials.length ?? 0) > 0)
 const activeStepIndex = computed(() => {
-  const stepOrder: CreatorActiveStep[] = ['task', 'prePublish', 'feedback', 'report']
+  const stepOrder: CreatorActiveStep[] = ['task', 'prePublish', 'feedback', 'report', 'usage']
   return Math.max(stepOrder.indexOf(activeStep.value), 0)
 })
 const activeStepStyle = computed<Record<string, string>>(() => ({
@@ -498,6 +519,33 @@ const misunderstandingSourceAnalysis = computed(() =>
 const feedbackActionPlan = computed(() =>
   parseJsonArray(feedbackReport.value?.feedbackActionPlan),
 )
+const usageCategorySummaries = computed(() => {
+  const existing = new Map<LlmApiModelCategory, LlmApiUsageCategorySummary>()
+  for (const item of usageSummary.value?.categories ?? []) {
+    existing.set(item.modelCategory, item)
+  }
+  return (['TEXT', 'EMBEDDING', 'RERANK'] as LlmApiModelCategory[]).map(
+    (category) =>
+      existing.get(category) ?? {
+        modelCategory: category,
+        callCount: 0,
+        successCount: 0,
+        failedCount: 0,
+        skippedCount: 0,
+        totalTokens: null,
+        promptTokens: null,
+        completionTokens: null,
+        totalElapsedMs: null,
+        averageElapsedMs: null,
+      },
+  )
+})
+const usageTotalPages = computed(() => {
+  if (!usageCallPage.value || usageCallPage.value.pageSize <= 0) {
+    return 1
+  }
+  return Math.max(1, Math.ceil(usageCallPage.value.total / usageCallPage.value.pageSize))
+})
 const historicalPreferenceChips = computed<PreferenceChip[]>(() =>
   creatorPreferences.value
     .flatMap((record) =>
@@ -817,6 +865,51 @@ async function refreshEvaluationResults(caseId: string) {
   } finally {
     isLoadingEvalResults.value = false
   }
+}
+
+async function refreshUsageStats(page = usageCurrentPage.value, reportError = true) {
+  if (!selectedTaskId.value) {
+    usageSummary.value = null
+    usageCallPage.value = null
+    return
+  }
+  isLoadingUsageStats.value = true
+  try {
+    const modelCategory =
+      usageCategoryFilter.value === 'ALL' ? undefined : usageCategoryFilter.value
+    const [summary, callPage] = await Promise.all([
+      getTaskLlmUsageSummary(selectedTaskId.value),
+      listTaskLlmApiCalls(selectedTaskId.value, page, 20, modelCategory),
+    ])
+    usageSummary.value = summary
+    usageCallPage.value = callPage
+    usageCurrentPage.value = callPage.page
+  } catch (error) {
+    if (reportError) {
+      showError(error)
+    }
+  } finally {
+    isLoadingUsageStats.value = false
+  }
+}
+
+function openUsageStats() {
+  activeStep.value = 'usage'
+  void refreshUsageStats(1)
+}
+
+async function changeUsageCategoryFilter(category: 'ALL' | LlmApiModelCategory) {
+  usageCategoryFilter.value = category
+  usageCurrentPage.value = 1
+  await refreshUsageStats(1)
+}
+
+async function changeUsagePage(delta: number) {
+  const nextPage = Math.min(Math.max(1, usageCurrentPage.value + delta), usageTotalPages.value)
+  if (nextPage === usageCurrentPage.value) {
+    return
+  }
+  await refreshUsageStats(nextPage)
 }
 
 async function selectEvalCase(caseId: string) {
@@ -1224,6 +1317,7 @@ async function selectTask(taskId: string) {
     await loadCreatorContextTerms(task.userId, task.videoType)
     await loadOptionalResults(task)
     await loadPrePublishWorkflow(taskId)
+    await refreshUsageStats(1)
     closeTaskManager()
   } catch (error) {
     showError(error)
@@ -1241,6 +1335,10 @@ async function loadOptionalResults(task: CreatorTask) {
   feedbackFetchResult.value = null
   feedbackImportFile.value = null
   feedbackImportWarnings.value = []
+  usageSummary.value = null
+  usageCallPage.value = null
+  usageCurrentPage.value = 1
+  usageCategoryFilter.value = 'ALL'
 
   if (hasPrePublishResult(task.status)) {
     suggestion.value = await optionalRequest(() => getPrePublishSuggestion(task.taskId))
@@ -1496,6 +1594,7 @@ async function runPrePublishAnalyze() {
   } catch (error) {
     showError(error)
   } finally {
+    await refreshUsageStats(1, false)
     isAnalyzingPrePublish.value = false
   }
 }
@@ -1676,6 +1775,7 @@ async function runFeedbackAnalyze() {
   } catch (error) {
     showError(error)
   } finally {
+    await refreshUsageStats(1, false)
     isAnalyzingFeedback.value = false
   }
 }
@@ -1695,6 +1795,7 @@ async function askFeedbackChat() {
   } catch (error) {
     showError(error)
   } finally {
+    await refreshUsageStats(1, false)
     isAskingFeedbackChat.value = false
   }
 }
@@ -1768,6 +1869,7 @@ async function rebuildFeedbackEvidenceIndex() {
   } catch (error) {
     showError(error)
   } finally {
+    await refreshUsageStats(1, false)
     isRebuildingFeedbackEvidenceIndex.value = false
   }
 }
@@ -1784,6 +1886,77 @@ function retrievalModeLabel(mode: string | null | undefined) {
     default:
       return 'SQL 证据检索'
   }
+}
+
+function usageCategoryLabel(category: string | null | undefined) {
+  switch (category) {
+    case 'TEXT':
+      return '文本 LLM'
+    case 'EMBEDDING':
+      return '向量化模型'
+    case 'RERANK':
+      return 'Rerank 模型'
+    default:
+      return category || '未知模型'
+  }
+}
+
+function usageStatusLabel(status: string | null | undefined) {
+  switch (status) {
+    case 'SUCCESS':
+      return '成功'
+    case 'FAILED':
+      return '失败'
+    case 'SKIPPED':
+      return '跳过'
+    default:
+      return status || '未知'
+  }
+}
+
+function usageStatusClass(status: string | null | undefined) {
+  if (status === 'FAILED') {
+    return 'failed'
+  }
+  if (status === 'SKIPPED') {
+    return 'skipped'
+  }
+  return 'success'
+}
+
+function formatUsageToken(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return '未返回'
+  }
+  return value.toLocaleString('zh-CN')
+}
+
+function formatDuration(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return '未返回'
+  }
+  if (value < 1000) {
+    return `${value} ms`
+  }
+  if (value < 60_000) {
+    return `${(value / 1000).toFixed(1)} s`
+  }
+  const minutes = Math.floor(value / 60_000)
+  const seconds = Math.round((value % 60_000) / 1000)
+  return `${minutes} min ${seconds} s`
+}
+
+function formatInputCount(record: LlmApiCallRecord) {
+  if (record.inputCount === null || record.inputCount === undefined) {
+    return record.modelCategory === 'TEXT' ? '单次对话' : '未记录'
+  }
+  if (record.modelCategory === 'EMBEDDING') {
+    return `${record.inputCount} 段文本`
+  }
+  if (record.modelCategory === 'RERANK') {
+    return `${record.inputCount} 条候选`
+  }
+  return `${record.inputCount} 条输入`
 }
 
 function contextTermTypeLabel(termType: CreatorContextTermType | string) {
@@ -1865,6 +2038,10 @@ function resetSelectedWorkspace() {
   creatorContextTerms.value = []
   feedbackImportFile.value = null
   feedbackImportWarnings.value = []
+  usageSummary.value = null
+  usageCallPage.value = null
+  usageCurrentPage.value = 1
+  usageCategoryFilter.value = 'ALL'
   isFetchingFeedback.value = false
   resetPrePublishPreferenceMode()
   resultModalTarget.value = null
@@ -2036,6 +2213,7 @@ function upsertWorkflowMessage(message: CreatorWorkflowMessage) {
 
 async function refreshWorkflowSuggestion(taskId: string) {
   suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
+  await refreshUsageStats(1, false)
 }
 
 function isWorkflowMessage(value: unknown): value is CreatorWorkflowMessage {
@@ -2423,7 +2601,10 @@ function statusLabel(status: string) {
   return labels[status] ?? status
 }
 
-function shortId(value: string) {
+function shortId(value: string | null | undefined) {
+  if (!value) {
+    return '-'
+  }
   return value.length <= 14 ? value : `${value.slice(0, 8)}...${value.slice(-4)}`
 }
 
@@ -2753,6 +2934,14 @@ function showError(error: unknown) {
             @click="activeStep = 'report'"
           >
             分析结果
+          </button>
+          <button
+            type="button"
+            :disabled="!hasSelectedTask"
+            :class="{ active: activeStep === 'usage' }"
+            @click="openUsageStats"
+          >
+            开销统计
           </button>
         </nav>
 
@@ -3781,6 +3970,165 @@ function showError(error: unknown) {
             <strong>还没有反馈报告</strong>
             <span>先提交评论弹幕样例并分析反馈；完整复盘报告生成后可导出 Markdown。</span>
           </article>
+        </section>
+
+        <section v-if="activeStep === 'usage'" class="creator-section creator-usage-section">
+          <div class="creator-section-head">
+            <div>
+              <h3>API 开销统计</h3>
+            </div>
+            <div class="creator-action-row">
+              <span class="creator-parse-status">
+                {{ isLoadingUsageStats ? '读取中' : `${usageSummary?.callCount ?? 0} 次调用` }}
+              </span>
+              <button
+                type="button"
+                class="creator-secondary-action"
+                :disabled="!hasSelectedTask || isLoadingUsageStats"
+                @click="refreshUsageStats(1)"
+              >
+                {{ isLoadingUsageStats ? '刷新中...' : '刷新统计' }}
+              </button>
+            </div>
+          </div>
+
+          <p class="creator-inline-note">
+            这里按当前任务汇总文本 LLM、向量化模型和 Rerank 模型的调用记录，便于核对每一步 AI 调用的耗时、Token 和失败原因。
+          </p>
+
+          <div class="creator-usage-overview" aria-label="当前任务 API 开销总览">
+            <article class="creator-usage-card">
+              <span>总 Token</span>
+              <strong>{{ formatUsageToken(usageSummary?.totalTokens) }}</strong>
+              <small>仅统计模型实际返回的 token usage</small>
+            </article>
+            <article class="creator-usage-card">
+              <span>总耗时</span>
+              <strong>{{ formatDuration(usageSummary?.totalElapsedMs) }}</strong>
+              <small>平均 {{ formatDuration(usageSummary?.averageElapsedMs) }}</small>
+            </article>
+            <article class="creator-usage-card danger">
+              <span>失败调用</span>
+              <strong>{{ usageSummary?.failedCount ?? 0 }}</strong>
+              <small>跳过 {{ usageSummary?.skippedCount ?? 0 }} 次</small>
+            </article>
+          </div>
+
+          <div class="creator-usage-category-grid" aria-label="模型分类开销">
+            <article
+              v-for="item in usageCategorySummaries"
+              :key="item.modelCategory"
+              class="creator-usage-category"
+            >
+              <header>
+                <div>
+                  <span>{{ usageCategoryLabel(item.modelCategory) }}</span>
+                  <strong>{{ item.callCount }} 次调用</strong>
+                </div>
+                <small>{{ item.failedCount > 0 ? `${item.failedCount} 失败` : '无失败' }}</small>
+              </header>
+              <div class="creator-usage-category-metrics">
+                <span>
+                  Token
+                  <b>{{ formatUsageToken(item.totalTokens) }}</b>
+                </span>
+                <span>
+                  耗时
+                  <b>{{ formatDuration(item.totalElapsedMs) }}</b>
+                </span>
+                <span>
+                  成功
+                  <b>{{ item.successCount }}</b>
+                </span>
+                <span>
+                  跳过
+                  <b>{{ item.skippedCount }}</b>
+                </span>
+              </div>
+            </article>
+          </div>
+
+          <div class="creator-usage-toolbar">
+            <div class="creator-usage-filter" role="group" aria-label="模型类型筛选">
+              <button
+                v-for="option in usageCategoryOptions"
+                :key="option.value"
+                type="button"
+                :class="{ active: usageCategoryFilter === option.value }"
+                :disabled="isLoadingUsageStats"
+                @click="changeUsageCategoryFilter(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <span>
+              共 {{ usageCallPage?.total ?? 0 }} 条明细，第 {{ usageCurrentPage }} / {{ usageTotalPages }} 页
+            </span>
+          </div>
+
+          <div
+            v-if="usageCallPage && usageCallPage.items.length > 0"
+            class="creator-usage-call-list"
+            aria-label="模型调用明细"
+          >
+            <article
+              v-for="record in usageCallPage.items"
+              :key="record.callId"
+              class="creator-usage-call-item"
+            >
+              <header>
+                <div>
+                  <span>{{ usageCategoryLabel(record.modelCategory) }}</span>
+                  <strong>{{ record.scene || '未记录场景' }}</strong>
+                </div>
+                <b
+                  class="creator-usage-status"
+                  :class="usageStatusClass(record.status)"
+                >
+                  {{ usageStatusLabel(record.status) }}
+                </b>
+              </header>
+              <div class="creator-usage-call-meta">
+                <span>模型：{{ record.modelName || '未返回' }}</span>
+                <span>Token：{{ formatUsageToken(record.totalTokens) }}</span>
+                <span>耗时：{{ formatDuration(record.elapsedMs) }}</span>
+                <span>输入：{{ formatInputCount(record) }}</span>
+                <span>时间：{{ formatDate(record.createTime) }}</span>
+              </div>
+              <div class="creator-usage-call-trace">
+                <code>call {{ shortId(record.callId) }}</code>
+                <code v-if="record.traceId">trace {{ shortId(record.traceId) }}</code>
+                <code v-if="record.requestId">request {{ shortId(record.requestId) }}</code>
+              </div>
+              <p v-if="record.errorMessage" class="creator-usage-error">
+                {{ record.errorMessage }}
+              </p>
+            </article>
+          </div>
+
+          <article v-else class="creator-empty-result">
+            <strong>还没有模型调用记录</strong>
+            <span>运行发布前优化、评论弹幕分析、反馈追问或证据索引后，这里会显示当前任务的调用明细。</span>
+          </article>
+
+          <div class="creator-usage-pagination">
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="usageCurrentPage <= 1 || isLoadingUsageStats"
+              @click="changeUsagePage(-1)"
+            >
+              上一页
+            </button>
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="usageCurrentPage >= usageTotalPages || isLoadingUsageStats"
+              @click="changeUsagePage(1)"
+            >
+              下一页
+            </button>
+          </div>
         </section>
       </section>
     </div>

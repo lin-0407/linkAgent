@@ -33,6 +33,9 @@ import type {
   CreatorWorkflowStage,
   CreatorWorkflowStep,
   CreatorWorkflowStartPayload,
+  LlmApiCallPage,
+  LlmApiModelCategory,
+  LlmApiUsageSummary,
   PrePublishAnalyzePayload,
 } from '@/types/creator'
 
@@ -437,5 +440,29 @@ export function listCreatorEvalResults(caseId: string, limit = 10) {
 export function listCreatorEvalPromptVersionStats(caseId: string) {
   return requestJson<CreatorEvalPromptVersionStats[]>(
     `/api/creator/evaluations/cases/${encodeURIComponent(caseId)}/prompt-version-stats`,
+  )
+}
+
+export function getTaskLlmUsageSummary(taskId: string) {
+  return requestJson<LlmApiUsageSummary>(
+    `/api/llm-usage/tasks/${encodeURIComponent(taskId)}/summary`,
+  )
+}
+
+export function listTaskLlmApiCalls(
+  taskId: string,
+  page = 1,
+  pageSize = 20,
+  modelCategory?: LlmApiModelCategory,
+) {
+  const params = new URLSearchParams({
+    page: String(page),
+    pageSize: String(pageSize),
+  })
+  if (modelCategory) {
+    params.set('modelCategory', modelCategory)
+  }
+  return requestJson<LlmApiCallPage>(
+    `/api/llm-usage/tasks/${encodeURIComponent(taskId)}/calls?${params.toString()}`,
   )
 }

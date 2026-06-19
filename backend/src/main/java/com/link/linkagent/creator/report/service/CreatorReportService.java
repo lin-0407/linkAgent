@@ -20,6 +20,7 @@ import com.link.linkagent.creator.task.model.CreatorMaterialType;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.LlmJsonUtil;
 import com.link.linkagent.util.TextUtil;
@@ -84,10 +85,13 @@ public class CreatorReportService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先完成同类型视频竞品分析"));
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
 
-        String rawOutput = llmService.chat(
-                buildSystemPrompt(),
-                buildUserPrompt(taskRecord, materials, suggestionRecord, feedbackReportRecord, competitorReportRecord, request)
-        );
+        String rawOutput;
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "创作复盘报告")) {
+            rawOutput = llmService.chat(
+                    buildSystemPrompt(),
+                    buildUserPrompt(taskRecord, materials, suggestionRecord, feedbackReportRecord, competitorReportRecord, request)
+            );
+        }
         CreatorReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
         creatorReportMapper.upsert(reportRecord);
         creatorPreferenceService.saveFromReport(taskRecord, reportRecord);

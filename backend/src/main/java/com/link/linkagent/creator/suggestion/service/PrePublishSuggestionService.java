@@ -15,6 +15,7 @@ import com.link.linkagent.creator.task.model.CreatorMaterialType;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.LlmJsonUtil;
 import com.link.linkagent.util.TextUtil;
@@ -83,7 +84,10 @@ public class PrePublishSuggestionService {
         }
 
         PrePublishAnalyzeRequest safeRequest = normalizeRequest(request);
-        String rawOutput = llmService.chat(buildSystemPrompt(), buildUserPrompt(taskRecord, materials, safeRequest));
+        String rawOutput;
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "发布前优化")) {
+            rawOutput = llmService.chat(buildSystemPrompt(), buildUserPrompt(taskRecord, materials, safeRequest));
+        }
         CreatorSuggestionRecord suggestionRecord = buildSuggestionRecord(taskRecord.getTaskId(), rawOutput);
         creatorSuggestionMapper.upsert(suggestionRecord);
         return getSuggestion(taskRecord.getTaskId());
