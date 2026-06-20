@@ -752,7 +752,7 @@ CREATE TABLE IF NOT EXISTS creator_workflow_step
     id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     step_id         VARCHAR(64)  NOT NULL COMMENT '步骤唯一标识（UUID）',
     session_id      VARCHAR(64)  NOT NULL COMMENT '关联 creator_workflow_session.session_id',
-    step_type       VARCHAR(32)  NOT NULL COMMENT '步骤类型：LOAD_CONTEXT=读取上下文，LLM_CALL=调用大模型，SAVE_RESULT=保存结果，CONFIRM_RESULT=确认结果',
+    step_type       VARCHAR(32)  NOT NULL COMMENT '步骤类型：LOAD_CONTEXT=读取上下文，AGENT_REASONING=Agent推理，TOOL_CALL=工具调用，LLM_CALL=调用大模型，SAVE_RESULT=保存结果，CONFIRM_RESULT=确认结果',
     step_name       VARCHAR(128) NOT NULL COMMENT '步骤名称，用于前端和排障时快速理解当前节点',
     status          VARCHAR(16)  NOT NULL DEFAULT 'PENDING' COMMENT '步骤状态：PENDING=待执行，RUNNING=执行中，SUCCESS=成功，FAILED=失败',
     input_summary   TEXT                  DEFAULT NULL COMMENT '输入摘要，只保存排障所需的简短说明，避免把完整材料重复塞进步骤表',
@@ -2446,6 +2446,10 @@ CREATE TABLE IF NOT EXISTS llm_api_call_log
     task_id           VARCHAR(64)           DEFAULT NULL COMMENT '关联创作任务 ID；通用 Agent 或后台能力没有任务时允许为空',
     trace_id          VARCHAR(64)           DEFAULT NULL COMMENT '一次业务链路的追踪 ID，用于把同一任务请求内多次模型调用串起来',
     request_id        VARCHAR(64)           DEFAULT NULL COMMENT '一次前端或后端请求 ID，用于排查同一 HTTP 请求产生的多次调用',
+    workflow_session_id VARCHAR(64)         DEFAULT NULL COMMENT '工作流会话ID，用于把模型调用归属到一次创作者工作流',
+    workflow_step_id  VARCHAR(64)           DEFAULT NULL COMMENT '工作流步骤ID，用于把模型调用归属到具体执行步骤',
+    workflow_step_name VARCHAR(100)         DEFAULT NULL COMMENT '工作流步骤名称，用于前端展示模型调用发生在哪一步',
+    workflow_stage    VARCHAR(32)           DEFAULT NULL COMMENT '工作流阶段，例如 PRE_PUBLISH、FEEDBACK、REPORT',
     model_category    VARCHAR(32)  NOT NULL COMMENT '模型分类：TEXT=文本大模型，EMBEDDING=向量化模型，RERANK=重排序模型',
     scene             VARCHAR(64)           DEFAULT NULL COMMENT '调用场景，例如发布前优化、反馈追问、知识库检索或向量索引',
     model_name        VARCHAR(128)          DEFAULT NULL COMMENT '模型名称；供应商未返回时允许为空',
@@ -2462,8 +2466,75 @@ CREATE TABLE IF NOT EXISTS llm_api_call_log
     UNIQUE KEY uk_llm_api_call_id (call_id),
     KEY idx_llm_api_task_time (task_id, create_time),
     KEY idx_llm_api_task_category_time (task_id, model_category, create_time),
+    KEY idx_llm_api_workflow_step (workflow_session_id, workflow_step_id, create_time),
     KEY idx_llm_api_trace_id (trace_id),
     KEY idx_llm_api_status_time (status, create_time)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '模型 API 调用流水表';
+
+-- 已建过阶段 5.9 统计表的本地库需要补齐工作流步骤归属字段，否则过程弹窗无法把调用挂到具体步骤。
+SET @add_llm_api_workflow_session_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE llm_api_call_log ADD COLUMN workflow_session_id VARCHAR(64) DEFAULT NULL COMMENT ''工作流会话ID，用于把模型调用归属到一次创作者工作流'' AFTER request_id',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'llm_api_call_log'
+      AND COLUMN_NAME = 'workflow_session_id'
+);
+PREPARE add_llm_api_workflow_session_stmt FROM @add_llm_api_workflow_session_sql;
+EXECUTE add_llm_api_workflow_session_stmt;
+DEALLOCATE PREPARE add_llm_api_workflow_session_stmt;
+
+SET @add_llm_api_workflow_step_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE llm_api_call_log ADD COLUMN workflow_step_id VARCHAR(64) DEFAULT NULL COMMENT ''工作流步骤ID，用于把模型调用归属到具体执行步骤'' AFTER workflow_session_id',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'llm_api_call_log'
+      AND COLUMN_NAME = 'workflow_step_id'
+);
+PREPARE add_llm_api_workflow_step_stmt FROM @add_llm_api_workflow_step_sql;
+EXECUTE add_llm_api_workflow_step_stmt;
+DEALLOCATE PREPARE add_llm_api_workflow_step_stmt;
+
+SET @add_llm_api_workflow_step_name_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE llm_api_call_log ADD COLUMN workflow_step_name VARCHAR(100) DEFAULT NULL COMMENT ''工作流步骤名称，用于前端展示模型调用发生在哪一步'' AFTER workflow_step_id',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'llm_api_call_log'
+      AND COLUMN_NAME = 'workflow_step_name'
+);
+PREPARE add_llm_api_workflow_step_name_stmt FROM @add_llm_api_workflow_step_name_sql;
+EXECUTE add_llm_api_workflow_step_name_stmt;
+DEALLOCATE PREPARE add_llm_api_workflow_step_name_stmt;
+
+SET @add_llm_api_workflow_stage_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE llm_api_call_log ADD COLUMN workflow_stage VARCHAR(32) DEFAULT NULL COMMENT ''工作流阶段，例如 PRE_PUBLISH、FEEDBACK、REPORT'' AFTER workflow_step_name',
+              'SELECT 1')
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'llm_api_call_log'
+      AND COLUMN_NAME = 'workflow_stage'
+);
+PREPARE add_llm_api_workflow_stage_stmt FROM @add_llm_api_workflow_stage_sql;
+EXECUTE add_llm_api_workflow_stage_stmt;
+DEALLOCATE PREPARE add_llm_api_workflow_stage_stmt;
+
+SET @add_llm_api_workflow_step_index_sql = (
+    SELECT IF(COUNT(*) = 0,
+              'ALTER TABLE llm_api_call_log ADD INDEX idx_llm_api_workflow_step (workflow_session_id, workflow_step_id, create_time)',
+              'SELECT 1')
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'llm_api_call_log'
+      AND INDEX_NAME = 'idx_llm_api_workflow_step'
+);
+PREPARE add_llm_api_workflow_step_index_stmt FROM @add_llm_api_workflow_step_index_sql;
+EXECUTE add_llm_api_workflow_step_index_stmt;
+DEALLOCATE PREPARE add_llm_api_workflow_step_index_stmt;

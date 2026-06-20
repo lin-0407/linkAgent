@@ -2,6 +2,7 @@ package com.link.linkagent.tool;
 
 import com.link.linkagent.core.Observation;
 import com.link.linkagent.core.ToolCall;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -29,8 +30,13 @@ public class ToolExecutor {
     }
 
     public List<Observation> executeAll(List<ToolCall> toolCalls) {
+        LlmUsageContext usageContext = LlmUsageContext.current();
         List<CompletableFuture<Observation>> futures = toolCalls.stream()
-                .map(toolCall -> CompletableFuture.supplyAsync(() -> executeInternal(toolCall)))
+                .map(toolCall -> CompletableFuture.supplyAsync(() -> {
+                    try (LlmUsageContext.UsageScope ignored = LlmUsageContext.restore(usageContext)) {
+                        return executeInternal(toolCall);
+                    }
+                }))
                 .toList();
         return futures.stream()
                 .map(CompletableFuture::join)
@@ -55,8 +61,14 @@ public class ToolExecutor {
     }
 
     private String executeOnce(Tool tool, ToolCall toolCall) {
+        LlmUsageContext usageContext = LlmUsageContext.current();
         return CompletableFuture
-                .supplyAsync(() -> tool.execute(toolCall.arguments()))
+                .supplyAsync(() -> {
+                    // 工具执行会切到公共线程池，必须显式恢复用量上下文，否则工具内部模型调用无法归属到工作流步骤。
+                    try (LlmUsageContext.UsageScope ignored = LlmUsageContext.restore(usageContext)) {
+                        return tool.execute(toolCall.arguments());
+                    }
+                })
                 .orTimeout(properties.timeoutSeconds(), TimeUnit.SECONDS)
                 .join();
     }

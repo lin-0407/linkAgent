@@ -15,23 +15,60 @@ public final class LlmUsageContext {
     private final String traceId;
     private final String requestId;
     private final String scene;
+    private final String workflowSessionId;
+    private final String workflowStepId;
+    private final String workflowStepName;
+    private final String workflowStage;
 
-    private LlmUsageContext(String taskId, String traceId, String requestId, String scene) {
+    private LlmUsageContext(String taskId,
+                            String traceId,
+                            String requestId,
+                            String scene,
+                            String workflowSessionId,
+                            String workflowStepId,
+                            String workflowStepName,
+                            String workflowStage) {
         this.taskId = trimToNull(taskId);
         this.traceId = trimToNull(traceId);
         this.requestId = trimToNull(requestId);
         this.scene = trimToNull(scene);
+        this.workflowSessionId = trimToNull(workflowSessionId);
+        this.workflowStepId = trimToNull(workflowStepId);
+        this.workflowStepName = trimToNull(workflowStepName);
+        this.workflowStage = trimToNull(workflowStage);
     }
 
     public static LlmUsageContext current() {
         return CURRENT.get();
     }
 
+    public static UsageScope restore(LlmUsageContext context) {
+        LlmUsageContext previous = CURRENT.get();
+        if (context == null) {
+            CURRENT.remove();
+        } else {
+            CURRENT.set(context);
+        }
+        return new UsageScope(previous);
+    }
+
     public static UsageScope open(String taskId, String scene) {
         LlmUsageContext previous = CURRENT.get();
         String traceId = previous == null || previous.traceId == null ? UUID.randomUUID().toString() : previous.traceId;
         String requestId = previous == null || previous.requestId == null ? UUID.randomUUID().toString() : previous.requestId;
-        LlmUsageContext next = new LlmUsageContext(taskId, traceId, requestId, scene);
+        String resolvedScene = previous != null && previous.workflowStepId != null && previous.scene != null
+                ? previous.scene
+                : scene;
+        LlmUsageContext next = new LlmUsageContext(
+                taskId,
+                traceId,
+                requestId,
+                resolvedScene,
+                previous == null ? null : previous.workflowSessionId,
+                previous == null ? null : previous.workflowStepId,
+                previous == null ? null : previous.workflowStepName,
+                previous == null ? null : previous.workflowStage
+        );
         CURRENT.set(next);
         return new UsageScope(previous);
     }
@@ -39,10 +76,35 @@ public final class LlmUsageContext {
     public static UsageScope scene(String scene) {
         LlmUsageContext previous = CURRENT.get();
         if (previous == null) {
-            CURRENT.set(new LlmUsageContext(null, UUID.randomUUID().toString(), UUID.randomUUID().toString(), scene));
+            CURRENT.set(new LlmUsageContext(null, UUID.randomUUID().toString(), UUID.randomUUID().toString(), scene,
+                    null, null, null, null));
         } else {
-            CURRENT.set(new LlmUsageContext(previous.taskId, previous.traceId, previous.requestId, scene));
+            CURRENT.set(new LlmUsageContext(previous.taskId, previous.traceId, previous.requestId, scene,
+                    previous.workflowSessionId, previous.workflowStepId, previous.workflowStepName, previous.workflowStage));
         }
+        return new UsageScope(previous);
+    }
+
+    public static UsageScope openWorkflowStep(String taskId,
+                                              String workflowSessionId,
+                                              String workflowStepId,
+                                              String workflowStepName,
+                                              String workflowStage,
+                                              String scene) {
+        LlmUsageContext previous = CURRENT.get();
+        String traceId = previous == null || previous.traceId == null ? UUID.randomUUID().toString() : previous.traceId;
+        String requestId = previous == null || previous.requestId == null ? UUID.randomUUID().toString() : previous.requestId;
+        LlmUsageContext next = new LlmUsageContext(
+                taskId,
+                traceId,
+                requestId,
+                scene,
+                workflowSessionId,
+                workflowStepId,
+                workflowStepName,
+                workflowStage
+        );
+        CURRENT.set(next);
         return new UsageScope(previous);
     }
 
@@ -60,6 +122,22 @@ public final class LlmUsageContext {
 
     public String scene() {
         return scene;
+    }
+
+    public String workflowSessionId() {
+        return workflowSessionId;
+    }
+
+    public String workflowStepId() {
+        return workflowStepId;
+    }
+
+    public String workflowStepName() {
+        return workflowStepName;
+    }
+
+    public String workflowStage() {
+        return workflowStage;
     }
 
     private static String trimToNull(String value) {

@@ -37,6 +37,7 @@ import type {
   LlmApiModelCategory,
   LlmApiUsageSummary,
   PrePublishAnalyzePayload,
+  WorkflowUsageResponse,
 } from '@/types/creator'
 
 async function requestJson<T>(url: string, options?: RequestInit) {
@@ -267,6 +268,12 @@ export function listWorkflowMessages(taskId: string, sessionId: string) {
 export function listWorkflowSteps(taskId: string, sessionId: string) {
   return requestJson<CreatorWorkflowStep[]>(
     `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/steps`,
+  )
+}
+
+export function getWorkflowUsage(taskId: string, sessionId: string) {
+  return requestJson<WorkflowUsageResponse>(
+    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/usage`,
   )
 }
 

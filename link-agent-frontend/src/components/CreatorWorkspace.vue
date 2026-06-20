@@ -15,6 +15,7 @@ import {
   getCreatorFeedbackReport,
   getCreatorTask,
   getTaskLlmUsageSummary,
+  getWorkflowUsage,
   getPrePublishSuggestion,
   fetchCreatorFeedbackByBv,
   importCreatorFeedbackFile,
@@ -68,6 +69,7 @@ import type {
   LlmApiModelCategory,
   LlmApiUsageCategorySummary,
   LlmApiUsageSummary,
+  WorkflowUsageResponse,
 } from '@/types/creator'
 
 type UnknownRecord = Record<string, unknown>
@@ -273,10 +275,15 @@ const usageCurrentPage = ref(1)
 const workflowSession = ref<CreatorWorkflowSession | null>(null)
 const workflowMessages = ref<CreatorWorkflowMessage[]>([])
 const workflowSteps = ref<CreatorWorkflowStep[]>([])
+const workflowUsage = ref<WorkflowUsageResponse | null>(null)
 const workflowMessageDraft = ref('')
 const workflowMessageListRef = ref<HTMLDivElement | null>(null)
 const workflowEventSource = ref<EventSource | null>(null)
 const workflowSseText = ref('未连接')
+const workflowMessageModalOpen = ref(false)
+const workflowProcessModalOpen = ref(false)
+const expandedRawStepIds = ref<Set<string>>(new Set())
+const workflowUsageError = ref('')
 const selectedWorkflowMessageId = ref('')
 const restoredTaskId = ref('')
 const activeStep = ref<CreatorActiveStep>('task')
@@ -642,6 +649,30 @@ const workflowStepStats = computed(() => {
   }
   return stats
 })
+const workflowFailedStep = computed(() => workflowSteps.value.find((step) => step.status === 'FAILED') ?? null)
+const workflowRunningStep = computed(() => workflowSteps.value.find((step) => step.status === 'RUNNING') ?? null)
+const workflowUnmatchedUsageSteps = computed(() => {
+  const stepIds = new Set(workflowSteps.value.map((step) => step.stepId))
+  return (workflowUsage.value?.steps ?? []).filter((step) => !stepIds.has(step.stepId))
+})
+const workflowProcessSummary = computed(() => {
+  if (!workflowSession.value) {
+    return '未创建工作流会话'
+  }
+  if (workflowSession.value.status === 'RUNNING') {
+    return `${workflowRunningStep.value?.stepName ?? '正在执行'} · 已完成 ${workflowStepStats.value.success}/${Math.max(workflowStepStats.value.total, 1)}`
+  }
+  if (workflowSession.value.status === 'FAILED') {
+    return `执行失败 · 失败步骤：${workflowFailedStep.value?.stepName ?? '未知步骤'}`
+  }
+  const usage = workflowUsage.value
+  const usagePart = usage
+    ? `API 调用 ${usage.totalCalls} 次 · ${formatUsageToken(usage.totalTokens)} token · ${formatDuration(usage.totalElapsedMs)}`
+    : workflowUsageError.value
+      ? '开销统计暂不可用'
+      : '开销统计待加载'
+  return `${workflowStepStats.value.total} 步完成 · ${workflowStepStats.value.failed} 步失败 · ${usagePart}`
+})
 const guidanceEditorTitle = computed(() => {
   if (guidanceEditorTarget.value === 'prePublish') {
     return '发布前优化指导'
@@ -726,6 +757,12 @@ function handleWorkspaceKeydown(event: KeyboardEvent) {
   }
   if (isTaskManagerOpen.value) {
     closeTaskManager()
+  }
+  if (workflowMessageModalOpen.value) {
+    closeWorkflowMessageModal()
+  }
+  if (workflowProcessModalOpen.value) {
+    closeWorkflowProcessModal()
   }
 }
 
@@ -994,6 +1031,10 @@ function resetGeneratedTaskResults() {
   workflowSession.value = null
   workflowMessages.value = []
   workflowSteps.value = []
+  workflowUsage.value = null
+  workflowUsageError.value = ''
+  workflowMessageModalOpen.value = false
+  expandedRawStepIds.value = new Set()
   workflowMessageDraft.value = ''
   selectedWorkflowMessageId.value = ''
   resultModalTarget.value = null
@@ -1369,6 +1410,7 @@ async function loadPrePublishWorkflow(taskId: string, resumeLatest = true) {
     workflowMessages.value = workflowSession.value.messages ?? []
     workflowSteps.value =
       (await optionalRequest(() => listWorkflowSteps(taskId, workflowSession.value!.sessionId))) ?? []
+    await loadWorkflowUsage(false)
     if (!suggestion.value && isPrePublishSuggestionVisible(workflowSession.value.status)) {
       suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
     }
@@ -1401,6 +1443,7 @@ async function refreshPrePublishWorkflowMessages() {
       (await optionalRequest(() =>
         listWorkflowSteps(selectedTaskId.value, workflowSession.value!.sessionId),
       )) ?? []
+    await loadWorkflowUsage(false)
     syncWorkflowSelection()
   } catch (error) {
     showError(error)
@@ -1418,8 +1461,27 @@ async function refreshPrePublishWorkflowSteps() {
       (await optionalRequest(() =>
         listWorkflowSteps(selectedTaskId.value, workflowSession.value!.sessionId),
       )) ?? []
+    await loadWorkflowUsage(false)
   } catch (error) {
     showError(error)
+  }
+}
+
+async function loadWorkflowUsage(reportError = false) {
+  if (!selectedTaskId.value || !workflowSession.value) {
+    workflowUsage.value = null
+    workflowUsageError.value = ''
+    return
+  }
+  try {
+    workflowUsage.value = await getWorkflowUsage(selectedTaskId.value, workflowSession.value.sessionId)
+    workflowUsageError.value = ''
+  } catch (error) {
+    workflowUsage.value = null
+    workflowUsageError.value = error instanceof Error ? error.message : '开销统计暂不可用'
+    if (reportError) {
+      showError(error)
+    }
   }
 }
 
@@ -1816,6 +1878,22 @@ function formatDuration(value: number | null | undefined) {
   return `${minutes} min ${seconds} s`
 }
 
+function formatTokenUsage(record: LlmApiCallRecord) {
+  if (record.totalTokens !== null && record.totalTokens !== undefined) {
+    return `${formatUsageToken(record.totalTokens)} token`
+  }
+  return 'token 未返回'
+}
+
+function formatWorkflowCallUsage(record: LlmApiCallRecord) {
+  const statusText = record.status === 'FAILED' ? '失败' : usageStatusLabel(record.status)
+  const base = `${record.modelCategory} · ${record.modelName || '模型未返回'} · ${statusText} · ${formatTokenUsage(record)} · ${formatDuration(record.elapsedMs)}`
+  if (record.errorMessage) {
+    return `${base} · ${record.errorMessage}`
+  }
+  return base
+}
+
 function formatInputCount(record: LlmApiCallRecord) {
   if (record.inputCount === null || record.inputCount === undefined) {
     return record.modelCategory === 'TEXT' ? '单次对话' : '未记录'
@@ -1915,9 +1993,14 @@ function resetSelectedWorkspace() {
   isFetchingFeedback.value = false
   resetPrePublishPreferenceMode()
   resultModalTarget.value = null
+  workflowMessageModalOpen.value = false
+  workflowProcessModalOpen.value = false
   workflowSession.value = null
   workflowMessages.value = []
   workflowSteps.value = []
+  workflowUsage.value = null
+  workflowUsageError.value = ''
+  expandedRawStepIds.value = new Set()
   selectedWorkflowMessageId.value = ''
   activeStep.value = 'task'
   closeDeveloperTest()
@@ -2222,6 +2305,8 @@ function workflowContentTypeLabel(contentType: string) {
 function workflowStepTypeLabel(stepType: string) {
   const labels: Record<string, string> = {
     LOAD_CONTEXT: '读取上下文',
+    AGENT_REASONING: 'Agent 推理',
+    TOOL_CALL: '工具调用',
     LLM_CALL: '模型调用',
     SAVE_RESULT: '保存结果',
     CONFIRM_RESULT: '确认结果',
@@ -2336,6 +2421,46 @@ function closeResultModal() {
   resultModalTarget.value = null
   isResultModalBackdropPointerDown.value = false
   isFeedbackChatDrawerOpen.value = false
+}
+
+function openWorkflowMessageModal() {
+  if (!hasSelectedTask.value) {
+    return
+  }
+  workflowMessageModalOpen.value = true
+  syncWorkflowSelection()
+  void scrollWorkflowMessagesToBottom()
+}
+
+function closeWorkflowMessageModal() {
+  workflowMessageModalOpen.value = false
+}
+
+function openWorkflowProcessModal() {
+  workflowProcessModalOpen.value = true
+  void loadWorkflowUsage(false)
+}
+
+function closeWorkflowProcessModal() {
+  workflowProcessModalOpen.value = false
+}
+
+function toggleRawOutput(stepId: string) {
+  const next = new Set(expandedRawStepIds.value)
+  if (next.has(stepId)) {
+    next.delete(stepId)
+  } else {
+    next.add(stepId)
+  }
+  expandedRawStepIds.value = next
+}
+
+function isRawOutputExpanded(stepId: string) {
+  return expandedRawStepIds.value.has(stepId)
+}
+
+function workflowCallsForStep(stepId: string) {
+  return workflowUsage.value?.steps.find((step) => step.stepId === stepId)?.calls ?? []
 }
 
 function openFeedbackChatDrawer() {
@@ -3281,6 +3406,14 @@ function showError(error: unknown) {
                 创作指导
               </button>
               <button
+                type="button"
+                class="creator-secondary-action"
+                :disabled="!hasSelectedTask"
+                @click="openWorkflowMessageModal"
+              >
+                查看消息流
+              </button>
+              <button
                 v-if="suggestion"
                 type="button"
                 class="creator-secondary-action"
@@ -3299,161 +3432,31 @@ function showError(error: unknown) {
             </div>
           </div>
 
-          <div class="creator-workflow-grid">
-            <section class="creator-workflow-stream" aria-label="发布前优化消息流">
-              <header class="creator-workflow-head">
-                <div>
-                  <h4>发布前优化消息流</h4>
-                </div>
-                <div class="creator-workflow-head-actions">
-                  <span>{{ workflowStatusText }}</span>
-                  <span
-                    class="creator-sse-status"
-                    :class="{ active: workflowSseText === '实时连接' }"
-                  >
-                    {{ workflowSseText }}
-                  </span>
-                  <button
-                    type="button"
-                    class="creator-ghost-button"
-                    :disabled="!hasSelectedTask || !hasSelectedTaskMaterials || isLoadingWorkflow"
-                    @click="refreshPrePublishWorkflowMessages"
-                  >
-                    {{ isLoadingWorkflow ? '载入中' : '刷新消息' }}
-                  </button>
-                </div>
-              </header>
-
-              <div ref="workflowMessageListRef" class="creator-workflow-message-list">
-                <button
-                  v-for="message in workflowMessages"
-                  :key="message.messageId"
-                  type="button"
-                  class="creator-workflow-message"
-                  :class="[
-                    `role-${message.role.toLowerCase()}`,
-                    { active: message.messageId === selectedWorkflowMessage?.messageId },
-                  ]"
-                  @click="selectedWorkflowMessageId = message.messageId"
-                >
-                  <small>
-                    #{{ message.sequenceNo }} · {{ workflowRoleLabel(message.role) }} ·
-                    {{ formatDate(message.createTime) }}
-                  </small>
-                  <strong>{{ previewWorkflowMessage(message.content) }}</strong>
-                  <span>{{ workflowContentTypeLabel(message.contentType) }}</span>
-                </button>
-
-                <p v-if="!isLoadingWorkflow && workflowMessages.length === 0" class="creator-muted">
-                  {{
-                    hasSelectedTaskMaterials
-                      ? '还没有工作流消息，选择任务后会自动装载材料。'
-                      : '当前任务没有材料，无法装载发布前优化工作流。'
-                  }}
-                </p>
-              </div>
-            </section>
-
-            <section class="creator-workflow-detail" aria-label="工作流消息详情">
-              <header class="creator-workflow-head">
-                <div>
-                  <h4>消息详情</h4>
-                </div>
-                <span v-if="selectedWorkflowMessage" class="creator-parse-status">
-                  {{ workflowContentTypeLabel(selectedWorkflowMessage.contentType) }}
-                </span>
-              </header>
-
-              <article v-if="selectedWorkflowMessage" class="creator-workflow-detail-body">
-                <small>
-                  {{ workflowRoleLabel(selectedWorkflowMessage.role) }} ·
-                  {{ formatDate(selectedWorkflowMessage.createTime) }}
-                </small>
-                <strong>
-                  {{
-                    selectedWorkflowMaterial
-                      ? materialLabel(selectedWorkflowMaterial.materialType)
-                      : workflowContentTypeLabel(selectedWorkflowMessage.contentType)
-                  }}
-                </strong>
-                <p v-if="selectedWorkflowMaterial">{{ selectedWorkflowMessage.content }}</p>
-                <pre>{{
-                  selectedWorkflowMaterial?.content || selectedWorkflowMessage.content
-                }}</pre>
-              </article>
-
-              <article v-else class="creator-empty-result">
-                <strong>未选择消息</strong>
-                <span>点击左侧消息可以查看完整材料或过程内容。</span>
-              </article>
-            </section>
-
+          <div class="creator-workflow-grid creator-workflow-grid-compact">
             <section class="creator-workflow-steps" aria-label="工作流步骤回放">
               <header class="creator-workflow-head">
                 <div>
-                  <h4>步骤回放</h4>
+                  <h4>执行过程</h4>
                 </div>
                 <div class="creator-workflow-head-actions">
-                  <span>{{ workflowStepStats.total }} 步</span>
-                  <span v-if="workflowStepStats.failed > 0">{{ workflowStepStats.failed }} 失败</span>
-                  <span v-else>{{ workflowStepStats.success }} 成功</span>
                   <button
                     type="button"
                     class="creator-ghost-button"
                     :disabled="!workflowSession"
-                    @click="refreshPrePublishWorkflowSteps"
+                    @click="openWorkflowProcessModal"
                   >
-                    刷新步骤
+                    查看过程
                   </button>
                 </div>
               </header>
 
-              <div class="creator-workflow-step-list">
-                <article
-                  v-for="step in workflowSteps"
-                  :key="step.stepId"
-                  class="creator-workflow-step"
-                  :class="step.status.toLowerCase()"
-                >
-                  <small>
-                    {{ workflowStepTypeLabel(step.stepType) }} ·
-                    {{ workflowStepStatusLabel(step.status) }} ·
-                    {{ formatDate(step.startTime || step.createTime) }}
-                  </small>
-                  <strong>{{ step.stepName }}</strong>
-                  <p v-if="step.inputSummary">输入：{{ step.inputSummary }}</p>
-                  <p v-if="step.outputSummary">输出：{{ step.outputSummary }}</p>
-                  <p v-if="step.errorMessage" class="creator-step-error">
-                    失败：{{ step.errorMessage }}
-                  </p>
-                  <pre v-if="step.rawOutput">{{ step.rawOutput }}</pre>
-                </article>
-
-                <p v-if="workflowSteps.length === 0" class="creator-muted">
-                  当前会话还没有可回放的执行步骤。
-                </p>
-              </div>
+              <article class="creator-workflow-process-summary">
+                <strong>{{ workflowProcessSummary }}</strong>
+                <span v-if="workflowRunningStep">当前步骤：{{ workflowRunningStep.stepName }}</span>
+                <span v-else-if="workflowFailedStep">失败原因：{{ workflowFailedStep.errorMessage || '未知错误' }}</span>
+                <span v-else>过程细节、原始输出和模型开销已收进弹窗，避免干扰建议阅读。</span>
+              </article>
             </section>
-
-            <form class="creator-workflow-composer" @submit.prevent="sendWorkflowSupplement">
-              <textarea
-                v-model="workflowMessageDraft"
-                maxlength="2000"
-                :disabled="!canSendWorkflowMessage || isSendingWorkflowMessage"
-                placeholder="补充发布前优化要求，例如：标题更适合 Java 后端学习者，不要标题党"
-              ></textarea>
-              <button
-                type="submit"
-                class="creator-primary-button"
-                :disabled="
-                  !canSendWorkflowMessage ||
-                  !hasText(workflowMessageDraft) ||
-                  isSendingWorkflowMessage
-                "
-              >
-                {{ isSendingWorkflowMessage ? '发送中...' : '发送消息' }}
-              </button>
-            </form>
           </div>
 
           <article class="creator-preference-panel">
@@ -3958,6 +3961,260 @@ function showError(error: unknown) {
             </button>
           </div>
         </section>
+      </section>
+    </div>
+
+    <div
+      v-if="workflowProcessModalOpen"
+      class="creator-modal-backdrop"
+      role="presentation"
+      @click.self="closeWorkflowProcessModal"
+    >
+      <section
+        class="creator-process-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="过程详情"
+      >
+        <header class="creator-result-modal-head">
+          <div>
+            <p class="creator-kicker">过程详情</p>
+            <h3>执行步骤、证据和开销</h3>
+          </div>
+          <div class="creator-panel-actions">
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="!workflowSession"
+              @click="refreshPrePublishWorkflowSteps"
+            >
+              刷新
+            </button>
+            <button type="button" class="creator-ghost-button" @click="closeWorkflowProcessModal">
+              关闭
+            </button>
+          </div>
+        </header>
+
+        <div class="creator-process-modal-body">
+          <section class="creator-process-summary-grid" aria-label="工作流过程汇总">
+            <article>
+              <span>工作流状态</span>
+              <strong>{{ workflowStatusText }}</strong>
+            </article>
+            <article>
+              <span>步骤</span>
+              <strong>{{ workflowStepStats.total }} 步</strong>
+              <small>{{ workflowStepStats.failed }} 失败 · {{ workflowStepStats.running }} 执行中</small>
+            </article>
+            <article>
+              <span>API 调用</span>
+              <strong>{{ workflowUsage?.totalCalls ?? 0 }} 次</strong>
+              <small>{{ workflowUsage?.failedCalls ?? 0 }} 失败 · {{ workflowUsage?.skippedCalls ?? 0 }} 跳过</small>
+            </article>
+            <article>
+              <span>模型开销</span>
+              <strong>{{ formatUsageToken(workflowUsage?.totalTokens) }} token</strong>
+              <small>{{ formatDuration(workflowUsage?.totalElapsedMs) }}</small>
+            </article>
+          </section>
+
+          <p v-if="workflowUsageError" class="creator-process-warning">
+            开销统计暂不可用：{{ workflowUsageError }}
+          </p>
+
+          <div class="creator-process-step-list">
+            <article
+              v-for="step in workflowSteps"
+              :key="step.stepId"
+              class="creator-process-step"
+              :class="step.status.toLowerCase()"
+            >
+              <header>
+                <small>
+                  {{ workflowStepTypeLabel(step.stepType) }} ·
+                  {{ workflowStepStatusLabel(step.status) }} ·
+                  {{ formatDate(step.startTime || step.createTime) }}
+                </small>
+                <strong>{{ step.stepName }}</strong>
+              </header>
+
+              <p v-if="step.inputSummary">输入摘要：{{ step.inputSummary }}</p>
+              <p v-if="step.outputSummary">输出摘要：{{ step.outputSummary }}</p>
+              <p v-if="step.errorMessage" class="creator-step-error">
+                错误信息：{{ step.errorMessage }}
+              </p>
+
+              <div v-if="workflowCallsForStep(step.stepId).length > 0" class="creator-process-api">
+                <small>API 开销</small>
+                <span
+                  v-for="call in workflowCallsForStep(step.stepId)"
+                  :key="call.callId"
+                  :class="{ failed: call.status === 'FAILED' }"
+                >
+                  {{ formatWorkflowCallUsage(call) }}
+                </span>
+              </div>
+
+              <button
+                v-if="step.rawOutput"
+                type="button"
+                class="creator-ghost-button"
+                @click="toggleRawOutput(step.stepId)"
+              >
+                {{ isRawOutputExpanded(step.stepId) ? '收起原始输出' : '查看原始输出' }}
+              </button>
+              <pre v-if="step.rawOutput && isRawOutputExpanded(step.stepId)">{{ step.rawOutput }}</pre>
+            </article>
+
+            <article v-if="workflowSteps.length === 0" class="creator-empty-result">
+              <strong>当前会话还没有步骤</strong>
+              <span>触发发布前优化分析后，这里会展示步骤、状态、输入输出摘要和模型开销。</span>
+            </article>
+
+            <article
+              v-for="usageStep in workflowUnmatchedUsageSteps"
+              :key="usageStep.stepId"
+              class="creator-process-step"
+            >
+              <header>
+                <small>{{ usageStep.stage || '未记录阶段' }} · 未匹配到工作流步骤</small>
+                <strong>{{ usageStep.stepName }}</strong>
+              </header>
+              <div class="creator-process-api">
+                <small>API 开销</small>
+                <span
+                  v-for="call in usageStep.calls"
+                  :key="call.callId"
+                  :class="{ failed: call.status === 'FAILED' }"
+                >
+                  {{ formatWorkflowCallUsage(call) }}
+                </span>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div
+      v-if="workflowMessageModalOpen"
+      class="creator-modal-backdrop"
+      role="presentation"
+      @click.self="closeWorkflowMessageModal"
+    >
+      <section
+        class="creator-message-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="发布前优化消息流"
+      >
+        <header class="creator-result-modal-head">
+          <div>
+            <p class="creator-kicker">材料与消息</p>
+            <h3>发布前优化消息流</h3>
+          </div>
+          <div class="creator-panel-actions">
+            <span>{{ workflowStatusText }}</span>
+            <span class="creator-sse-status" :class="{ active: workflowSseText === '实时连接' }">
+              {{ workflowSseText }}
+            </span>
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="!hasSelectedTask || !hasSelectedTaskMaterials || isLoadingWorkflow"
+              @click="refreshPrePublishWorkflowMessages"
+            >
+              {{ isLoadingWorkflow ? '载入中' : '刷新消息' }}
+            </button>
+            <button type="button" class="creator-ghost-button" @click="closeWorkflowMessageModal">
+              关闭
+            </button>
+          </div>
+        </header>
+
+        <div class="creator-message-modal-body">
+          <section class="creator-workflow-stream" aria-label="发布前优化消息列表">
+            <div ref="workflowMessageListRef" class="creator-workflow-message-list">
+              <button
+                v-for="message in workflowMessages"
+                :key="message.messageId"
+                type="button"
+                class="creator-workflow-message"
+                :class="[
+                  `role-${message.role.toLowerCase()}`,
+                  { active: message.messageId === selectedWorkflowMessage?.messageId },
+                ]"
+                @click="selectedWorkflowMessageId = message.messageId"
+              >
+                <small>
+                  #{{ message.sequenceNo }} · {{ workflowRoleLabel(message.role) }} ·
+                  {{ formatDate(message.createTime) }}
+                </small>
+                <strong>{{ previewWorkflowMessage(message.content) }}</strong>
+                <span>{{ workflowContentTypeLabel(message.contentType) }}</span>
+              </button>
+
+              <p v-if="!isLoadingWorkflow && workflowMessages.length === 0" class="creator-muted">
+                {{
+                  hasSelectedTaskMaterials
+                    ? '还没有工作流消息，选择任务后会自动装载材料。'
+                    : '当前任务没有材料，无法装载发布前优化工作流。'
+                }}
+              </p>
+            </div>
+          </section>
+
+          <section class="creator-workflow-detail" aria-label="工作流消息详情">
+            <header class="creator-workflow-head">
+              <div>
+                <h4>消息详情</h4>
+              </div>
+              <span v-if="selectedWorkflowMessage" class="creator-parse-status">
+                {{ workflowContentTypeLabel(selectedWorkflowMessage.contentType) }}
+              </span>
+            </header>
+
+            <article v-if="selectedWorkflowMessage" class="creator-workflow-detail-body">
+              <small>
+                {{ workflowRoleLabel(selectedWorkflowMessage.role) }} ·
+                {{ formatDate(selectedWorkflowMessage.createTime) }}
+              </small>
+              <strong>
+                {{
+                  selectedWorkflowMaterial
+                    ? materialLabel(selectedWorkflowMaterial.materialType)
+                    : workflowContentTypeLabel(selectedWorkflowMessage.contentType)
+                }}
+              </strong>
+              <p v-if="selectedWorkflowMaterial">{{ selectedWorkflowMessage.content }}</p>
+              <pre>{{ selectedWorkflowMaterial?.content || selectedWorkflowMessage.content }}</pre>
+            </article>
+
+            <article v-else class="creator-empty-result">
+              <strong>未选择消息</strong>
+              <span>点击左侧消息可以查看完整材料或过程内容。</span>
+            </article>
+          </section>
+
+          <form class="creator-workflow-composer" @submit.prevent="sendWorkflowSupplement">
+            <textarea
+              v-model="workflowMessageDraft"
+              maxlength="2000"
+              :disabled="!canSendWorkflowMessage || isSendingWorkflowMessage"
+              placeholder="补充发布前优化要求，例如：标题更适合 Java 后端学习者，不要标题党"
+            ></textarea>
+            <button
+              type="submit"
+              class="creator-primary-button"
+              :disabled="
+                !canSendWorkflowMessage || !hasText(workflowMessageDraft) || isSendingWorkflowMessage
+              "
+            >
+              {{ isSendingWorkflowMessage ? '发送中...' : '发送消息' }}
+            </button>
+          </form>
+        </div>
       </section>
     </div>
 

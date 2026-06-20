@@ -29,7 +29,13 @@ import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepRecord;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepResponse;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepStatus;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepType;
+import com.link.linkagent.llm.usage.LlmApiUsageService;
+import com.link.linkagent.llm.usage.LlmUsageContext;
+import com.link.linkagent.llm.usage.WorkflowUsageResponse;
+import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,6 +55,8 @@ import java.util.UUID;
 @Service
 public class CreatorWorkflowService {
 
+    private static final Logger log = LoggerFactory.getLogger(CreatorWorkflowService.class);
+
     private static final String DEFAULT_USER_ID = "default";
     private static final String DETAIL_REF_TYPE_MATERIAL = "MATERIAL";
     private static final String DETAIL_REF_TYPE_SUGGESTION = "SUGGESTION";
@@ -60,17 +68,23 @@ public class CreatorWorkflowService {
     private final CreatorWorkflowMapper creatorWorkflowMapper;
     private final PrePublishSuggestionService prePublishSuggestionService;
     private final CreatorWorkflowEventPublisher workflowEventPublisher;
+    private final LlmApiUsageService llmApiUsageService;
+    private final RuntimeSettingService runtimeSettingService;
 
     public CreatorWorkflowService(CreatorTaskMapper creatorTaskMapper,
                                   CreatorSuggestionMapper creatorSuggestionMapper,
                                   CreatorWorkflowMapper creatorWorkflowMapper,
                                   PrePublishSuggestionService prePublishSuggestionService,
-                                  CreatorWorkflowEventPublisher workflowEventPublisher) {
+                                  CreatorWorkflowEventPublisher workflowEventPublisher,
+                                  LlmApiUsageService llmApiUsageService,
+                                  RuntimeSettingService runtimeSettingService) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorWorkflowMapper = creatorWorkflowMapper;
         this.prePublishSuggestionService = prePublishSuggestionService;
         this.workflowEventPublisher = workflowEventPublisher;
+        this.llmApiUsageService = llmApiUsageService;
+        this.runtimeSettingService = runtimeSettingService;
     }
 
     @Transactional
@@ -108,6 +122,11 @@ public class CreatorWorkflowService {
                 .stream()
                 .map(this::toStepResponse)
                 .toList();
+    }
+
+    public WorkflowUsageResponse getWorkflowUsage(String taskId, String sessionId) {
+        CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
+        return llmApiUsageService.summarizeWorkflowSession(sessionRecord.getTaskId(), sessionRecord.getSessionId());
     }
 
     public SseEmitter subscribeEvents(String taskId, String sessionId) {
@@ -225,23 +244,56 @@ public class CreatorWorkflowService {
                     null
             );
 
-            currentStep = startStep(
-                    sessionRecord,
-                    CreatorWorkflowStepType.LLM_CALL,
-                    "生成发布前优化建议",
-                    "基于任务材料、创作指导和工作流补充消息调用 LLM。"
-            );
             PrePublishAnalyzeRequest mergedRequest = mergeWorkflowGuidance(sessionRecord.getSessionId(), request);
-            CreatorSuggestionResponse suggestionResponse = prePublishSuggestionService.generateSuggestion(
-                    sessionRecord.getTaskId(),
-                    mergedRequest
-            );
-            completeStepSuccess(
-                    sessionRecord,
-                    currentStep,
-                    "LLM 已返回发布前优化建议，解析状态：" + suggestionResponse.parseStatus(),
-                    suggestionResponse.rawOutput()
-            );
+            CreatorSuggestionResponse suggestionResponse;
+            if (runtimeSettingService.isPrePublishAgentEnabled()) {
+                currentStep = startStep(
+                        sessionRecord,
+                        CreatorWorkflowStepType.AGENT_REASONING,
+                        "发布前优化 Agent 推理",
+                        "基于任务材料、创作指导、创作者偏好和案例知识库执行 Agent 推理。"
+                );
+                try {
+                    suggestionResponse = generateSuggestionInWorkflowStep(sessionRecord, currentStep, mergedRequest, true);
+                    completeStepSuccess(
+                            sessionRecord,
+                            currentStep,
+                            "Agent 已返回发布前优化建议，解析状态：" + suggestionResponse.parseStatus(),
+                            suggestionResponse.rawOutput()
+                    );
+                } catch (RuntimeException agentException) {
+                    completeStepFailure(sessionRecord, currentStep, agentException);
+                    log.warn("发布前优化 Agent 链路失败，准备回退旧直连 LLM。taskId={}, sessionId={}",
+                            sessionRecord.getTaskId(), sessionRecord.getSessionId(), agentException);
+                    currentStep = startStep(
+                            sessionRecord,
+                            CreatorWorkflowStepType.LLM_CALL,
+                            "直连 LLM 回退生成建议",
+                            "Agent 结构化输出或工具链路失败后，使用旧直连 LLM 链路保证发布前优化可用。"
+                    );
+                    suggestionResponse = generateSuggestionInWorkflowStep(sessionRecord, currentStep, mergedRequest, false);
+                    completeStepSuccess(
+                            sessionRecord,
+                            currentStep,
+                            "旧直连 LLM 已返回发布前优化建议，解析状态：" + suggestionResponse.parseStatus(),
+                            suggestionResponse.rawOutput()
+                    );
+                }
+            } else {
+                currentStep = startStep(
+                        sessionRecord,
+                        CreatorWorkflowStepType.LLM_CALL,
+                        "生成发布前优化建议",
+                        "基于任务材料、创作指导和工作流补充消息调用 LLM。"
+                );
+                suggestionResponse = generateSuggestionInWorkflowStep(sessionRecord, currentStep, mergedRequest, false);
+                completeStepSuccess(
+                        sessionRecord,
+                        currentStep,
+                        "LLM 已返回发布前优化建议，解析状态：" + suggestionResponse.parseStatus(),
+                        suggestionResponse.rawOutput()
+                );
+            }
 
             currentStep = startStep(
                     sessionRecord,
@@ -466,6 +518,26 @@ public class CreatorWorkflowService {
                 safeRequest.extraRequirement(),
                 safeRequest.preferenceMode()
         );
+    }
+
+    private CreatorSuggestionResponse generateSuggestionInWorkflowStep(CreatorWorkflowSessionRecord sessionRecord,
+                                                                       CreatorWorkflowStepRecord stepRecord,
+                                                                       PrePublishAnalyzeRequest request,
+                                                                       boolean agentMode) {
+        String scene = agentMode ? "发布前优化 Agent 推理" : "发布前优化 LLM 回退";
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.openWorkflowStep(
+                sessionRecord.getTaskId(),
+                sessionRecord.getSessionId(),
+                stepRecord.getStepId(),
+                stepRecord.getStepName(),
+                sessionRecord.getStage(),
+                scene
+        )) {
+            if (agentMode) {
+                return prePublishSuggestionService.generateSuggestionByAgent(sessionRecord.getTaskId(), request);
+            }
+            return prePublishSuggestionService.generateSuggestion(sessionRecord.getTaskId(), request);
+        }
     }
 
     private CreatorWorkflowMessageRecord appendAndPublishMessage(String taskId,

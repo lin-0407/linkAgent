@@ -21,6 +21,10 @@ public enum RuntimeSettingKey {
             "agent.kernel.structured.enabled",
             "结构化 Agent 内核",
             "通用 Agent 每步使用 ReActStep 结构化输出，减少对文本格式提示词的依赖"),
+    PRE_PUBLISH_AGENT_ENABLED(
+            "creator.pre-publish.agent.enabled",
+            "发布前优化 Agent",
+            "发布前优化优先走 AgentExecutor.runTask，失败时保留旧直连链路回退能力"),
     KNOWLEDGE_RAG_RERANK_ENABLED(
             "knowledge.rag.rerank.enabled",
             "案例库 rerank 精排",

@@ -13,6 +13,10 @@ public class LlmApiCallRecord {
     private String taskId;
     private String traceId;
     private String requestId;
+    private String workflowSessionId;
+    private String workflowStepId;
+    private String workflowStepName;
+    private String workflowStage;
     private String modelCategory;
     private String scene;
     private String modelName;
@@ -63,6 +67,38 @@ public class LlmApiCallRecord {
 
     public void setRequestId(String requestId) {
         this.requestId = requestId;
+    }
+
+    public String getWorkflowSessionId() {
+        return workflowSessionId;
+    }
+
+    public void setWorkflowSessionId(String workflowSessionId) {
+        this.workflowSessionId = workflowSessionId;
+    }
+
+    public String getWorkflowStepId() {
+        return workflowStepId;
+    }
+
+    public void setWorkflowStepId(String workflowStepId) {
+        this.workflowStepId = workflowStepId;
+    }
+
+    public String getWorkflowStepName() {
+        return workflowStepName;
+    }
+
+    public void setWorkflowStepName(String workflowStepName) {
+        this.workflowStepName = workflowStepName;
+    }
+
+    public String getWorkflowStage() {
+        return workflowStage;
+    }
+
+    public void setWorkflowStage(String workflowStage) {
+        this.workflowStage = workflowStage;
     }
 
     public String getModelCategory() {

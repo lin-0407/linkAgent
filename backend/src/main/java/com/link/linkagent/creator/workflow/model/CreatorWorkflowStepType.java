@@ -11,7 +11,17 @@ public enum CreatorWorkflowStepType {
     LOAD_CONTEXT,
 
     /**
-     * 调用 LLM 生成发布前优化建议。
+     * Agent 读取上下文、按需调用工具并生成发布前优化建议。
+     */
+    AGENT_REASONING,
+
+    /**
+     * 工具调用步骤，后续如果需要把 Agent 工具过程拆成业务步骤，可直接复用。
+     */
+    TOOL_CALL,
+
+    /**
+     * 旧直连链路调用 LLM 生成发布前优化建议。
      */
     LLM_CALL,
 

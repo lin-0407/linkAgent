@@ -5,7 +5,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -118,6 +121,51 @@ public class LlmApiUsageService {
         return new LlmApiCallPageResponse(taskId, safePage, safePageSize, total, items);
     }
 
+    public WorkflowUsageResponse summarizeWorkflowSession(String taskId, String sessionId) {
+        List<LlmApiCallRecord> calls = llmApiUsageMapper.listCallsByWorkflowSession(taskId, sessionId);
+        long successCalls = 0;
+        long failedCalls = 0;
+        long skippedCalls = 0;
+        Long totalTokens = null;
+        Long totalElapsedMs = null;
+        Map<String, WorkflowStepAccumulator> stepMap = new LinkedHashMap<>();
+        for (LlmApiCallRecord call : calls) {
+            if (LlmApiCallStatus.SUCCESS.name().equals(call.getStatus())) {
+                successCalls++;
+            } else if (LlmApiCallStatus.FAILED.name().equals(call.getStatus())) {
+                failedCalls++;
+            } else if (LlmApiCallStatus.SKIPPED.name().equals(call.getStatus())) {
+                skippedCalls++;
+            }
+            totalTokens = addNullable(totalTokens, longValue(call.getTotalTokens()));
+            totalElapsedMs = addNullable(totalElapsedMs, call.getElapsedMs());
+
+            String stepKey = TextUtil.trimToDefault(call.getWorkflowStepId(), "UNKNOWN_STEP");
+            WorkflowStepAccumulator accumulator = stepMap.computeIfAbsent(stepKey, ignored -> new WorkflowStepAccumulator(
+                    stepKey,
+                    TextUtil.trimToDefault(call.getWorkflowStepName(), "未归属步骤"),
+                    TextUtil.trimToDefault(call.getWorkflowStage(), null)
+            ));
+            accumulator.calls().add(call);
+        }
+
+        List<WorkflowStepUsageResponse> steps = stepMap.values()
+                .stream()
+                .map(item -> new WorkflowStepUsageResponse(item.stepId(), item.stepName(), item.stage(), item.calls()))
+                .toList();
+        return new WorkflowUsageResponse(
+                taskId,
+                sessionId,
+                calls.size(),
+                successCalls,
+                failedCalls,
+                skippedCalls,
+                totalTokens,
+                totalElapsedMs,
+                steps
+        );
+    }
+
     private void recordWithException(LlmApiModelCategory modelCategory,
                                      String modelName,
                                      Integer promptTokens,
@@ -147,6 +195,10 @@ public class LlmApiUsageService {
             record.setTaskId(context == null ? null : context.taskId());
             record.setTraceId(context == null ? null : context.traceId());
             record.setRequestId(context == null ? null : context.requestId());
+            record.setWorkflowSessionId(context == null ? null : context.workflowSessionId());
+            record.setWorkflowStepId(context == null ? null : context.workflowStepId());
+            record.setWorkflowStepName(context == null ? null : context.workflowStepName());
+            record.setWorkflowStage(context == null ? null : context.workflowStage());
             record.setScene(context == null ? null : context.scene());
             record.setModelCategory(modelCategory.name());
             record.setModelName(trimToNull(modelName));
@@ -216,5 +268,21 @@ public class LlmApiUsageService {
             return left;
         }
         return left == null ? right : left + right;
+    }
+
+    private Long longValue(Integer value) {
+        return value == null ? null : value.longValue();
+    }
+
+    private record WorkflowStepAccumulator(
+            String stepId,
+            String stepName,
+            String stage,
+            List<LlmApiCallRecord> calls
+    ) {
+
+        private WorkflowStepAccumulator(String stepId, String stepName, String stage) {
+            this(stepId, stepName, stage, new ArrayList<>());
+        }
     }
 }

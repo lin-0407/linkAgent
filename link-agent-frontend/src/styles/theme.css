@@ -1798,7 +1798,7 @@ textarea:focus {
 .creator-secondary-action,
 .creator-danger-action,
 .creator-primary-button {
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 var(--s3);
   border-radius: var(--r-sm);
   cursor: pointer;
@@ -3433,6 +3433,10 @@ textarea:focus {
   gap: var(--s4);
 }
 
+.creator-workflow-grid-compact {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .creator-workflow-stream,
 .creator-workflow-detail,
 .creator-workflow-steps,
@@ -3454,6 +3458,10 @@ textarea:focus {
 
 .creator-workflow-steps {
   grid-column: 1 / -1;
+}
+
+.creator-workflow-grid-compact .creator-workflow-steps {
+  grid-column: auto;
 }
 
 .creator-workflow-head {
@@ -3613,6 +3621,29 @@ textarea:focus {
   font-family: var(--font-code);
   font-size: 13px;
   line-height: 1.62;
+}
+
+.creator-workflow-process-summary {
+  display: grid;
+  gap: var(--s2);
+  padding: var(--s4);
+  color: var(--ink);
+  background:
+    linear-gradient(135deg, rgba(53, 115, 106, 0.12), transparent 48%),
+    var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.creator-workflow-process-summary strong {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.creator-workflow-process-summary span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .creator-workflow-step-list {
@@ -4066,6 +4097,240 @@ textarea:focus {
   min-height: 0;
   overflow: auto;
   padding-right: 4px;
+}
+
+.creator-process-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1080px, 100%);
+  max-height: min(840px, calc(100vh - 48px));
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  box-shadow: var(--sh-lg);
+}
+
+.creator-message-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1160px, 100%);
+  max-height: min(840px, calc(100vh - 48px));
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  box-shadow: var(--sh-lg);
+}
+
+.creator-message-modal .creator-panel-actions > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 var(--s3);
+  color: var(--text);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.creator-message-modal .creator-panel-actions > .creator-sse-status {
+  color: var(--muted);
+  background: var(--surface-sub);
+}
+
+.creator-message-modal .creator-panel-actions > .creator-sse-status.active {
+  color: var(--accent);
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+
+.creator-message-modal-body {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.72fr) minmax(0, 1.28fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--s4);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.creator-message-modal-body .creator-workflow-stream,
+.creator-message-modal-body .creator-workflow-detail {
+  align-content: stretch;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.creator-message-modal-body .creator-workflow-detail {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.creator-message-modal-body .creator-workflow-message-list {
+  max-height: none;
+  min-height: 0;
+}
+
+.creator-message-modal-body .creator-workflow-detail-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.creator-message-modal-body .creator-workflow-detail-body pre {
+  min-height: 0;
+  max-height: min(560px, calc(100vh - 280px));
+}
+
+.creator-message-modal-body .creator-workflow-composer {
+  grid-column: 1 / -1;
+}
+
+.creator-process-modal-body {
+  display: grid;
+  gap: var(--s4);
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.creator-process-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s3);
+}
+
+.creator-process-summary-grid article {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: var(--s3);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.creator-process-summary-grid span,
+.creator-process-summary-grid small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.creator-process-summary-grid strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.creator-process-warning {
+  margin: 0;
+  padding: var(--s3);
+  color: var(--danger);
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.24);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.creator-process-step-list {
+  display: grid;
+  gap: var(--s3);
+}
+
+.creator-process-step {
+  display: grid;
+  min-width: 0;
+  gap: var(--s3);
+  padding: var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: inset 4px 0 0 var(--border-strong);
+}
+
+.creator-process-step.success {
+  box-shadow: inset 4px 0 0 var(--ok);
+}
+
+.creator-process-step.failed {
+  box-shadow: inset 4px 0 0 var(--danger);
+}
+
+.creator-process-step.running {
+  box-shadow: inset 4px 0 0 var(--warn);
+}
+
+.creator-process-step header {
+  display: grid;
+  gap: 4px;
+}
+
+.creator-process-step small,
+.creator-process-api small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.creator-process-step strong {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.creator-process-step p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+.creator-process-api {
+  display: grid;
+  gap: 6px;
+  padding: var(--s3);
+  color: var(--muted);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.creator-process-api span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.creator-process-api span.failed,
+.creator-process-step .creator-step-error {
+  color: var(--danger);
+  font-weight: var(--fw-semibold);
+}
+
+.creator-process-step pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(31, 23, 32, 0.88);
+  background: rgba(248, 250, 252, 0.96);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: var(--r-sm);
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .creator-task-manager-backdrop {
@@ -4561,7 +4826,8 @@ textarea:focus {
   .creator-eval-grid,
   .creator-usage-overview,
   .creator-usage-category-grid,
-  .creator-usage-call-meta {
+  .creator-usage-call-meta,
+  .creator-process-summary-grid {
     grid-template-columns: 1fr;
   }
 
@@ -4631,6 +4897,30 @@ textarea:focus {
 
   .creator-result-modal {
     max-height: calc(100vh - 24px);
+  }
+
+  .creator-process-modal {
+    width: 100%;
+    max-height: calc(100vh - 24px);
+  }
+
+  .creator-message-modal {
+    width: 100%;
+    max-height: calc(100vh - 24px);
+    padding: 14px;
+  }
+
+  .creator-message-modal-body {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .creator-message-modal-body .creator-workflow-message-list {
+    max-height: 280px;
+  }
+
+  .creator-message-modal-body .creator-workflow-detail-body pre {
+    max-height: 320px;
   }
 
   .creator-result-modal.with-feedback-drawer {

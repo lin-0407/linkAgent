@@ -15,3 +15,6 @@
 | 阶段 5.9 - LLM API 开销统计与全链路追溯 | `/docs/develop/阶段5.9-LLM API开销统计与全链路追溯.md` |
 | LLM API 开销统计与全链路追溯说明 | `/docs/reference/LLM API开销统计与全链路追溯说明.md` |
 | 阶段 5.9 - LLM API 开销统计与全链路追溯踩坑记录 | `/docs/error/阶段5.9-LLM API开销统计与全链路追溯踩坑记录.md` |
+| 阶段 5.10 - 发布前优化 Agent 化与步骤级开销追溯 | `/docs/develop/阶段5.10-发布前优化Agent化与步骤级开销追溯.md` |
+| 发布前优化 Agent 化与步骤级开销追溯说明 | `/docs/reference/发布前优化Agent化与步骤级开销追溯说明.md` |
+| 阶段 5.10 - 发布前优化 Agent 化与步骤级开销追溯踩坑记录 | `/docs/error/阶段5.10-发布前优化Agent化与步骤级开销追溯踩坑记录.md` |

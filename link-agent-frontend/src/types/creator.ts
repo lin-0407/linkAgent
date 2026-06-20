@@ -553,6 +553,10 @@ export type LlmApiCallRecord = {
   taskId: string | null
   traceId: string | null
   requestId: string | null
+  workflowSessionId: string | null
+  workflowStepId: string | null
+  workflowStepName: string | null
+  workflowStage: CreatorWorkflowStage | string | null
   modelCategory: LlmApiModelCategory
   scene: string | null
   modelName: string | null
@@ -572,4 +576,23 @@ export type LlmApiCallPage = {
   pageSize: number
   total: number
   items: LlmApiCallRecord[]
+}
+
+export type WorkflowStepUsage = {
+  stepId: string
+  stepName: string
+  stage: CreatorWorkflowStage | string | null
+  calls: LlmApiCallRecord[]
+}
+
+export type WorkflowUsageResponse = {
+  taskId: string
+  sessionId: string
+  totalCalls: number
+  successCalls: number
+  failedCalls: number
+  skippedCalls: number
+  totalTokens: number | null
+  totalElapsedMs: number | null
+  steps: WorkflowStepUsage[]
 }

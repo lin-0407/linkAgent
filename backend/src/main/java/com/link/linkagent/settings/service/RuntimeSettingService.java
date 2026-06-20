@@ -77,6 +77,10 @@ public class RuntimeSettingService {
         return isEnabled(RuntimeSettingKey.AGENT_STRUCTURED_KERNEL_ENABLED, agentStructuredKernelDefaultEnabled());
     }
 
+    public boolean isPrePublishAgentEnabled() {
+        return isEnabled(RuntimeSettingKey.PRE_PUBLISH_AGENT_ENABLED, prePublishAgentDefaultEnabled());
+    }
+
     public boolean isKnowledgeRerankEnabled() {
         return isEnabled(RuntimeSettingKey.KNOWLEDGE_RAG_RERANK_ENABLED, knowledgeRagProperties.getRerank().isEnabled());
     }
@@ -91,6 +95,7 @@ public class RuntimeSettingService {
                 toToggle(RuntimeSettingKey.LLM_GUARD_ENABLED, defaults),
                 toToggle(RuntimeSettingKey.SUMMARY_MEMORY_ENABLED, defaults),
                 toToggle(RuntimeSettingKey.AGENT_STRUCTURED_KERNEL_ENABLED, defaults),
+                toToggle(RuntimeSettingKey.PRE_PUBLISH_AGENT_ENABLED, defaults),
                 toToggle(RuntimeSettingKey.KNOWLEDGE_RAG_RERANK_ENABLED, defaults),
                 toToggle(RuntimeSettingKey.CREATOR_FEEDBACK_RAG_ENABLED, defaults)
         );
@@ -110,6 +115,7 @@ public class RuntimeSettingService {
         defaults.put(RuntimeSettingKey.LLM_GUARD_ENABLED, llmCallGuardProperties.isEnabled());
         defaults.put(RuntimeSettingKey.SUMMARY_MEMORY_ENABLED, summaryMemoryProperties.enabled());
         defaults.put(RuntimeSettingKey.AGENT_STRUCTURED_KERNEL_ENABLED, agentStructuredKernelDefaultEnabled());
+        defaults.put(RuntimeSettingKey.PRE_PUBLISH_AGENT_ENABLED, prePublishAgentDefaultEnabled());
         defaults.put(RuntimeSettingKey.KNOWLEDGE_RAG_RERANK_ENABLED, knowledgeRagProperties.getRerank().isEnabled());
         defaults.put(RuntimeSettingKey.CREATOR_FEEDBACK_RAG_ENABLED, creatorFeedbackRagProperties.isEnabled());
         return defaults;
@@ -137,6 +143,10 @@ public class RuntimeSettingService {
 
     private boolean agentStructuredKernelDefaultEnabled() {
         return Boolean.parseBoolean(environment.getProperty("agent.kernel.structured.enabled", "true"));
+    }
+
+    private boolean prePublishAgentDefaultEnabled() {
+        return Boolean.parseBoolean(environment.getProperty("creator.pre-publish.agent.enabled", "true"));
     }
 
     private boolean isEnabled(RuntimeSettingKey key, boolean defaultValue) {

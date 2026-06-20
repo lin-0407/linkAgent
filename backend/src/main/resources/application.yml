@@ -116,6 +116,10 @@ agent:
 # 业务开关独立于 spring.ai 基础设施开关：即使 Milvus/Embedding 连上，也只有 enabled=true 才让追问走向量检索，
 # 避免“基础设施就绪但业务还没准备好”时追问链路被动切到 RAG。
 creator:
+  pre-publish:
+    # 默认启用发布前优化 Agent 链路；演示或排障时可通过 PRE_PUBLISH_AGENT_ENABLED=false 回退旧直连 LLM 链路。
+    agent:
+      enabled: ${PRE_PUBLISH_AGENT_ENABLED:true}
   feedback:
     rag:
       enabled: ${CREATOR_FEEDBACK_RAG_ENABLED:false}

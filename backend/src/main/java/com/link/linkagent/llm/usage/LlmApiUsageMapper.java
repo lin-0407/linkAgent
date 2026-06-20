@@ -23,6 +23,10 @@ public interface LlmApiUsageMapper {
                 task_id,
                 trace_id,
                 request_id,
+                workflow_session_id,
+                workflow_step_id,
+                workflow_step_name,
+                workflow_stage,
                 model_category,
                 scene,
                 model_name,
@@ -39,6 +43,10 @@ public interface LlmApiUsageMapper {
                 #{taskId},
                 #{traceId},
                 #{requestId},
+                #{workflowSessionId},
+                #{workflowStepId},
+                #{workflowStepName},
+                #{workflowStage},
                 #{modelCategory},
                 #{scene},
                 #{modelName},
@@ -105,6 +113,10 @@ public interface LlmApiUsageMapper {
                    task_id,
                    trace_id,
                    request_id,
+                   workflow_session_id,
+                   workflow_step_id,
+                   workflow_step_name,
+                   workflow_stage,
                    model_category,
                    scene,
                    model_name,
@@ -132,6 +144,10 @@ public interface LlmApiUsageMapper {
             @Result(column = "task_id", property = "taskId"),
             @Result(column = "trace_id", property = "traceId"),
             @Result(column = "request_id", property = "requestId"),
+            @Result(column = "workflow_session_id", property = "workflowSessionId"),
+            @Result(column = "workflow_step_id", property = "workflowStepId"),
+            @Result(column = "workflow_step_name", property = "workflowStepName"),
+            @Result(column = "workflow_stage", property = "workflowStage"),
             @Result(column = "model_category", property = "modelCategory"),
             @Result(column = "scene", property = "scene"),
             @Result(column = "model_name", property = "modelName"),
@@ -155,6 +171,10 @@ public interface LlmApiUsageMapper {
                    task_id,
                    trace_id,
                    request_id,
+                   workflow_session_id,
+                   workflow_step_id,
+                   workflow_step_name,
+                   workflow_stage,
                    model_category,
                    scene,
                    model_name,
@@ -175,4 +195,35 @@ public interface LlmApiUsageMapper {
     @ResultMap("LlmApiCallRecordMap")
     List<LlmApiCallRecord> listRecentCallsByTaskId(@Param("taskId") String taskId,
                                                    @Param("limit") int limit);
+
+    @Select("""
+            SELECT id,
+                   call_id,
+                   task_id,
+                   trace_id,
+                   request_id,
+                   workflow_session_id,
+                   workflow_step_id,
+                   workflow_step_name,
+                   workflow_stage,
+                   model_category,
+                   scene,
+                   model_name,
+                   prompt_tokens,
+                   completion_tokens,
+                   total_tokens,
+                   elapsed_ms,
+                   status,
+                   error_message,
+                   input_count,
+                   create_time
+            FROM llm_api_call_log
+            WHERE task_id = #{taskId}
+              AND workflow_session_id = #{workflowSessionId}
+              AND is_deleted = 0
+            ORDER BY create_time ASC, id ASC
+            """)
+    @ResultMap("LlmApiCallRecordMap")
+    List<LlmApiCallRecord> listCallsByWorkflowSession(@Param("taskId") String taskId,
+                                                      @Param("workflowSessionId") String workflowSessionId);
 }
