@@ -539,6 +539,127 @@ small.step-block {
   color: var(--danger);
 }
 
+.agent-mode-badge {
+  display: inline-flex;
+  width: fit-content;
+  margin-bottom: 10px;
+  padding: 3px 9px;
+  color: var(--accent);
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+
+.plan-trace {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.plan-trace summary {
+  color: var(--ink);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 650;
+}
+
+.plan-trace-body,
+.plan-trace-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.plan-trace-overview,
+.plan-trace-step {
+  display: grid;
+  gap: 7px;
+  padding: 12px 13px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+
+.plan-trace-overview strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.plan-trace-overview p,
+.plan-trace-overview small,
+.plan-trace-step p,
+.plan-trace-step small {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.plan-trace-step {
+  box-shadow: inset 3px 0 0 var(--border-strong);
+}
+
+.plan-trace-step.success {
+  box-shadow: inset 3px 0 0 var(--ok);
+}
+
+.plan-trace-step.failed {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.plan-trace-step.skipped {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
+.plan-trace-step header {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 8px;
+}
+
+.plan-trace-step header > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: var(--surface);
+  background: var(--ink);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+}
+
+.plan-trace-step header div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.plan-trace-step strong {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.plan-trace-step b {
+  padding: 3px 8px;
+  color: var(--muted);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.plan-trace-error {
+  color: var(--danger) !important;
+  font-weight: var(--fw-semibold);
+}
+
 .error {
   position: relative;
   z-index: 1;
@@ -1090,6 +1211,50 @@ textarea:focus {
   background: var(--surface-sub);
   border-top: 1px solid var(--border);
   font-size: 12px;
+}
+
+.agent-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.agent-mode-switch button {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 8px;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.agent-mode-switch button:hover,
+.agent-mode-switch button.active {
+  color: var(--accent);
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+
+.agent-mode-switch strong {
+  color: currentColor;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.agent-mode-switch small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-floating-window .error {
@@ -4958,6 +5123,21 @@ textarea:focus {
 
   .creator-prompt-field textarea {
     min-height: 300px;
+  }
+}
+
+@media (max-width: 640px) {
+  .agent-mode-switch {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plan-trace-step header {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .plan-trace-step header b {
+    grid-column: 2;
+    width: fit-content;
   }
 }
 

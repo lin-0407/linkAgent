@@ -18,3 +18,6 @@
 | 阶段 5.10 - 发布前优化 Agent 化与步骤级开销追溯 | `/docs/develop/阶段5.10-发布前优化Agent化与步骤级开销追溯.md` |
 | 发布前优化 Agent 化与步骤级开销追溯说明 | `/docs/reference/发布前优化Agent化与步骤级开销追溯说明.md` |
 | 阶段 5.10 - 发布前优化 Agent 化与步骤级开销追溯踩坑记录 | `/docs/error/阶段5.10-发布前优化Agent化与步骤级开销追溯踩坑记录.md` |
+| 阶段 6 - Agent PaE 与 Multi Agent 模式 | `/docs/develop/阶段6-Agent PAE与Multi Agent模式.md` |
+| Agent PaE 与 Multi Agent 模式说明 | `/docs/reference/Agent PAE与Multi Agent模式说明.md` |
+| 阶段 6 - Agent PaE 与 Multi Agent 模式踩坑记录 | `/docs/error/阶段6-Agent PAE与Multi Agent模式踩坑记录.md` |

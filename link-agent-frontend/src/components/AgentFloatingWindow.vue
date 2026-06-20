@@ -14,6 +14,7 @@ import {
   KNOWLEDGE_VIDEO_CONTEXT_EVENT,
   type KnowledgeVideoContextEventDetail,
 } from '@/utils/agentContext'
+import type { AgentExecutionMode } from '@/types/agent'
 
 type WindowRect = {
   left: number
@@ -46,6 +47,16 @@ const promptExamples = [
   '结合当前工作台，给我一个排查后端接口问题的步骤。',
 ]
 const capabilityTags = ['会话记忆', '工具调用', '推理轨迹']
+const executionModeOptions: Array<{
+  value: AgentExecutionMode
+  label: string
+  description: string
+}> = [
+  { value: 'AUTO', label: 'Auto', description: '自动选择' },
+  { value: 'REACT', label: 'ReAct', description: '边想边做' },
+  { value: 'PLAN_EXECUTE', label: 'PaE', description: '先计划后执行' },
+  { value: 'MULTI_AGENT', label: 'Multi', description: '多 Agent 协作' },
+]
 const viewportMargin = 18
 const minWindowWidth = 520
 const minWindowHeight = 420
@@ -77,6 +88,7 @@ const {
   activeSessionLabel,
   canSend,
   errorMessage,
+  executionMode,
   inputMessage,
   isLoading,
   isSessionsLoading,
@@ -480,6 +492,10 @@ function sourceTypeLabel(sourceType: string) {
   return sourceType === 'DANMAKU' ? '弹幕' : '评论'
 }
 
+function modeButtonTitle(option: { label: string; description: string }) {
+  return `${option.label}：${option.description}`
+}
+
 function tierLabel(value: string) {
   switch (value) {
     case 'BENCHMARK':
@@ -644,8 +660,22 @@ function clipText(value: string, maxLength: number) {
 
         <div class="agent-floating-meta">
           <span>{{ messages.length }} 条消息</span>
-          <span>{{ latestStepCount }} 个 ReAct 步骤</span>
+          <span>{{ latestStepCount }} 个推理步骤</span>
           <span>{{ sessionId ? '当前会话' : '新会话' }}</span>
+        </div>
+
+        <div class="agent-mode-switch" aria-label="Agent 执行模式">
+          <button
+            v-for="option in executionModeOptions"
+            :key="option.value"
+            type="button"
+            :class="{ active: executionMode === option.value }"
+            :title="modeButtonTitle(option)"
+            @click="executionMode = option.value"
+          >
+            <strong>{{ option.label }}</strong>
+            <small>{{ option.description }}</small>
+          </button>
         </div>
 
         <ErrorNotice :error-message="errorMessage" />

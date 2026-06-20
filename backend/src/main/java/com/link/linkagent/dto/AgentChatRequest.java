@@ -1,5 +1,6 @@
 package com.link.linkagent.dto;
 
+import com.link.linkagent.core.AgentExecutionMode;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -11,6 +12,8 @@ public record AgentChatRequest(
         String userId,
 
         @NotBlank(message = "消息内容不能为空")
-        String message
+        String message,
+
+        AgentExecutionMode executionMode
 ) {
 }

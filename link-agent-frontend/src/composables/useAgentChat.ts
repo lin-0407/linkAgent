@@ -4,7 +4,7 @@ import {
   loadAgentSessions,
   sendAgentMessage,
 } from '@/api/agent'
-import type { ChatMessage, SessionListItem } from '@/types/agent'
+import type { AgentExecutionMode, ChatMessage, SessionListItem } from '@/types/agent'
 
 const selectedSessionKey = 'link-agent-session-id'
 
@@ -26,6 +26,7 @@ export function useAgentChat() {
   const isLoading = ref(false)
   const isSessionsLoading = ref(false)
   const isSessionsOpen = ref(false)
+  const executionMode = ref<AgentExecutionMode>('AUTO')
   const errorMessage = ref('')
   const sessionsError = ref('')
   const messageListRef = ref<ScrollContainer | null>(null)
@@ -76,7 +77,7 @@ export function useAgentChat() {
 
     try {
       // 前端可以把上下文拼进实际出站消息，但聊天窗口只显示用户原问题，避免界面被大段事实材料刷屏。
-      const data = await sendAgentMessage(sessionId.value, outboundMessage)
+      const data = await sendAgentMessage(sessionId.value, outboundMessage, executionMode.value)
       sessionId.value = data.sessionId
       persistSessionId(data.sessionId)
       await loadSessions()
@@ -86,6 +87,9 @@ export function useAgentChat() {
         content: data.finalAnswer || data.stopReason || 'Agent 没有返回内容',
         steps: data.steps,
         stopReason: data.stopReason,
+        executionMode: data.executionMode,
+        planTrace: data.planTrace,
+        workerTraces: data.workerTraces,
       })
     } catch (error) {
       errorMessage.value = error instanceof Error ? error.message : '请求失败'
@@ -182,6 +186,7 @@ export function useAgentChat() {
     assistantMessageCount,
     canSend,
     errorMessage,
+    executionMode,
     inputMessage,
     isLoading,
     isSessionsLoading,

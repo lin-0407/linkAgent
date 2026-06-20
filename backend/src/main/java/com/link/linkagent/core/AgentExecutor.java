@@ -3,6 +3,8 @@ package com.link.linkagent.core;
 import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.memory.LongTermMemory;
+import com.link.linkagent.core.multi.MultiAgentOrchestrator;
+import com.link.linkagent.core.plan.PlanAndExecuteAgent;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.memory.LongTermMemoryCandidate;
 import com.link.linkagent.memory.LongTermMemoryExtractor;
@@ -23,9 +25,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,6 +50,9 @@ public class AgentExecutor {
     private final LongTermMemoryExtractor longTermMemoryExtractor;
     private final PromptService promptService;
     private final RuntimeSettingService runtimeSettingService;
+    private final AgentExecutionModeRouter executionModeRouter;
+    private final PlanAndExecuteAgent planAndExecuteAgent;
+    private final MultiAgentOrchestrator multiAgentOrchestrator;
     /** 生产环境从运行期设置读取结构化开关；单测不注入设置服务时回退到构造器默认值。 */
     private final boolean structuredKernelDefaultEnabled;
 
@@ -88,9 +93,13 @@ public class AgentExecutor {
                          SummaryMemory summaryMemory, LongTermMemory longTermMemory,
                          LongTermMemoryExtractor longTermMemoryExtractor,
                          PromptService promptService,
-                         RuntimeSettingService runtimeSettingService) {
+                         RuntimeSettingService runtimeSettingService,
+                         AgentExecutionModeRouter executionModeRouter,
+                         PlanAndExecuteAgent planAndExecuteAgent,
+                         MultiAgentOrchestrator multiAgentOrchestrator) {
         this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
-                longTermMemoryExtractor, promptService, runtimeSettingService, true);
+                longTermMemoryExtractor, promptService, runtimeSettingService, true,
+                executionModeRouter, planAndExecuteAgent, multiAgentOrchestrator);
     }
 
     public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
@@ -99,7 +108,8 @@ public class AgentExecutor {
                          LongTermMemoryExtractor longTermMemoryExtractor,
                          PromptService promptService) {
         this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
-                longTermMemoryExtractor, promptService, null, false);
+                longTermMemoryExtractor, promptService, null, false,
+                new AgentExecutionModeRouter(), null, null);
     }
 
     AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
@@ -109,7 +119,8 @@ public class AgentExecutor {
                   PromptService promptService,
                   boolean structuredKernelDefaultEnabled) {
         this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
-                longTermMemoryExtractor, promptService, null, structuredKernelDefaultEnabled);
+                longTermMemoryExtractor, promptService, null, structuredKernelDefaultEnabled,
+                new AgentExecutionModeRouter(), null, null);
     }
 
     private AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
@@ -118,7 +129,10 @@ public class AgentExecutor {
                           LongTermMemoryExtractor longTermMemoryExtractor,
                           PromptService promptService,
                           RuntimeSettingService runtimeSettingService,
-                          boolean structuredKernelDefaultEnabled) {
+                          boolean structuredKernelDefaultEnabled,
+                          AgentExecutionModeRouter executionModeRouter,
+                          PlanAndExecuteAgent planAndExecuteAgent,
+                          MultiAgentOrchestrator multiAgentOrchestrator) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
@@ -129,6 +143,9 @@ public class AgentExecutor {
         this.promptService = promptService;
         this.runtimeSettingService = runtimeSettingService;
         this.structuredKernelDefaultEnabled = structuredKernelDefaultEnabled;
+        this.executionModeRouter = executionModeRouter == null ? new AgentExecutionModeRouter() : executionModeRouter;
+        this.planAndExecuteAgent = planAndExecuteAgent;
+        this.multiAgentOrchestrator = multiAgentOrchestrator;
     }
 
     /**
@@ -153,6 +170,10 @@ public class AgentExecutor {
     }
 
     public AgentChatResponse run(String sessionId, String userId, String userMessage) {
+        return run(sessionId, userId, userMessage, AgentExecutionMode.AUTO);
+    }
+
+    public AgentChatResponse run(String sessionId, String userId, String userMessage, AgentExecutionMode requestedMode) {
         String resolvedSessionId = resolveSessionId(sessionId);
         String resolvedUserId = resolveUserId(userId);
 
@@ -163,6 +184,15 @@ public class AgentExecutor {
         List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
         appendMemory(conversation, recentMessages);
         conversation.append("Human:").append(userMessage).append("\n\n");
+
+        AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
+        AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
+        if (plannedResult != null) {
+            if (TextUtil.hasText(plannedResult.finalAnswer())) {
+                persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer());
+            }
+            return toChatResponse(resolvedSessionId, plannedResult);
+        }
 
         // 结构化内核（5.4+）：开关开则每步走受 schema 约束的 ReActStep；关闭时回退文本 ReAct 兜底。
         if (isStructuredKernelEnabled()) {
@@ -331,6 +361,54 @@ public class AgentExecutor {
         }
     }
 
+    public AgentChatResponse runTask(String taskMessage, AgentExecutionMode requestedMode) {
+        AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, taskMessage);
+        String conversationContext = "Human:" + TextUtil.trimToDefault(taskMessage, "") + "\n\n";
+        AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversationContext, taskMessage);
+        if (plannedResult != null) {
+            return toChatResponse(null, plannedResult);
+        }
+        // 既有 runTask 默认语义保留为 ReAct，避免发布前优化内部取证链路被阶段 6 自动路由改变。
+        return runTask(taskMessage);
+    }
+
+    private AgentRunResult tryRunPlannedMode(AgentExecutionMode selectedMode, AgentExecutionMode requestedMode,
+                                             String conversationContext, String userMessage) {
+        if (selectedMode == AgentExecutionMode.PLAN_EXECUTE && planAndExecuteAgent != null) {
+            return runPlannedSafely(requestedMode, () -> planAndExecuteAgent.run(conversationContext, userMessage));
+        }
+        if (selectedMode == AgentExecutionMode.MULTI_AGENT && multiAgentOrchestrator != null) {
+            return runPlannedSafely(requestedMode, () -> multiAgentOrchestrator.run(conversationContext, userMessage));
+        }
+        return null;
+    }
+
+    private AgentRunResult runPlannedSafely(AgentExecutionMode requestedMode, Supplier<AgentRunResult> supplier) {
+        try {
+            return supplier.get();
+        } catch (RuntimeException exception) {
+            // AUTO 是体验优先：规划链路异常时回退 ReAct，避免用户只是问复杂问题就直接 500；显式指定模式时保留响亮失败，便于排障。
+            if (AgentExecutionMode.normalize(requestedMode) == AgentExecutionMode.AUTO) {
+                log.warn("自动规划模式执行失败，回退 ReAct。error={}", exception.getMessage(), exception);
+                return null;
+            }
+            throw exception;
+        }
+    }
+
+    private AgentChatResponse toChatResponse(String sessionId, AgentRunResult result) {
+        return new AgentChatResponse(
+                sessionId,
+                result.finalAnswer(),
+                result.stopReason(),
+                result.totalSteps(),
+                result.steps(),
+                result.executionMode(),
+                result.planTrace(),
+                result.workerTraces()
+        );
+    }
+
     private String resolveSessionId(String sessionId) {
         if (TextUtil.isBlank(sessionId)) {
             return UUID.randomUUID().toString();
@@ -494,9 +572,7 @@ public class AgentExecutor {
     }
 
     private String buildSystemPrompt(Collection<Tool> tools) {
-        String toolDescriptions = tools.stream()
-                .map(t -> "- " + t.getName() + ": " + t.getDescription())
-                .collect(Collectors.joining("\n"));
+        String toolDescriptions = AgentToolPromptFormatter.format(tools);
         return promptService.render("agent_executor.system", Map.of("toolList", toolDescriptions));
     }
 
@@ -505,9 +581,7 @@ public class AgentExecutor {
      * 不再写 Thought:/Action: 文本格式约定——具体 JSON schema 由 chatStructured 的 BeanOutputConverter 自动追加进 prompt。
      */
     private String buildStructuredSystemPrompt(Collection<Tool> tools) {
-        String toolDescriptions = tools.stream()
-                .map(t -> "- " + t.getName() + ": " + t.getDescription())
-                .collect(Collectors.joining("\n"));
+        String toolDescriptions = AgentToolPromptFormatter.format(tools);
         return promptService.render("agent_executor_structured.system", Map.of("toolList", toolDescriptions));
     }
 }

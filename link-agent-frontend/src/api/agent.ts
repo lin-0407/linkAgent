@@ -1,6 +1,15 @@
-import type { AgentChatResponse, SessionListItem, SessionMessageItem } from '@/types/agent'
+import type {
+  AgentChatResponse,
+  AgentExecutionMode,
+  SessionListItem,
+  SessionMessageItem,
+} from '@/types/agent'
 
-export async function sendAgentMessage(sessionId: string, message: string) {
+export async function sendAgentMessage(
+  sessionId: string,
+  message: string,
+  executionMode: AgentExecutionMode,
+) {
   const response = await fetch('/api/agent/chat', {
     method: 'POST',
     headers: {
@@ -9,6 +18,7 @@ export async function sendAgentMessage(sessionId: string, message: string) {
     body: JSON.stringify({
       sessionId: sessionId || undefined,
       message,
+      executionMode,
     }),
   })
 
