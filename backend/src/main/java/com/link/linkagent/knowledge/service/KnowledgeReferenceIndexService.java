@@ -209,8 +209,13 @@ public class KnowledgeReferenceIndexService {
         metadata.put("tier", video.getTier());
         putIfNotNull(metadata, "category", video.getCategory());
         metadata.put("source", video.getSource());
-        if (video.getQualityScore() != null) {
-            // 转 double 入元数据：避免 BigDecimal 在 JSON 元数据序列化上的歧义
+        metadata.put("qualityScoreReliable", video.isQualityScoreReliable());
+        metadata.put("qualitySampleCount", video.getQualitySampleCount());
+        if (video.getRawQualityScore() != null) {
+            metadata.put("rawQualityScore", video.getRawQualityScore().doubleValue());
+        }
+        if (video.isQualityScoreReliable() && video.getQualityScore() != null) {
+            // 转 double 入元数据：避免 BigDecimal 在 JSON 元数据序列化上的歧义；不可靠分不写入，避免向量侧误用少样本相对分。
             metadata.put("qualityScore", video.getQualityScore().doubleValue());
         }
         putIfNotNull(metadata, "viewCount", video.getViewCount());
@@ -226,7 +231,7 @@ public class KnowledgeReferenceIndexService {
     }
 
     /**
-     * 拼装案例卡片文本：标题/分区/层级/标签/简介/亮点摘要 + 热度数据 + 质量分。
+     * 拼装案例卡片文本：标题/分区/层级/标签/简介/亮点摘要 + 热度数据 + 可靠质量分。
      * 带中文字段名，是为了让语义检索能匹配「同赛道高互动案例」这类问法，而不只是匹配原文片段。
      */
     private String buildDocumentText(ReferenceVideoRecord video) {
@@ -249,7 +254,7 @@ public class KnowledgeReferenceIndexService {
         if (!stats.isEmpty()) {
             builder.append("数据：").append(stats).append('\n');
         }
-        if (video.getQualityScore() != null) {
+        if (video.isQualityScoreReliable() && video.getQualityScore() != null) {
             builder.append("质量分：").append(video.getQualityScore());
         }
         return TextUtil.abbreviateWithSuffix(builder.toString().trim(), DOC_TEXT_MAX_CHARS, "...");

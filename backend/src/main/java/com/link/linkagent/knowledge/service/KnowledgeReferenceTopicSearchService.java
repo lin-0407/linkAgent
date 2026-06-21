@@ -43,7 +43,7 @@ import java.util.regex.Pattern;
 /**
  * 主题优先案例检索服务。
  * <p>
- * 这条链路把 RAG 的职责收窄为“先找到相关主题中块”，视频卡片展示再按质量分排序，
+ * 这条链路把 RAG 的职责收窄为“先找到相关主题中块”，视频候选再按质量信号排序，
  * 避免父视频大块检索把整体相似误当成创作者真正关心的主题相似。
  */
 @Service
@@ -96,7 +96,7 @@ public class KnowledgeReferenceTopicSearchService {
     }
 
     /**
-     * 主题优先检索：先查中块集合，再用质量分形成候选池，最后按运行期设置决定是否结合评论弹幕 rerank。
+     * 主题优先检索：先查中块集合，再用质量信号形成候选池，最后按运行期设置决定是否结合评论弹幕 rerank。
      */
     public ReferenceVideoTopicSearchResponse topicSearch(ReferenceVideoTopicSearchRequest request) {
         String query = request.query().trim();

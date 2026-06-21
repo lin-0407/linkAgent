@@ -37,7 +37,11 @@ export type ReferenceVideo = {
   danmakuCount: number | null
   replyCount: number | null
   highlightSummary: string | null
+  // rawQualityScore 是后端用于小样本兜底排序的单视频原始分，不直接当成 0-100 展示。
+  rawQualityScore: number | null
   qualityScore: number | null
+  qualitySampleCount: number
+  qualityScoreReliable: boolean
   source: string
   publishTimeText: string | null
   embeddingStatus: string | null
@@ -110,7 +114,7 @@ export type ReferenceVideoEvidenceItem = {
   sourceType: string
 }
 
-// 主题中块命中摘要：前端用它解释卡片为什么被召回，真正的视频排序仍按质量分走 MySQL。
+// 主题中块命中摘要：前端用它解释卡片为什么被召回，真正的视频排序仍按质量信号走 MySQL。
 export type ReferenceVideoMatchedTopic = {
   chunkId: string
   videoId: string

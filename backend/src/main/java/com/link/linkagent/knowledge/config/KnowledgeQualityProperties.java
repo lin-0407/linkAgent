@@ -64,10 +64,10 @@ public class KnowledgeQualityProperties {
     private double sentimentMulSpan = 0.6;
 
     /**
-     * 分区兜底分。当某分区可打分视频只有一条、或原始分全部相等（min==max）时，min-max 归一化无意义，
-     * 统一给中性 60，避免出现「孤例自动满分 100」的误导。
+     * 最小可靠样本数。分区相对分依赖 min-max 归一化，样本太少时会出现 60 / 0 / 100 的跳变，
+     * 所以低于该数量时只保存 raw_quality_score，不产出可展示的 quality_score。
      */
-    private double fallbackScore = 60.0;
+    private int minReliableSampleSize = 5;
 
     public double getCoinWeight() {
         return coinWeight;
@@ -141,11 +141,11 @@ public class KnowledgeQualityProperties {
         this.sentimentMulSpan = sentimentMulSpan;
     }
 
-    public double getFallbackScore() {
-        return fallbackScore;
+    public int getMinReliableSampleSize() {
+        return minReliableSampleSize;
     }
 
-    public void setFallbackScore(double fallbackScore) {
-        this.fallbackScore = fallbackScore;
+    public void setMinReliableSampleSize(int minReliableSampleSize) {
+        this.minReliableSampleSize = minReliableSampleSize;
     }
 }

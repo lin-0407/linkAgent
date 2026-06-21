@@ -6,6 +6,7 @@ import MessageBubble from '@/components/MessageBubble.vue'
 import { useAgentChat } from '@/composables/useAgentChat'
 import type { SessionListItem } from '@/types/agent'
 import type {
+  ReferenceVideo,
   ReferenceVideoAnalysisContext,
   ReferenceVideoEvidenceItem,
   ReferenceVideoMatchedTopic,
@@ -213,7 +214,7 @@ function buildKnowledgeContextMessage(userMessage: string) {
     '',
     '【已选视频】',
     `标题：${video.title}`,
-    `BV：${video.bvId || '无'}；分区：${video.category || '未标注'}；层级：${tierLabel(video.tier)}；质量分：${video.qualityScore ?? '无'}`,
+    `BV：${video.bvId || '无'}；分区：${video.category || '未标注'}；层级：${tierLabel(video.tier)}；质量分：${formatKnowledgeQuality(video)}`,
     `数据：播放 ${formatReferenceCount(video.viewCount)}，点赞 ${formatReferenceCount(video.likeCount)}，投币 ${formatReferenceCount(video.coinCount)}，收藏 ${formatReferenceCount(video.favoriteCount)}，弹幕 ${formatReferenceCount(video.danmakuCount)}，评论 ${formatReferenceCount(video.replyCount)}`,
     `摘要：${clipText(video.highlightSummary || video.description || '暂无摘要', 520)}`,
     '',
@@ -223,6 +224,16 @@ function buildKnowledgeContextMessage(userMessage: string) {
     '【评论弹幕证据】',
     evidenceLines.length ? evidenceLines.join('\n') : '暂无评论弹幕证据。',
   ].join('\n')
+}
+
+function formatKnowledgeQuality(video: ReferenceVideo) {
+  if (video.qualityScoreReliable && video.qualityScore !== null) {
+    return String(video.qualityScore)
+  }
+  if (video.rawQualityScore !== null) {
+    return `样本不足（同分区有效样本 ${video.qualitySampleCount} 条）`
+  }
+  return '无'
 }
 
 function startDrag(event: PointerEvent) {
@@ -609,7 +620,10 @@ function clipText(value: string, maxLength: number) {
             <span v-if="knowledgeContextQuery">检索：{{ knowledgeContextQuery }}</span>
             <span>{{ tierLabel(knowledgeContext.video.tier) }}</span>
             <span v-if="knowledgeContext.video.category">{{ knowledgeContext.video.category }}</span>
-            <span v-if="knowledgeContext.video.qualityScore !== null">质量分 {{ knowledgeContext.video.qualityScore }}</span>
+            <span v-if="knowledgeContext.video.qualityScoreReliable && knowledgeContext.video.qualityScore !== null">
+              质量分 {{ knowledgeContext.video.qualityScore }}
+            </span>
+            <span v-else-if="knowledgeContext.video.rawQualityScore !== null">质量样本不足</span>
           </div>
           <div class="agent-floating-context-grid">
             <p v-for="topic in visibleKnowledgeTopics" :key="topic.chunkId">

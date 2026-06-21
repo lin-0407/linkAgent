@@ -24,9 +24,9 @@ linkAgent 项目中开发者绝对不能代跑编译、测试、构建、运行�
 
 ### Metadata
 - Source: user_feedback
-- Related Files: E:\linkAgent\AGENTS.md
+- Related Files: E:\linkAgent\linkAgent\AGENTS.md
 - Tags: project-rule, verification, collaboration
-- Promoted: E:\linkAgent\AGENTS.md
+- Promoted: E:\linkAgent\linkAgent\AGENTS.md
 
 ---
 

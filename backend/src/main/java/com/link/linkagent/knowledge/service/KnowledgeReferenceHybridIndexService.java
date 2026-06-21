@@ -156,7 +156,7 @@ public class KnowledgeReferenceHybridIndexService {
     }
 
     /**
-     * 拼装案例卡片文本（与 5.1c 父索引同款结构）：标题/分区/层级/标签/简介/亮点/热度/质量分。
+     * 拼装案例卡片文本（与 5.1c 父索引同款结构）：标题/分区/层级/标签/简介/亮点/热度/可靠质量分。
      * 该 text 在 hybrid 集合里同时服务 BM25（关键词）与 dense（语义），故保持与父卡片一致的富文本。
      * 与 {@link KnowledgeReferenceIndexService} 的同名逻辑有意各自保留（简单优先；真出现第三处再上提共用）。
      */
@@ -180,7 +180,7 @@ public class KnowledgeReferenceHybridIndexService {
         if (!stats.isEmpty()) {
             builder.append("数据：").append(stats).append('\n');
         }
-        if (video.getQualityScore() != null) {
+        if (video.isQualityScoreReliable() && video.getQualityScore() != null) {
             builder.append("质量分：").append(video.getQualityScore());
         }
         return TextUtil.abbreviateWithSuffix(builder.toString().trim(), DOC_TEXT_MAX_CHARS, "...");

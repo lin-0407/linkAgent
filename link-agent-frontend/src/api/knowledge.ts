@@ -179,7 +179,7 @@ export function searchReferenceVideos(payload: ReferenceVideoSearchPayload) {
   })
 }
 
-// 主题优先检索：先召回主题中块，再由后端按视频质量分分页返回卡片。
+// 主题优先检索：先召回主题中块，再由后端按视频质量信号分页返回卡片。
 // page/size 只在前端做批次控制，真正的 top20 截断规则由后端统一兜底。
 export function topicSearchReferenceVideos(payload: ReferenceVideoTopicSearchPayload) {
   const body: Record<string, string | number> = { query: payload.query.trim() }

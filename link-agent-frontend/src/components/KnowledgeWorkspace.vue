@@ -54,7 +54,7 @@ const filterCategory = ref('')
 const listLoading = ref(false)
 const listError = ref('')
 
-// 主题优先检索：query 命中主题中块，后端再按质量分返回每批 5 张视频卡片。
+// 主题优先检索：query 命中主题中块，后端再按质量信号返回每批 5 张视频卡片。
 const searchQuery = ref('')
 const searchTier = ref('')
 const searchCategory = ref('')
@@ -159,6 +159,26 @@ function formatCount(value: number | null) {
   return String(value)
 }
 
+function qualityScoreLabel(video: ReferenceVideo) {
+  if (video.qualityScoreReliable && video.qualityScore !== null) {
+    return `质量分 ${video.qualityScore}`
+  }
+  if (video.rawQualityScore !== null) {
+    return '质量样本不足'
+  }
+  return ''
+}
+
+function qualityScoreTitle(video: ReferenceVideo) {
+  if (video.qualityScoreReliable && video.qualityScore !== null) {
+    return `同分区有效样本 ${video.qualitySampleCount} 条`
+  }
+  if (video.rawQualityScore !== null) {
+    return `同分区有效样本 ${video.qualitySampleCount} 条，暂不展示相对质量分`
+  }
+  return ''
+}
+
 async function submitFetchImport() {
   const bvInput = form.bvInput.trim()
   if (!bvInput || importing.value) {
@@ -218,7 +238,7 @@ function changePage(delta: number) {
   void loadList()
 }
 
-// 检索结果的实际模式标签：主题向量不可用时，后端会退回 SQL 质量分兜底。
+// 检索结果的实际模式标签：主题向量不可用时，后端会退回 SQL 质量信号兜底。
 function searchModeLabel(mode: string) {
   switch (mode) {
     case 'TOPIC_VECTOR':
@@ -226,9 +246,9 @@ function searchModeLabel(mode: string) {
     case 'TOPIC_HYBRID':
       return '主题混合检索'
     case 'SQL':
-      return 'SQL 质量分兜底'
+      return 'SQL 质量兜底'
     default:
-      return mode || 'SQL 质量分兜底'
+      return mode || 'SQL 质量兜底'
   }
 }
 
@@ -457,7 +477,7 @@ onMounted(() => {
             <span class="creator-chip-list">
               <b>{{ tierLabel(hit.tier) }}</b>
               <b v-if="hit.category">{{ hit.category }}</b>
-              <b v-if="hit.qualityScore !== null">质量分 {{ hit.qualityScore }}</b>
+              <b v-if="qualityScoreLabel(hit)" :title="qualityScoreTitle(hit)">{{ qualityScoreLabel(hit) }}</b>
               <b>{{ embeddingLabel(hit.embeddingStatus) }}</b>
             </span>
             <small>
@@ -554,7 +574,7 @@ onMounted(() => {
           <div class="creator-chip-list">
             <b>{{ tierLabel(item.tier) }}</b>
             <b v-if="item.category">{{ item.category }}</b>
-            <b v-if="item.qualityScore !== null">质量分 {{ item.qualityScore }}</b>
+            <b v-if="qualityScoreLabel(item)" :title="qualityScoreTitle(item)">{{ qualityScoreLabel(item) }}</b>
             <b>{{ embeddingLabel(item.embeddingStatus) }}</b>
           </div>
           <small>

@@ -2,6 +2,7 @@ package com.link.linkagent.knowledge.service;
 
 import com.link.linkagent.knowledge.config.KnowledgeQualityProperties;
 import com.link.linkagent.knowledge.mapper.KnowledgeReferenceVideoMapper;
+import com.link.linkagent.knowledge.model.ReferenceVideoQualityRecomputeResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoScoringRow;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.stereotype.Service;
@@ -9,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -24,6 +26,7 @@ import java.util.Set;
  * <p>
  * 纯 SQL + 数学计算，不依赖 Milvus / Embedding。打分时机是「导入后按受影响分区重算」，
  * 因为归一化是分区相对值——新增一条样例会改变该分区的 min/max，必须连带刷新同分区其它视频的分数。
+ * 低样本分区只回写 raw_quality_score，不回写 quality_score，避免把 60 / 0 / 100 这种小样本跳变展示成确定结论。
  */
 @Service
 public class KnowledgeQualityScoringService {
@@ -60,7 +63,18 @@ public class KnowledgeQualityScoringService {
     }
 
     /**
-     * 重算单个分区：取出该分区全部未删除视频的热度 + 情绪样本，算出各自原始分后做 min-max 归一化回写。
+     * 重算所有已有分区。
+     * 主要用于质量公式或表字段升级后刷新历史数据；复用分区重算逻辑，避免维护两套打分公式。
+     */
+    @Transactional
+    public ReferenceVideoQualityRecomputeResponse recomputeAllCategories() {
+        List<String> categories = knowledgeReferenceVideoMapper.listScoringCategories();
+        recomputeCategories(categories);
+        return new ReferenceVideoQualityRecomputeResponse(categories.size(), LocalDateTime.now());
+    }
+
+    /**
+     * 重算单个分区：取出该分区全部未删除视频的热度 + 情绪样本，先回写单视频原始分，再在样本充足时做 min-max 归一化。
      * 只对「可打分」（view 有效）的视频参与 min/max；view 缺失 / 为 0 的视频原始分为 null，归一化后写回 NULL。
      */
     private void recomputeCategory(String category) {
@@ -70,24 +84,32 @@ public class KnowledgeQualityScoringService {
             return;
         }
 
-        // 先算原始分（可能为 null），同时收集可打分视频的 min/max，供下一步归一化
+        // 先算原始分（可能为 null），同时收集可打分视频的 min/max；原始分独立于其它视频，适合低样本兜底排序。
         Map<String, Double> rawScores = new LinkedHashMap<>();
         Double minRaw = null;
         Double maxRaw = null;
+        int validSampleCount = 0;
         for (ReferenceVideoScoringRow row : rows) {
             Double rawScore = computeRawScore(row);
             rawScores.put(row.getVideoId(), rawScore);
             if (rawScore != null) {
+                validSampleCount++;
                 minRaw = (minRaw == null) ? rawScore : Math.min(minRaw, rawScore);
                 maxRaw = (maxRaw == null) ? rawScore : Math.max(maxRaw, rawScore);
             }
         }
 
+        boolean reliableDistribution = isReliableDistribution(validSampleCount, minRaw, maxRaw);
+
         // 归一化并逐条回写。逐条更新与本表 insert 按条进行的风格一致；样例量级下足够，
         // 真实大批量榜单出现性能问题时再改成 CASE 批量更新（先简单、有问题再优化）。
         for (ReferenceVideoScoringRow row : rows) {
-            BigDecimal qualityScore = normalize(rawScores.get(row.getVideoId()), minRaw, maxRaw);
-            knowledgeReferenceVideoMapper.updateQualityScore(row.getVideoId(), qualityScore);
+            Double rawScore = rawScores.get(row.getVideoId());
+            BigDecimal rawQualityScore = toRawQualityScore(rawScore);
+            BigDecimal qualityScore = reliableDistribution ? normalize(rawScore, minRaw, maxRaw) : null;
+            boolean qualityScoreReliable = qualityScore != null;
+            knowledgeReferenceVideoMapper.updateQualityScores(
+                    row.getVideoId(), rawQualityScore, qualityScore, validSampleCount, qualityScoreReliable);
         }
     }
 
@@ -132,19 +154,36 @@ public class KnowledgeQualityScoringService {
     }
 
     /**
+     * 只有样本量和分布都可靠时才允许产出相对分。否则保留 raw_quality_score，让排序还有兜底信号，
+     * 但不把样本不足的 60 / 0 / 100 展示成确定质量判断。
+     */
+    private boolean isReliableDistribution(int validSampleCount, Double minRaw, Double maxRaw) {
+        int minReliableSampleSize = Math.max(2, knowledgeQualityProperties.getMinReliableSampleSize());
+        return validSampleCount >= minReliableSampleSize
+                && minRaw != null
+                && maxRaw != null
+                && maxRaw.doubleValue() > minRaw.doubleValue();
+    }
+
+    /**
+     * 单视频原始分保留 6 位小数，便于排查和小样本兜底排序；展示层不直接把它当 0–100 分使用。
+     */
+    private BigDecimal toRawQualityScore(Double rawScore) {
+        if (rawScore == null) {
+            return null;
+        }
+        return BigDecimal.valueOf(rawScore).setScale(6, RoundingMode.HALF_UP);
+    }
+
+    /**
      * §2.7 第 4 步：把原始分按分区 min-max 归一化到 0–100，保留两位小数（对齐 DECIMAL(6,2)）。
-     * rawScore 为 null（不打分）→ 写回 NULL；分区内只有一条或全相等（max==min）→ 中性兜底分。
+     * rawScore 为 null（不打分）→ 写回 NULL；样本不足或全相等已在调用前拦截，不再给中性兜底分。
      */
     private BigDecimal normalize(Double rawScore, Double minRaw, Double maxRaw) {
         if (rawScore == null) {
             return null;
         }
-        double value;
-        if (minRaw == null || maxRaw == null || maxRaw.doubleValue() == minRaw.doubleValue()) {
-            value = knowledgeQualityProperties.getFallbackScore();
-        } else {
-            value = 100.0 * (rawScore - minRaw) / (maxRaw - minRaw);
-        }
+        double value = 100.0 * (rawScore - minRaw) / (maxRaw - minRaw);
         return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
     }
 

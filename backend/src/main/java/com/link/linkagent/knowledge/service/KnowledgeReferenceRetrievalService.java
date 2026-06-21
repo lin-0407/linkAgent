@@ -588,7 +588,7 @@ public class KnowledgeReferenceRetrievalService {
 
     private List<ReferenceVideoRecord> sqlFallbackRecords(String query, String category, String tier, int topK) {
         // 兜底不能只整串 LIKE：用户常输入带空格 / 标点的标题，分词片段能避免强关键词被符号差异误杀。
-        // 这里仍不做复杂打分，排序继续交给质量分；真正的关键词相关性打分留给 5.2d 原生 BM25。
+        // 这里仍不做复杂打分，排序继续交给质量信号；真正的关键词相关性打分留给 5.2d 原生 BM25。
         String keyword = TextUtil.trimToNull(TextUtil.collapseWhitespace(query));
         return knowledgeReferenceVideoMapper.searchByKeyword(category, tier, keyword, extractSqlKeywords(keyword), topK);
     }

@@ -136,6 +136,9 @@ creator:
 # 与反馈 RAG 完全独立的开关，默认关闭：关闭时不连 Milvus、不调 Embedding，案例导入与列表照常工作（不依赖向量库）。
 # Milvus 连接复用上面的 MILVUS_* 同一套环境变量；只是集合名与维度不同，做到专用集合物理隔离。
 knowledge:
+  quality:
+    # 分区相对质量分需要足够同赛道样本；低于该数量时只保存单视频原始分，避免 60/0/100 的小样本跳变误导展示。
+    min-reliable-sample-size: ${KNOWLEDGE_QUALITY_MIN_RELIABLE_SAMPLE_SIZE:5}
   rag:
     enabled: ${KNOWLEDGE_RAG_ENABLED:false}
     collection-name: ${KNOWLEDGE_RAG_COLLECTION_NAME:creator_reference_video}

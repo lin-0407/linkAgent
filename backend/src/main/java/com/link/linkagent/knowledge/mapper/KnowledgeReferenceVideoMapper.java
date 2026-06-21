@@ -31,7 +31,7 @@ public interface KnowledgeReferenceVideoMapper {
 
     /**
      * 插入一条视频案例。
-     * 故意不写入 quality_score / highlight_summary / embedding_*：前两者分别由 5.1c、5.1b 计算，后者用 DDL 默认值，
+     * 故意不写入质量分相关字段 / highlight_summary / embedding_*：前两者分别由 5.1c、5.1b 计算，后者用 DDL 默认值，
      * 这样导入链路完全不依赖向量库或打分逻辑，可在 RAG 关闭时独立跑通。
      */
     @Insert("""
@@ -149,7 +149,10 @@ public interface KnowledgeReferenceVideoMapper {
                    v.danmaku_count,
                    v.reply_count,
                    v.highlight_summary,
+                   v.raw_quality_score,
                    v.quality_score,
+                   v.quality_sample_count,
+                   v.quality_score_reliable,
                    v.source,
                    v.publish_time_text,
                    v.embedding_status,
@@ -178,7 +181,10 @@ public interface KnowledgeReferenceVideoMapper {
             @Result(column = "danmaku_count", property = "danmakuCount"),
             @Result(column = "reply_count", property = "replyCount"),
             @Result(column = "highlight_summary", property = "highlightSummary"),
+            @Result(column = "raw_quality_score", property = "rawQualityScore"),
             @Result(column = "quality_score", property = "qualityScore"),
+            @Result(column = "quality_sample_count", property = "qualitySampleCount"),
+            @Result(column = "quality_score_reliable", property = "qualityScoreReliable"),
             @Result(column = "source", property = "source"),
             @Result(column = "publish_time_text", property = "publishTimeText"),
             @Result(column = "embedding_status", property = "embeddingStatus"),
@@ -204,6 +210,20 @@ public interface KnowledgeReferenceVideoMapper {
                               @Param("tier") String tier);
 
     /**
+     * 查询需要参与质量分重算的分区。
+     * 空分区没有同赛道基准，按设计不参与分区相对分；这里过滤掉，避免重算时反复扫描无意义分组。
+     */
+    @Select("""
+            SELECT DISTINCT category
+            FROM creator_reference_video
+            WHERE is_deleted = 0
+              AND category IS NOT NULL
+              AND TRIM(category) <> ''
+            ORDER BY category
+            """)
+    List<String> listScoringCategories();
+
+    /**
      * 按 video_id 批量回查父表案例（5.2a 检索回查事实源）。
      * 向量库只返回 videoId，必须用 is_deleted=0 回查父表拿真身：向量库里的旧批次/已删案例自然被过滤掉。
      * 顺序由调用方按向量相似度重排（MySQL IN 不保证顺序），故这里不加 ORDER BY。调用方需保证 videoIds 非空。
@@ -213,7 +233,8 @@ public interface KnowledgeReferenceVideoMapper {
             <script>
             SELECT id, video_id, bv_id, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
-                   highlight_summary, quality_score, source, publish_time_text,
+                   highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
+                   source, publish_time_text,
                    embedding_status, create_time, update_time
             FROM creator_reference_video
             WHERE is_deleted = 0
@@ -227,14 +248,15 @@ public interface KnowledgeReferenceVideoMapper {
     List<ReferenceVideoRecord> listByVideoIds(@Param("videoIds") List<String> videoIds);
 
     /**
-     * 对主题中块召回得到的视频候选按质量分取候选池。
-     * RAG 在这里只负责“找到相关主题的视频集合”，质量分先兜住基础排序；rerank 开启时服务层再结合评论弹幕精排。
+     * 对主题中块召回得到的视频候选按质量信号取候选池。
+     * RAG 在这里只负责“找到相关主题的视频集合”，可靠相对分和原始分先兜住基础排序；rerank 开启时服务层再结合评论弹幕精排。
      */
     @Select("""
             <script>
             SELECT id, video_id, bv_id, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
-                   highlight_summary, quality_score, source, publish_time_text,
+                   highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
+                   source, publish_time_text,
                    embedding_status, create_time, update_time
             FROM creator_reference_video
             WHERE is_deleted = 0
@@ -244,7 +266,7 @@ public interface KnowledgeReferenceVideoMapper {
               <foreach item='vid' collection='videoIds' open='(' separator=',' close=')'>
                   #{vid}
               </foreach>
-            ORDER BY quality_score DESC, id DESC
+            ORDER BY quality_score DESC, raw_quality_score DESC, id DESC
             LIMIT #{limit} OFFSET #{offset}
             </script>
             """)
@@ -257,17 +279,18 @@ public interface KnowledgeReferenceVideoMapper {
 
     /**
      * SQL 关键词兜底检索父表（5.2a）：RAG 关闭或向量库不可用时走这里。
-     * keyword 为空则不加关键词条件（退化为「按质量分取前 N」）；title/description/highlight_summary 任一命中即返回。
-     * 排序 quality_score DESC：5.1c 的归一化质量分让兜底也优先高质量案例；MySQL 中 NULL 在 DESC 下排最后（未打分案例垫底）。
+     * keyword 为空则不加关键词条件（退化为「按质量信号取前 N」）；title/description/highlight_summary 任一命中即返回。
+     * 排序先看可靠的归一化质量分，再用单视频原始分兜底，避免小样本分区因 quality_score 为空完全失去排序信号。
      * keywords 是从 query 中抽出来的核心词，避免整串 LIKE 因空格 / 标点 / 括号差异导致标题明明存在却搜不到。
-     * 真正的关键词相关性打分留给 5.2d 原生 BM25；这里仍只是兜底召回，按质量分排序。
+     * 真正的关键词相关性打分留给 5.2d 原生 BM25；这里仍只是兜底召回，按质量信号排序。
      * 复用 listReferenceVideos 的 ReferenceVideoRecordMap，故 SELECT 列须与之保持一致。
      */
     @Select("""
             <script>
             SELECT id, video_id, bv_id, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
-                   highlight_summary, quality_score, source, publish_time_text,
+                   highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
+                   source, publish_time_text,
                    embedding_status, create_time, update_time
             FROM creator_reference_video
             WHERE is_deleted = 0
@@ -291,7 +314,7 @@ public interface KnowledgeReferenceVideoMapper {
                        OR bv_id LIKE CONCAT('%', #{keyword}, '%'))
                   </otherwise>
               </choose>
-            ORDER BY quality_score DESC, id DESC
+            ORDER BY quality_score DESC, raw_quality_score DESC, id DESC
             LIMIT #{limit}
             </script>
             """)
@@ -350,18 +373,24 @@ public interface KnowledgeReferenceVideoMapper {
     List<ReferenceVideoScoringRow> listScoringRowsByCategory(@Param("category") String category);
 
     /**
-     * 回写单个视频的归一化质量分（5.1c）。
-     * qualityScore 允许为 null（view 缺失 / 分区样本不足时不打分），故显式声明 jdbcType=DECIMAL，
-     * 避免标量 null 参数让 MyBatis 无法推断 JDBC 类型而报错。
+     * 回写单个视频的质量分结果（5.1c）。
+     * rawQualityScore 是单视频独立结果；qualityScore 是同分区相对结果，样本不足时允许为 null。
+     * 两个 DECIMAL 参数都显式声明 jdbcType，避免 null 值让 MyBatis 无法推断 JDBC 类型。
      */
     @Update("""
             UPDATE creator_reference_video
-            SET quality_score = #{qualityScore,jdbcType=DECIMAL}
+            SET raw_quality_score = #{rawQualityScore,jdbcType=DECIMAL},
+                quality_score = #{qualityScore,jdbcType=DECIMAL},
+                quality_sample_count = #{qualitySampleCount},
+                quality_score_reliable = #{qualityScoreReliable}
             WHERE video_id = #{videoId}
               AND is_deleted = 0
             """)
-    int updateQualityScore(@Param("videoId") String videoId,
-                           @Param("qualityScore") BigDecimal qualityScore);
+    int updateQualityScores(@Param("videoId") String videoId,
+                            @Param("rawQualityScore") BigDecimal rawQualityScore,
+                            @Param("qualityScore") BigDecimal qualityScore,
+                            @Param("qualitySampleCount") int qualitySampleCount,
+                            @Param("qualityScoreReliable") boolean qualityScoreReliable);
 
     /**
      * 查询待索引的案例（5.1c 向量索引）。
@@ -385,7 +414,10 @@ public interface KnowledgeReferenceVideoMapper {
                    v.danmaku_count,
                    v.reply_count,
                    v.highlight_summary,
+                   v.raw_quality_score,
                    v.quality_score,
+                   v.quality_sample_count,
+                   v.quality_score_reliable,
                    v.source,
                    v.publish_time_text,
                    v.embedding_status,
@@ -631,7 +663,10 @@ public interface KnowledgeReferenceVideoMapper {
                    v.danmaku_count,
                    v.reply_count,
                    v.highlight_summary,
+                   v.raw_quality_score,
                    v.quality_score,
+                   v.quality_sample_count,
+                   v.quality_score_reliable,
                    v.source,
                    v.publish_time_text,
                    v.embedding_status,

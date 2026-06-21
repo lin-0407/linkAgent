@@ -38,6 +38,7 @@ import {
   startPrePublishWorkflow,
   updateCreatorTask,
 } from '@/api/creator'
+import MessageBubble from '@/components/MessageBubble.vue'
 import type {
   CreatorFeedback,
   CreatorFeedbackChatResult,
@@ -71,6 +72,7 @@ import type {
   LlmApiUsageSummary,
   WorkflowUsageResponse,
 } from '@/types/creator'
+import type { ChatMessage } from '@/types/agent'
 
 type UnknownRecord = Record<string, unknown>
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
@@ -79,6 +81,13 @@ type TaskManageMode = 'create' | 'edit'
 type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report' | 'usage'
 type CreatorWorkspaceState = {
   taskId?: string | null
+}
+type FeedbackChatTurn = {
+  id: string
+  question: string
+  result: CreatorFeedbackChatResult | null
+  status: 'PENDING' | 'DONE' | 'FAILED'
+  errorMessage?: string
 }
 type PreferenceChip = {
   text: string
@@ -254,6 +263,8 @@ const suggestion = ref<CreatorSuggestion | null>(null)
 const feedback = ref<CreatorFeedback | null>(null)
 const feedbackReport = ref<CreatorFeedbackReport | null>(null)
 const feedbackChatResult = ref<CreatorFeedbackChatResult | null>(null)
+const feedbackChatTurns = ref<FeedbackChatTurn[]>([])
+const feedbackChatThreadRef = ref<HTMLElement | null>(null)
 // 阶段 4.13：证据索引状态与重建结果提示。状态在打开反馈报告弹窗时按需加载，避免每次切任务都多发请求。
 const feedbackEvidenceIndexStatus = ref<CreatorFeedbackEvidenceIndexStatus | null>(null)
 const feedbackEvidenceIndexWarnings = ref<string[]>([])
@@ -447,6 +458,7 @@ const canAskFeedbackChat = computed(() =>
       !isAskingFeedbackChat.value,
   ),
 )
+const hasFeedbackChatTurns = computed(() => feedbackChatTurns.value.length > 0)
 const feedbackDashboardWarnings = computed(() => {
   const warnings = [...feedbackImportWarnings.value, ...(feedbackDashboard.value?.warnings ?? [])]
   return Array.from(new Set(warnings))
@@ -775,6 +787,55 @@ async function scrollWorkflowMessagesToBottom() {
   messageList.scrollTop = messageList.scrollHeight
 }
 
+async function scrollFeedbackChatToBottom() {
+  await nextTick()
+  const thread = feedbackChatThreadRef.value
+  if (!thread) {
+    return
+  }
+  thread.scrollTop = thread.scrollHeight
+}
+
+function clearFeedbackChatState(clearQuestion = true) {
+  feedbackChatResult.value = null
+  feedbackChatTurns.value = []
+  if (clearQuestion) {
+    feedbackChatForm.question = ''
+  }
+}
+
+function feedbackQuestionMessage(turn: FeedbackChatTurn, index: number): ChatMessage {
+  return {
+    id: index * 2 + 1,
+    role: 'user',
+    content: turn.question,
+  }
+}
+
+function feedbackAnswerMessage(turn: FeedbackChatTurn, index: number): ChatMessage {
+  return {
+    id: index * 2 + 2,
+    role: 'assistant',
+    content: feedbackAnswerContent(turn),
+  }
+}
+
+function feedbackAnswerContent(turn: FeedbackChatTurn) {
+  if (turn.result) {
+    return turn.result.answer
+  }
+  if (turn.status === 'FAILED') {
+    return `追问失败：${turn.errorMessage || '请稍后重试。'}`
+  }
+  return '正在基于当前反馈报告和评论弹幕证据生成回答...'
+}
+
+function updateFeedbackChatTurn(turnId: string, patch: Partial<FeedbackChatTurn>) {
+  feedbackChatTurns.value = feedbackChatTurns.value.map((turn) =>
+    turn.id === turnId ? { ...turn, ...patch } : turn,
+  )
+}
+
 function closeSuccessToast() {
   clearSuccessMessageTimer()
   successMessage.value = ''
@@ -1020,7 +1081,7 @@ function resetGeneratedTaskResults() {
   suggestion.value = null
   feedback.value = null
   feedbackReport.value = null
-  feedbackChatResult.value = null
+  clearFeedbackChatState()
   feedbackEvidenceIndexStatus.value = null
   feedbackEvidenceIndexWarnings.value = []
   isFeedbackChatDrawerOpen.value = false
@@ -1239,7 +1300,7 @@ async function loadOptionalResults(task: CreatorTask) {
   suggestion.value = null
   feedback.value = null
   feedbackReport.value = null
-  feedbackChatResult.value = null
+  clearFeedbackChatState()
   feedbackEvidenceIndexStatus.value = null
   feedbackEvidenceIndexWarnings.value = []
   feedbackDashboard.value = null
@@ -1605,7 +1666,7 @@ async function submitFeedback() {
       extraContext: feedbackForm.extraContext,
     })
     feedbackReport.value = null
-    feedbackChatResult.value = null
+    clearFeedbackChatState()
     feedbackDashboard.value = null
     feedbackFetchResult.value = null
     feedbackImportWarnings.value = []
@@ -1636,7 +1697,7 @@ async function importFeedbackFile() {
     const result = await importCreatorFeedbackFile(selectedTaskId.value, feedbackImportFile.value)
     feedbackFetchResult.value = null
     feedbackReport.value = null
-    feedbackChatResult.value = null
+    clearFeedbackChatState()
     feedbackImportWarnings.value = result.warnings ?? []
     // 导入会回填旧样例表并生成明细表，前端立即重读后端状态，避免本地文件内容成为隐藏的数据源。
     feedback.value = await optionalRequest(() => getCreatorFeedback(selectedTaskId.value))
@@ -1671,7 +1732,7 @@ async function fetchFeedbackByBv() {
     })
     feedbackFetchResult.value = result
     feedbackReport.value = null
-    feedbackChatResult.value = null
+    clearFeedbackChatState()
     feedbackImportWarnings.value = result.warnings ?? []
     // 后端已经完成脚本执行和入库，前端只刷新权威状态，避免页面表单成为第二份数据源。
     feedback.value = await optionalRequest(() => getCreatorFeedback(selectedTaskId.value))
@@ -1698,7 +1759,7 @@ async function runFeedbackAnalyze() {
       analysisFocus: feedbackAnalyzeForm.analysisFocus,
       extraRequirement: feedbackAnalyzeForm.extraRequirement,
     })
-    feedbackChatResult.value = null
+    clearFeedbackChatState()
     selectedTask.value = await getCreatorTask(selectedTaskId.value)
     activeStep.value = 'report'
     successMessage.value = '评论弹幕分析完成，反馈报告已保存。'
@@ -1716,17 +1777,40 @@ async function askFeedbackChat() {
   if (!selectedTaskId.value || !canAskFeedbackChat.value) {
     return
   }
+  const question = feedbackChatForm.question.trim()
+  const turnId = `feedback-chat-${Date.now()}-${feedbackChatTurns.value.length}`
+  feedbackChatTurns.value = [
+    ...feedbackChatTurns.value,
+    {
+      id: turnId,
+      question,
+      result: null,
+      status: 'PENDING',
+    },
+  ]
+  feedbackChatForm.question = ''
+  await scrollFeedbackChatToBottom()
   isAskingFeedbackChat.value = true
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    feedbackChatResult.value = await chatCreatorFeedback(selectedTaskId.value, {
-      question: feedbackChatForm.question,
+    const result = await chatCreatorFeedback(selectedTaskId.value, {
+      question,
+    })
+    feedbackChatResult.value = result
+    updateFeedbackChatTurn(turnId, {
+      result,
+      status: 'DONE',
     })
     successMessage.value = '反馈追问已生成，回答基于当前任务报告和评论弹幕证据。'
   } catch (error) {
+    updateFeedbackChatTurn(turnId, {
+      status: 'FAILED',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    })
     showError(error)
   } finally {
+    await scrollFeedbackChatToBottom()
     await refreshUsageStats(1, false)
     isAskingFeedbackChat.value = false
   }
@@ -1796,7 +1880,7 @@ async function rebuildFeedbackEvidenceIndex() {
     // 重建会改变索引计数，立即重读权威状态，避免前端用旧计数展示。
     await loadFeedbackEvidenceIndexStatus()
     // 索引后旧追问回答可能基于旧检索模式，清空让用户重新追问拿到向量检索结果。
-    feedbackChatResult.value = null
+    clearFeedbackChatState(false)
     successMessage.value = `证据索引完成：已索引 ${result.indexedCount} 条，失败 ${result.failedCount} 条。`
   } catch (error) {
     showError(error)
@@ -1976,7 +2060,7 @@ function resetSelectedWorkspace() {
   suggestion.value = null
   feedback.value = null
   feedbackReport.value = null
-  feedbackChatResult.value = null
+  clearFeedbackChatState()
   feedbackEvidenceIndexStatus.value = null
   feedbackEvidenceIndexWarnings.value = []
   isFeedbackChatDrawerOpen.value = false
@@ -4688,6 +4772,90 @@ function showError(error: unknown) {
 
           <template v-else-if="resultModalTarget === 'feedbackReport' && feedbackReport">
             <div class="creator-report">
+              <section class="creator-feedback-index-status">
+                <div class="creator-feedback-index-line">
+                  <div>
+                    <strong>证据索引</strong>
+                    <small>
+                      {{
+                        feedbackEvidenceIndexStatus
+                          ? retrievalModeLabel(feedbackEvidenceIndexStatus.retrievalMode)
+                          : isLoadingFeedbackEvidenceIndexStatus
+                            ? '读取中'
+                            : '未读取'
+                      }}
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    class="creator-ghost-button creator-mini-button"
+                    :disabled="isRebuildingFeedbackEvidenceIndex"
+                    @click="rebuildFeedbackEvidenceIndex"
+                  >
+                    {{ isRebuildingFeedbackEvidenceIndex ? '索引中...' : '重建证据索引' }}
+                  </button>
+                </div>
+                <p v-if="feedbackEvidenceIndexStatus" class="creator-feedback-index-hint">
+                  <template
+                    v-if="
+                      feedbackEvidenceIndexStatus.ragEnabled &&
+                      feedbackEvidenceIndexStatus.vectorStoreReady
+                    "
+                  >
+                    已索引 {{ feedbackEvidenceIndexStatus.indexedCount }}/{{
+                      feedbackEvidenceIndexStatus.totalItems
+                    }} 条，待索引 {{ feedbackEvidenceIndexStatus.pendingCount }} 条，失败
+                    {{ feedbackEvidenceIndexStatus.failedCount }} 条。
+                  </template>
+                  <template v-else>
+                    当前使用 SQL 证据检索（{{
+                      feedbackEvidenceIndexStatus.ragEnabled ? 'Milvus 未就绪' : 'RAG 未启用'
+                    }}）。
+                  </template>
+                </p>
+                <p v-else class="creator-feedback-index-hint">
+                  {{
+                    isLoadingFeedbackEvidenceIndexStatus
+                      ? '正在读取证据索引状态...'
+                      : '暂未读取证据索引状态。'
+                  }}
+                </p>
+                <p v-if="feedbackChatResult" class="creator-feedback-index-hint">
+                  最近追问：{{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
+                  {{ retrievalModeLabel(feedbackChatResult.retrievalMode) }} ·
+                  {{ feedbackChatResult.modelName || '未记录模型' }} · Token
+                  {{ formatMetric(feedbackChatResult.totalTokens) }} ·
+                  {{ formatMetric(feedbackChatResult.elapsedMs) }} ms
+                </p>
+                <ul v-if="feedbackEvidenceIndexWarnings.length" class="creator-feedback-index-warnings">
+                  <li v-for="(warning, index) in feedbackEvidenceIndexWarnings" :key="index">
+                    {{ warning }}
+                  </li>
+                </ul>
+                <details
+                  v-if="feedbackChatResult && feedbackChatResult.evidenceItems.length > 0"
+                  class="creator-feedback-index-evidence"
+                >
+                  <summary>
+                    最近追问依据
+                    <small>{{ feedbackChatResult.evidenceItems.length }} 条证据</small>
+                  </summary>
+                  <div class="creator-feedback-evidence-list">
+                    <section
+                      v-for="(item, index) in feedbackChatResult.evidenceItems"
+                      :key="item.itemId"
+                    >
+                      <small>
+                        证据{{ index + 1 }} · {{ item.sourceLabel }} ·
+                        {{ item.categoryLabel }} · {{ item.sentimentLabel }}
+                        <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
+                      </small>
+                      <p>{{ item.content }}</p>
+                    </section>
+                  </div>
+                </details>
+              </section>
+
               <section class="creator-report-group">
                 <h4 class="creator-report-group-title">概览</h4>
                 <div class="creator-report-overview">
@@ -4855,122 +5023,49 @@ function showError(error: unknown) {
           class="creator-feedback-drawer"
           aria-label="反馈追问"
         >
-      <header class="creator-feedback-drawer-head">
-        <div>
-          <h3>反馈追问</h3>
-        </div>
-        <button type="button" class="creator-ghost-button" @click="closeFeedbackChatDrawer">
-          关闭
-        </button>
-      </header>
-
-      <div class="creator-feedback-drawer-body">
-        <section class="message-list creator-feedback-chat-thread" aria-label="反馈追问对话">
-          <template v-if="feedbackChatResult">
-            <div class="message user">
-              <div class="bubble">
-                <p>{{ feedbackChatResult.question }}</p>
-              </div>
-              <div class="avatar">U</div>
+          <header class="creator-feedback-drawer-head">
+            <div>
+              <h3>反馈追问</h3>
             </div>
-            <div class="message assistant">
-              <div class="avatar">A</div>
-              <div class="bubble">
-                <p>{{ feedbackChatResult.answer }}</p>
-              </div>
-            </div>
-          </template>
-          <div v-else class="creator-feedback-chat-empty">
-            <strong>还没有追问</strong>
-            <p>输入一个和本次反馈报告相关的问题，系统会结合报告与评论弹幕证据回答。</p>
-          </div>
-        </section>
+            <button type="button" class="creator-ghost-button" @click="closeFeedbackChatDrawer">
+              关闭
+            </button>
+          </header>
 
-        <details
-          v-if="feedbackChatResult && feedbackChatResult.evidenceItems.length > 0"
-          class="creator-feedback-drawer-details"
-        >
-          <summary>
-            依据
-            <small>{{ feedbackChatResult.evidenceItems.length }} 条证据</small>
-          </summary>
-          <div class="creator-feedback-evidence-list">
+          <div class="creator-feedback-drawer-body">
             <section
-              v-for="(item, index) in feedbackChatResult.evidenceItems"
-              :key="item.itemId"
+              ref="feedbackChatThreadRef"
+              class="message-list creator-feedback-chat-thread"
+              aria-label="反馈追问对话"
             >
-              <small>
-                证据{{ index + 1 }} · {{ item.sourceLabel }} ·
-                {{ item.categoryLabel }} · {{ item.sentimentLabel }}
-                <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
-              </small>
-              <p>{{ item.content }}</p>
+              <template v-if="hasFeedbackChatTurns">
+                <template v-for="(turn, index) in feedbackChatTurns" :key="turn.id">
+                  <MessageBubble :message="feedbackQuestionMessage(turn, index)" />
+                  <MessageBubble :message="feedbackAnswerMessage(turn, index)" />
+                </template>
+              </template>
+              <div v-else class="creator-feedback-chat-empty">
+                <strong>还没有追问</strong>
+                <p>输入一个和本次反馈报告相关的问题，系统会结合报告与评论弹幕证据回答。</p>
+              </div>
             </section>
           </div>
-        </details>
 
-        <details class="creator-feedback-drawer-details">
-          <summary>
-            技术信息
-            <small>{{ feedbackEvidenceIndexStatus ? retrievalModeLabel(feedbackEvidenceIndexStatus.retrievalMode) : '未读取' }}</small>
-          </summary>
-          <div class="creator-feedback-tech-panel">
-            <template v-if="feedbackEvidenceIndexStatus">
-              <p
-                v-if="feedbackEvidenceIndexStatus.ragEnabled && feedbackEvidenceIndexStatus.vectorStoreReady"
-              >
-                证据索引：已索引
-                {{ feedbackEvidenceIndexStatus.indexedCount }}/{{ feedbackEvidenceIndexStatus.totalItems }}，
-                待索引 {{ feedbackEvidenceIndexStatus.pendingCount }}。
-              </p>
-              <p v-else>
-                当前使用 SQL 证据检索（{{
-                  feedbackEvidenceIndexStatus.ragEnabled ? 'Milvus 未就绪' : 'RAG 未启用'
-                }}）。
-              </p>
-              <button
-                type="button"
-                class="creator-ghost-button creator-mini-button"
-                :disabled="isRebuildingFeedbackEvidenceIndex"
-                @click="rebuildFeedbackEvidenceIndex"
-              >
-                {{ isRebuildingFeedbackEvidenceIndex ? '索引中...' : '重建证据索引' }}
-              </button>
-            </template>
-            <p v-else>
-              {{ isLoadingFeedbackEvidenceIndexStatus ? '正在读取证据索引状态...' : '暂未读取证据索引状态。' }}
-            </p>
-            <p v-if="feedbackChatResult">
-              {{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
-              {{ retrievalModeLabel(feedbackChatResult.retrievalMode) }} ·
-              {{ feedbackChatResult.modelName || '未记录模型' }} · Token
-              {{ formatMetric(feedbackChatResult.totalTokens) }} ·
-              {{ formatMetric(feedbackChatResult.elapsedMs) }} ms
-            </p>
-            <ul v-if="feedbackEvidenceIndexWarnings.length">
-              <li v-for="(warning, index) in feedbackEvidenceIndexWarnings" :key="index">
-                {{ warning }}
-              </li>
-            </ul>
-          </div>
-        </details>
-      </div>
-
-      <form class="creator-feedback-chat-composer" @submit.prevent="askFeedbackChat">
-        <textarea
-          v-model="feedbackChatForm.question"
-          maxlength="1000"
-          placeholder="向当前报告追问..."
-          @keydown.ctrl.enter.prevent="askFeedbackChat"
-        ></textarea>
-        <button
-          type="submit"
-          class="creator-primary-button"
-          :disabled="!canAskFeedbackChat"
-        >
-          {{ isAskingFeedbackChat ? '生成中...' : '追问' }}
-        </button>
-      </form>
+          <form class="creator-feedback-chat-composer" @submit.prevent="askFeedbackChat">
+            <textarea
+              v-model="feedbackChatForm.question"
+              maxlength="1000"
+              placeholder="向当前报告追问..."
+              @keydown.ctrl.enter.prevent="askFeedbackChat"
+            ></textarea>
+            <button
+              type="submit"
+              class="creator-primary-button"
+              :disabled="!canAskFeedbackChat"
+            >
+              {{ isAskingFeedbackChat ? '生成中...' : '追问' }}
+            </button>
+          </form>
         </aside>
       </section>
     </div>

@@ -6,7 +6,7 @@ import java.time.LocalDateTime;
 /**
  * 跨分区视频案例主表（creator_reference_video）的数据库记录对象。
  * 用普通 POJO 而非 record，是因为 MyBatis @Results 通过 setter 回填字段，record 的不可变特性不适合做映射载体。
- * 阶段 5.1a 只负责把案例落库，质量分（quality_score）与亮点摘要（highlight_summary）留空，分别在 5.1c、5.1b 补写。
+ * 阶段 5.1a 只负责把案例落库，质量分相关字段与亮点摘要（highlight_summary）留空，分别在 5.1c、5.1b 补写。
  */
 public class ReferenceVideoRecord {
 
@@ -26,7 +26,10 @@ public class ReferenceVideoRecord {
     private Long danmakuCount;
     private Long replyCount;
     private String highlightSummary;
+    private BigDecimal rawQualityScore;
     private BigDecimal qualityScore;
+    private int qualitySampleCount;
+    private boolean qualityScoreReliable;
     private String source;
     private String publishTimeText;
     /** 向量索引状态，5.1a 阶段恒为 DB 默认值 PENDING，向量化在 5.1c 才真正写状态。 */
@@ -154,12 +157,36 @@ public class ReferenceVideoRecord {
         this.highlightSummary = highlightSummary;
     }
 
+    public BigDecimal getRawQualityScore() {
+        return rawQualityScore;
+    }
+
+    public void setRawQualityScore(BigDecimal rawQualityScore) {
+        this.rawQualityScore = rawQualityScore;
+    }
+
     public BigDecimal getQualityScore() {
         return qualityScore;
     }
 
     public void setQualityScore(BigDecimal qualityScore) {
         this.qualityScore = qualityScore;
+    }
+
+    public int getQualitySampleCount() {
+        return qualitySampleCount;
+    }
+
+    public void setQualitySampleCount(int qualitySampleCount) {
+        this.qualitySampleCount = qualitySampleCount;
+    }
+
+    public boolean isQualityScoreReliable() {
+        return qualityScoreReliable;
+    }
+
+    public void setQualityScoreReliable(boolean qualityScoreReliable) {
+        this.qualityScoreReliable = qualityScoreReliable;
     }
 
     public String getSource() {

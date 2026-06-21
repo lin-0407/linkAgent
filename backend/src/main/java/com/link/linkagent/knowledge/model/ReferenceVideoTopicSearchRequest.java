@@ -8,7 +8,7 @@ import jakarta.validation.constraints.Size;
 /**
  * 主题优先案例检索请求。
  * <p>
- * 先用用户问题命中主题中块，再把命中的视频按质量分分页展示，避免父块检索把“整体相似”误当成“主题相关”。
+ * 先用用户问题命中主题中块，再把命中的视频按质量信号分页展示，避免父块检索把“整体相似”误当成“主题相关”。
  */
 public record ReferenceVideoTopicSearchRequest(
 

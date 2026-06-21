@@ -8,6 +8,7 @@ import com.link.linkagent.knowledge.model.ReferenceVideoIndexRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexStatusResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoPageResponse;
+import com.link.linkagent.knowledge.model.ReferenceVideoQualityRecomputeResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoTopicSearchRequest;
@@ -21,6 +22,7 @@ import com.link.linkagent.knowledge.service.KnowledgeReferenceItemIndexService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceRetrievalService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceTopicSearchService;
 import com.link.linkagent.knowledge.service.KnowledgeReferenceVideoService;
+import com.link.linkagent.knowledge.service.KnowledgeQualityScoringService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -54,6 +56,7 @@ public class KnowledgeReferenceVideoController {
     private final KnowledgeReferenceItemHybridIndexService knowledgeReferenceItemHybridIndexService;
     private final KnowledgeReferenceRetrievalService knowledgeReferenceRetrievalService;
     private final KnowledgeReferenceTopicSearchService knowledgeReferenceTopicSearchService;
+    private final KnowledgeQualityScoringService knowledgeQualityScoringService;
 
     public KnowledgeReferenceVideoController(KnowledgeReferenceVideoService knowledgeReferenceVideoService,
                                              KnowledgeReferenceFetchService knowledgeReferenceFetchService,
@@ -63,7 +66,8 @@ public class KnowledgeReferenceVideoController {
                                              KnowledgeReferenceHybridIndexService knowledgeReferenceHybridIndexService,
                                              KnowledgeReferenceItemHybridIndexService knowledgeReferenceItemHybridIndexService,
                                              KnowledgeReferenceRetrievalService knowledgeReferenceRetrievalService,
-                                             KnowledgeReferenceTopicSearchService knowledgeReferenceTopicSearchService) {
+                                             KnowledgeReferenceTopicSearchService knowledgeReferenceTopicSearchService,
+                                             KnowledgeQualityScoringService knowledgeQualityScoringService) {
         this.knowledgeReferenceVideoService = knowledgeReferenceVideoService;
         this.knowledgeReferenceFetchService = knowledgeReferenceFetchService;
         this.knowledgeReferenceIndexService = knowledgeReferenceIndexService;
@@ -73,6 +77,7 @@ public class KnowledgeReferenceVideoController {
         this.knowledgeReferenceItemHybridIndexService = knowledgeReferenceItemHybridIndexService;
         this.knowledgeReferenceRetrievalService = knowledgeReferenceRetrievalService;
         this.knowledgeReferenceTopicSearchService = knowledgeReferenceTopicSearchService;
+        this.knowledgeQualityScoringService = knowledgeQualityScoringService;
     }
 
     /**
@@ -95,6 +100,15 @@ public class KnowledgeReferenceVideoController {
     }
 
     /**
+     * 重算全部分区质量分。
+     * 表结构或公式口径调整后，用这个维护入口刷新历史数据，避免旧 quality_score 继续影响排序。
+     */
+    @PostMapping("/quality/recompute")
+    public ReferenceVideoQualityRecomputeResponse recomputeReferenceVideoQuality() {
+        return knowledgeQualityScoringService.recomputeAllCategories();
+    }
+
+    /**
      * 案例库检索（5.2a）：dense 语义检索父表案例卡片 + SQL 关键词兜底，响应回显本次实际检索模式。
      * RAG 关闭或向量库未就绪时不报错，正常返回 mode=SQL（优雅降级，非错误）；非法 tier / 空 query / 超长 → 400。
      */
@@ -105,7 +119,7 @@ public class KnowledgeReferenceVideoController {
     }
 
     /**
-     * 主题优先检索：先用 RAG 命中主题中块，再按质量分展示 top5 视频卡片。
+     * 主题优先检索：先用 RAG 命中主题中块，再按质量信号展示 top5 视频卡片。
      * 刷新时传 page=2/3/4，分别展示 top6-10、top11-15、top16-20。
      */
     @PostMapping("/topic-search")
