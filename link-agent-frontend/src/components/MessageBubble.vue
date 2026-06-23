@@ -5,9 +5,12 @@ import type { ChatMessage } from '@/types/agent'
 import PlanTracePanel from './PlanTracePanel.vue'
 import ReactTimeline from './ReactTimeline.vue'
 
-defineProps<{
+withDefaults(defineProps<{
   message: ChatMessage
-}>()
+  showDiagnostics?: boolean
+}>(), {
+  showDiagnostics: true,
+})
 
 const markdown = new MarkdownIt({
   breaks: true,
@@ -50,21 +53,21 @@ function executionModeLabel(mode: ChatMessage['executionMode']) {
     <div class="avatar">{{ message.role === 'user' ? 'U' : 'A' }}</div>
     <div class="bubble">
       <template v-if="message.role === 'assistant'">
-        <span v-if="message.executionMode" class="agent-mode-badge">
+        <span v-if="showDiagnostics && message.executionMode" class="agent-mode-badge">
           {{ executionModeLabel(message.executionMode) }}
         </span>
         <div class="markdown-body" v-html="renderAssistantContent(message.content)"></div>
       </template>
       <p v-else>{{ message.content }}</p>
 
-      <ReactTimeline v-if="message.steps?.length" :steps="message.steps" />
+      <ReactTimeline v-if="showDiagnostics && message.steps?.length" :steps="message.steps" />
       <PlanTracePanel
-        v-if="message.planTrace || message.workerTraces?.length"
+        v-if="showDiagnostics && (message.planTrace || message.workerTraces?.length)"
         :plan-trace="message.planTrace"
         :worker-traces="message.workerTraces"
       />
 
-      <small v-if="message.stopReason" class="stop-reason">{{ message.stopReason }}</small>
+      <small v-if="showDiagnostics && message.stopReason" class="stop-reason">{{ message.stopReason }}</small>
     </div>
   </article>
 </template>

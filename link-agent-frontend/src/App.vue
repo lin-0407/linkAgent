@@ -1,51 +1,51 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import AgentFloatingWindow from '@/components/AgentFloatingWindow.vue'
-import CreatorWorkspace from '@/components/CreatorWorkspace.vue'
-import KnowledgeWorkspace from '@/components/KnowledgeWorkspace.vue'
 import SettingsDrawer from '@/components/SettingsDrawer.vue'
+import { useAppStore } from '@/stores/appStore'
 
-type Surface = 'creator' | 'knowledge'
-
-const activeSurface = ref<Surface>('creator')
-const settingsOpen = ref(false)
+const appStore = useAppStore()
+const { settingsOpen, developerMode } = storeToRefs(appStore)
 </script>
 
 <template>
   <div class="surface-root">
-    <button
-      type="button"
-      class="global-settings-button"
-      aria-label="打开设置面板"
-      @click="settingsOpen = true"
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Zm8.2 3.8c0 .5-.04.98-.13 1.45l2.02 1.56-1.92 3.32-2.38-.96c-.72.6-1.54 1.08-2.44 1.4L15 21.32H9l-.35-2.55a7.8 7.8 0 0 1-2.44-1.4l-2.38.96-1.92-3.32 2.02-1.56A8.37 8.37 0 0 1 3.8 12c0-.5.04-.98.13-1.45L1.91 8.99l1.92-3.32 2.38.96c.72-.6 1.54-1.08 2.44-1.4L9 2.68h6l.35 2.55c.9.32 1.72.8 2.44 1.4l2.38-.96 1.92 3.32-2.02 1.56c.09.47.13.95.13 1.45Z"
-        />
-      </svg>
-    </button>
-
-    <nav class="surface-switch" aria-label="工作台切换">
+    <nav class="surface-switch" aria-label="导航">
+      <RouterLink to="/" custom v-slot="{ navigate, isExactActive }">
+        <button type="button" :class="{ active: isExactActive }" @click="navigate">
+          首页
+        </button>
+      </RouterLink>
+      <!-- 使用 RouterLink custom v-slot 渲染原生 button，保持现有 CSS 选择器兼容 -->
+      <RouterLink to="/creator" custom v-slot="{ navigate, isActive }">
+        <button type="button" :class="{ active: isActive }" @click="navigate">
+          创作台
+        </button>
+      </RouterLink>
+      <RouterLink to="/knowledge" custom v-slot="{ navigate, isActive }">
+        <button type="button" :class="{ active: isActive }" @click="navigate">
+          参考案例
+        </button>
+      </RouterLink>
+      <RouterLink to="/projects" custom v-slot="{ navigate, isActive }">
+        <button type="button" :class="{ active: isActive }" @click="navigate">
+          项目列表
+        </button>
+      </RouterLink>
       <button
         type="button"
-        :class="{ active: activeSurface === 'creator' }"
-        @click="activeSurface = 'creator'"
+        :class="{ active: settingsOpen }"
+        @click="settingsOpen = true"
       >
-        创作工作台
-      </button>
-      <button
-        type="button"
-        :class="{ active: activeSurface === 'knowledge' }"
-        @click="activeSurface = 'knowledge'"
-      >
-        案例库
+        设置
       </button>
     </nav>
 
-    <CreatorWorkspace v-if="activeSurface === 'creator'" />
-    <KnowledgeWorkspace v-else />
-    <AgentFloatingWindow />
-    <SettingsDrawer v-model:open="settingsOpen" />
+    <!-- RouterView 替代原来的 v-if 三选一切换，避免组件销毁导致 SSE 断开和状态丢失 -->
+    <RouterView v-slot="{ Component }">
+      <component :is="Component" :developer-mode="developerMode" />
+    </RouterView>
+    <AgentFloatingWindow :developer-mode="developerMode" />
+    <SettingsDrawer v-model:open="settingsOpen" v-model:developer-mode="developerMode" />
   </div>
 </template>

@@ -39,105 +39,16 @@ import type {
   PrePublishAnalyzePayload,
   WorkflowUsageResponse,
 } from '@/types/creator'
+import { cleanPayload, del, download, get, post, put, upload } from './http'
 
-async function requestJson<T>(url: string, options?: RequestInit) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  })
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response)
-    throw new Error(message || `HTTP ${response.status}`)
-  }
-
-  return (await response.json()) as T
-}
-
-async function readErrorMessage(response: Response) {
-  try {
-    const data = (await response.json()) as { message?: string; error?: string; detail?: string }
-    return data.message || data.detail || data.error
-  } catch {
-    return ''
-  }
-}
-
-async function requestForm<T>(url: string, formData: FormData) {
-  const response = await fetch(url, {
-    method: 'POST',
-    body: formData,
-  })
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response)
-    throw new Error(message || `HTTP ${response.status}`)
-  }
-
-  return (await response.json()) as T
-}
-
-async function requestEmpty(url: string, options?: RequestInit) {
-  const response = await fetch(url, options)
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response)
-    throw new Error(message || `HTTP ${response.status}`)
-  }
-}
-
-async function requestBlob(url: string, options?: RequestInit) {
-  const response = await fetch(url, options)
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response)
-    throw new Error(message || `HTTP ${response.status}`)
-  }
-
-  return {
-    blob: await response.blob(),
-    filename: parseDownloadFilename(response.headers.get('Content-Disposition')),
-  }
-}
-
-function parseDownloadFilename(contentDisposition: string | null) {
-  if (!contentDisposition) {
-    return ''
-  }
-  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
-  if (utf8Match?.[1]) {
-    return decodeURIComponent(utf8Match[1].replace(/"/g, ''))
-  }
-  const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
-  return filenameMatch?.[1] ?? ''
-}
-
-function cleanPayload<T extends Record<string, unknown>>(payload: T) {
-  return Object.fromEntries(
-    Object.entries(payload).filter(([, value]) => {
-      if (typeof value === 'string') {
-        return value.trim().length > 0
-      }
-      return value !== undefined && value !== null
-    }),
-  )
-}
+// ── 任务 CRUD ──
 
 export function createCreatorTask(payload: CreatorTaskCreatePayload) {
-  return requestJson<CreatorTask>('/api/creator/tasks', {
-    method: 'POST',
-    body: JSON.stringify(cleanPayload(payload)),
-  })
+  return post<CreatorTask>('/creator/tasks', cleanPayload(payload))
 }
 
 export function updateCreatorTask(taskId: string, payload: CreatorTaskUpdatePayload) {
-  return requestJson<CreatorTask>(`/api/creator/tasks/${encodeURIComponent(taskId)}`, {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  })
+  return put<CreatorTask>(`/creator/tasks/${encodeURIComponent(taskId)}`, payload)
 }
 
 export function importCreatorTaskMaterialFile(
@@ -148,35 +59,25 @@ export function importCreatorTaskMaterialFile(
   const formData = new FormData()
   formData.append('materialType', materialType)
   formData.append('file', file)
-  return requestForm<CreatorTask>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/materials/import`,
-    formData,
-  )
+  return upload<CreatorTask>(`/creator/tasks/${encodeURIComponent(taskId)}/materials/import`, formData)
 }
 
 export function deleteCreatorTask(taskId: string) {
-  return requestEmpty(`/api/creator/tasks/${encodeURIComponent(taskId)}`, {
-    method: 'DELETE',
-  })
+  return del(`/creator/tasks/${encodeURIComponent(taskId)}`)
 }
 
 export function listCreatorTasks(limit = 20) {
-  const params = new URLSearchParams({
-    limit: String(limit),
-  })
-  return requestJson<CreatorTaskSummary[]>(`/api/creator/tasks?${params.toString()}`)
+  return get<CreatorTaskSummary[]>('/creator/tasks', { params: { limit } })
 }
 
 export function getCreatorTask(taskId: string) {
-  return requestJson<CreatorTask>(`/api/creator/tasks/${encodeURIComponent(taskId)}`)
+  return get<CreatorTask>(`/creator/tasks/${encodeURIComponent(taskId)}`)
 }
 
+// ── 偏好 & 语境 ──
+
 export function listCreatorPreferences(userId = 'default', limit = 10) {
-  const params = new URLSearchParams({
-    userId,
-    limit: String(limit),
-  })
-  return requestJson<CreatorPreference[]>(`/api/creator/preferences?${params.toString()}`)
+  return get<CreatorPreference[]>('/creator/preferences', { params: { userId, limit } })
 }
 
 export function listCreatorContextTerms(
@@ -185,101 +86,72 @@ export function listCreatorContextTerms(
   includeDisabled = false,
   limit = 50,
 ) {
-  const params = new URLSearchParams({
-    userId,
-    includeDisabled: String(includeDisabled),
-    limit: String(limit),
+  return get<CreatorContextTerm[]>('/creator/context/terms', {
+    params: { userId, videoType, includeDisabled, limit },
   })
-  if (videoType) {
-    params.set('videoType', videoType)
-  }
-  return requestJson<CreatorContextTerm[]>(`/api/creator/context/terms?${params.toString()}`)
 }
 
 export function getCreatorContextBundle(userId = 'default', videoType?: string, scene = 'PRE_PUBLISH') {
-  const params = new URLSearchParams({
-    userId,
-    scene,
+  return get<CreatorContextBundle>('/creator/context/bundle', {
+    params: { userId, videoType, scene },
   })
-  if (videoType) {
-    params.set('videoType', videoType)
-  }
-  return requestJson<CreatorContextBundle>(`/api/creator/context/bundle?${params.toString()}`)
 }
 
 export function saveCreatorContextTerm(payload: CreatorContextTermPayload) {
-  return requestJson<CreatorContextTerm>('/api/creator/context/terms', {
-    method: 'POST',
-    body: JSON.stringify(cleanPayload(payload)),
-  })
+  return post<CreatorContextTerm>('/creator/context/terms', cleanPayload(payload))
 }
 
 export function disableCreatorContextTerm(termId: string) {
-  return requestJson<CreatorContextTerm>(`/api/creator/context/terms/${encodeURIComponent(termId)}`, {
-    method: 'DELETE',
-  })
+  return del<CreatorContextTerm>(`/creator/context/terms/${encodeURIComponent(termId)}`)
 }
 
 export function recordCreatorContextTermFeedback(termId: string, accepted: boolean) {
-  return requestJson<CreatorContextTerm>(
-    `/api/creator/context/terms/${encodeURIComponent(termId)}/feedback`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ accepted }),
-    },
+  return post<CreatorContextTerm>(
+    `/creator/context/terms/${encodeURIComponent(termId)}/feedback`,
+    { accepted },
   )
 }
 
+// ── 发布前优化 ──
+
 export function analyzePrePublish(taskId: string, payload: PrePublishAnalyzePayload) {
-  return requestJson<CreatorSuggestion>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/pre-publish/analyze`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorSuggestion>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/pre-publish/analyze`,
+    cleanPayload(payload),
   )
 }
 
 export function getPrePublishSuggestion(taskId: string) {
-  return requestJson<CreatorSuggestion>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/pre-publish/suggestions`,
-  )
+  return get<CreatorSuggestion>(`/creator/tasks/${encodeURIComponent(taskId)}/pre-publish/suggestions`)
 }
 
 export function startPrePublishWorkflow(
   taskId: string,
   payload: CreatorWorkflowStartPayload = { resumeLatest: true },
 ) {
-  return requestJson<CreatorWorkflowSession>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/pre-publish/start`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorWorkflowSession>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/pre-publish/start`,
+    cleanPayload(payload),
   )
 }
 
+// ── 工作流消息 / 步骤 / 用量 ──
+
 export function listWorkflowMessages(taskId: string, sessionId: string) {
-  return requestJson<CreatorWorkflowMessage[]>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/messages`,
+  return get<CreatorWorkflowMessage[]>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/messages`,
   )
 }
 
 export function listWorkflowSteps(taskId: string, sessionId: string) {
-  return requestJson<CreatorWorkflowStep[]>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/steps`,
+  return get<CreatorWorkflowStep[]>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/steps`,
   )
 }
 
 export function getWorkflowUsage(taskId: string, sessionId: string) {
-  return requestJson<WorkflowUsageResponse>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/usage`,
-  )
-}
-
-export function createWorkflowEventSource(taskId: string, sessionId: string) {
-  return new EventSource(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/events`,
+  return get<WorkflowUsageResponse>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/usage`,
   )
 }
 
@@ -288,12 +160,9 @@ export function sendWorkflowMessage(
   sessionId: string,
   payload: CreatorWorkflowMessagePayload,
 ) {
-  return requestJson<CreatorWorkflowMessage>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/messages`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorWorkflowMessage>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/messages`,
+    cleanPayload(payload),
   )
 }
 
@@ -302,12 +171,9 @@ export function analyzePrePublishWorkflow(
   sessionId: string,
   payload: PrePublishAnalyzePayload,
 ) {
-  return requestJson<CreatorSuggestion>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/analyze`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorSuggestion>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/analyze`,
+    cleanPayload(payload),
   )
 }
 
@@ -316,74 +182,60 @@ export function confirmWorkflowPrePublishSuggestion(
   sessionId: string,
   payload: CreatorWorkflowConfirmPayload,
 ) {
-  return requestJson<CreatorWorkflowSession>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/confirm`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorWorkflowSession>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/confirm`,
+    cleanPayload(payload),
   )
 }
 
+// ── 反馈管理 ──
+
 export function saveCreatorFeedback(taskId: string, payload: CreatorFeedbackSavePayload) {
-  return requestJson<CreatorFeedback>(`/api/creator/tasks/${encodeURIComponent(taskId)}/feedback`, {
-    method: 'POST',
-    body: JSON.stringify(cleanPayload(payload)),
-  })
+  return post<CreatorFeedback>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/feedback`,
+    cleanPayload(payload),
+  )
 }
 
 export function getCreatorFeedback(taskId: string) {
-  return requestJson<CreatorFeedback>(`/api/creator/tasks/${encodeURIComponent(taskId)}/feedback`)
+  return get<CreatorFeedback>(`/creator/tasks/${encodeURIComponent(taskId)}/feedback`)
 }
 
 export function importCreatorFeedbackFile(taskId: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
-  return requestForm<CreatorFeedbackImportResult>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/import`,
+  return upload<CreatorFeedbackImportResult>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/feedback/import`,
     formData,
   )
 }
 
 export function fetchCreatorFeedbackByBv(taskId: string, payload: CreatorFeedbackFetchPayload) {
-  return requestJson<CreatorFeedbackFetchResult>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/fetch`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorFeedbackFetchResult>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/feedback/fetch`,
+    cleanPayload(payload),
   )
 }
 
 export function getCreatorFeedbackDashboard(taskId: string) {
-  return requestJson<CreatorFeedbackDashboard>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/dashboard`,
-  )
+  return get<CreatorFeedbackDashboard>(`/creator/tasks/${encodeURIComponent(taskId)}/feedback/dashboard`)
 }
 
 export function analyzeCreatorFeedback(taskId: string, payload: CreatorFeedbackAnalyzePayload) {
-  return requestJson<CreatorFeedbackReport>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/analyze`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorFeedbackReport>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/feedback/analyze`,
+    cleanPayload(payload),
   )
 }
 
 export function getCreatorFeedbackReport(taskId: string) {
-  return requestJson<CreatorFeedbackReport>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/report`,
-  )
+  return get<CreatorFeedbackReport>(`/creator/tasks/${encodeURIComponent(taskId)}/feedback/report`)
 }
 
 export function chatCreatorFeedback(taskId: string, payload: CreatorFeedbackChatPayload) {
-  return requestJson<CreatorFeedbackChatResult>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/chat`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorFeedbackChatResult>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/feedback/chat`,
+    cleanPayload(payload),
   )
 }
 
@@ -391,69 +243,60 @@ export function rebuildCreatorFeedbackEvidenceIndex(
   taskId: string,
   payload: CreatorFeedbackEvidenceIndexPayload,
 ) {
-  return requestJson<CreatorFeedbackEvidenceIndexResult>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/evidence-index/rebuild`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorFeedbackEvidenceIndexResult>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/feedback/evidence-index/rebuild`,
+    cleanPayload(payload),
   )
 }
 
 export function getCreatorFeedbackEvidenceIndexStatus(taskId: string) {
-  return requestJson<CreatorFeedbackEvidenceIndexStatus>(
-    `/api/creator/tasks/${encodeURIComponent(taskId)}/feedback/evidence-index/status`,
+  return get<CreatorFeedbackEvidenceIndexStatus>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/feedback/evidence-index/status`,
   )
 }
 
+// ── 报告导出 ──
+
 export function exportCreatorReportMarkdown(taskId: string) {
-  return requestBlob(`/api/creator/tasks/${encodeURIComponent(taskId)}/report/markdown`)
+  return download(`/creator/tasks/${encodeURIComponent(taskId)}/report/markdown`)
 }
+
+// ── 评测 ──
 
 export function listCreatorEvalCases(
   userId = 'default',
   targetStage?: CreatorWorkflowStage,
   limit = 20,
 ) {
-  const params = new URLSearchParams({
-    userId,
-    limit: String(limit),
+  return get<CreatorEvalCase[]>('/creator/evaluations/cases', {
+    params: { userId, targetStage, limit },
   })
-  if (targetStage) {
-    params.set('targetStage', targetStage)
-  }
-  return requestJson<CreatorEvalCase[]>(`/api/creator/evaluations/cases?${params.toString()}`)
 }
 
 export function recordCreatorEvalResult(caseId: string, payload: CreatorEvalResultPayload) {
-  return requestJson<CreatorEvalResult>(
-    `/api/creator/evaluations/cases/${encodeURIComponent(caseId)}/results`,
-    {
-      method: 'POST',
-      body: JSON.stringify(cleanPayload(payload)),
-    },
+  return post<CreatorEvalResult>(
+    `/creator/evaluations/cases/${encodeURIComponent(caseId)}/results`,
+    cleanPayload(payload),
   )
 }
 
 export function listCreatorEvalResults(caseId: string, limit = 10) {
-  const params = new URLSearchParams({
-    limit: String(limit),
-  })
-  return requestJson<CreatorEvalResult[]>(
-    `/api/creator/evaluations/cases/${encodeURIComponent(caseId)}/results?${params.toString()}`,
+  return get<CreatorEvalResult[]>(
+    `/creator/evaluations/cases/${encodeURIComponent(caseId)}/results`,
+    { params: { limit } },
   )
 }
 
 export function listCreatorEvalPromptVersionStats(caseId: string) {
-  return requestJson<CreatorEvalPromptVersionStats[]>(
-    `/api/creator/evaluations/cases/${encodeURIComponent(caseId)}/prompt-version-stats`,
+  return get<CreatorEvalPromptVersionStats[]>(
+    `/creator/evaluations/cases/${encodeURIComponent(caseId)}/prompt-version-stats`,
   )
 }
 
+// ── LLM 开销统计 ──
+
 export function getTaskLlmUsageSummary(taskId: string) {
-  return requestJson<LlmApiUsageSummary>(
-    `/api/llm-usage/tasks/${encodeURIComponent(taskId)}/summary`,
-  )
+  return get<LlmApiUsageSummary>(`/llm-usage/tasks/${encodeURIComponent(taskId)}/summary`)
 }
 
 export function listTaskLlmApiCalls(
@@ -462,14 +305,7 @@ export function listTaskLlmApiCalls(
   pageSize = 20,
   modelCategory?: LlmApiModelCategory,
 ) {
-  const params = new URLSearchParams({
-    page: String(page),
-    pageSize: String(pageSize),
+  return get<LlmApiCallPage>(`/llm-usage/tasks/${encodeURIComponent(taskId)}/calls`, {
+    params: { page, pageSize, modelCategory },
   })
-  if (modelCategory) {
-    params.set('modelCategory', modelCategory)
-  }
-  return requestJson<LlmApiCallPage>(
-    `/api/llm-usage/tasks/${encodeURIComponent(taskId)}/calls?${params.toString()}`,
-  )
 }

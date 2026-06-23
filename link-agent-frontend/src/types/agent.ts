@@ -12,6 +12,14 @@ export type PlanStepStatus = 'SUCCESS' | 'FAILED' | 'SKIPPED'
 
 export type WorkerStatus = 'SUCCESS' | 'FAILED' | 'SKIPPED'
 
+export type EvidenceSourceType =
+  | 'TOOL_OBSERVATION'
+  | 'PLAN_STEP'
+  | 'USER_INPUT'
+  | 'CONVERSATION_CONTEXT'
+  | 'WORKER_REASONING'
+  | 'SYSTEM_LIMITATION'
+
 export type AgentPlanStep = {
   id: number
   description: string
@@ -41,6 +49,23 @@ export type AgentPlanTrace = {
   executions: PlanStepExecution[]
 }
 
+export type AgentEvidence = {
+  evidenceId: string
+  sourceType: EvidenceSourceType
+  sourceRef: string
+  content: string
+  quote: string
+  confidence: number
+}
+
+export type WorkerBrief = {
+  coreConclusion: string
+  keyPoints: string[]
+  confidence: number
+  evidenceIds: string[]
+  unresolvedQuestions: string[]
+}
+
 export type AgentWorkerTrace = {
   callId: number
   workerName: string
@@ -50,6 +75,8 @@ export type AgentWorkerTrace = {
   subTask: string
   sharedContext: string
   summary: string | null
+  brief: WorkerBrief | null
+  evidences: AgentEvidence[]
   errorMessage: string | null
   planTrace: AgentPlanTrace | null
   steps: AgentStep[]

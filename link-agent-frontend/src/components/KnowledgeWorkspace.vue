@@ -18,6 +18,17 @@ import {
   type KnowledgeVideoContextEventDetail,
 } from '@/utils/agentContext'
 
+const props = withDefaults(
+  defineProps<{
+    developerMode?: boolean
+  }>(),
+  {
+    developerMode: false,
+  },
+)
+
+const developerMode = computed(() => props.developerMode)
+
 // 案例层级选项：与后端 ALLOWED_TIERS 一致。
 const TIER_OPTIONS = [
   { value: 'BENCHMARK', label: '标杆案例' },
@@ -69,10 +80,8 @@ const analysisError = ref('')
 const matchedTopicsByVideoId = computed(() => {
   const map: Record<string, ReferenceVideoMatchedTopic[]> = {}
   for (const topic of searchResult.value?.matchedTopics ?? []) {
-    if (!map[topic.videoId]) {
-      map[topic.videoId] = []
-    }
-    map[topic.videoId].push(topic)
+    const bucket = map[topic.videoId] ?? (map[topic.videoId] = [])
+    bucket.push(topic)
   }
   return map
 })
@@ -100,7 +109,7 @@ const importSummary = computed(() => {
   if (result.skippedCount > 0) {
     return '该 BV 已在案例库中，本次按 BV 幂等去重跳过。'
   }
-  return '脚本未采集到可入库的视频，请换一个 BV 重试。'
+  return '没有采集到可入库的视频，请换一个 BV 重试。'
 })
 
 function tierLabel(value: string) {
@@ -334,9 +343,9 @@ onMounted(() => {
   <div class="creator-shell">
     <header class="creator-header">
       <div>
-        <p class="creator-kicker">案例库 · 跨分区参照</p>
-        <h2>视频案例库</h2>
-        <p>输入 BV，自动采集视频信息与评论弹幕，清洗后沉淀为可参照的创作案例。榜单批量请用离线脚本。</p>
+        <p class="creator-kicker">参考案例</p>
+        <h2>找灵感</h2>
+        <p>用一句话描述想借鉴的方向，查看相近视频为什么值得参考，以及观众是怎么反馈的。</p>
       </div>
       <div class="creator-header-actions">
         <div class="creator-status-strip">
@@ -346,9 +355,9 @@ onMounted(() => {
     </header>
 
     <section class="creator-section">
-      <div class="creator-section-head"><h3>采集导入</h3></div>
+      <div class="creator-section-head"><h3>添加参考案例</h3></div>
       <p class="creator-inline-note">
-        输入单个 BV 号或视频链接，后端会显式调用采集脚本限量抓取（视频信息 + 评论 + 弹幕），清洗后入库。采集约需 10–60 秒，请耐心等待。
+        输入单个 BV 号或视频链接，系统会整理视频信息、评论和弹幕，沉淀成可参考的案例。采集约需 10-60 秒，请耐心等待。
       </p>
       <div class="knowledge-form">
         <label>
@@ -400,9 +409,9 @@ onMounted(() => {
     </section>
 
     <section class="creator-section">
-      <div class="creator-section-head"><h3>案例检索</h3></div>
+      <div class="creator-section-head"><h3>找灵感</h3></div>
       <p class="creator-inline-note">
-        用一句话按语义检索最相关的案例（如「开场如何快速留住观众」）。hybrid 就绪时会补充 BM25 关键词召回；RAG 关闭或向量库未就绪时自动降级为关键词检索（SQL 兜底），结果上方标签会标明本次实际走的检索模式。
+        可以输入“开场如何留住观众”“标题怎么更像教程”等问题，系统会找出更接近的案例和观众原话。
       </p>
       <div class="knowledge-toolbar">
         <input
@@ -426,7 +435,12 @@ onMounted(() => {
           :disabled="searching"
           @keyup.enter="submitSearch()"
         />
-        <select v-model="searchStrategy" :disabled="searching" title="查询增强策略">
+        <select
+          v-if="developerMode"
+          v-model="searchStrategy"
+          :disabled="searching"
+          title="查询增强策略"
+        >
           <option v-for="option in STRATEGY_OPTIONS" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
@@ -451,18 +465,18 @@ onMounted(() => {
       </div>
       <template v-if="!searchError && searchResult">
         <div class="creator-chip-list">
-          <b>检索模式 {{ searchModeLabel(searchResult.mode) }}</b>
-          <b>增强策略 {{ strategyLabel(searchResult.strategy) }}</b>
-          <b v-if="searchResult.reranked">已精排 · qwen3-rerank</b>
+          <b v-if="developerMode">检索模式 {{ searchModeLabel(searchResult.mode) }}</b>
+          <b v-if="developerMode">增强策略 {{ strategyLabel(searchResult.strategy) }}</b>
+          <b v-if="developerMode && searchResult.reranked">已精排 · qwen3-rerank</b>
           <b>第 {{ searchResult.page }} / {{ searchResult.maxPage }} 批</b>
           <b>展示 {{ searchResult.cards.length }} 张</b>
         </div>
-        <p v-if="searchResult.enhancedQueries.length" class="knowledge-enhanced">
+        <p v-if="developerMode && searchResult.enhancedQueries.length" class="knowledge-enhanced">
           <span class="knowledge-enhanced-label">扩展查询</span>
           <span v-for="(q, i) in searchResult.enhancedQueries" :key="i" class="knowledge-enhanced-item">{{ q }}</span>
         </p>
         <p v-if="!searchResult.cards.length" class="creator-muted">
-          没有匹配的案例，换个说法，或先在上方采集 / 索引更多案例。
+          没有匹配的案例，换个说法，或先在上方添加更多参考案例。
         </p>
         <div v-else class="knowledge-card-list">
           <button
@@ -478,7 +492,7 @@ onMounted(() => {
               <b>{{ tierLabel(hit.tier) }}</b>
               <b v-if="hit.category">{{ hit.category }}</b>
               <b v-if="qualityScoreLabel(hit)" :title="qualityScoreTitle(hit)">{{ qualityScoreLabel(hit) }}</b>
-              <b>{{ embeddingLabel(hit.embeddingStatus) }}</b>
+              <b v-if="developerMode">{{ embeddingLabel(hit.embeddingStatus) }}</b>
             </span>
             <small>
               {{ hit.bvId || '无 BV' }} · {{ hit.source }}
@@ -497,7 +511,7 @@ onMounted(() => {
               <span>评论 {{ formatCount(hit.replyCount) }}</span>
             </span>
             <span v-if="matchedTopicsByVideoId[hit.videoId]?.length" class="knowledge-topic-hits">
-              <span class="knowledge-topic-hits-label">命中主题</span>
+              <span class="knowledge-topic-hits-label">为什么推荐它</span>
               <span
                 v-for="topic in matchedTopicsByVideoId[hit.videoId]"
                 :key="topic.chunkId"
@@ -508,7 +522,7 @@ onMounted(() => {
               </span>
             </span>
             <span v-if="evidenceByVideoId[hit.videoId]?.length" class="knowledge-evidence">
-              <span class="knowledge-evidence-label">相关评论弹幕</span>
+              <span class="knowledge-evidence-label">观众怎么说</span>
               <span
                 v-for="ev in evidenceByVideoId[hit.videoId]"
                 :key="ev.itemId"
@@ -520,7 +534,7 @@ onMounted(() => {
               </span>
             </span>
             <span class="knowledge-card-action">
-              {{ analysisLoadingVideoId === hit.videoId ? '加载视频上下文…' : '打开 AI 分析' }}
+              {{ analysisLoadingVideoId === hit.videoId ? '加载案例内容...' : '用这个案例帮我改当前视频' }}
             </span>
           </button>
         </div>
@@ -575,7 +589,7 @@ onMounted(() => {
             <b>{{ tierLabel(item.tier) }}</b>
             <b v-if="item.category">{{ item.category }}</b>
             <b v-if="qualityScoreLabel(item)" :title="qualityScoreTitle(item)">{{ qualityScoreLabel(item) }}</b>
-            <b>{{ embeddingLabel(item.embeddingStatus) }}</b>
+            <b v-if="developerMode">{{ embeddingLabel(item.embeddingStatus) }}</b>
           </div>
           <small>
             {{ item.bvId || '无 BV' }} · {{ item.source }}

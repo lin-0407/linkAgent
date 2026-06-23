@@ -48,8 +48,8 @@
   --s8: 40px;
   /* 圆角：三档 + 胶囊，取代原先 8~28px 的九种乱用 */
   --r-sm: 6px;
-  --r: 10px;
-  --r-lg: 14px;
+  --r: 8px;
+  --r-lg: 8px;
   --r-pill: 999px;
   /* 阴影：三档柔和，全部无硬偏移 */
   --sh-sm: 0 1px 2px rgba(24, 24, 27, 0.05);
@@ -91,7 +91,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -658,6 +659,40 @@ small.step-block {
 .plan-trace-error {
   color: var(--danger) !important;
   font-weight: var(--fw-semibold);
+}
+
+.plan-trace-warning {
+  color: var(--warn) !important;
+  font-weight: var(--fw-semibold);
+}
+
+.plan-trace-evidence {
+  display: grid;
+  gap: 8px;
+  padding: 9px 10px;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+
+.plan-trace-evidence summary {
+  font-size: 12px;
+}
+
+.plan-trace-evidence ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-trace-evidence li {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 .error {
@@ -2331,6 +2366,7 @@ textarea:focus {
     transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
     box-shadow 220ms ease,
     border-color 220ms ease;
+  display: none;
 }
 
 .creator-tabs button {
@@ -2349,8 +2385,8 @@ textarea:focus {
 
 .creator-tabs button.active {
   color: var(--ink);
-  background: transparent;
-  border-color: transparent;
+  background: var(--accent-tint);
+  border-color: var(--accent);
   box-shadow: none;
 }
 
@@ -2382,6 +2418,42 @@ textarea:focus {
   display: grid;
   gap: var(--s5);
   padding: var(--s5);
+}
+
+.creator-start-screen {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--s6);
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--s7);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: var(--sh-sm);
+}
+
+.creator-start-screen h3 {
+  margin: 0 0 var(--s2);
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: var(--fw-bold);
+  line-height: 1.25;
+}
+
+.creator-start-screen p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.creator-start-actions {
+  display: grid;
+  gap: var(--s3);
+  min-width: 190px;
 }
 
 .creator-section-head {
@@ -2598,9 +2670,56 @@ textarea:focus {
   line-height: 1.55;
 }
 
+.creator-script-main-input {
+  display: grid;
+  gap: var(--s2);
+}
+
+.creator-script-main-input > span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+}
+
+.creator-script-main-input input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--s3);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+}
+
+.creator-script-main-input input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-ring);
+}
+
+.creator-advanced-panel {
+  display: grid;
+  gap: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px dashed var(--border-strong);
+}
+
+.creator-advanced-panel summary {
+  width: fit-content;
+  min-height: 32px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+}
+
+.creator-advanced-panel[open] summary {
+  margin-bottom: var(--s3);
+}
+
 .creator-script-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 1.4fr) repeat(4, minmax(104px, 0.6fr));
+  grid-template-columns: repeat(4, minmax(104px, 1fr));
   gap: var(--s3);
 }
 
@@ -4940,6 +5059,7 @@ textarea:focus {
 }
 
 .creator-tabs::before {
+  display: none;
   background: var(--accent-tint);
   border-color: var(--accent);
   box-shadow: inset 0 -2px 0 var(--accent);
@@ -4951,7 +5071,8 @@ textarea:focus {
 
 .creator-tabs button.active {
   color: #111827;
-  background: transparent;
+  background: var(--accent-tint);
+  border-color: var(--accent);
   box-shadow: none;
 }
 
@@ -4999,6 +5120,20 @@ textarea:focus {
 
   .creator-shell {
     padding: 18px 12px 16px;
+  }
+
+  .creator-start-screen {
+    grid-template-columns: 1fr;
+    gap: var(--s5);
+    padding: var(--s5);
+  }
+
+  .creator-start-actions {
+    min-width: 0;
+  }
+
+  .creator-start-actions button {
+    width: 100%;
   }
 
   .creator-toast {

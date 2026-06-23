@@ -1,9 +1,15 @@
 package com.link.linkagent.core.multi;
 
 import com.link.linkagent.core.AgentRunResult;
+import com.link.linkagent.core.citation.AgentEvidence;
 import com.link.linkagent.core.plan.PlanAndExecuteAgent;
+import com.link.linkagent.core.plan.PlanStepExecution;
+import com.link.linkagent.core.plan.PlanStepStatus;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 多 Agent 模式下的工具取证 Worker。
@@ -41,15 +47,20 @@ public class PlanExecuteWorkerAgent implements WorkerAgent {
                     buildWorkerContext(conversationContext, call),
                     call.subTask()
             );
+            WorkerStatus status = result.stopReason() == null ? WorkerStatus.SUCCESS : WorkerStatus.FAILED;
+            List<AgentEvidence> evidences = buildEvidences(call, result);
+            WorkerBrief brief = WorkerBrief.fromSummary(result.finalAnswer(), evidenceIds(evidences), status);
             return new AgentWorkerTrace(
                     call.id(),
                     name(),
                     role(),
                     capability(),
-                    result.stopReason() == null ? WorkerStatus.SUCCESS : WorkerStatus.FAILED,
+                    status,
                     call.subTask(),
                     call.sharedContext(),
                     result.finalAnswer(),
+                    brief,
+                    evidences,
                     result.stopReason(),
                     result.planTrace(),
                     result.steps()
@@ -82,9 +93,38 @@ public class PlanExecuteWorkerAgent implements WorkerAgent {
                 call.subTask(),
                 call.sharedContext(),
                 null,
+                WorkerBrief.fromSummary(errorMessage, List.of(), WorkerStatus.FAILED),
+                List.of(),
                 TextUtil.trimToDefault(errorMessage, "Worker 执行异常"),
                 null,
-                java.util.List.of()
+                List.of()
         );
+    }
+
+    private List<AgentEvidence> buildEvidences(WorkerCall call, AgentRunResult result) {
+        List<AgentEvidence> evidences = new ArrayList<>();
+        if (result.planTrace() != null) {
+            for (PlanStepExecution execution : result.planTrace().executions()) {
+                if (execution.status() == PlanStepStatus.SUCCESS && TextUtil.hasText(execution.observation())) {
+                    evidences.add(AgentEvidence.fromWorkerPlanStep(
+                            call.id(),
+                            execution.stepId(),
+                            execution.action(),
+                            execution.observation()
+                    ));
+                }
+            }
+        }
+        // 没有工具观察时仍保留 Worker 结论来源，但置信度较低，供 Synthesizer 区分事实和推断。
+        if (evidences.isEmpty() && TextUtil.hasText(result.finalAnswer())) {
+            evidences.add(AgentEvidence.fromWorkerSummary(call.id(), name(), result.finalAnswer()));
+        }
+        return evidences;
+    }
+
+    private List<String> evidenceIds(List<AgentEvidence> evidences) {
+        return evidences.stream()
+                .map(AgentEvidence::evidenceId)
+                .toList();
     }
 }

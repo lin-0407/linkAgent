@@ -1,51 +1,15 @@
 import type { ConnectivityCheckResult, SettingsStatus } from '@/types/settings'
-
-// 设置面板接口封装。保持和 knowledge.ts 一样的模块私有 requestJson，避免本阶段扩大到公共请求层重构。
-async function requestJson<T>(url: string, options?: RequestInit) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  })
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response)
-    throw new Error(message || `HTTP ${response.status}`)
-  }
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  const text = await response.text()
-  return (text ? JSON.parse(text) : undefined) as T
-}
-
-async function readErrorMessage(response: Response) {
-  try {
-    const data = (await response.json()) as { message?: string; error?: string; detail?: string }
-    return data.message || data.detail || data.error
-  } catch {
-    return ''
-  }
-}
+import { get, post, put } from './http'
 
 export function getSettingsStatus() {
-  return requestJson<SettingsStatus>('/api/settings/status')
+  return get<SettingsStatus>('/settings/status')
 }
 
+/** 运行时开关切换，后端返回 204 No Content，http.put 拦截器自动返回 undefined */
 export function updateRuntimeToggle(settingKey: string, enabled: boolean) {
-  return requestJson<void>(`/api/settings/toggles/${encodeURIComponent(settingKey)}`, {
-    method: 'PUT',
-    body: JSON.stringify({ enabled }),
-  })
+  return put(`/settings/toggles/${encodeURIComponent(settingKey)}`, { enabled })
 }
 
 export function checkSettingsConnectivity() {
-  return requestJson<ConnectivityCheckResult>('/api/settings/connectivity/check', {
-    method: 'POST',
-    body: JSON.stringify({}),
-  })
+  return post<ConnectivityCheckResult>('/settings/connectivity/check', {})
 }

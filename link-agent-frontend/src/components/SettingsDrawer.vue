@@ -5,6 +5,7 @@ import type { ConnectivityItem, SettingsStatus } from '@/types/settings'
 import KnowledgeIndexPanels from '@/components/KnowledgeIndexPanels.vue'
 
 const open = defineModel<boolean>('open', { default: false })
+const developerMode = defineModel<boolean>('developerMode', { default: false })
 
 const settings = ref<SettingsStatus | null>(null)
 const loading = ref(false)
@@ -20,8 +21,8 @@ const hasLoaded = ref(false)
 const dynamicToggles = computed(() => settings.value?.dynamicToggles ?? [])
 const readonlySettings = computed(() => settings.value?.readonlySettings ?? [])
 
-watch(open, (value) => {
-  if (value && !hasLoaded.value) {
+watch([open, developerMode], ([isOpen, isDeveloperMode]) => {
+  if (isOpen && isDeveloperMode && !hasLoaded.value) {
     void loadSettings()
   }
 })
@@ -102,6 +103,28 @@ function statusLabel(status: string) {
 
           <main class="settings-body">
             <section class="creator-section settings-section">
+              <div class="creator-section-head"><h3>开发者模式</h3></div>
+              <article class="settings-developer-card">
+                <div>
+                  <strong>{{ developerMode ? '已开启' : '已关闭' }}</strong>
+                  <p>
+                    开启后显示模型连接、索引状态、生成消耗、评测样例和处理记录。普通创作流程会默认隐藏这些工程信息。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="settings-switch"
+                  :class="{ enabled: developerMode }"
+                  :aria-pressed="developerMode"
+                  @click="developerMode = !developerMode"
+                >
+                  <span>{{ developerMode ? '关闭' : '开启' }}</span>
+                </button>
+              </article>
+            </section>
+
+            <template v-if="developerMode">
+            <section class="creator-section settings-section">
               <div class="creator-section-head">
                 <h3>运行期开关</h3>
                 <button type="button" class="creator-secondary-action" :disabled="loading" @click="loadSettings">
@@ -181,6 +204,14 @@ function statusLabel(status: string) {
             <section class="creator-section settings-section">
               <div class="creator-section-head"><h3>知识库索引</h3></div>
               <KnowledgeIndexPanels />
+            </section>
+            </template>
+
+            <section v-else class="creator-section settings-section">
+              <div class="creator-section-head"><h3>普通设置</h3></div>
+              <p class="creator-muted">
+                当前是普通创作模式。发布方案、观众反馈和复盘报告会优先展示可直接采用的内容。
+              </p>
             </section>
           </main>
         </aside>
@@ -267,6 +298,36 @@ function statusLabel(status: string) {
 .settings-connectivity-grid {
   display: grid;
   gap: var(--s3);
+}
+
+.settings-developer-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+
+.settings-developer-card div {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.settings-developer-card strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: var(--fw-semibold);
+}
+
+.settings-developer-card p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .settings-toggle-list {
@@ -449,7 +510,8 @@ function statusLabel(status: string) {
   }
 
   .settings-toggle-list,
-  .settings-toggle-card {
+  .settings-toggle-card,
+  .settings-developer-card {
     grid-template-columns: 1fr;
   }
 }

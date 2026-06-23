@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import {
   deleteCreatorTask,
   analyzeCreatorFeedback,
@@ -7,7 +8,6 @@ import {
   chatCreatorFeedback,
   confirmWorkflowPrePublishSuggestion,
   createCreatorTask,
-  createWorkflowEventSource,
   exportCreatorReportMarkdown,
   getCreatorFeedback,
   getCreatorFeedbackDashboard,
@@ -39,6 +39,7 @@ import {
   updateCreatorTask,
 } from '@/api/creator'
 import MessageBubble from '@/components/MessageBubble.vue'
+import GuidanceEditorModal from '@/components/creator/GuidanceEditorModal.vue'
 import type {
   CreatorFeedback,
   CreatorFeedbackChatResult,
@@ -59,7 +60,6 @@ import type {
   CreatorTask,
   CreatorTaskSummary,
   CreatorTaskUpdatePayload,
-  CreatorWorkflowEvent,
   CreatorWorkflowMessage,
   CreatorWorkflowSession,
   CreatorWorkflowStatus,
@@ -73,15 +73,20 @@ import type {
   WorkflowUsageResponse,
 } from '@/types/creator'
 import type { ChatMessage } from '@/types/agent'
-
+import { useWorkflowSSE } from '@/composables/useWorkflowSSE'
+import { useCreatorStore } from '@/stores/creatorStore'
+import { useCreatorEvaluation } from '@/composables/creator/useCreatorEvaluation'
+import { useCreatorUsage } from '@/composables/creator/useCreatorUsage'
+import { useCreatorContext } from '@/composables/creator/useCreatorContext'
+import { useCreatorGuidance } from '@/composables/creator/useCreatorGuidance'
+import { useCreatorTask } from '@/composables/creator/useCreatorTask'
+import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
+import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
 type UnknownRecord = Record<string, unknown>
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
 type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | 'feedbackReport'
 type TaskManageMode = 'create' | 'edit'
 type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report' | 'usage'
-type CreatorWorkspaceState = {
-  taskId?: string | null
-}
 type FeedbackChatTurn = {
   id: string
   question: string
@@ -99,13 +104,23 @@ type ContextTermOption = {
   polarity: CreatorContextPolarity
 }
 
-const guidanceStorageKey = 'link-agent-creator-guidance'
-const legacyPromptStorageKey = 'link-agent-creator-system-prompts'
-const workspaceStorageKey = 'link-agent-creator-workspace'
-const defaultPrePublishGuidance =
-  '标题表达克制、具体，优先说明视频能解决的问题；先总结核心卖点，再给出优化建议；避免夸张措辞。'
-const defaultFeedbackGuidance =
-  '先归纳观众最关注的问题，再分析争议和误解；建议应能直接转化为下一期选题或互动动作。'
+const props = withDefaults(
+  defineProps<{
+    developerMode?: boolean
+  }>(),
+  {
+    developerMode: false,
+  },
+)
+
+// 指导词域迁移至 useCreatorGuidance（表单 + guidance 编辑 + localStorage 持久化）
+const {
+  prePublishForm, feedbackAnalyzeForm,
+  guidanceEditorTarget, lastPrePublishPreferenceMode, hasPrePublishPreferenceModeSnapshot,
+  defaultPrePublishGuidance, defaultFeedbackGuidance,
+  loadGuidanceSettings, openGuidanceEditor, closeGuidanceEditor,
+  resetCurrentGuidance, resetPrePublishPreferenceMode,
+} = useCreatorGuidance()
 const preferenceModeOptions: Array<{
   value: CreatorPreferenceMode
   label: string
@@ -177,46 +192,10 @@ const usageCategoryOptions: Array<{
   { value: 'RERANK', label: 'Rerank' },
 ]
 
-const taskForm = reactive({
-  taskName: '',
-  videoType: '未分类',
-  titleDraft: '',
-  descriptionDraft: '',
-  manuscript: '',
-  subtitle: '',
-})
 
-const prePublishForm = reactive({
-  customGuidance: '',
-  creatorPreference: '',
-  titleStyle: '',
-  extraRequirement: '',
-  preferenceMode: 'USE_HISTORY' as CreatorPreferenceMode,
-})
+// feedbackForm 统一来源：见 Adapter Layer → feedbackModule
 
-const feedbackForm = reactive({
-  commentSamples: '',
-  danmakuSamples: '',
-  extraContext: '',
-})
-
-const feedbackAnalyzeForm = reactive({
-  customGuidance: '',
-  analysisFocus: '',
-  extraRequirement: '',
-})
-
-const feedbackChatForm = reactive({
-  question: '',
-})
-
-const feedbackScriptForm = reactive({
-  bvInput: '',
-  maxComments: 50,
-  maxRepliesPerComment: 20,
-  maxDanmaku: 500,
-  format: 'both' as 'json' | 'both',
-})
+// feedbackChatForm / feedbackScriptForm 统一来源：见 Adapter Layer → feedbackModule
 
 const tasks = ref<CreatorTaskSummary[]>([])
 const selectedTask = ref<CreatorTask | null>(null)
@@ -224,41 +203,24 @@ const taskManageMode = ref<TaskManageMode>('create')
 const taskSearchQuery = ref('')
 const taskStatusFilter = ref<'ALL' | CreatorTaskSummary['status']>('ALL')
 // 任务列表是导航型信息，默认收进弹窗，避免持续挤占创作主流程空间。
+const errorMessage = ref('')
+const successMessage = ref('')
+
 const isTaskManagerOpen = ref(false)
-const evalCases = ref<CreatorEvalCase[]>([])
-const selectedEvalCaseId = ref('')
-const selectedEvalResultId = ref('')
-const evalStageFilter = ref<'ALL' | CreatorWorkflowStage>('ALL')
-const evalResults = ref<CreatorEvalResult[]>([])
-const evalPromptVersionStats = ref<CreatorEvalPromptVersionStats[]>([])
-const isLoadingEvalCases = ref(false)
-const isLoadingEvalResults = ref(false)
-const isRecordingEvalResult = ref(false)
+const isTaskComposerOpen = ref(false)
+// 评测域状态迁移至 useCreatorEvaluation
+const {
+  evalCases, selectedEvalCaseId, selectedEvalResultId, evalStageFilter,
+  evalResults, evalPromptVersionStats, evalResultDraft,
+  isLoadingEvalCases, isLoadingEvalResults, isRecordingEvalResult,
+  filteredEvalCases, selectedEvalCase, selectedEvalResult, canRecordEvalResult,
+  loadEvaluationCases, refreshEvaluationCases, refreshEvaluationResults,
+  selectEvalCase, submitEvalResult,
+} = useCreatorEvaluation(errorMessage)
 const isDeveloperTestOpen = ref(false)
-const evalResultDraft = reactive({
-  taskId: '',
-  workflowSessionId: '',
-  targetStage: 'PRE_PUBLISH' as CreatorWorkflowStage,
-  modelName: 'qwen3',
-  promptVersion: '',
-  promptHash: '',
-  promptSnapshot: '',
-  outputSummary: '',
-  rawOutput: '',
-  elapsedMs: null as number | null,
-  promptTokens: null as number | null,
-  completionTokens: null as number | null,
-  totalTokens: null as number | null,
-  failureReason: '',
-  readabilityScore: 4,
-  relevanceScore: 4,
-  completenessScore: 4,
-  accuracyScore: 4,
-  stabilityScore: 4,
-  costScore: 4,
-  explainabilityScore: 4,
-  reviewerNote: '',
-})
+const pendingDeleteTask = ref<CreatorTaskSummary | null>(null)
+const isResultModalBackdropPointerDown = ref(false)
+const isGuidanceBackdropPointerDown = ref(false)
 const suggestion = ref<CreatorSuggestion | null>(null)
 const feedback = ref<CreatorFeedback | null>(null)
 const feedbackReport = ref<CreatorFeedbackReport | null>(null)
@@ -270,34 +232,45 @@ const feedbackEvidenceIndexStatus = ref<CreatorFeedbackEvidenceIndexStatus | nul
 const feedbackEvidenceIndexWarnings = ref<string[]>([])
 const feedbackDashboard = ref<CreatorFeedbackDashboard | null>(null)
 const feedbackFetchResult = ref<CreatorFeedbackFetchResult | null>(null)
-const creatorPreferences = ref<CreatorPreference[]>([])
-const creatorContextTerms = ref<CreatorContextTerm[]>([])
+// 语境库域迁移至 useCreatorContext（saveContextTerm 作为编排函数留在组件）
+const {
+  creatorPreferences, creatorContextTerms,
+  isLoadingCreatorPreferences, isLoadingCreatorContextTerms,
+  isSavingCreatorContextTerm, savingContextTermKey,
+  loadCreatorPreferences, loadCreatorContextTerms,
+} = useCreatorContext(errorMessage)
+// disableContextTerm / feedbackContextTerm 保留在组件：有 errorMessage/successMessage 交互逻辑
 const contextTermForm = reactive({
   term: '',
   termType: 'KEYWORD' as CreatorContextTermType,
   evidenceText: '',
 })
-const feedbackImportFile = ref<File | null>(null)
+// feedbackImportFile → see Adapter Layer
 const feedbackImportWarnings = ref<string[]>([])
-const usageSummary = ref<LlmApiUsageSummary | null>(null)
-const usageCallPage = ref<LlmApiCallPage | null>(null)
-const usageCategoryFilter = ref<'ALL' | LlmApiModelCategory>('ALL')
-const usageCurrentPage = ref(1)
+// 开销统计域迁移至 useCreatorUsage
+const {
+  usageSummary, usageCallPage, usageCategoryFilter, usageCurrentPage,
+  isLoadingUsageStats,
+  usageCategorySummaries, usageTotalPages,
+  refreshUsageStats, changeUsageCategoryFilter, changeUsagePage,
+} = useCreatorUsage(() => selectedTask.value?.taskId ?? '', errorMessage)
 const workflowSession = ref<CreatorWorkflowSession | null>(null)
 const workflowMessages = ref<CreatorWorkflowMessage[]>([])
 const workflowSteps = ref<CreatorWorkflowStep[]>([])
 const workflowUsage = ref<WorkflowUsageResponse | null>(null)
 const workflowMessageDraft = ref('')
 const workflowMessageListRef = ref<HTMLDivElement | null>(null)
-const workflowEventSource = ref<EventSource | null>(null)
-const workflowSseText = ref('未连接')
+// useWorkflowSSE 统一管理 EventSource 生命周期、连接状态、心跳检测和版本校验，
+// 组件层只需提供 handlers 处理业务数据，不再直接操作 EventSource 实例。
+const { connect: connectWorkflowEvents, disconnect: closeWorkflowEventSource, statusText: workflowSseText } = useWorkflowSSE()
 const workflowMessageModalOpen = ref(false)
 const workflowProcessModalOpen = ref(false)
 const expandedRawStepIds = ref<Set<string>>(new Set())
 const workflowUsageError = ref('')
 const selectedWorkflowMessageId = ref('')
-const restoredTaskId = ref('')
-const activeStep = ref<CreatorActiveStep>('task')
+// activeStep / restoredTaskId 从 Pinia creatorStore 读取，替代原来的 localStorage + persistWorkspaceState 模式
+const creatorStore = useCreatorStore()
+const { activeStep, restoredTaskId } = storeToRefs(creatorStore)
 // 当前任务详情默认折叠，让发布前优化和复盘区域成为页面第一视觉重点。
 const isCurrentTaskExpanded = ref(false)
 const isLoadingTasks = ref(false)
@@ -316,31 +289,49 @@ const isAskingFeedbackChat = ref(false)
 const isRebuildingFeedbackEvidenceIndex = ref(false)
 const isLoadingFeedbackEvidenceIndexStatus = ref(false)
 const isExportingReportMarkdown = ref(false)
-const isLoadingUsageStats = ref(false)
-const isLoadingCreatorPreferences = ref(false)
-const isLoadingCreatorContextTerms = ref(false)
-const isSavingCreatorContextTerm = ref(false)
 const isContextLibraryOpen = ref(false)
-const savingContextTermKey = ref('')
-const lastPrePublishPreferenceMode = ref<CreatorPreferenceMode>('USE_HISTORY')
-const hasPrePublishPreferenceModeSnapshot = ref(false)
-const guidanceEditorTarget = ref<GuidanceEditorTarget | null>(null)
 const resultModalTarget = ref<ResultModalTarget | null>(null)
 const isFeedbackChatDrawerOpen = ref(false)
-const pendingDeleteTask = ref<CreatorTaskSummary | null>(null)
-const isGuidanceBackdropPointerDown = ref(false)
-const isResultModalBackdropPointerDown = ref(false)
 const isDeveloperTestBackdropPointerDown = ref(false)
-const errorMessage = ref('')
-const successMessage = ref('')
 let successMessageTimer: number | undefined
+
+// ═══════════════════════════════════════════
+// Phase 5.8 Adapter Layer — 桥接模式
+// composable 持有真实状态，旧 ref/函数逐步改为转发到 module
+// ═══════════════════════════════════════════
+
+const taskModule = useCreatorTask(errorMessage)
+const workflowModule = useCreatorWorkflow(
+  taskModule.selectedTaskId,
+  taskModule.hasSelectedTaskMaterials,
+  errorMessage,
+)
+const feedbackModule = useCreatorFeedback(
+  taskModule.selectedTaskId,
+  workflowModule.hasConfirmedPrePublish,
+  errorMessage,
+  successMessage,
+)
+
+// ═══════════════════════════════════════════
+
+// taskForm 统一来源：模块持有真实 reactive，组件通过此引用读写
+const taskForm = taskModule.taskForm
+// feedback 表单统一来源：feedbackModule 持有真实 reactive
+const feedbackForm = feedbackModule.feedbackForm
+const feedbackChatForm = feedbackModule.feedbackChatForm
+const feedbackScriptForm = feedbackModule.feedbackScriptForm
+const feedbackImportFile = feedbackModule.feedbackImportFile
 
 const selectedTaskId = computed(() => selectedTask.value?.taskId ?? '')
 const hasSelectedTask = computed(() => selectedTaskId.value.length > 0)
 const hasSelectedTaskMaterials = computed(() => (selectedTask.value?.materials.length ?? 0) > 0)
+const showDeveloperTools = computed(() => props.developerMode)
 const activeStepIndex = computed(() => {
-  const stepOrder: CreatorActiveStep[] = ['task', 'prePublish', 'feedback', 'report', 'usage']
-  return Math.max(stepOrder.indexOf(activeStep.value), 0)
+  const stepOrder: CreatorActiveStep[] = showDeveloperTools.value
+    ? ['task', 'prePublish', 'feedback', 'report', 'usage']
+    : ['task', 'prePublish', 'feedback', 'report']
+  return Math.max(stepOrder.indexOf(activeStep.value as CreatorActiveStep), 0)
 })
 const activeStepStyle = computed<Record<string, string>>(() => ({
   '--creator-active-step-index': String(activeStepIndex.value),
@@ -390,17 +381,17 @@ const taskSummaryStats = computed(() => {
 })
 const taskSubmitLabel = computed(() => {
   if (taskManageMode.value === 'edit') {
-    return isUpdatingTask.value ? '保存中...' : '保存修改'
+    return isUpdatingTask.value ? '保存中...' : '保存视频资料'
   }
-  return isCreatingTask.value ? '创建中...' : '创建任务'
+  return isCreatingTask.value ? '保存中...' : '保存视频资料'
 })
 const taskFormTitle = computed(() =>
-  taskManageMode.value === 'edit' ? '编辑创作任务' : '创建创作任务',
+  taskManageMode.value === 'edit' ? '编辑视频资料' : '填写视频资料',
 )
 const taskFormHint = computed(() =>
   taskManageMode.value === 'edit'
     ? '编辑当前任务后，旧材料会被覆盖，后续分析请重新生成。'
-    : '先填写任务主题、视频类型和已有材料，后续由 Agent 继续推荐标题、简介和优化方向。',
+    : '先放入这期视频已有的标题、简介和文稿，后续会基于这些资料生成发布方案。',
 )
 const pendingDeleteTaskName = computed(() => pendingDeleteTask.value?.taskName ?? '')
 const hasFeedbackSampleInput = computed(
@@ -498,33 +489,6 @@ const misunderstandingSourceAnalysis = computed(() =>
 const feedbackActionPlan = computed(() =>
   parseJsonArray(feedbackReport.value?.feedbackActionPlan),
 )
-const usageCategorySummaries = computed(() => {
-  const existing = new Map<LlmApiModelCategory, LlmApiUsageCategorySummary>()
-  for (const item of usageSummary.value?.categories ?? []) {
-    existing.set(item.modelCategory, item)
-  }
-  return (['TEXT', 'EMBEDDING', 'RERANK'] as LlmApiModelCategory[]).map(
-    (category) =>
-      existing.get(category) ?? {
-        modelCategory: category,
-        callCount: 0,
-        successCount: 0,
-        failedCount: 0,
-        skippedCount: 0,
-        totalTokens: null,
-        promptTokens: null,
-        completionTokens: null,
-        totalElapsedMs: null,
-        averageElapsedMs: null,
-      },
-  )
-})
-const usageTotalPages = computed(() => {
-  if (!usageCallPage.value || usageCallPage.value.pageSize <= 0) {
-    return 1
-  }
-  return Math.max(1, Math.ceil(usageCallPage.value.total / usageCallPage.value.pageSize))
-})
 const historicalPreferenceChips = computed<PreferenceChip[]>(() =>
   creatorPreferences.value
     .flatMap((record) =>
@@ -600,31 +564,6 @@ const workflowStatusText = computed(() => {
   }
   return workflowSessionLabel(workflowSession.value.status)
 })
-const filteredEvalCases = computed(() =>
-  evalCases.value.filter((item) => {
-    return evalStageFilter.value === 'ALL' || item.targetStage === evalStageFilter.value
-  }),
-)
-const selectedEvalCase = computed(() => {
-  if (!selectedEvalCaseId.value) {
-    return filteredEvalCases.value[0] ?? null
-  }
-  return (
-    evalCases.value.find((item) => item.caseId === selectedEvalCaseId.value) ??
-    filteredEvalCases.value[0] ??
-    null
-  )
-})
-const selectedEvalResult = computed(() => {
-  if (evalResults.value.length === 0) {
-    return null
-  }
-  return (
-    evalResults.value.find((item) => item.resultId === selectedEvalResultId.value) ??
-    evalResults.value[0] ??
-    null
-  )
-})
 const evalStats = computed(() => {
   const stats = {
     total: evalCases.value.length,
@@ -687,33 +626,25 @@ const workflowProcessSummary = computed(() => {
 })
 const guidanceEditorTitle = computed(() => {
   if (guidanceEditorTarget.value === 'prePublish') {
-    return '发布前优化指导'
+    return '发布方案偏好'
   }
   if (guidanceEditorTarget.value === 'feedback') {
-    return '反馈分析指导'
+    return '反馈分析偏好'
   }
   return ''
 })
 const resultModalTitle = computed(() => {
   if (resultModalTarget.value === 'prePublishSuggestion') {
-    return '发布前优化建议'
+    return '发布方案'
   }
   if (resultModalTarget.value === 'feedbackDashboard') {
-    return '评论弹幕导入结果'
+    return '观众反馈导入结果'
   }
   if (resultModalTarget.value === 'feedbackReport') {
-    return '反馈分析报告'
+    return '复盘报告'
   }
   return ''
 })
-const canRecordEvalResult = computed(() => {
-  return Boolean(
-    selectedEvalCase.value &&
-      !isRecordingEvalResult.value &&
-      (hasText(evalResultDraft.rawOutput) || hasText(evalResultDraft.failureReason)),
-  )
-})
-
 onMounted(() => {
   loadGuidanceSettings()
   loadWorkspaceState()
@@ -740,11 +671,36 @@ watch(successMessage, (message) => {
 })
 
 watch(
+  () => props.developerMode,
+  (enabled) => {
+    if (enabled) {
+      return
+    }
+    if (activeStep.value === 'usage') {
+      activeStep.value = selectedTask.value ? 'prePublish' : 'task'
+    }
+    isDeveloperTestOpen.value = false
+    workflowMessageModalOpen.value = false
+    workflowProcessModalOpen.value = false
+  },
+)
+
+watch(
   () => workflowMessages.value.length,
   () => {
     void scrollWorkflowMessagesToBottom()
   },
 )
+
+// ═══════════════════════════════════════════
+// Phase 5.8 Bridge Sync — 将 taskModule 状态单向同步到旧 ref，模板继续读旧变量
+// ═══════════════════════════════════════════
+watch(() => taskModule.tasks.value, (val) => { tasks.value = val }, { immediate: true })
+watch(() => taskModule.selectedTask.value, (val) => { selectedTask.value = val }, { immediate: true })
+watch(() => taskModule.isLoadingTasks.value, (val) => { isLoadingTasks.value = val })
+watch(() => taskModule.isCreatingTask.value, (val) => { isCreatingTask.value = val })
+watch(() => taskModule.isUpdatingTask.value, (val) => { isUpdatingTask.value = val })
+watch(() => taskModule.isDeletingTask.value, (val) => { isDeletingTask.value = val })
 
 function clearSuccessMessageTimer() {
   if (successMessageTimer === undefined) {
@@ -842,239 +798,42 @@ function closeSuccessToast() {
 }
 
 async function refreshTasks() {
-  isLoadingTasks.value = true
-  errorMessage.value = ''
-  try {
-    tasks.value = await listCreatorTasks(20)
-    const targetTask = resolveRefreshTargetTask()
-    if (!targetTask) {
-      resetSelectedWorkspace()
-      persistWorkspaceState({ taskId: null })
-      return
-    }
-    if (targetTask.taskId !== selectedTask.value?.taskId) {
-      await selectTask(targetTask.taskId)
-    }
-  } catch (error) {
-    showError(error)
-  } finally {
-    isLoadingTasks.value = false
+  await taskModule.refreshTasks()
+  // 编排：检查是否有待恢复的任务，自动选中
+  const targetTask = resolveRefreshTargetTask()
+  if (!targetTask) {
+    resetSelectedWorkspace()
+    creatorStore.selectedTaskId = null
+    return
+  }
+  if (targetTask.taskId !== selectedTask.value?.taskId) {
+    await selectTask(targetTask.taskId)
   }
 }
 
-async function loadEvaluationCases() {
-  isLoadingEvalCases.value = true
-  try {
-    await refreshEvaluationCases(false)
-  } catch (error) {
-    showError(error)
-  } finally {
-    isLoadingEvalCases.value = false
-  }
-}
-
+// openDeveloperTest 保留在组件：依赖 isDeveloperTestOpen (组件 UI 状态) + evalCases (composable)
 function openDeveloperTest() {
+  if (!showDeveloperTools.value) {
+    return
+  }
   isDeveloperTestOpen.value = true
   if (evalCases.value.length === 0 && !isLoadingEvalCases.value) {
     void loadEvaluationCases()
   }
 }
 
-async function refreshEvaluationCases(resetSelection = true) {
-  const stage = evalStageFilter.value === 'ALL' ? undefined : evalStageFilter.value
-  evalCases.value = await listCreatorEvalCases('default', stage)
-  if (evalCases.value.length === 0) {
-    selectedEvalCaseId.value = ''
-    evalResults.value = []
-    selectedEvalResultId.value = ''
-    return
-  }
-
-  if (resetSelection || !evalCases.value.some((item) => item.caseId === selectedEvalCaseId.value)) {
-    selectedEvalCaseId.value = evalCases.value[0].caseId
-  }
-
-  await refreshEvaluationResults(selectedEvalCaseId.value)
-}
-
-async function refreshEvaluationResults(caseId: string) {
-  if (!caseId) {
-    evalResults.value = []
-    evalPromptVersionStats.value = []
-    selectedEvalResultId.value = ''
-    return
-  }
-
-  isLoadingEvalResults.value = true
-  try {
-    const [results, promptVersionStats] = await Promise.all([
-      listCreatorEvalResults(caseId, 10),
-      listCreatorEvalPromptVersionStats(caseId),
-    ])
-    evalResults.value = results
-    evalPromptVersionStats.value = promptVersionStats
-    if (
-      evalResults.value.length === 0 ||
-      !evalResults.value.some((item) => item.resultId === selectedEvalResultId.value)
-    ) {
-      selectedEvalResultId.value = evalResults.value[0]?.resultId ?? ''
-    }
-    resetEvalResultDraftFromCase()
-  } finally {
-    isLoadingEvalResults.value = false
-  }
-}
-
-async function refreshUsageStats(page = usageCurrentPage.value, reportError = true) {
-  if (!selectedTaskId.value) {
-    usageSummary.value = null
-    usageCallPage.value = null
-    return
-  }
-  isLoadingUsageStats.value = true
-  try {
-    const modelCategory =
-      usageCategoryFilter.value === 'ALL' ? undefined : usageCategoryFilter.value
-    const [summary, callPage] = await Promise.all([
-      getTaskLlmUsageSummary(selectedTaskId.value),
-      listTaskLlmApiCalls(selectedTaskId.value, page, 20, modelCategory),
-    ])
-    usageSummary.value = summary
-    usageCallPage.value = callPage
-    usageCurrentPage.value = callPage.page
-  } catch (error) {
-    if (reportError) {
-      showError(error)
-    }
-  } finally {
-    isLoadingUsageStats.value = false
-  }
-}
-
 function openUsageStats() {
+  if (!showDeveloperTools.value) {
+    return
+  }
   activeStep.value = 'usage'
   void refreshUsageStats(1)
 }
 
-async function changeUsageCategoryFilter(category: 'ALL' | LlmApiModelCategory) {
-  usageCategoryFilter.value = category
-  usageCurrentPage.value = 1
-  await refreshUsageStats(1)
-}
-
-async function changeUsagePage(delta: number) {
-  const nextPage = Math.min(Math.max(1, usageCurrentPage.value + delta), usageTotalPages.value)
-  if (nextPage === usageCurrentPage.value) {
-    return
-  }
-  await refreshUsageStats(nextPage)
-}
-
-async function selectEvalCase(caseId: string) {
-  selectedEvalCaseId.value = caseId
-  await refreshEvaluationResults(caseId)
-}
-
-function resetEvalResultDraftFromCase() {
-  if (!selectedEvalCase.value) {
-    return
-  }
-  evalResultDraft.targetStage = selectedEvalCase.value.targetStage
-  evalResultDraft.taskId = selectedEvalCase.value.taskId ?? ''
-  evalResultDraft.workflowSessionId = ''
-  evalResultDraft.promptVersion = ''
-  evalResultDraft.promptHash = ''
-  evalResultDraft.promptSnapshot = ''
-  evalResultDraft.outputSummary = ''
-  evalResultDraft.rawOutput = ''
-  evalResultDraft.failureReason = ''
-  evalResultDraft.elapsedMs = null
-  evalResultDraft.promptTokens = null
-  evalResultDraft.completionTokens = null
-  evalResultDraft.totalTokens = null
-  evalResultDraft.readabilityScore = 4
-  evalResultDraft.relevanceScore = 4
-  evalResultDraft.completenessScore = 4
-  evalResultDraft.accuracyScore = 4
-  evalResultDraft.stabilityScore = 4
-  evalResultDraft.costScore = 4
-  evalResultDraft.explainabilityScore = 4
-  evalResultDraft.reviewerNote = ''
-}
-
-async function submitEvalResult() {
-  if (!selectedEvalCase.value || !canRecordEvalResult.value) {
-    return
-  }
-  isRecordingEvalResult.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    const result = await recordCreatorEvalResult(selectedEvalCase.value.caseId, {
-      taskId: trimToNull(evalResultDraft.taskId),
-      workflowSessionId: trimToNull(evalResultDraft.workflowSessionId),
-      targetStage: evalResultDraft.targetStage,
-      modelName: trimToNull(evalResultDraft.modelName),
-      promptVersion: trimToNull(evalResultDraft.promptVersion),
-      promptHash: trimToNull(evalResultDraft.promptHash),
-      promptSnapshot: trimToNull(evalResultDraft.promptSnapshot),
-      outputSummary: trimToNull(evalResultDraft.outputSummary),
-      rawOutput: trimToNull(evalResultDraft.rawOutput),
-      elapsedMs: normalizeOptionalNumber(evalResultDraft.elapsedMs),
-      promptTokens: normalizeOptionalNumber(evalResultDraft.promptTokens),
-      completionTokens: normalizeOptionalNumber(evalResultDraft.completionTokens),
-      totalTokens: normalizeOptionalNumber(evalResultDraft.totalTokens),
-      failureReason: trimToNull(evalResultDraft.failureReason),
-      readabilityScore: normalizeOptionalNumber(evalResultDraft.readabilityScore),
-      relevanceScore: normalizeOptionalNumber(evalResultDraft.relevanceScore),
-      completenessScore: normalizeOptionalNumber(evalResultDraft.completenessScore),
-      accuracyScore: normalizeOptionalNumber(evalResultDraft.accuracyScore),
-      stabilityScore: normalizeOptionalNumber(evalResultDraft.stabilityScore),
-      costScore: normalizeOptionalNumber(evalResultDraft.costScore),
-      explainabilityScore: normalizeOptionalNumber(evalResultDraft.explainabilityScore),
-      reviewerNote: trimToNull(evalResultDraft.reviewerNote),
-    })
-    await refreshEvaluationResults(selectedEvalCase.value.caseId)
-    selectedEvalResultId.value = result.resultId
-    successMessage.value = '评测结果已记录，可以继续查看结果列表。'
-  } catch (error) {
-    showError(error)
-  } finally {
-    isRecordingEvalResult.value = false
-  }
-}
-
-function resetTaskForm() {
-  taskForm.taskName = ''
-  taskForm.videoType = '未分类'
-  taskForm.titleDraft = ''
-  taskForm.descriptionDraft = ''
-  taskForm.manuscript = ''
-  taskForm.subtitle = ''
-}
-
-function fillTaskForm(task: CreatorTask) {
-  taskForm.taskName = task.taskName
-  taskForm.videoType = task.videoType || '未分类'
-  taskForm.titleDraft = getMaterialContent(task, 'TITLE_DRAFT')
-  taskForm.descriptionDraft = getMaterialContent(task, 'DESCRIPTION_DRAFT')
-  taskForm.manuscript = getMaterialContent(task, 'MANUSCRIPT')
-  taskForm.subtitle = getMaterialContent(task, 'SUBTITLE')
-}
-
-function getMaterialContent(task: CreatorTask, materialType: string) {
-  return task.materials.find((item) => item.materialType === materialType)?.content ?? ''
-}
-
-function hasTaskMaterialChanged(task: CreatorTask) {
-  return (
-    (task.videoType || '未分类') !== taskForm.videoType.trim() ||
-    getMaterialContent(task, 'TITLE_DRAFT') !== taskForm.titleDraft.trim() ||
-    getMaterialContent(task, 'DESCRIPTION_DRAFT') !== taskForm.descriptionDraft.trim() ||
-    getMaterialContent(task, 'MANUSCRIPT') !== taskForm.manuscript.trim() ||
-    getMaterialContent(task, 'SUBTITLE') !== taskForm.subtitle.trim()
-  )
-}
+function resetTaskForm() { taskModule.resetTaskForm() }
+function fillTaskForm(task: CreatorTask) { taskModule.fillTaskForm(task) }
+function getMaterialContent(task: CreatorTask, materialType: string) { return taskModule.getMaterialContent(task, materialType) }
+function hasTaskMaterialChanged(task: CreatorTask) { return taskModule.hasTaskMaterialChanged(task) }
 
 function resetGeneratedTaskResults() {
   closeWorkflowEventSource()
@@ -1107,80 +866,51 @@ async function submitTask() {
     await updateTask()
     return
   }
-  isCreatingTask.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    const task = await createCreatorTask({
-      taskName: taskForm.taskName,
-      videoType: taskForm.videoType,
-      titleDraft: taskForm.titleDraft,
-      descriptionDraft: taskForm.descriptionDraft,
-      manuscript: taskForm.manuscript,
-      subtitle: taskForm.subtitle,
-    })
-    selectedTask.value = task
-    taskManageMode.value = 'create'
-    activeStep.value = 'prePublish'
-    resetPrePublishPreferenceMode()
-    resetGeneratedTaskResults()
-    await loadCreatorPreferences(task.userId)
-    await loadCreatorContextTerms(task.userId, task.videoType)
-    persistWorkspaceState({ taskId: task.taskId })
-    await loadPrePublishWorkflow(task.taskId)
-    resetTaskForm()
-    await refreshTasks()
-    successMessage.value = '创作任务已创建，可以继续做发布前优化。'
-  } catch (error) {
-    showError(error)
-  } finally {
-    isCreatingTask.value = false
-  }
+  // 委托 taskModule 执行创建（内部已处理 loading / selectedTask / store）
+  const task = await taskModule.submitTask()
+  if (!task) return
+  // 编排层：跨域操作 + UI 状态
+  resetPrePublishPreferenceMode()
+  resetGeneratedTaskResults()
+  taskModule.resetTaskForm()
+  restoredTaskId.value = task.taskId
+  activeStep.value = 'prePublish'
+  await Promise.all([
+    loadCreatorPreferences(task.userId),
+    loadCreatorContextTerms(task.userId, task.videoType),
+  ])
+  await loadPrePublishWorkflow(task.taskId)
+  await refreshTasks()
+  successMessage.value = '创作任务已创建，可以继续做发布前优化。'
 }
 
 async function updateTask() {
-  if (!selectedTask.value) {
-    return
-  }
-  isUpdatingTask.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
+  if (!selectedTask.value) return
   const materialChanged = hasTaskMaterialChanged(selectedTask.value)
-  const payload: CreatorTaskUpdatePayload = {
-    taskName: taskForm.taskName,
-    videoType: taskForm.videoType,
-    titleDraft: taskForm.titleDraft,
-    descriptionDraft: taskForm.descriptionDraft,
-    manuscript: taskForm.manuscript,
-    subtitle: taskForm.subtitle,
+  // 委托 taskModule 执行更新（内部已处理 loading / store / selectedTask）
+  const task = await taskModule.submitUpdateTask()
+  if (!task) return
+  // 编排层：跨域操作
+  restoredTaskId.value = task.taskId
+  await Promise.all([
+    loadCreatorPreferences(task.userId),
+    loadCreatorContextTerms(task.userId, task.videoType),
+  ])
+  if (materialChanged) {
+    resetGeneratedTaskResults()
+    await loadPrePublishWorkflow(task.taskId, false)
+  } else {
+    await loadPrePublishWorkflow(task.taskId)
   }
-  try {
-    const task = await updateCreatorTask(selectedTask.value.taskId, payload)
-    selectedTask.value = task
-    taskManageMode.value = 'edit'
-    persistWorkspaceState({ taskId: task.taskId })
-    await loadCreatorPreferences(task.userId)
-    await loadCreatorContextTerms(task.userId, task.videoType)
-    if (materialChanged) {
-      resetGeneratedTaskResults()
-      await loadPrePublishWorkflow(task.taskId, false)
-    } else {
-      await loadPrePublishWorkflow(task.taskId)
-    }
-    await refreshTasks()
-    successMessage.value = materialChanged
-      ? '任务内容已更新，旧建议已清空，请重新生成。'
-      : '任务名称已更新。'
-  } catch (error) {
-    showError(error)
-  } finally {
-    isUpdatingTask.value = false
-  }
+  await refreshTasks()
+  successMessage.value = materialChanged
+    ? '任务内容已更新，旧建议已清空，请重新生成。'
+    : '任务名称已更新。'
 }
 
 function startCreateTask() {
-  taskManageMode.value = 'create'
-  resetTaskForm()
+  taskModule.startCreateTask()
+  isTaskComposerOpen.value = true
   pendingDeleteTask.value = null
   errorMessage.value = ''
   successMessage.value = ''
@@ -1191,37 +921,29 @@ function startCreateTask() {
 async function startEditTask(taskId: string) {
   errorMessage.value = ''
   successMessage.value = ''
-  const task = selectedTask.value?.taskId === taskId ? selectedTask.value : null
-  if (task) {
+  const alreadyLoaded = selectedTask.value?.taskId === taskId
+  if (alreadyLoaded) {
     taskManageMode.value = 'edit'
-    fillTaskForm(task)
+    isTaskComposerOpen.value = true
+    taskModule.fillTaskForm(selectedTask.value!)
     activeStep.value = 'task'
     pendingDeleteTask.value = null
     closeTaskManager()
     return
   }
-
   await selectTask(taskId)
-  if (selectedTask.value?.taskId !== taskId) {
-    return
-  }
+  if (selectedTask.value?.taskId !== taskId) return
   taskManageMode.value = 'edit'
-  fillTaskForm(selectedTask.value)
+  isTaskComposerOpen.value = true
+  taskModule.fillTaskForm(selectedTask.value!)
   activeStep.value = 'task'
   pendingDeleteTask.value = null
   closeTaskManager()
 }
 
-function cancelEditTask() {
-  taskManageMode.value = 'create'
-  resetTaskForm()
-}
+function cancelEditTask() { taskModule.cancelEditTask() }
 
-function askDeleteTask(task: CreatorTaskSummary) {
-  pendingDeleteTask.value = task
-  errorMessage.value = ''
-  successMessage.value = ''
-}
+function askDeleteTask(task: CreatorTaskSummary) { taskModule.askDeleteTask(task) }
 
 function askDeleteSelectedTask() {
   if (!selectedTask.value) {
@@ -1244,32 +966,15 @@ function askDeleteSelectedTask() {
 }
 
 function cancelDeleteTask() {
-  pendingDeleteTask.value = null
+  taskModule.cancelDeleteTask()
 }
 
 async function confirmDeleteTask() {
-  if (!pendingDeleteTask.value) {
-    return
-  }
-  isDeletingTask.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  const targetTaskId = pendingDeleteTask.value.taskId
-  try {
-    await deleteCreatorTask(targetTaskId)
-    pendingDeleteTask.value = null
-    if (selectedTask.value?.taskId === targetTaskId) {
-      resetSelectedWorkspace()
-      restoredTaskId.value = ''
-      persistWorkspaceState({ taskId: null })
-    }
-    await refreshTasks()
-    successMessage.value = '任务已删除，列表会自动刷新。'
-  } catch (error) {
-    showError(error)
-  } finally {
-    isDeletingTask.value = false
-  }
+  await taskModule.confirmDeleteTask()
+  // 编排：模块版 confirmDeleteTask 已清空 pendingDeleteTask 和 selectedTask，
+  // 这里补充 successMessage + 刷新后检查恢复任务
+  successMessage.value = '任务已删除，列表会自动刷新。'
+  await refreshTasks()
 }
 
 async function selectTask(taskId: string) {
@@ -1278,22 +983,23 @@ async function selectTask(taskId: string) {
   resultModalTarget.value = null
   pendingDeleteTask.value = null
   taskManageMode.value = 'create'
-  resetTaskForm()
-  try {
-    const task = await getCreatorTask(taskId)
-    selectedTask.value = task
-    activeStep.value = 'prePublish'
-    resetPrePublishPreferenceMode()
-    persistWorkspaceState({ taskId: task.taskId })
-    await loadCreatorPreferences(task.userId)
-    await loadCreatorContextTerms(task.userId, task.videoType)
-    await loadOptionalResults(task)
-    await loadPrePublishWorkflow(taskId)
-    await refreshUsageStats(1)
-    closeTaskManager()
-  } catch (error) {
-    showError(error)
-  }
+  taskModule.resetTaskForm()
+  // 委托 taskModule 加载完整任务（内部已处理 selectedTask / store）
+  const task = await taskModule.loadTask(taskId)
+  if (!task) return
+  // 编排层：跨域操作
+  isTaskComposerOpen.value = true
+  activeStep.value = 'prePublish'
+  resetPrePublishPreferenceMode()
+  restoredTaskId.value = task.taskId
+  await Promise.all([
+    loadCreatorPreferences(task.userId),
+    loadCreatorContextTerms(task.userId, task.videoType),
+  ])
+  await loadOptionalResults(task)
+  await loadPrePublishWorkflow(taskId)
+  await refreshUsageStats(1)
+  closeTaskManager()
 }
 
 async function loadOptionalResults(task: CreatorTask) {
@@ -1320,35 +1026,6 @@ async function loadOptionalResults(task: CreatorTask) {
 
   if (hasFeedbackResult(task.status)) {
     feedbackReport.value = await optionalRequest(() => getCreatorFeedbackReport(task.taskId))
-  }
-}
-
-async function loadCreatorPreferences(userId?: string) {
-  isLoadingCreatorPreferences.value = true
-  try {
-    creatorPreferences.value = await listCreatorPreferences(userId || 'default', 10)
-  } catch {
-    // 偏好记忆是发布前优化的增强上下文，查询失败时不阻断任务主流程。
-    creatorPreferences.value = []
-  } finally {
-    isLoadingCreatorPreferences.value = false
-  }
-}
-
-async function loadCreatorContextTerms(userId?: string, videoType?: string) {
-  isLoadingCreatorContextTerms.value = true
-  try {
-    creatorContextTerms.value = await listCreatorContextTerms(
-      userId || selectedTask.value?.userId || 'default',
-      videoType || selectedTask.value?.videoType || currentVideoType.value,
-      true,
-      80,
-    )
-  } catch {
-    // 语境库是增强上下文，加载失败不能阻断任务主流程。
-    creatorContextTerms.value = []
-  } finally {
-    isLoadingCreatorContextTerms.value = false
   }
 }
 
@@ -1476,7 +1153,32 @@ async function loadPrePublishWorkflow(taskId: string, resumeLatest = true) {
       suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
     }
     syncWorkflowSelection()
-    connectWorkflowEvents(taskId, workflowSession.value.sessionId)
+    connectWorkflowEvents(taskId, workflowSession.value.sessionId, {
+      onMessageCreated: (message) => {
+        upsertWorkflowMessage(message)
+        syncWorkflowSelection()
+      },
+      onSessionStatus: (status, confirmedResultId, errorMessage) => {
+        if (workflowSession.value) {
+          workflowSession.value = {
+            ...workflowSession.value,
+            status: (isWorkflowStatus(status ?? null) ? status : workflowSession.value.status) as CreatorWorkflowStatus,
+            confirmedResultId:
+              (confirmedResultId ?? workflowSession.value.confirmedResultId) ?? null,
+            errorMessage: errorMessage ?? null,
+          }
+        }
+        if (status === 'WAITING_CONFIRMATION' || status === 'CONFIRMED') {
+          void refreshWorkflowSuggestion(taskId)
+        }
+      },
+      onResultReady: (resultTaskId) => {
+        void refreshWorkflowSuggestion(resultTaskId)
+      },
+      onStepStarted: () => { void refreshPrePublishWorkflowSteps() },
+      onStepCompleted: () => { void refreshPrePublishWorkflowSteps() },
+      onStepFailed: () => { void refreshPrePublishWorkflowSteps() },
+    })
   } catch (error) {
     showError(error)
   } finally {
@@ -1737,7 +1439,9 @@ async function fetchFeedbackByBv() {
     // 后端已经完成脚本执行和入库，前端只刷新权威状态，避免页面表单成为第二份数据源。
     feedback.value = await optionalRequest(() => getCreatorFeedback(selectedTaskId.value))
     feedbackDashboard.value = await optionalRequest(() => getCreatorFeedbackDashboard(selectedTaskId.value))
-    successMessage.value = `已拉取并导入 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，文件已保存到 ${result.outputDirectory}。`
+    successMessage.value = showDeveloperTools.value
+      ? `已读取 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，文件已保存到 ${result.outputDirectory}。`
+      : `已读取 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕。`
     openResultModal('feedbackDashboard')
   } catch (error) {
     showError(error)
@@ -1816,78 +1520,24 @@ async function askFeedbackChat() {
   }
 }
 
+// 委托 feedbackModule：API 调用 + blob 下载 + 状态管理已在模块内闭环
 async function downloadReportMarkdown() {
-  if (!selectedTaskId.value || isExportingReportMarkdown.value) {
-    return
-  }
-  isExportingReportMarkdown.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    const result = await exportCreatorReportMarkdown(selectedTaskId.value)
-    triggerBrowserDownload(
-      result.blob,
-      result.filename || `creator-report-${selectedTaskId.value}.md`,
-    )
-    successMessage.value = '复盘报告 Markdown 已开始下载。'
-  } catch (error) {
-    showError(error)
-  } finally {
-    isExportingReportMarkdown.value = false
-  }
+  if (!selectedTaskId.value || isExportingReportMarkdown.value) return
+  await feedbackModule.downloadReportMarkdown(selectedTaskId.value)
 }
 
-function triggerBrowserDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.style.display = 'none'
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  // 临时 URL 只服务本次下载，稍后释放可以兼顾下载可靠性和浏览器内存占用。
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-// 打开反馈报告弹窗时按需加载索引状态。状态查询失败不阻断追问主流程，所以走 optionalRequest 容错。
+// 委托 feedbackModule 加载证据索引状态
 async function loadFeedbackEvidenceIndexStatus() {
-  if (!selectedTaskId.value || isLoadingFeedbackEvidenceIndexStatus.value) {
-    return
-  }
-  isLoadingFeedbackEvidenceIndexStatus.value = true
-  try {
-    feedbackEvidenceIndexStatus.value = await optionalRequest(() =>
-      getCreatorFeedbackEvidenceIndexStatus(selectedTaskId.value),
-    )
-  } finally {
-    isLoadingFeedbackEvidenceIndexStatus.value = false
-  }
+  if (!selectedTaskId.value || isLoadingFeedbackEvidenceIndexStatus.value) return
+  await feedbackModule.loadEvidenceIndexStatus(selectedTaskId.value)
 }
 
+// 委托 feedbackModule 重建证据索引，补充组件级 UI 清理
 async function rebuildFeedbackEvidenceIndex() {
-  if (!selectedTaskId.value || isRebuildingFeedbackEvidenceIndex.value) {
-    return
-  }
-  isRebuildingFeedbackEvidenceIndex.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  feedbackEvidenceIndexWarnings.value = []
-  try {
-    // maxItems/includeNoise 留空，让后端按 creator.feedback.rag 配置默认值索引，前端不重复定义业务默认值。
-    const result = await rebuildCreatorFeedbackEvidenceIndex(selectedTaskId.value, {})
-    feedbackEvidenceIndexWarnings.value = result.warnings ?? []
-    // 重建会改变索引计数，立即重读权威状态，避免前端用旧计数展示。
-    await loadFeedbackEvidenceIndexStatus()
-    // 索引后旧追问回答可能基于旧检索模式，清空让用户重新追问拿到向量检索结果。
-    clearFeedbackChatState(false)
-    successMessage.value = `证据索引完成：已索引 ${result.indexedCount} 条，失败 ${result.failedCount} 条。`
-  } catch (error) {
-    showError(error)
-  } finally {
-    await refreshUsageStats(1, false)
-    isRebuildingFeedbackEvidenceIndex.value = false
-  }
+  if (!selectedTaskId.value || isRebuildingFeedbackEvidenceIndex.value) return
+  await feedbackModule.rebuildEvidenceIndex(selectedTaskId.value)
+  clearFeedbackChatState(false)
+  await refreshUsageStats(1, false)
 }
 
 // 把后端检索模式编码翻译成用户能看懂的中文，统一用于状态区和追问回答脚注。
@@ -2043,18 +1693,20 @@ async function optionalRequest<T>(request: () => Promise<T>) {
 function resolveRefreshTargetTask() {
   const currentTaskId = selectedTask.value?.taskId
   const targetTaskId = currentTaskId || restoredTaskId.value
-  if (targetTaskId) {
-    const matchedTask = tasks.value.find((task) => task.taskId === targetTaskId)
-    if (matchedTask) {
-      return matchedTask
-    }
+  if (!targetTaskId) {
+    return null
   }
-  return tasks.value[0] ?? null
+  const matchedTask = tasks.value.find((task) => task.taskId === targetTaskId)
+  if (matchedTask) {
+    return matchedTask
+  }
+  return null
 }
 
 function resetSelectedWorkspace() {
   closeWorkflowEventSource()
   selectedTask.value = null
+  creatorStore.selectedTaskId = null
   taskManageMode.value = 'create'
   resetTaskForm()
   suggestion.value = null
@@ -2086,51 +1738,17 @@ function resetSelectedWorkspace() {
   workflowUsageError.value = ''
   expandedRawStepIds.value = new Set()
   selectedWorkflowMessageId.value = ''
+  isTaskComposerOpen.value = false
   activeStep.value = 'task'
   closeDeveloperTest()
 }
 
+// 从 Pinia creatorStore 恢复上次选中的任务 ID，替代原来的 localStorage 直接读取。
+// Pinia persist 插件在 store 初始化时已自动从 localStorage 反序列化 selectedTaskId。
 function loadWorkspaceState() {
-  const saved = readWorkspaceState()
-  if (saved.taskId) {
-    restoredTaskId.value = saved.taskId
+  if (creatorStore.selectedTaskId) {
+    restoredTaskId.value = creatorStore.selectedTaskId
   }
-}
-
-function readWorkspaceState(): CreatorWorkspaceState {
-  const savedValue = localStorage.getItem(workspaceStorageKey)
-  if (!savedValue) {
-    return {}
-  }
-
-  try {
-    const saved = JSON.parse(savedValue) as unknown
-    if (!isRecord(saved)) {
-      return {}
-    }
-    return {
-      taskId: typeof saved.taskId === 'string' ? saved.taskId : undefined,
-    }
-  } catch {
-    localStorage.removeItem(workspaceStorageKey)
-    return {}
-  }
-}
-
-function persistWorkspaceState(patch: CreatorWorkspaceState) {
-  const previous = readWorkspaceState()
-  const next: CreatorWorkspaceState = {
-    ...previous,
-    ...patch,
-  }
-  const taskId = patch.taskId === null ? undefined : trimToNull(next.taskId ?? undefined)
-  restoredTaskId.value = taskId ?? ''
-  localStorage.setItem(
-    workspaceStorageKey,
-    JSON.stringify({
-      ...(taskId ? { taskId } : {}),
-    }),
-  )
 }
 
 function trimToNull(value: string | undefined) {
@@ -2147,90 +1765,6 @@ function normalizeOptionalNumber(value: unknown) {
   }
   const numericValue = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(numericValue) ? numericValue : undefined
-}
-
-function connectWorkflowEvents(taskId: string, sessionId: string) {
-  closeWorkflowEventSource()
-  const eventSource = createWorkflowEventSource(taskId, sessionId)
-  workflowEventSource.value = eventSource
-  workflowSseText.value = '连接中'
-
-  eventSource.onopen = () => {
-    workflowSseText.value = '实时连接'
-  }
-  eventSource.onerror = () => {
-    workflowSseText.value = '连接中断'
-  }
-
-  const eventNames = [
-    'message_created',
-    'session_status',
-    'result_ready',
-    'heartbeat',
-    'step_started',
-    'step_completed',
-    'step_failed',
-  ]
-  eventNames.forEach((eventName) => {
-    eventSource.addEventListener(eventName, (event) => {
-      handleWorkflowEvent(event as MessageEvent<string>)
-    })
-  })
-}
-
-function closeWorkflowEventSource() {
-  if (!workflowEventSource.value) {
-    return
-  }
-  workflowEventSource.value.close()
-  workflowEventSource.value = null
-  workflowSseText.value = '未连接'
-}
-
-function handleWorkflowEvent(event: MessageEvent<string>) {
-  const data = parseWorkflowEvent(event.data)
-  if (!data) {
-    return
-  }
-
-  if (data.eventType === 'message_created' && isWorkflowMessage(data.payload)) {
-    upsertWorkflowMessage(data.payload)
-    syncWorkflowSelection()
-    return
-  }
-
-  if (data.eventType === 'result_ready') {
-    void refreshWorkflowSuggestion(data.taskId)
-    return
-  }
-
-  if (['step_started', 'step_completed', 'step_failed'].includes(data.eventType)) {
-    void refreshPrePublishWorkflowSteps()
-    return
-  }
-
-  if (data.eventType === 'session_status' && workflowSession.value) {
-    const status = readStringField(data.payload, 'status')
-    workflowSession.value = {
-      ...workflowSession.value,
-      status: isWorkflowStatus(status) ? status : workflowSession.value.status,
-      confirmedResultId:
-        readStringField(data.payload, 'confirmedResultId') ??
-        workflowSession.value.confirmedResultId,
-      errorMessage: readStringField(data.payload, 'errorMessage'),
-    }
-    if (status === 'WAITING_CONFIRMATION' || status === 'CONFIRMED') {
-      void refreshWorkflowSuggestion(data.taskId)
-    }
-  }
-}
-
-function parseWorkflowEvent(value: string) {
-  try {
-    return JSON.parse(value) as CreatorWorkflowEvent
-  } catch {
-    return null
-  }
 }
 
 function upsertWorkflowMessage(message: CreatorWorkflowMessage) {
@@ -2251,16 +1785,6 @@ function upsertWorkflowMessage(message: CreatorWorkflowMessage) {
 async function refreshWorkflowSuggestion(taskId: string) {
   suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
   await refreshUsageStats(1, false)
-}
-
-function isWorkflowMessage(value: unknown): value is CreatorWorkflowMessage {
-  return (
-    isRecord(value) &&
-    typeof value.messageId === 'string' &&
-    typeof value.sessionId === 'string' &&
-    typeof value.content === 'string' &&
-    typeof value.sequenceNo === 'number'
-  )
 }
 
 function parseJsonArray(value: string | null | undefined) {
@@ -2315,14 +1839,6 @@ function getRecordText(value: unknown, key: string) {
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function readStringField(value: unknown, key: string) {
-  if (!isRecord(value)) {
-    return null
-  }
-  const fieldValue = value[key]
-  return typeof fieldValue === 'string' ? fieldValue : null
 }
 
 function extractBvid(value: string) {
@@ -2470,15 +1986,7 @@ function syncWorkflowSelection(messageId?: string) {
   selectedWorkflowMessageId.value = workflowMessages.value[0]?.messageId ?? ''
 }
 
-function openGuidanceEditor(target: GuidanceEditorTarget) {
-  guidanceEditorTarget.value = target
-}
 
-function closeGuidanceEditor() {
-  persistGuidanceSettings()
-  guidanceEditorTarget.value = null
-  isGuidanceBackdropPointerDown.value = false
-}
 
 function openResultModal(target: ResultModalTarget) {
   if (target === 'prePublishSuggestion' && !suggestion.value) {
@@ -2494,8 +2002,8 @@ function openResultModal(target: ResultModalTarget) {
   if (guidanceEditorTarget.value) {
     closeGuidanceEditor()
   }
-  // 报告弹窗只负责阅读，证据索引状态提前刷新，追问抽屉打开时可以直接展示当前任务上下文。
-  if (target === 'feedbackReport') {
+  // 证据索引是工程诊断信息，只有开发者模式才提前读取，避免普通用户看到 RAG/Milvus 等概念。
+  if (target === 'feedbackReport' && showDeveloperTools.value) {
     feedbackEvidenceIndexWarnings.value = []
     void loadFeedbackEvidenceIndexStatus()
   }
@@ -2609,54 +2117,9 @@ function handleDeveloperTestBackdropClick(event: MouseEvent) {
   isDeveloperTestBackdropPointerDown.value = false
 }
 
-function resetCurrentGuidance() {
-  if (guidanceEditorTarget.value === 'prePublish') {
-    prePublishForm.customGuidance = defaultPrePublishGuidance
-  }
-  if (guidanceEditorTarget.value === 'feedback') {
-    feedbackAnalyzeForm.customGuidance = defaultFeedbackGuidance
-  }
-}
 
-function resetPrePublishPreferenceMode() {
-  prePublishForm.preferenceMode = 'USE_HISTORY'
-  lastPrePublishPreferenceMode.value = 'USE_HISTORY'
-  hasPrePublishPreferenceModeSnapshot.value = false
-}
 
-function loadGuidanceSettings() {
-  // 旧版本曾保存完整系统提示词，主动移除以避免在前端继续保留受保护规则。
-  localStorage.removeItem(legacyPromptStorageKey)
-  const savedValue = localStorage.getItem(guidanceStorageKey)
-  if (!savedValue) {
-    return
-  }
 
-  try {
-    const saved = JSON.parse(savedValue) as {
-      prePublishGuidance?: string
-      feedbackGuidance?: string
-    }
-    if (saved.prePublishGuidance) {
-      prePublishForm.customGuidance = saved.prePublishGuidance
-    }
-    if (saved.feedbackGuidance) {
-      feedbackAnalyzeForm.customGuidance = saved.feedbackGuidance
-    }
-  } catch {
-    localStorage.removeItem(guidanceStorageKey)
-  }
-}
-
-function persistGuidanceSettings() {
-  localStorage.setItem(
-    guidanceStorageKey,
-    JSON.stringify({
-      prePublishGuidance: prePublishForm.customGuidance,
-      feedbackGuidance: feedbackAnalyzeForm.customGuidance,
-    }),
-  )
-}
 
 function materialLabel(type: string) {
   const labels: Record<string, string> = {
@@ -2759,17 +2222,26 @@ function showError(error: unknown) {
 
     <header class="creator-header">
       <div>
-        <h2>UP 主智能工作台</h2>
-        <p>从稿件输入到发布前优化，再到评论弹幕复盘，直接在同一个页面验证后端闭环。</p>
+        <p class="creator-kicker">创作台</p>
+        <h2>视频发布与复盘助手</h2>
+        <p>围绕一条视频整理资料、生成发布方案、读懂观众反馈，并沉淀下一期行动。</p>
       </div>
-      <div class="creator-header-actions">
-        <div class="creator-status-strip" aria-label="Creator workflow status">
-          <span :class="{ active: Boolean(selectedTask) }">任务</span>
-          <span :class="{ active: Boolean(workflowSession) }">工作流</span>
-          <span :class="{ active: Boolean(suggestion) }">发布建议</span>
-          <span :class="{ active: Boolean(feedbackReport) }">反馈报告</span>
+      <div
+        v-if="selectedTask || isTaskComposerOpen || showDeveloperTools"
+        class="creator-header-actions"
+      >
+        <div
+          v-if="selectedTask || isTaskComposerOpen"
+          class="creator-status-strip"
+          aria-label="创作进度"
+        >
+          <span :class="{ active: Boolean(selectedTask) }">视频资料</span>
+          <span :class="{ active: Boolean(suggestion) }">发布方案</span>
+          <span :class="{ active: Boolean(feedback || feedbackDashboard) }">观众反馈</span>
+          <span :class="{ active: Boolean(feedbackReport) }">复盘报告</span>
         </div>
         <button
+          v-if="showDeveloperTools"
           type="button"
           class="creator-secondary-action creator-mini-button creator-dev-test-button"
           @click="openDeveloperTest"
@@ -2777,11 +2249,12 @@ function showError(error: unknown) {
           开发者测试
         </button>
         <button
+          v-if="selectedTask || isTaskComposerOpen"
           type="button"
-          class="creator-primary-button creator-mini-button"
+          class="creator-secondary-action creator-mini-button"
           @click="openTaskManager"
         >
-          任务管理
+          继续历史项目
         </button>
       </div>
     </header>
@@ -2801,7 +2274,7 @@ function showError(error: unknown) {
           >
             <header class="creator-result-modal-head creator-task-manager-head">
               <div>
-                <span>任务管理</span>
+                <span>项目列表</span>
                 <h3 id="creator-task-manager-title">
                   {{ filteredTasks.length }} / {{ taskSummaryStats.total }}
                 </h3>
@@ -2823,7 +2296,7 @@ function showError(error: unknown) {
               <div class="creator-task-toolbar">
                 <label class="creator-task-search">
                   <span>搜索</span>
-                  <input v-model="taskSearchQuery" type="search" placeholder="名称 / ID / 状态" />
+                <input v-model="taskSearchQuery" type="search" placeholder="名称 / 项目编号 / 状态" />
                 </label>
                 <label class="creator-task-filter">
                   <span>状态</span>
@@ -2839,7 +2312,7 @@ function showError(error: unknown) {
                 </label>
               </div>
 
-              <div class="creator-task-overview" aria-label="任务概览">
+              <div class="creator-task-overview" aria-label="项目概览">
                 <span><b>{{ taskSummaryStats.draft }}</b> 草稿</span>
                 <span><b>{{ taskSummaryStats.inProgress }}</b> 推进中</span>
                 <span><b>{{ taskSummaryStats.done }}</b> 已复盘</span>
@@ -2847,7 +2320,7 @@ function showError(error: unknown) {
 
               <div v-if="pendingDeleteTask" class="creator-delete-confirm">
                 <strong>删除「{{ pendingDeleteTaskName }}」？</strong>
-                <span>任务会从列表隐藏，历史分析产物保留在后端。</span>
+                <span>项目会从列表隐藏，历史分析产物保留在后端。</span>
                 <div class="creator-delete-actions">
                   <button
                     type="button"
@@ -2905,10 +2378,10 @@ function showError(error: unknown) {
                   </div>
                 </article>
                 <p v-if="!isLoadingTasks && tasks.length === 0" class="creator-muted">
-                  还没有创作任务，先新建一个。
+                  还没有视频项目，先新建一个。
                 </p>
                 <p v-else-if="!isLoadingTasks && filteredTasks.length === 0" class="creator-muted">
-                  没有匹配当前筛选条件的任务。
+                  没有匹配当前筛选条件的视频项目。
                 </p>
               </div>
             </div>
@@ -2917,12 +2390,32 @@ function showError(error: unknown) {
       </Transition>
     </Teleport>
 
-    <div class="creator-layout">
+    <section
+      v-if="!selectedTask && !isTaskComposerOpen"
+      class="creator-start-screen"
+      aria-label="创作台入口"
+    >
+      <div>
+        <p class="creator-kicker">开始</p>
+        <h3>先选择你要优化哪条视频</h3>
+        <p>新项目会从视频资料开始；历史项目会继续上次的发布方案、观众反馈或复盘报告。</p>
+      </div>
+      <div class="creator-start-actions">
+        <button type="button" class="creator-primary-button" @click="startCreateTask">
+          开始优化一条视频
+        </button>
+        <button type="button" class="creator-secondary-action" @click="openTaskManager">
+          继续上次复盘
+        </button>
+      </div>
+    </section>
+
+    <div v-else class="creator-layout">
       <aside class="creator-task-rail">
         <div v-if="selectedTask" class="creator-panel compact-panel creator-current-task-card">
           <div class="creator-panel-title">
             <div>
-              <span>当前任务</span>
+              <span>当前视频</span>
               <b>{{ selectedTask.taskName }}</b>
             </div>
             <div class="creator-panel-actions">
@@ -2966,13 +2459,13 @@ function showError(error: unknown) {
         <div v-else class="creator-panel compact-panel creator-task-empty-panel">
           <div class="creator-panel-title">
             <div>
-              <span>当前任务</span>
+              <span>当前视频</span>
               <b>未选择</b>
             </div>
           </div>
-          <p class="creator-muted">打开任务管理选择历史任务，或直接在右侧创建新任务。</p>
-          <button type="button" class="creator-primary-button" @click="openTaskManager">
-            打开任务管理
+          <p class="creator-muted">打开项目列表选择历史项目，或直接在右侧创建新视频项目。</p>
+          <button type="button" class="creator-secondary-action" @click="openTaskManager">
+            打开项目列表
           </button>
         </div>
       </aside>
@@ -2980,7 +2473,7 @@ function showError(error: unknown) {
       <section class="creator-main">
         <nav
           class="creator-tabs"
-          aria-label="Creator workflow tabs"
+          aria-label="创作步骤"
           :style="activeStepStyle"
         >
           <button
@@ -2988,7 +2481,7 @@ function showError(error: unknown) {
             :class="{ active: activeStep === 'task' }"
             @click="activeStep = 'task'"
           >
-            任务输入
+            视频资料
           </button>
           <button
             type="button"
@@ -2996,7 +2489,7 @@ function showError(error: unknown) {
             :class="{ active: activeStep === 'prePublish' }"
             @click="activeStep = 'prePublish'"
           >
-            发布前优化
+            发布方案
           </button>
           <button
             type="button"
@@ -3004,7 +2497,7 @@ function showError(error: unknown) {
             :class="{ active: activeStep === 'feedback' }"
             @click="activeStep = 'feedback'"
           >
-            评论弹幕
+            观众反馈
           </button>
           <button
             type="button"
@@ -3012,9 +2505,10 @@ function showError(error: unknown) {
             :class="{ active: activeStep === 'report' }"
             @click="activeStep = 'report'"
           >
-            分析结果
+            复盘报告
           </button>
           <button
+            v-if="showDeveloperTools"
             type="button"
             :disabled="!hasSelectedTask"
             :class="{ active: activeStep === 'usage' }"
@@ -3059,16 +2553,16 @@ function showError(error: unknown) {
 
           <div class="creator-form-grid">
             <label>
-              <span>任务名称</span>
+              <span>视频主题</span>
               <input
                 v-model="taskForm.taskName"
                 type="text"
                 maxlength="128"
-                placeholder="填写本期视频主题"
+                placeholder="例如：第一次做个人知识库踩了哪些坑"
               />
             </label>
             <label>
-              <span>视频类型</span>
+              <span>内容类型</span>
               <select v-model="taskForm.videoType">
                 <option v-for="option in videoTypeOptions" :key="option" :value="option">
                   {{ option === 'GLOBAL' ? '全局通用' : option }}
@@ -3076,24 +2570,24 @@ function showError(error: unknown) {
               </select>
             </label>
             <label>
-              <span>标题草稿</span>
+              <span>现在想到的标题</span>
               <input
                 v-model="taskForm.titleDraft"
                 type="text"
                 maxlength="200"
-                placeholder="输入一个粗标题"
+                placeholder="先写一个粗标题，后面再优化"
               />
             </label>
             <label>
-              <span>简介草稿</span>
+              <span>准备发到简介里的内容</span>
               <textarea
                 v-model="taskForm.descriptionDraft"
                 maxlength="2000"
-                placeholder="粘贴 B 站简介初稿"
+                placeholder="可以先粘贴简介初稿、链接说明或补充信息"
               ></textarea>
             </label>
             <label class="span-full">
-              <span>文稿</span>
+              <span>视频主要内容</span>
               <textarea
                 v-model="taskForm.manuscript"
                 maxlength="20000"
@@ -3101,7 +2595,7 @@ function showError(error: unknown) {
               ></textarea>
             </label>
             <label class="span-full">
-              <span>字幕</span>
+              <span>字幕 / 补充材料</span>
               <textarea
                 v-model="taskForm.subtitle"
                 maxlength="20000"
@@ -3479,7 +2973,7 @@ function showError(error: unknown) {
         <section v-if="activeStep === 'prePublish'" class="creator-section">
           <div class="creator-section-head">
             <div>
-              <h3>发布前优化 Agent</h3>
+              <h3>发布方案</h3>
             </div>
             <div class="creator-action-row">
               <button
@@ -3487,9 +2981,10 @@ function showError(error: unknown) {
                 class="creator-secondary-action"
                 @click="openGuidanceEditor('prePublish')"
               >
-                创作指导
+                调整偏好
               </button>
               <button
+                v-if="showDeveloperTools"
                 type="button"
                 class="creator-secondary-action"
                 :disabled="!hasSelectedTask"
@@ -3511,12 +3006,15 @@ function showError(error: unknown) {
                 :disabled="!canRunPrePublishAnalyze || isAnalyzingPrePublish"
                 @click="runPrePublishAnalyze"
               >
-                {{ isAnalyzingPrePublish ? '分析中...' : '生成建议' }}
+                {{ isAnalyzingPrePublish ? '生成中...' : '生成发布方案' }}
               </button>
             </div>
           </div>
 
-          <div class="creator-workflow-grid creator-workflow-grid-compact">
+          <div
+            v-if="showDeveloperTools"
+            class="creator-workflow-grid creator-workflow-grid-compact"
+          >
             <section class="creator-workflow-steps" aria-label="工作流步骤回放">
               <header class="creator-workflow-head">
                 <div>
@@ -3608,20 +3106,20 @@ function showError(error: unknown) {
 
           <div class="creator-form-grid">
             <label>
-              <span>创作者偏好</span>
+              <span>创作目标</span>
               <textarea
                 v-model="prePublishForm.creatorPreference"
                 maxlength="500"
-                placeholder="如：表达克制，面向技术学习者"
+                placeholder="这期最想让观众记住什么？也可以补充表达偏好"
               ></textarea>
             </label>
             <label>
-              <span>标题风格</span>
+              <span>风格偏好</span>
               <input
                 v-model="prePublishForm.titleStyle"
                 type="text"
                 maxlength="100"
-                placeholder="如：经验分享 / 问题解决"
+                placeholder="更稳重 / 更有网感 / 更像教程 / 更像故事"
               />
             </label>
             <label class="span-full">
@@ -3636,12 +3134,12 @@ function showError(error: unknown) {
 
           <article v-if="suggestion" class="creator-result-entry">
             <div>
-              <strong>发布前 AI 分析结果已生成</strong>
+              <strong>发布方案已生成</strong>
               <span>
                 {{
                   hasConfirmedPrePublish
-                    ? '本轮建议已确认，可以继续评论弹幕阶段。'
-                    : '进入独立弹窗查看标题、简介、标签建议，并决定是否采用。'
+                    ? '本轮方案已采用，可以继续导入观众反馈。'
+                    : '进入弹窗查看标题、简介、标签建议，并决定是否采用。'
                 }}
               </span>
             </div>
@@ -3659,7 +3157,7 @@ function showError(error: unknown) {
         <section v-if="activeStep === 'feedback'" class="creator-section">
           <div class="creator-section-head">
             <div>
-              <h3>评论弹幕样例</h3>
+              <h3>观众反馈</h3>
             </div>
             <div class="creator-action-row">
               <button
@@ -3667,7 +3165,7 @@ function showError(error: unknown) {
                 class="creator-secondary-action"
                 @click="openGuidanceEditor('feedback')"
               >
-                分析指导
+                分析偏好
               </button>
               <button
                 v-if="feedbackDashboard || feedbackFetchResult"
@@ -3699,7 +3197,7 @@ function showError(error: unknown) {
                 :disabled="!canEnterFeedback || !hasFeedbackSampleInput || isSavingFeedback || isFetchingFeedback"
                 @click="submitFeedback"
               >
-                {{ isSavingFeedback ? '保存中...' : '保存样例' }}
+                {{ isSavingFeedback ? '保存中...' : '保存手动粘贴' }}
               </button>
               <button
                 type="button"
@@ -3707,7 +3205,7 @@ function showError(error: unknown) {
                 :disabled="!canRunFeedbackAnalyze"
                 @click="runFeedbackAnalyze"
               >
-                {{ isAnalyzingFeedback ? '分析中...' : '分析反馈' }}
+                {{ isAnalyzingFeedback ? '分析中...' : '读懂反馈' }}
               </button>
             </div>
           </div>
@@ -3716,8 +3214,8 @@ function showError(error: unknown) {
             <article class="span-full creator-script-panel">
               <div class="creator-script-panel-head">
                 <div>
-                  <span>BV 拉取并导入</span>
-                  <p>填好 BV 和数量上限后，后端执行项目内脚本，文件保存到项目根目录 export/bilibili_feedback，并自动导入仪表盘。</p>
+                  <span>粘贴视频链接 / BV</span>
+                  <p>输入单条视频链接或 BV 号后，系统会读取这条视频的评论和弹幕，并整理成反馈数据。</p>
                 </div>
                 <button
                   type="button"
@@ -3725,59 +3223,61 @@ function showError(error: unknown) {
                   :disabled="!canEnterFeedback || !feedbackScriptBv || isFetchingFeedback"
                   @click="fetchFeedbackByBv"
                 >
-                  {{ isFetchingFeedback ? '拉取中...' : '拉取并导入' }}
+                  {{ isFetchingFeedback ? '读取中...' : '自动读取反馈' }}
                 </button>
               </div>
-              <div class="creator-script-grid">
-                <label>
-                  <span>BV 号或链接</span>
-                  <input
-                    v-model="feedbackScriptForm.bvInput"
-                    type="text"
-                    maxlength="200"
-                    placeholder="BVxxxx 或 https://www.bilibili.com/video/BVxxxx"
-                  />
-                </label>
-                <label>
-                  <span>主楼评论数</span>
-                  <input
-                    v-model.number="feedbackScriptForm.maxComments"
-                    type="number"
-                    min="0"
-                    max="500"
-                  />
-                </label>
-                <label>
-                  <span>每条回复数</span>
-                  <input
-                    v-model.number="feedbackScriptForm.maxRepliesPerComment"
-                    type="number"
-                    min="0"
-                    max="100"
-                  />
-                </label>
-                <label>
-                  <span>弹幕数</span>
-                  <input
-                    v-model.number="feedbackScriptForm.maxDanmaku"
-                    type="number"
-                    min="0"
-                    max="2000"
-                  />
-                </label>
-                <label>
-                  <span>输出格式</span>
-                  <select v-model="feedbackScriptForm.format">
-                    <option value="both">JSON + TXT</option>
-                    <option value="json">只输出 JSON</option>
-                  </select>
-                </label>
-              </div>
-              <small>自动导入依赖 JSON 文件，所以页面只开放 JSON 或 JSON+TXT 两种输出格式。</small>
+              <label class="creator-script-main-input">
+                <span>视频链接 / BV</span>
+                <input
+                  v-model="feedbackScriptForm.bvInput"
+                  type="text"
+                  maxlength="200"
+                  placeholder="BVxxxx 或 https://www.bilibili.com/video/BVxxxx"
+                />
+              </label>
+              <details class="creator-advanced-panel">
+                <summary>高级采集设置</summary>
+                <div class="creator-script-grid">
+                  <label>
+                    <span>主楼评论数</span>
+                    <input
+                      v-model.number="feedbackScriptForm.maxComments"
+                      type="number"
+                      min="0"
+                      max="500"
+                    />
+                  </label>
+                  <label>
+                    <span>每条回复数</span>
+                    <input
+                      v-model.number="feedbackScriptForm.maxRepliesPerComment"
+                      type="number"
+                      min="0"
+                      max="100"
+                    />
+                  </label>
+                  <label>
+                    <span>弹幕数</span>
+                    <input
+                      v-model.number="feedbackScriptForm.maxDanmaku"
+                      type="number"
+                      min="0"
+                      max="2000"
+                    />
+                  </label>
+                  <label>
+                    <span>输出格式</span>
+                    <select v-model="feedbackScriptForm.format">
+                      <option value="both">JSON + TXT</option>
+                      <option value="json">只输出 JSON</option>
+                    </select>
+                  </label>
+                </div>
+              </details>
             </article>
 
             <label class="span-full creator-file-field">
-              <span>导入脚本文件</span>
+              <span>上传文件</span>
               <!-- 切换任务时重建文件输入框，避免浏览器保留上一个任务选择过的本地文件。 -->
               <input
                 :key="selectedTaskId"
@@ -3787,11 +3287,11 @@ function showError(error: unknown) {
                 @change="handleFeedbackFileChange"
               />
               <small>
-                仍保留文件导入入口，便于导入历史 JSON/TXT 或手工整理后的样例文件。
+                可以导入已经整理好的评论或弹幕文件，支持 JSON/TXT。
               </small>
             </label>
             <label>
-              <span>评论样例</span>
+              <span>手动粘贴评论</span>
               <textarea
                 v-model="feedbackForm.commentSamples"
                 maxlength="20000"
@@ -3799,7 +3299,7 @@ function showError(error: unknown) {
               ></textarea>
             </label>
             <label>
-              <span>弹幕样例</span>
+              <span>手动粘贴弹幕</span>
               <textarea
                 v-model="feedbackForm.danmakuSamples"
                 maxlength="20000"
@@ -3840,7 +3340,7 @@ function showError(error: unknown) {
         <section v-if="activeStep === 'report'" class="creator-section">
           <div class="creator-section-head">
             <div>
-              <h3>反馈与复盘结果</h3>
+              <h3>复盘报告</h3>
             </div>
             <div v-if="selectedTaskId" class="creator-action-row">
               <button
@@ -3867,9 +3367,9 @@ function showError(error: unknown) {
 
           <article v-if="feedbackReport" class="creator-result-entry">
             <div>
-              <strong>反馈分析已生成</strong>
+              <strong>复盘报告已生成</strong>
               <span>
-                反馈分析收纳在独立结果弹窗；完整复盘报告生成后可直接导出 Markdown 归档。
+                先看一句话结论、保留项、修改清单和下一期选题；需要归档时可导出 Markdown。
               </span>
             </div>
             <button
@@ -3883,7 +3383,7 @@ function showError(error: unknown) {
 
           <article v-else class="creator-empty-result">
             <strong>还没有反馈报告</strong>
-            <span>先提交评论弹幕样例并分析反馈；完整复盘报告生成后可导出 Markdown。</span>
+            <span>先提交观众反馈并点击“读懂反馈”，生成后这里会给出下一期行动建议。</span>
           </article>
         </section>
 
@@ -4344,13 +3844,13 @@ function showError(error: unknown) {
             <div class="creator-result-grid">
               <article class="creator-confirm-panel span-full">
                 <div>
-                  <span>确认状态</span>
-                  <strong>{{ workflowStatusText }}</strong>
+                  <span>采用状态</span>
+                  <strong>{{ hasConfirmedPrePublish ? '已采用' : '待采用' }}</strong>
                   <p>
                     {{
                       hasConfirmedPrePublish
-                        ? '本轮发布前优化建议已确认，评论弹幕阶段已开放。'
-                        : '建议生成后不会自动推进阶段，需要你确认采用。'
+                        ? '本轮发布方案已确认，观众反馈阶段已开放。'
+                        : '建议生成后不会自动进入下一步，需要你确认采用。'
                     }}
                   </p>
                 </div>
@@ -4555,7 +4055,10 @@ function showError(error: unknown) {
 
           <template v-else-if="resultModalTarget === 'feedbackDashboard'">
             <div class="creator-result-grid">
-              <article v-if="feedbackFetchResult" class="creator-result-block span-full">
+              <article
+                v-if="showDeveloperTools && feedbackFetchResult"
+                class="creator-result-block span-full"
+              >
                 <span>脚本输出</span>
                 <div class="creator-script-output">
                   <span>输出目录</span>
@@ -4567,6 +4070,17 @@ function showError(error: unknown) {
                     </li>
                   </ul>
                 </div>
+              </article>
+              <article
+                v-else-if="feedbackFetchResult && !feedbackDashboard"
+                class="creator-result-block span-full"
+              >
+                <span>读取完成</span>
+                <p>
+                  已读取 {{ feedbackFetchResult.commentCount }} 条评论、{{
+                    feedbackFetchResult.danmakuCount
+                  }} 条弹幕。导入明细暂时没有返回，可以稍后刷新或直接继续分析。
+                </p>
               </article>
 
               <template v-if="feedbackDashboard">
@@ -4681,7 +4195,7 @@ function showError(error: unknown) {
                       {{ item.keyword }} · {{ item.count }}
                     </b>
                     <p v-if="feedbackDashboard.keywords.length === 0">
-                      暂未命中内置关键词，后续可接入分词或 LLM 分类。
+                      暂未识别出明显关键词，可以补充更多评论或弹幕后再分析。
                     </p>
                   </div>
                 </article>
@@ -4772,7 +4286,7 @@ function showError(error: unknown) {
 
           <template v-else-if="resultModalTarget === 'feedbackReport' && feedbackReport">
             <div class="creator-report">
-              <section class="creator-feedback-index-status">
+              <section v-if="showDeveloperTools" class="creator-feedback-index-status">
                 <div class="creator-feedback-index-line">
                   <div>
                     <strong>证据索引</strong>
@@ -5179,59 +4693,15 @@ function showError(error: unknown) {
       </section>
     </div>
 
-    <div
-      v-if="guidanceEditorTarget"
-      class="creator-modal-backdrop"
-      role="presentation"
-      @pointerdown="handleGuidanceBackdropPointerDown"
-      @click="handleGuidanceBackdropClick"
-    >
-      <section
-        class="creator-prompt-modal"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="guidanceEditorTitle"
-      >
-        <header>
-          <div>
-            <p class="creator-kicker">业务指导</p>
-            <h3>{{ guidanceEditorTitle }}</h3>
-          </div>
-          <button type="button" class="creator-ghost-button" @click="closeGuidanceEditor">
-            关闭
-          </button>
-        </header>
-
-        <label v-if="guidanceEditorTarget === 'prePublish'" class="creator-prompt-field">
-          <span>可调整的风格与建议偏好</span>
-          <textarea
-            v-model="prePublishForm.customGuidance"
-            maxlength="2000"
-            placeholder="可补充固定风格；留空沿用后端基础规则"
-          ></textarea>
-        </label>
-        <label v-else class="creator-prompt-field">
-          <span>可调整的风格与分析偏好</span>
-          <textarea
-            v-model="feedbackAnalyzeForm.customGuidance"
-            maxlength="2000"
-            placeholder="可补充固定复盘口径；留空沿用后端基础规则"
-          ></textarea>
-        </label>
-
-        <p class="creator-prompt-hint">
-          可描述表达风格、建议侧重点和分析顺序；角色、数据边界及基础输出结构由系统统一维护。
-        </p>
-
-        <footer>
-          <button type="button" class="creator-secondary-action" @click="resetCurrentGuidance">
-            恢复默认指导
-          </button>
-          <button type="button" class="creator-primary-button" @click="closeGuidanceEditor">
-            保存并关闭
-          </button>
-        </footer>
-      </section>
-    </div>
+    <GuidanceEditorModal
+      :target="guidanceEditorTarget"
+      :title="guidanceEditorTitle"
+      v-model:pre-publish-guidance="prePublishForm.customGuidance"
+      v-model:feedback-guidance="feedbackAnalyzeForm.customGuidance"
+      @close="closeGuidanceEditor"
+      @reset="resetCurrentGuidance"
+      @backdrop-pointer-down="handleGuidanceBackdropPointerDown"
+      @backdrop-click="handleGuidanceBackdropClick"
+    />
   </section>
 </template>

@@ -43,11 +43,21 @@ type ResizeState = {
 
 type ResizeDirection = 'n' | 'e' | 's' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
+const props = withDefaults(
+  defineProps<{
+    developerMode?: boolean
+  }>(),
+  {
+    developerMode: false,
+  },
+)
+
 const promptExamples = [
-  '帮我用 ReAct 思路拆一下这个创作功能。',
-  '结合当前工作台，给我一个排查后端接口问题的步骤。',
+  '这个标题哪里弱？',
+  '观众可能会误解什么？',
+  '下一期选题怎么延展？',
 ]
-const capabilityTags = ['会话记忆', '工具调用', '推理轨迹']
+const capabilityTags = ['标题建议', '观众误解', '下一期选题']
 const executionModeOptions: Array<{
   value: AgentExecutionMode
   label: string
@@ -117,7 +127,10 @@ const floatingWindowSubtitle = computed(() => {
   if (title) {
     return clipText(title, 26)
   }
-  return isLoading.value ? 'Agent 正在思考' : activeSessionLabel.value
+  if (isLoading.value) {
+    return 'AI 正在整理建议'
+  }
+  return props.developerMode ? activeSessionLabel.value : '围绕当前视频追问'
 })
 
 const visibleKnowledgeTopics = computed(() => knowledgeContext.value?.topics.slice(0, 4) ?? [])
@@ -545,11 +558,11 @@ function clipText(value: string, maxLength: number) {
       v-if="!isOpen"
       type="button"
       class="agent-floating-launcher"
-      aria-label="打开 AI 交互台浮窗"
+      aria-label="打开问问 AI 浮窗"
       @click="openFloatingWindow"
     >
       <strong>AI</strong>
-      <span>交互台</span>
+      <span>问问</span>
     </button>
 
     <section
@@ -557,13 +570,13 @@ function clipText(value: string, maxLength: number) {
       class="agent-floating-window"
       :class="{ minimized: isMinimized, dragging: isDragging, resizing: isResizing }"
       :style="floatingWindowStyle"
-      aria-label="AI 交互台浮窗"
+      aria-label="问问 AI 浮窗"
     >
       <header class="agent-floating-head" @pointerdown="startDrag">
         <div class="agent-floating-title">
           <span class="agent-floating-status" :class="{ running: isLoading }"></span>
           <div>
-            <strong>AI 交互台</strong>
+            <strong>问问 AI</strong>
             <small>{{ floatingWindowSubtitle }}</small>
           </div>
         </div>
@@ -579,14 +592,14 @@ function clipText(value: string, maxLength: number) {
           >
             {{ isMinimized ? '展开' : '收起' }}
           </button>
-          <button type="button" title="关闭浮窗" aria-label="关闭 AI 交互台" @click.stop="closeFloatingWindow">
+          <button type="button" title="关闭浮窗" aria-label="关闭问问 AI" @click.stop="closeFloatingWindow">
             ×
           </button>
         </div>
       </header>
 
       <div v-if="!isMinimized" class="agent-floating-body">
-        <section v-if="isSessionsOpen" class="agent-floating-session-panel" aria-label="Agent 会话列表">
+        <section v-if="isSessionsOpen" class="agent-floating-session-panel" aria-label="AI 会话列表">
           <button v-if="isSessionsLoading" type="button" class="agent-floating-session-item muted" disabled>
             正在读取会话...
           </button>
@@ -641,7 +654,7 @@ function clipText(value: string, maxLength: number) {
 
         <div ref="messageListRef" class="message-list agent-floating-message-list">
           <div v-if="messages.length === 0" class="agent-floating-empty">
-            <p>从这里直接调用通用 Agent，适合临时拆解问题、验证工具调用和查看推理轨迹。</p>
+            <p>可以问：这个标题哪里弱？观众可能会误解什么？下一期选题怎么延展？</p>
             <div class="agent-floating-tags">
               <span v-for="tag in capabilityTags" :key="tag">{{ tag }}</span>
             </div>
@@ -657,12 +670,17 @@ function clipText(value: string, maxLength: number) {
             </div>
           </div>
 
-          <MessageBubble v-for="message in messages" :key="message.id" :message="message" />
+          <MessageBubble
+            v-for="message in messages"
+            :key="message.id"
+            :message="message"
+            :show-diagnostics="props.developerMode"
+          />
 
           <div v-if="isLoading" class="message assistant">
             <div class="avatar">A</div>
-            <div class="bubble loading animated" aria-label="Agent 正在思考">
-              <span class="thinking-text">Agent 正在组织思路</span>
+            <div class="bubble loading animated" aria-label="AI 正在整理建议">
+              <span class="thinking-text">AI 正在整理建议</span>
               <span class="thinking-dots" aria-hidden="true">
                 <i></i>
                 <i></i>
@@ -674,11 +692,11 @@ function clipText(value: string, maxLength: number) {
 
         <div class="agent-floating-meta">
           <span>{{ messages.length }} 条消息</span>
-          <span>{{ latestStepCount }} 个推理步骤</span>
-          <span>{{ sessionId ? '当前会话' : '新会话' }}</span>
+          <span v-if="props.developerMode">{{ latestStepCount }} 个推理步骤</span>
+          <span>{{ sessionId && props.developerMode ? '当前会话' : '当前对话' }}</span>
         </div>
 
-        <div class="agent-mode-switch" aria-label="Agent 执行模式">
+        <div v-if="props.developerMode" class="agent-mode-switch" aria-label="AI 执行模式">
           <button
             v-for="option in executionModeOptions"
             :key="option.value"

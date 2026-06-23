@@ -4,45 +4,24 @@ import type {
   SessionListItem,
   SessionMessageItem,
 } from '@/types/agent'
+import { get, post } from './http'
 
-export async function sendAgentMessage(
+export function sendAgentMessage(
   sessionId: string,
   message: string,
   executionMode: AgentExecutionMode,
 ) {
-  const response = await fetch('/api/agent/chat', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      sessionId: sessionId || undefined,
-      message,
-      executionMode,
-    }),
+  return post<AgentChatResponse>('/agent/chat', {
+    sessionId: sessionId || undefined,
+    message,
+    executionMode,
   })
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
-  }
-
-  return (await response.json()) as AgentChatResponse
 }
 
-export async function loadAgentSessions() {
-  const response = await fetch('/api/agent/sessions')
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
-  }
-
-  return (await response.json()) as SessionListItem[]
+export function loadAgentSessions() {
+  return get<SessionListItem[]>('/agent/sessions')
 }
 
-export async function loadAgentSessionMessages(sessionId: string) {
-  const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}`)
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
-  }
-
-  return (await response.json()) as SessionMessageItem[]
+export function loadAgentSessionMessages(sessionId: string) {
+  return get<SessionMessageItem[]>(`/agent/sessions/${encodeURIComponent(sessionId)}`)
 }

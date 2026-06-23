@@ -17,6 +17,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 多 Agent Orchestrator。
@@ -26,6 +30,8 @@ import java.util.Set;
  */
 @Component
 public class MultiAgentOrchestrator {
+
+    private static final int DEFAULT_MAX_PARALLEL_WORKERS = 4;
 
     private final MultiAgentPlanner multiAgentPlanner;
     private final AgentAnswerSynthesizer answerSynthesizer;
@@ -50,7 +56,7 @@ public class MultiAgentOrchestrator {
         String finalAnswer = answerSynthesizer.synthesizeMultiAgentResult(
                 conversationContext,
                 userMessage,
-                formatWorkerTraces(workerTraces)
+                workerTraces
         );
         return AgentRunResult.multiAgent(finalAnswer, resolveStopReason(workerTraces), toAgentSteps(workerTraces),
                 planTrace, workerTraces);
@@ -66,25 +72,124 @@ public class MultiAgentOrchestrator {
 
     private List<AgentWorkerTrace> executeWorkerPlan(WorkerPlan workerPlan, String conversationContext, String userMessage) {
         List<AgentWorkerTrace> traces = new ArrayList<>();
-        Set<Integer> successCallIds = new HashSet<>();
         if (workerPlan == null || workerPlan.calls().isEmpty()) {
             return traces;
         }
-        for (WorkerCall call : workerPlan.calls()) {
-            AgentWorkerTrace trace = executeCall(call, successCallIds, conversationContext, userMessage);
-            traces.add(trace);
-            if (trace.status() == WorkerStatus.SUCCESS) {
-                successCallIds.add(trace.callId());
+
+        Map<Integer, AgentWorkerTrace> traceById = new HashMap<>();
+        List<WorkerCall> pendingCalls = collectExecutableCalls(workerPlan.calls(), traces, traceById);
+        Set<Integer> knownCallIds = collectKnownCallIds(pendingCalls);
+        int maxParallelism = resolveMaxParallelism(workerPlan);
+
+        // 每一轮只并发执行“依赖已经全部成功”的 Worker，避免后置 Worker 读到未完成或失败的前置结果。
+        try (ExecutorService executorService = Executors.newFixedThreadPool(maxParallelism)) {
+            while (!pendingCalls.isEmpty()) {
+                int skippedCount = skipCallsWithFailedDependencies(pendingCalls, knownCallIds, traces, traceById);
+                List<WorkerCall> readyCalls = findReadyCalls(pendingCalls, traceById);
+                if (readyCalls.isEmpty()) {
+                    if (skippedCount == 0) {
+                        skipUnresolvableCalls(pendingCalls, traces, traceById);
+                    }
+                    continue;
+                }
+                pendingCalls.removeAll(readyCalls);
+                List<CompletableFuture<AgentWorkerTrace>> futures = readyCalls.stream()
+                        .map(call -> CompletableFuture.supplyAsync(
+                                        () -> executeReadyCall(call, conversationContext, userMessage),
+                                        executorService
+                                )
+                                .exceptionally(exception -> failedTrace(call, rootMessage(exception))))
+                        .toList();
+                for (CompletableFuture<AgentWorkerTrace> future : futures) {
+                    AgentWorkerTrace trace = future.join();
+                    traces.add(trace);
+                    traceById.put(trace.callId(), trace);
+                }
             }
         }
-        return traces;
+        return traces.stream()
+                .sorted(Comparator.comparingInt(AgentWorkerTrace::callId))
+                .toList();
     }
 
-    private AgentWorkerTrace executeCall(WorkerCall call, Set<Integer> successCallIds,
-                                         String conversationContext, String userMessage) {
-        if (!successCallIds.containsAll(call.dependsOn())) {
-            return skippedTrace(call, "前置 Worker 未成功，已跳过本次调用。");
+    private List<WorkerCall> collectExecutableCalls(List<WorkerCall> calls, List<AgentWorkerTrace> traces,
+                                                    Map<Integer, AgentWorkerTrace> traceById) {
+        List<WorkerCall> pendingCalls = new ArrayList<>();
+        Set<Integer> seenIds = new HashSet<>();
+        for (WorkerCall call : calls) {
+            if (!seenIds.add(call.id())) {
+                AgentWorkerTrace trace = skippedTrace(call, "Worker 调用 ID 重复，已跳过重复项。");
+                traces.add(trace);
+                continue;
+            }
+            pendingCalls.add(call);
         }
+        return pendingCalls;
+    }
+
+    private Set<Integer> collectKnownCallIds(List<WorkerCall> calls) {
+        Set<Integer> ids = new HashSet<>();
+        for (WorkerCall call : calls) {
+            ids.add(call.id());
+        }
+        return ids;
+    }
+
+    private int resolveMaxParallelism(WorkerPlan workerPlan) {
+        int callCount = workerPlan == null ? 0 : workerPlan.calls().size();
+        return Math.max(1, Math.min(DEFAULT_MAX_PARALLEL_WORKERS, Math.max(1, callCount)));
+    }
+
+    private int skipCallsWithFailedDependencies(List<WorkerCall> pendingCalls, Set<Integer> knownCallIds,
+                                                List<AgentWorkerTrace> traces,
+                                                Map<Integer, AgentWorkerTrace> traceById) {
+        List<WorkerCall> skippedCalls = pendingCalls.stream()
+                .filter(call -> dependencyFailureReason(call, knownCallIds, traceById) != null)
+                .toList();
+        for (WorkerCall call : skippedCalls) {
+            AgentWorkerTrace trace = skippedTrace(call, dependencyFailureReason(call, knownCallIds, traceById));
+            traces.add(trace);
+            traceById.put(trace.callId(), trace);
+        }
+        pendingCalls.removeAll(skippedCalls);
+        return skippedCalls.size();
+    }
+
+    private String dependencyFailureReason(WorkerCall call, Set<Integer> knownCallIds,
+                                           Map<Integer, AgentWorkerTrace> traceById) {
+        for (Integer dependencyId : call.dependsOn()) {
+            if (!knownCallIds.contains(dependencyId)) {
+                return "依赖的 Worker 调用不存在：" + dependencyId;
+            }
+            AgentWorkerTrace dependencyTrace = traceById.get(dependencyId);
+            if (dependencyTrace != null && dependencyTrace.status() != WorkerStatus.SUCCESS) {
+                return "前置 Worker 未成功，已跳过本次调用。";
+            }
+        }
+        return null;
+    }
+
+    private List<WorkerCall> findReadyCalls(List<WorkerCall> pendingCalls, Map<Integer, AgentWorkerTrace> traceById) {
+        return pendingCalls.stream()
+                .filter(call -> call.dependsOn().stream()
+                        .allMatch(dependencyId -> {
+                            AgentWorkerTrace dependencyTrace = traceById.get(dependencyId);
+                            return dependencyTrace != null && dependencyTrace.status() == WorkerStatus.SUCCESS;
+                        }))
+                .toList();
+    }
+
+    private void skipUnresolvableCalls(List<WorkerCall> pendingCalls, List<AgentWorkerTrace> traces,
+                                       Map<Integer, AgentWorkerTrace> traceById) {
+        for (WorkerCall call : pendingCalls) {
+            AgentWorkerTrace trace = skippedTrace(call, "Worker 依赖关系形成循环或无法满足，已跳过。");
+            traces.add(trace);
+            traceById.put(trace.callId(), trace);
+        }
+        pendingCalls.clear();
+    }
+
+    private AgentWorkerTrace executeReadyCall(WorkerCall call, String conversationContext, String userMessage) {
         WorkerAgent worker = workerMap.get(call.workerName());
         if (worker == null) {
             return skippedTrace(call, "未知 Worker：" + call.workerName());
@@ -102,6 +207,8 @@ public class MultiAgentOrchestrator {
                 call.subTask(),
                 call.sharedContext(),
                 null,
+                WorkerBrief.fromSummary(reason, List.of(), WorkerStatus.SKIPPED),
+                List.of(),
                 reason,
                 null,
                 List.of()
@@ -154,22 +261,32 @@ public class MultiAgentOrchestrator {
         return PlanStepStatus.FAILED;
     }
 
-    private String formatWorkerTraces(List<AgentWorkerTrace> traces) {
-        if (traces.isEmpty()) {
-            return "没有 Worker 执行结果。";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (AgentWorkerTrace trace : traces) {
-            builder.append(trace.callId()).append(". ")
-                    .append(trace.workerName())
-                    .append("｜").append(trace.status())
-                    .append("｜子任务：").append(trace.subTask())
-                    .append("｜结论：").append(TextUtil.preview(trace.summary(), 900, "无"))
-                    .append("｜错误：").append(TextUtil.trimToDefault(trace.errorMessage(), "无"))
-                    .append("\n");
-        }
-        return builder.toString();
+    private AgentWorkerTrace failedTrace(WorkerCall call, String errorMessage) {
+        return new AgentWorkerTrace(
+                call.id(),
+                TextUtil.trimToDefault(call.workerName(), "unknown_worker"),
+                "执行异常",
+                "Worker 执行时出现未捕获异常",
+                WorkerStatus.FAILED,
+                call.subTask(),
+                call.sharedContext(),
+                null,
+                WorkerBrief.fromSummary(errorMessage, List.of(), WorkerStatus.FAILED),
+                List.of(),
+                TextUtil.trimToDefault(errorMessage, "Worker 执行异常"),
+                null,
+                List.of()
+        );
     }
+
+    private String rootMessage(Throwable throwable) {
+        Throwable current = throwable;
+        if (current instanceof CompletionException && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current == null ? "Worker 执行异常" : TextUtil.trimToDefault(current.getMessage(), current.getClass().getSimpleName());
+    }
+
 
     private List<AgentStep> toAgentSteps(List<AgentWorkerTrace> workerTraces) {
         List<AgentStep> steps = new ArrayList<>();

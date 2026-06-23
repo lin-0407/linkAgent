@@ -1,5 +1,6 @@
 package com.link.linkagent.core.multi;
 
+import com.link.linkagent.core.citation.AgentEvidence;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.TextUtil;
@@ -46,6 +47,7 @@ public class DirectReasoningWorkerAgent implements WorkerAgent {
                     promptService.get("agent_multi_direct_worker.system"),
                     buildWorkerUserMessage(call, conversationContext, userMessage)
             );
+            List<AgentEvidence> evidences = List.of(AgentEvidence.fromWorkerSummary(call.id(), name(), summary));
             return new AgentWorkerTrace(
                     call.id(),
                     name(),
@@ -55,6 +57,8 @@ public class DirectReasoningWorkerAgent implements WorkerAgent {
                     call.subTask(),
                     call.sharedContext(),
                     TextUtil.trimToDefault(summary, "Direct Worker 没有返回有效结果。"),
+                    WorkerBrief.fromSummary(summary, evidenceIds(evidences), WorkerStatus.SUCCESS),
+                    evidences,
                     null,
                     null,
                     List.of()
@@ -69,6 +73,8 @@ public class DirectReasoningWorkerAgent implements WorkerAgent {
                     call.subTask(),
                     call.sharedContext(),
                     null,
+                    WorkerBrief.fromSummary(exception.getMessage(), List.of(), WorkerStatus.FAILED),
+                    List.of(),
                     TextUtil.trimToDefault(exception.getMessage(), "Direct Worker 执行异常"),
                     null,
                     List.of()
@@ -97,5 +103,11 @@ public class DirectReasoningWorkerAgent implements WorkerAgent {
                 TextUtil.trimToDefault(call.sharedContext(), "（无共享上下文）"),
                 TextUtil.trimToDefault(conversationContext, "（无上下文）")
         );
+    }
+
+    private List<String> evidenceIds(List<AgentEvidence> evidences) {
+        return evidences.stream()
+                .map(AgentEvidence::evidenceId)
+                .toList();
     }
 }

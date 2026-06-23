@@ -1,6 +1,7 @@
 package com.link.linkagent.core.multi;
 
 import com.link.linkagent.core.AgentStep;
+import com.link.linkagent.core.citation.AgentEvidence;
 import com.link.linkagent.core.plan.AgentPlanTrace;
 
 import java.util.List;
@@ -19,12 +20,15 @@ public record AgentWorkerTrace(
         String subTask,
         String sharedContext,
         String summary,
+        WorkerBrief brief,
+        List<AgentEvidence> evidences,
         String errorMessage,
         AgentPlanTrace planTrace,
         List<AgentStep> steps
 ) {
 
     public AgentWorkerTrace {
+        evidences = evidences == null ? List.of() : List.copyOf(evidences);
         steps = steps == null ? List.of() : List.copyOf(steps);
     }
 }
