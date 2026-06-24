@@ -19,6 +19,7 @@ import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.creator.task.model.CreatorMaterialType;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
+import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
@@ -43,6 +44,9 @@ public class CreatorReportService {
 
     private static final int MATERIAL_MAX_LENGTH = 4000;
     private static final int SECTION_MAX_LENGTH = 8000;
+    // 跨期对比：拉取同一创作者最近几期报告做趋势分析
+    private static final int CROSS_PERIOD_LIMIT = 3;
+    private static final int CROSS_PERIOD_SECTION_MAX_LENGTH = 3000;
 
     private final CreatorTaskMapper creatorTaskMapper;
     private final CreatorSuggestionMapper creatorSuggestionMapper;
@@ -85,11 +89,15 @@ public class CreatorReportService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先完成同类型视频竞品分析"));
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
 
+        // 拉取同一创作者最近几期复盘报告，用于跨期趋势对比
+        String crossPeriodContext = buildCrossPeriodContext(taskRecord);
+
         String rawOutput;
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "创作复盘报告")) {
             rawOutput = llmService.chat(
                     buildSystemPrompt(),
-                    buildUserPrompt(taskRecord, materials, suggestionRecord, feedbackReportRecord, competitorReportRecord, request)
+                    buildUserPrompt(taskRecord, materials, suggestionRecord, feedbackReportRecord, competitorReportRecord,
+                            crossPeriodContext, request)
             );
         }
         CreatorReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
@@ -147,6 +155,65 @@ public class CreatorReportService {
         }
     }
 
+    /**
+     * 构建跨期对比上下文。
+     * 拉取同一创作者最近几期已完成的复盘报告摘要，让 AI 在复盘时能看到该创作者的成长轨迹，
+     * 从而给出"是否在重复犯同样的错误""哪类内容表现越来越好"等更有深度的分析。
+     */
+    private String buildCrossPeriodContext(CreatorTaskRecord currentTask) {
+        String userId = TextUtil.trimToDefault(currentTask.getUserId(), "default");
+        List<CreatorTaskSummaryRecord> recentTasks = creatorTaskMapper.listTasksByUser(userId, CROSS_PERIOD_LIMIT + 10);
+        // 过滤掉当前任务和未完成复盘的任务，只取已完成复盘的
+        List<CreatorTaskSummaryRecord> completedTasks = recentTasks.stream()
+                .filter(task -> !task.getTaskId().equals(currentTask.getTaskId()))
+                .filter(task -> CreatorTaskStatus.ANALYZED.name().equals(task.getStatus()))
+                .limit(CROSS_PERIOD_LIMIT)
+                .toList();
+
+        if (completedTasks.isEmpty()) {
+            return "暂无历史复盘记录可供对比（这是该创作者的第一期复盘）。";
+        }
+
+        StringBuilder builder = new StringBuilder();
+        builder.append("以下是该创作者最近 ").append(completedTasks.size()).append(" 期已完成复盘的视频摘要：\n\n");
+        for (int i = 0; i < completedTasks.size(); i++) {
+            CreatorTaskSummaryRecord task = completedTasks.get(i);
+            try {
+                CreatorReportRecord report = creatorReportMapper.findByTaskId(task.getTaskId()).orElse(null);
+                if (report != null && "PARSED".equals(report.getParseStatus())) {
+                    builder.append("--- 第").append(i + 1).append("期：")
+                            .append(TextUtil.trimToDefault(task.getTaskName(), "未命名"))
+                            .append(" ---\n");
+                    builder.append("总判断：")
+                            .append(limitSection(TextUtil.trimToDefault(report.getOverallConclusion(), "无"), CROSS_PERIOD_SECTION_MAX_LENGTH))
+                            .append("\n");
+                    builder.append("核心卖点：")
+                            .append(limitSection(TextUtil.trimToDefault(report.getCoreSellingPoints(), "无"), CROSS_PERIOD_SECTION_MAX_LENGTH))
+                            .append("\n");
+                    builder.append("观众反馈：")
+                            .append(limitSection(TextUtil.trimToDefault(report.getAudienceFeedbackSummary(), "无"), CROSS_PERIOD_SECTION_MAX_LENGTH))
+                            .append("\n");
+                    builder.append("下一步建议：")
+                            .append(limitSection(TextUtil.trimToDefault(report.getNextActionSuggestions(), "无"), CROSS_PERIOD_SECTION_MAX_LENGTH))
+                            .append("\n\n");
+                }
+            } catch (Exception ignored) {
+                // 单期报告取不到不影响整体流程
+            }
+        }
+
+        builder.append("请基于以上历史趋势，在本期复盘中分析：\n");
+        builder.append("1. 本期相比前几期是否有明显进步或退步。\n");
+        builder.append("2. 哪些问题在多期中反复出现（说明需要重点改进）。\n");
+        builder.append("3. 创作者的内容方向是否在持续优化。\n");
+
+        return TextUtil.abbreviateWithSuffix(
+                builder.toString().trim(),
+                CROSS_PERIOD_SECTION_MAX_LENGTH * 2,
+                "\n[跨期对比内容过长，已截断]"
+        );
+    }
+
     private String buildSystemPrompt() {
         return promptService.get("report.system");
     }
@@ -156,6 +223,7 @@ public class CreatorReportService {
                                    CreatorSuggestionRecord suggestionRecord,
                                    CreatorFeedbackReportRecord feedbackReportRecord,
                                    CreatorCompetitorReportRecord competitorReportRecord,
+                                   String crossPeriodContext,
                                    CreatorReportAnalyzeRequest request) {
         return promptService.render("report.user", Map.of(
                 "taskName", taskRecord.getTaskName(),
@@ -166,7 +234,8 @@ public class CreatorReportService {
                 "materials", buildMaterialPrompt(materials),
                 "suggestionResult", buildSuggestionPrompt(suggestionRecord),
                 "feedbackResult", buildFeedbackReportPrompt(feedbackReportRecord),
-                "competitorResult", buildCompetitorReportPrompt(competitorReportRecord)
+                "competitorResult", buildCompetitorReportPrompt(competitorReportRecord),
+                "crossPeriodContext", crossPeriodContext
         ));
     }
 

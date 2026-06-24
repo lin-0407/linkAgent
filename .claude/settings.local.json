@@ -29,7 +29,17 @@
       "Bash(awk '/^    <div v-else class=\"creator-layout\">/,/^    <\\\\/div>/' CreatorWorkspace.vue)",
       "Bash(awk '/^    <div v-if=\"isContextLibraryOpen\"/,/^    <\\\\/div>/' CreatorWorkspace.vue)",
       "Bash(npx vue-tsc *)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:lchzh3473.github.io)",
+      "WebFetch(domain:www.taptap.cn)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.7723.cn)",
+      "Bash(git check-ignore *)",
+      "Bash(cat .gitignore)",
+      "Bash(git rm *)",
+      "Bash(python3 *)",
+      "Bash(git checkout *)"
     ]
   }
 }

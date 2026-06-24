@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>灵感粒子网络 — linkAgent 动效原型</title>
+<style>
+  /* === 基础重置 === */
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* === 整体氛围：匹配项目浅色画布 #f4f4f5 === */
+  body {
+    background: #f4f4f5;  /* 对应 --canvas */
+    overflow: hidden;
+    font-family: "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    cursor: default;
+    user-select: none;
+  }
+
+  /* === Canvas 铺满全屏，作为动效底层 === */
+  #particleCanvas {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 0;
+  }
+
+  /* === 前景层：极简，让动效本身成为主角 === */
+  .overlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  /* === 右下角微型水印 === */
+  .watermark {
+    position: fixed;
+    bottom: 40px;
+    right: 40px;
+    z-index: 1;
+    font-size: 11px;
+    color: rgba(113, 113, 122, 0.3);  /* 对应 --muted */
+    letter-spacing: 3px;
+    pointer-events: none;
+  }
+
+  /* === 左下角提示文字 === */
+  .hint {
+    position: fixed;
+    bottom: 40px;
+    left: 40px;
+    z-index: 1;
+    font-size: 12px;
+    color: rgba(113, 113, 122, 0.5);  /* 对应 --muted */
+    letter-spacing: 1px;
+    pointer-events: none;
+    transition: opacity 0.6s;
+  }
+</style>
+</head>
+<body>
+
+<!-- 粒子画布 -->
+<canvas id="particleCanvas"></canvas>
+
+<!-- 前景层（极简） -->
+<div class="overlay">
+  <div class="watermark">linkAgent</div>
+  <div class="hint" id="hintBar"></div>
+</div>
+
+<script>
+// ============================================================================
+// 灵感粒子网络 — 核心动效引擎
+//
+// 设计理念：
+//   - 粒子散落 = 创作者脑海中的灵感碎片
+//   - 鼠标靠近 → 粒子连线 + 信号流动 = AI Agent 帮你串联创意
+//   - 点击涟漪 = 每一次操作都是一次思考扩散
+//   - 暖色调 = 工具不该冰冷，创作需要温度
+// ============================================================================
+
+(function() {
+  const canvas = document.getElementById('particleCanvas');
+  const ctx = canvas.getContext('2d');
+  const hintBar = document.getElementById('hintBar');
+
+  // ---- 画布尺寸自适应 ----
+  let W, H;
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---- 鼠标状态 ----
+  const mouse = { x: -9999, y: -9999, active: false, settled: false };
+  let mouseSettleTimer = null;
+
+  // ---- 配色方案（匹配项目设计令牌） ----
+  // 参考 link-agent-frontend/src/styles/theme.css：
+  //   --canvas: #f4f4f5   (画布底色)
+  //   --accent: #e5294a   (石榴红，唯一强调色)
+  //   --accent-tint: rgba(229,41,74,0.08)
+  //   --ink: #18181b       (最深文字色)
+  //   --muted: #71717a     (弱化文字)
+  const COLORS = {
+    bg:          '#f4f4f5',                             // 对应 --canvas
+    particle:    'rgba(229,41,74,0.55)',                 // 节点：石榴红半透明
+    line:        (alpha) => `rgba(229,41,74,${alpha})`,  // 连线：石榴红
+    signal:      'rgba(229,41,74,0.85)',                 // 流动信号点：石榴红
+    ripple:      'rgba(229,41,74,',                     // 涟漪前缀
+  };
+
+  // ---- 粒子数组 ----
+  // 粒子密度适中：每 10000px² 一个，疏密有致不杂乱
+  let particles = [];
+
+  // ---- 连线记忆 / 信号点 / 涟漪（必须在 createParticles 之前声明，否则 TDZ 报错） ----
+  let ripples = [];
+  let signals = [];
+  let connections = new Map();
+
+  function getParticleCount() {
+    return Math.floor((W * H) / 12000);  // 密度稍降，粒子游走空间更多
+  }
+
+  function createParticles() {
+    const count = getParticleCount();
+    particles = [];
+    connections.clear();
+    signals.length = 0;
+    for (let i = 0; i < count; i++) {
+      particles.push({
+        x:  Math.random() * W,
+        y:  Math.random() * H,
+        vx: (Math.random() - 0.5) * 0.8,               // 初始速度翻倍（0.3→0.8）
+        vy: (Math.random() - 0.5) * 0.8,
+        r:  Math.random() * 1.8 + 0.6,
+        baseR: 0,
+        phase: Math.random() * Math.PI * 2,
+        breatheSpeed: Math.random() * 0.008 + 0.004,
+        wanderAngle: Math.random() * Math.PI * 2,       // 漫游方向
+        wanderTimer: Math.random() * 60,                // 下次换向倒计时（帧数）
+      });
+      particles[i].baseR = particles[i].r;
+    }
+  }
+  createParticles();
+  window.addEventListener('resize', createParticles);
+
+  // ---- 连线记忆系统（解决"方生方死"问题） ----
+  // 每条连线有生命周期：淡入 → 持续 → 淡出，而非瞬间出现/消失
+  // 变量 ripples / signals / connections 已在上方声明
+
+  // ---- 连线参数（方生方死） ----
+  const LINK_DIST = 135;                    // 连线距离缩小，粒子游走时频繁跨越阈值
+  const LINK_FADE_IN_SPEED  = 0.07;        // 淡入较快（约0.5秒浮现）
+  const LINK_FADE_OUT_SPEED = 0.04;        // 淡出较慢（约1秒消散）——方生方死的不对称节律
+  const MOUSE_ACTIVATE_RADIUS = 180;       // 鼠标激活半径
+  const MOUSE_ATTRACT_RADIUS = 160;        // 引力半径
+  const ATTRACT_STRENGTH = 0.04;
+
+  // 生成粒子对的唯一 key
+  function pairKey(i, j) {
+    return i < j ? `${i}-${j}` : `${j}-${i}`;
+  }
+
+  // 每帧更新连线记忆（含生死生命周期）
+  function updateConnections() {
+    const len = particles.length;
+    const seenKeys = new Set();
+
+    for (let i = 0; i < len; i++) {
+      for (let j = i + 1; j < len; j++) {
+        const dx = particles[i].x - particles[j].x;
+        const dy = particles[i].y - particles[j].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const key = pairKey(i, j);
+        seenKeys.add(key);
+
+        const targetOpacity = dist < LINK_DIST
+          ? Math.pow(1 - dist / LINK_DIST, 1.5) * 0.55
+          : 0;
+
+        let conn = connections.get(key);
+        if (!conn) {
+          conn = {
+            from: particles[i],
+            to: particles[j],
+            opacity: 0,
+            // 生命周期标记
+            wasAlive: false,                            // 曾经亮过（用于检测"出生"时刻）
+            birthGlow: 0,                               // 出生闪光强度（0→1→0）
+            // 中点波动
+            midPhase: Math.random() * Math.PI * 2,
+            midAmp: Math.random() * 4 + 1,
+            midSpeed: Math.random() * 0.015 + 0.005,
+          };
+          connections.set(key, conn);
+        }
+
+        // 平滑过渡
+        if (targetOpacity > conn.opacity) {
+          conn.opacity += (targetOpacity - conn.opacity) * LINK_FADE_IN_SPEED;
+        } else {
+          conn.opacity += (targetOpacity - conn.opacity) * LINK_FADE_OUT_SPEED;
+        }
+        // 防止长时间积累的浮点误差
+        if (Math.abs(conn.opacity - targetOpacity) < 0.0005) {
+          conn.opacity = targetOpacity;
+        }
+
+        // 检测"出生"：从不可见跨过门槛到可见
+        if (!conn.wasAlive && conn.opacity > 0.08) {
+          conn.wasAlive = true;
+          conn.birthGlow = 1;  // 触发出生闪光
+        }
+        // 离开范围后重置状态，下次再靠近时重新"出生"
+        if (conn.opacity < 0.02) {
+          conn.wasAlive = false;
+        }
+      }
+    }
+
+    // 远离的连线：持续衰减 + 闪光消退
+    for (const [key, conn] of connections) {
+      // 出生闪光消退（无论连线状态如何，闪光都要衰减）
+      if (conn.birthGlow > 0.001) {
+        conn.birthGlow *= 0.88;
+      } else {
+        conn.birthGlow = 0;
+      }
+
+      if (!seenKeys.has(key)) {
+        conn.opacity *= 0.92;  // 比之前衰减更快，粒子游走后连线快点消失
+      }
+      if (conn.opacity < 0.003 && !seenKeys.has(key)) {
+        connections.delete(key);
+      }
+    }
+  }
+
+  // ---- 信号点（在"活着"的连线上穿梭） ----
+  function spawnSignals() {
+    const maxSignals = Math.floor(particles.length * 0.12);
+    if (signals.length >= maxSignals) return;
+
+    for (const [, conn] of connections) {
+      // 只在稳定亮着的连线上生成（正在出生闪光的不算，信号点只属于"活着"的线）
+      const alive = conn.opacity > 0.15 && conn.birthGlow < 0.3;
+      if (!alive) continue;
+      if (Math.random() < 0.015 && signals.length < maxSignals) {
+        signals.push({
+          from:    conn.from,
+          to:      conn.to,
+          t:       Math.random(),
+          speed:   Math.random() * 0.004 + 0.002,
+          forward: Math.random() > 0.5,
+        });
+      }
+    }
+  }
+
+  // ---- 鼠标交互 ----
+  function resetSettleTimer() {
+    if (mouseSettleTimer) clearTimeout(mouseSettleTimer);
+    mouse.settled = false;
+    mouseSettleTimer = setTimeout(() => {
+      mouse.settled = true;
+    }, 2000);
+  }
+
+  canvas.addEventListener('mousemove', (e) => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+    mouse.active = true;
+    resetSettleTimer();
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    mouse.active = false;
+    mouse.settled = true;
+  });
+
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    mouse.x = e.touches[0].clientX;
+    mouse.y = e.touches[0].clientY;
+    mouse.active = true;
+    resetSettleTimer();
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', () => {
+    mouse.active = false;
+    mouse.settled = true;
+  });
+
+  canvas.addEventListener('click', (e) => {
+    ripples.push({
+      x: e.clientX,
+      y: e.clientY,
+      r: 0,
+      maxR: Math.min(W, H) * 0.22,  // 涟漪稍小，更精致
+      alpha: 0.4,
+      speed: 2,
+    });
+  });
+
+  // ---- 粒子物理（含主动漫游，驱动"方生方死"） ----
+  function updateParticles() {
+    for (const p of particles) {
+      // --- 鼠标吸引 ---
+      if (mouse.active && !mouse.settled) {
+        const dx = mouse.x - p.x;
+        const dy = mouse.y - p.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < MOUSE_ATTRACT_RADIUS && dist > 1) {
+          const closeness = 1 - dist / MOUSE_ATTRACT_RADIUS;
+          const force = ATTRACT_STRENGTH * closeness * closeness;
+          p.vx += (dx / dist) * force;
+          p.vy += (dy / dist) * force;
+        }
+      }
+
+      // --- 漫游行为：每隔一段时间改变方向（模拟浮游生物的自然游走） ---
+      p.wanderTimer--;
+      if (p.wanderTimer <= 0) {
+        // 在当前方向基础上随机偏转 ±60°，不会突然掉头
+        const currentAngle = Math.atan2(p.vy, p.vx);
+        const turn = (Math.random() - 0.5) * Math.PI * 0.66; // ±60°
+        p.wanderAngle = currentAngle + turn;
+        p.wanderTimer = 40 + Math.random() * 80; // 40~120 帧后再次换向
+      }
+      // 漫游推力（持续的小推力，而非一次性大冲量）
+      const wanderForce = 0.008;
+      p.vx += Math.cos(p.wanderAngle) * wanderForce;
+      p.vy += Math.sin(p.wanderAngle) * wanderForce;
+
+      // --- 阻尼（更轻，粒子保持流动感） ---
+      p.vx *= 0.93;
+      p.vy *= 0.93;
+
+      // --- 速度钳制：既不太快（不飞），也不太慢（不死） ---
+      const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+      const maxSpeed = 1.2;
+      const minSpeed = 0.12;
+      if (speed > maxSpeed) {
+        // 超速：等比缩放回上限
+        p.vx *= maxSpeed / speed;
+        p.vy *= maxSpeed / speed;
+      } else if (speed < minSpeed) {
+        // 太慢：沿当前方向补推
+        if (speed < 0.01) {
+          // 几乎静止：随机给一个方向
+          const a = Math.random() * Math.PI * 2;
+          p.vx = Math.cos(a) * minSpeed;
+          p.vy = Math.sin(a) * minSpeed;
+        } else {
+          p.vx *= minSpeed / speed;
+          p.vy *= minSpeed / speed;
+        }
+      }
+
+      p.x += p.vx;
+      p.y += p.vy;
+
+      // --- 边界环绕 ---
+      const margin = 20;
+      if (p.x < -margin) p.x = W + margin;
+      if (p.x > W + margin) p.x = -margin;
+      if (p.y < -margin) p.y = H + margin;
+      if (p.y > H + margin) p.y = -margin;
+
+      // --- 呼吸 ---
+      p.r = p.baseR + Math.sin(p.phase) * 0.4;
+      p.phase += p.breatheSpeed;
+    }
+  }
+
+  // ---- 信号点更新 ----
+  function updateSignals() {
+    for (let i = signals.length - 1; i >= 0; i--) {
+      const s = signals[i];
+      if (s.forward) {
+        s.t += s.speed;
+        if (s.t >= 1) s.t -= 1;
+      } else {
+        s.t -= s.speed;
+        if (s.t <= 0) s.t += 1;
+      }
+      if (Math.random() < 0.003) s.forward = !s.forward;
+
+      const dx = s.from.x - s.to.x;
+      const dy = s.from.y - s.to.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > LINK_DIST * 1.3) {
+        signals.splice(i, 1);
+      }
+    }
+  }
+
+  // ---- 涟漪更新 ----
+  function updateRipples() {
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const rp = ripples[i];
+      rp.r += rp.speed;
+      rp.alpha = 0.5 * (1 - rp.r / rp.maxR);
+      if (rp.r >= rp.maxR || rp.alpha <= 0.01) {
+        ripples.splice(i, 1);
+      }
+    }
+  }
+
+  // ---- 渲染 ----
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    // 背景
+    ctx.fillStyle = COLORS.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    // 鼠标光晕（对应 --accent-tint）
+    if (mouse.active) {
+      const glow = ctx.createRadialGradient(mouse.x, mouse.y, 0, mouse.x, mouse.y, MOUSE_ACTIVATE_RADIUS);
+      glow.addColorStop(0, 'rgba(229,41,74,0.04)');
+      glow.addColorStop(0.6, 'rgba(229,41,74,0.015)');
+      glow.addColorStop(1, 'rgba(229,41,74,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(mouse.x, mouse.y, MOUSE_ACTIVATE_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 连线（带中点波动 + 出生闪光）
+    const time = performance.now() * 0.001;
+    for (const [, conn] of connections) {
+      // 合并 opacity 和 birthGlow 判断可见性
+      const visibleAlpha = Math.max(conn.opacity, conn.birthGlow * 0.6);
+      if (visibleAlpha < 0.006) continue;
+
+      // 鼠标附近的连线更亮
+      const fromMouseDist = Math.sqrt(
+        (conn.from.x - mouse.x) ** 2 + (conn.from.y - mouse.y) ** 2
+      );
+      const toMouseDist = Math.sqrt(
+        (conn.to.x - mouse.x) ** 2 + (conn.to.y - mouse.y) ** 2
+      );
+      const nearMouse = fromMouseDist < MOUSE_ACTIVATE_RADIUS || toMouseDist < MOUSE_ACTIVATE_RADIUS;
+
+      // 出生闪光时叠加额外亮度
+      const birthBoost = conn.birthGlow * 0.5;
+      const finalAlpha = nearMouse
+        ? Math.min(visibleAlpha * 1.8 + birthBoost, 0.7)
+        : Math.min(visibleAlpha + birthBoost, 0.55);
+
+      // 线宽也随闪光加粗一点
+      const baseWidth = nearMouse ? 0.8 : 0.35;
+      const birthWidth = conn.birthGlow * 1.5;
+      ctx.lineWidth = baseWidth + birthWidth;
+
+      // 出生闪光的颜色偏亮
+      const r = Math.round(229 + conn.birthGlow * 26);
+      const g = Math.round(41  - conn.birthGlow * 20);
+      const b = Math.round(74  - conn.birthGlow * 40);
+      ctx.strokeStyle = `rgba(${r},${g},${b},${finalAlpha})`;
+
+      // 中点 + 波动
+      const mx = (conn.from.x + conn.to.x) / 2;
+      const my = (conn.from.y + conn.to.y) / 2;
+      const dx = conn.to.x - conn.from.x;
+      const dy = conn.to.y - conn.from.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len < 1) continue;
+
+      const px = -dy / len;
+      const py =  dx / len;
+      const waveOffset = Math.sin(time * conn.midSpeed + conn.midPhase) * conn.midAmp;
+      const cpx = mx + px * waveOffset;
+      const cpy = my + py * waveOffset;
+
+      ctx.beginPath();
+      ctx.moveTo(conn.from.x, conn.from.y);
+      ctx.quadraticCurveTo(cpx, cpy, conn.to.x, conn.to.y);
+      ctx.stroke();
+    }
+
+    // 信号流动点
+    spawnSignals();
+    for (const s of signals) {
+      const sx = s.from.x + (s.to.x - s.from.x) * s.t;
+      const sy = s.from.y + (s.to.y - s.from.y) * s.t;
+      // 只画核心亮点，去掉了光晕让画面更干净
+      ctx.fillStyle = 'rgba(200,30,60,0.75)';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 涟漪
+    for (const rp of ripples) {
+      ctx.strokeStyle = `${COLORS.ripple}${rp.alpha})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // 粒子节点
+    for (const p of particles) {
+      let brightness = 1;
+      if (mouse.active) {
+        const dx = p.x - mouse.x;
+        const dy = p.y - mouse.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < MOUSE_ACTIVATE_RADIUS) {
+          brightness = 1 + (1 - dist / MOUSE_ACTIVATE_RADIUS) * 2.5;
+        }
+      }
+
+      // 光晕
+      const particleGlow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 4);
+      const glowAlpha = 0.25 * brightness;
+      particleGlow.addColorStop(0, `rgba(229,41,74,${glowAlpha})`);
+      particleGlow.addColorStop(1, 'rgba(229,41,74,0)');
+      ctx.fillStyle = particleGlow;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 核心：石榴红，亮度随鼠标距离变化
+      const coreAlpha = Math.min(0.75, 0.3 * brightness);
+      ctx.fillStyle = COLORS.particle.replace('0.55', String(coreAlpha));
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * brightness, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ---- 主循环 ----
+  function loop() {
+    updateParticles();
+    updateConnections(); // 更新连线记忆（含淡入淡出）
+    updateSignals();
+    updateRipples();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- 左下角提示轮播 ----
+  const hints = [
+    '粒子游走，连线方生方死 — 如灵感般无常',
+    '注意看：每条线诞生时都有一瞬闪光',
+    '没有永恒的连接，只有不断诞生与消逝的关联',
+    '移动鼠标 → 扰动这片灵感之海',
+  ];
+
+  let hintIdx = 0;
+  function rotateHint() {
+    hintBar.style.opacity = '0';
+    setTimeout(() => {
+      hintIdx = (hintIdx + 1) % hints.length;
+      hintBar.textContent = hints[hintIdx];
+      hintBar.style.opacity = '1';
+    }, 600);
+  }
+  hintBar.textContent = hints[0];
+  hintBar.style.opacity = '1';
+  setInterval(rotateHint, 6000);
+
+  // ---- 启动 ----
+  resize();
+  createParticles();
+  loop();
+
+  console.log('%c🌐 灵感粒子网络 v5 %c— 方生方死',
+    'color: #e5294a; font-size: 14px;', 'color: #71717a;');
+  console.log('%c  粒子漫游 | 连线诞生闪光 | 生死生命周期',
+    'color: #71717a; font-size: 11px;');
+})();
+</script>
+
+</body>
+</html>

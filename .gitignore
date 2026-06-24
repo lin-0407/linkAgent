@@ -1,3 +1,6 @@
+### Node.js ###
+node_modules/
+
 backend/HELP.md
 target/
 backend/.mvn/wrapper/maven-wrapper.jar

@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue'
 import { checkSettingsConnectivity, getSettingsStatus, updateRuntimeToggle } from '@/api/settings'
 import type { ConnectivityItem, SettingsStatus } from '@/types/settings'
 import KnowledgeIndexPanels from '@/components/KnowledgeIndexPanels.vue'
+import { listPromptTemplates, updatePromptContent } from '@/api/prompts'
+import type { PromptTemplate } from '@/types/prompts'
 
 const open = defineModel<boolean>('open', { default: false })
 const developerMode = defineModel<boolean>('developerMode', { default: false })
@@ -18,12 +20,89 @@ const connectivityError = ref('')
 
 const hasLoaded = ref(false)
 
+// ---- 设置分区折叠 ----
+// 默认全部折叠，只展开开发者模式（第一个分区）
+// 做成手机设置那种手风琴：点击标题展开/收缩，互不影响
+const collapsedSections = ref<Record<string, boolean>>({
+  runtime: true,
+  readonly: true,
+  connectivity: true,
+  knowledge: true,
+  prompts: true,
+})
+
+function toggleSection(key: string) {
+  collapsedSections.value[key] = !collapsedSections.value[key]
+}
+
+// ---- 提示词管理 ----
+const promptTemplates = ref<PromptTemplate[]>([])
+const promptLoading = ref(false)
+const promptError = ref('')
+const promptSavingKey = ref('')
+const expandedPromptKey = ref<string | null>(null)
+const editingPromptContent = ref('')
+
+/** 按场景分组 */
+const promptGroups = computed(() => {
+  const map = new Map<string, PromptTemplate[]>()
+  for (const t of promptTemplates.value) {
+    const list = map.get(t.scene) || []
+    list.push(t)
+    map.set(t.scene, list)
+  }
+  return Array.from(map.entries()).map(([scene, items]) => ({ scene, items }))
+})
+
+async function loadPrompts() {
+  promptLoading.value = true
+  promptError.value = ''
+  try {
+    promptTemplates.value = await listPromptTemplates()
+  } catch (e) {
+    promptError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    promptLoading.value = false
+  }
+}
+
+function startEditPrompt(template: PromptTemplate) {
+  expandedPromptKey.value = template.promptKey
+  editingPromptContent.value = template.content
+}
+
+function cancelEditPrompt() {
+  expandedPromptKey.value = null
+  editingPromptContent.value = ''
+}
+
+async function savePrompt(template: PromptTemplate) {
+  if (promptSavingKey.value) return
+  promptSavingKey.value = template.promptKey
+  promptError.value = ''
+  try {
+    await updatePromptContent(template.promptKey, editingPromptContent.value)
+    // 更新本地缓存
+    template.content = editingPromptContent.value
+    expandedPromptKey.value = null
+    editingPromptContent.value = ''
+  } catch (e) {
+    promptError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    promptSavingKey.value = ''
+  }
+}
+
 const dynamicToggles = computed(() => settings.value?.dynamicToggles ?? [])
 const readonlySettings = computed(() => settings.value?.readonlySettings ?? [])
 
 watch([open, developerMode], ([isOpen, isDeveloperMode]) => {
   if (isOpen && isDeveloperMode && !hasLoaded.value) {
     void loadSettings()
+  }
+  // 打开设置且开发者模式时自动加载提示词
+  if (isOpen && isDeveloperMode && promptTemplates.value.length === 0 && !promptLoading.value) {
+    void loadPrompts()
   }
 })
 
@@ -124,86 +203,234 @@ function statusLabel(status: string) {
             </section>
 
             <template v-if="developerMode">
+            <!-- ═══ 运行期开关 ═══ -->
             <section class="creator-section settings-section">
-              <div class="creator-section-head">
+              <button
+                type="button"
+                class="settings-section-toggle"
+                :aria-expanded="!collapsedSections.runtime"
+                @click="toggleSection('runtime')"
+              >
+                <span class="settings-section-chevron" :class="{ open: !collapsedSections.runtime }">▸</span>
                 <h3>运行期开关</h3>
-                <button type="button" class="creator-secondary-action" :disabled="loading" @click="loadSettings">
+                <span class="settings-section-hint" v-if="collapsedSections.runtime">
+                  {{ dynamicToggles.filter(t => t.enabled).length }}/{{ dynamicToggles.length }} 已开启
+                </span>
+                <button
+                  type="button"
+                  class="creator-secondary-action"
+                  :disabled="loading"
+                  @click.stop="loadSettings"
+                >
                   {{ loading ? '刷新中…' : '刷新' }}
                 </button>
-              </div>
+              </button>
 
-              <div v-if="loadError" class="creator-alert error-alert">
-                <strong>设置加载失败</strong>
-                <span>{{ loadError }}</span>
-              </div>
-              <p v-else-if="loading && !settings" class="creator-muted">正在读取设置状态…</p>
-              <div v-else class="settings-toggle-list">
-                <article v-for="toggle in dynamicToggles" :key="toggle.key" class="settings-toggle-card">
-                  <div>
-                    <strong>{{ toggle.name }}</strong>
-                    <small>{{ toggle.key }}</small>
-                    <p>{{ toggle.description }}</p>
-                  </div>
-                  <button
-                    type="button"
-                    class="settings-switch"
-                    :class="{ enabled: toggle.enabled }"
-                    :disabled="savingKey === toggle.key"
-                    :aria-pressed="toggle.enabled"
-                    @click="toggleSetting(toggle.key, !toggle.enabled)"
-                  >
-                    <span>{{ savingKey === toggle.key ? '保存中' : toggle.enabled ? '已开启' : '开启' }}</span>
-                  </button>
-                </article>
+              <div v-if="!collapsedSections.runtime" class="settings-section-body">
+                <div v-if="loadError" class="creator-alert error-alert">
+                  <strong>设置加载失败</strong>
+                  <span>{{ loadError }}</span>
+                </div>
+                <p v-else-if="loading && !settings" class="creator-muted">正在读取设置状态…</p>
+                <div v-else class="settings-toggle-list">
+                  <article v-for="toggle in dynamicToggles" :key="toggle.key" class="settings-toggle-card">
+                    <div>
+                      <strong>{{ toggle.name }}</strong>
+                      <small>{{ toggle.key }}</small>
+                      <p>{{ toggle.description }}</p>
+                    </div>
+                    <button
+                      type="button"
+                      class="settings-switch"
+                      :class="{ enabled: toggle.enabled }"
+                      :disabled="savingKey === toggle.key"
+                      :aria-pressed="toggle.enabled"
+                      @click="toggleSetting(toggle.key, !toggle.enabled)"
+                    >
+                      <span>{{ savingKey === toggle.key ? '保存中' : toggle.enabled ? '已开启' : '开启' }}</span>
+                    </button>
+                  </article>
+                </div>
               </div>
             </section>
 
+            <!-- ═══ 只读状态 ═══ -->
             <section class="creator-section settings-section">
-              <div class="creator-section-head"><h3>只读状态</h3></div>
-              <div class="settings-readonly-grid">
-                <article v-for="item in readonlySettings" :key="item.key" class="settings-readonly-card">
-                  <strong>{{ item.name }}</strong>
-                  <b>{{ item.value }}</b>
-                  <small>{{ item.key }}</small>
-                  <p>{{ item.description }}</p>
-                </article>
+              <button
+                type="button"
+                class="settings-section-toggle"
+                :aria-expanded="!collapsedSections.readonly"
+                @click="toggleSection('readonly')"
+              >
+                <span class="settings-section-chevron" :class="{ open: !collapsedSections.readonly }">▸</span>
+                <h3>只读状态</h3>
+                <span class="settings-section-hint" v-if="collapsedSections.readonly">
+                  {{ readonlySettings.length }} 项
+                </span>
+              </button>
+
+              <div v-if="!collapsedSections.readonly" class="settings-section-body">
+                <div class="settings-readonly-grid">
+                  <article v-for="item in readonlySettings" :key="item.key" class="settings-readonly-card">
+                    <strong>{{ item.name }}</strong>
+                    <b>{{ item.value }}</b>
+                    <small>{{ item.key }}</small>
+                    <p>{{ item.description }}</p>
+                  </article>
+                </div>
               </div>
             </section>
 
+            <!-- ═══ 连通性检测 ═══ -->
             <section class="creator-section settings-section">
-              <div class="creator-section-head">
+              <button
+                type="button"
+                class="settings-section-toggle"
+                :aria-expanded="!collapsedSections.connectivity"
+                @click="toggleSection('connectivity')"
+              >
+                <span class="settings-section-chevron" :class="{ open: !collapsedSections.connectivity }">▸</span>
                 <h3>连通性检测</h3>
+                <span class="settings-section-hint" v-if="collapsedSections.connectivity">
+                  点击展开后可检测 MySQL、Redis、向量库和模型连接
+                </span>
                 <button
                   type="button"
                   class="creator-secondary-action"
                   :disabled="connectivityLoading"
-                  @click="runConnectivityCheck"
+                  @click.stop="runConnectivityCheck"
                 >
                   {{ connectivityLoading ? '检测中…' : '检测连接' }}
                 </button>
+              </button>
+
+              <div v-if="!collapsedSections.connectivity" class="settings-section-body">
+                <div v-if="connectivityError" class="creator-alert error-alert">
+                  <strong>检测失败</strong>
+                  <span>{{ connectivityError }}</span>
+                </div>
+                <div v-if="connectivityItems.length" class="settings-connectivity-grid">
+                  <article
+                    v-for="item in connectivityItems"
+                    :key="item.key"
+                    class="settings-connectivity-card"
+                    :class="item.status.toLowerCase()"
+                  >
+                    <span>{{ statusLabel(item.status) }}</span>
+                    <strong>{{ item.name }}</strong>
+                    <p>{{ item.message }}</p>
+                  </article>
+                </div>
+                <p v-else class="creator-muted">点击"检测连接"后查看 MySQL、Redis、向量库和模型 Bean 状态。</p>
               </div>
-              <div v-if="connectivityError" class="creator-alert error-alert">
-                <strong>检测失败</strong>
-                <span>{{ connectivityError }}</span>
-              </div>
-              <div v-if="connectivityItems.length" class="settings-connectivity-grid">
-                <article
-                  v-for="item in connectivityItems"
-                  :key="item.key"
-                  class="settings-connectivity-card"
-                  :class="item.status.toLowerCase()"
-                >
-                  <span>{{ statusLabel(item.status) }}</span>
-                  <strong>{{ item.name }}</strong>
-                  <p>{{ item.message }}</p>
-                </article>
-              </div>
-              <p v-else class="creator-muted">点击“检测连接”后查看 MySQL、Redis、向量库和模型 Bean 状态。</p>
             </section>
 
+            <!-- ═══ 知识库索引 ═══ -->
             <section class="creator-section settings-section">
-              <div class="creator-section-head"><h3>知识库索引</h3></div>
-              <KnowledgeIndexPanels />
+              <button
+                type="button"
+                class="settings-section-toggle"
+                :aria-expanded="!collapsedSections.knowledge"
+                @click="toggleSection('knowledge')"
+              >
+                <span class="settings-section-chevron" :class="{ open: !collapsedSections.knowledge }">▸</span>
+                <h3>知识库索引</h3>
+              </button>
+
+              <div v-if="!collapsedSections.knowledge" class="settings-section-body">
+                <KnowledgeIndexPanels />
+              </div>
+            </section>
+
+            <!-- ═══ 提示词管理 ═══ -->
+            <section class="creator-section settings-section">
+              <button
+                type="button"
+                class="settings-section-toggle"
+                :aria-expanded="!collapsedSections.prompts"
+                @click="toggleSection('prompts')"
+              >
+                <span class="settings-section-chevron" :class="{ open: !collapsedSections.prompts }">▸</span>
+                <h3>提示词管理（Agent Prompt）</h3>
+                <span class="settings-section-hint" v-if="collapsedSections.prompts && promptTemplates.length">
+                  {{ promptTemplates.length }} 条模板
+                </span>
+                <button
+                  type="button"
+                  class="creator-secondary-action creator-mini-button"
+                  :disabled="promptLoading"
+                  @click.stop="loadPrompts"
+                >
+                  {{ promptLoading ? '加载中…' : promptTemplates.length ? '刷新' : '加载提示词' }}
+                </button>
+              </button>
+
+              <div v-if="!collapsedSections.prompts" class="settings-section-body">
+                <div v-if="promptError" class="creator-alert error-alert">
+                  <strong>提示词加载失败</strong>
+                  <span>{{ promptError }}</span>
+                </div>
+
+                <div v-if="promptTemplates.length === 0 && !promptLoading && !promptError" class="creator-muted">
+                  点击"加载提示词"查看所有 Agent 提示词模板。
+                </div>
+
+                <div v-for="group in promptGroups" :key="group.scene" class="prompt-group">
+                  <h4 class="prompt-group-title">{{ group.scene }}</h4>
+                  <div class="prompt-list">
+                    <article
+                      v-for="tpl in group.items"
+                      :key="tpl.promptKey"
+                      class="prompt-card"
+                      :class="{ expanded: expandedPromptKey === tpl.promptKey }"
+                    >
+                      <div class="prompt-card-head">
+                        <div>
+                          <strong>{{ tpl.promptKey }}</strong>
+                          <div class="prompt-card-meta">
+                            <span class="prompt-type-badge">{{ tpl.promptType }}</span>
+                            <small v-if="tpl.description">{{ tpl.description }}</small>
+                          </div>
+                        </div>
+                        <button
+                          v-if="expandedPromptKey !== tpl.promptKey"
+                          type="button"
+                          class="creator-secondary-action creator-mini-button"
+                          @click="startEditPrompt(tpl)"
+                        >
+                          编辑
+                        </button>
+                      </div>
+
+                      <template v-if="expandedPromptKey === tpl.promptKey">
+                        <textarea
+                          v-model="editingPromptContent"
+                          class="prompt-edit-area"
+                          rows="8"
+                          spellcheck="false"
+                        />
+                        <div class="prompt-edit-actions">
+                          <button
+                            type="button"
+                            class="creator-secondary-action creator-mini-button"
+                            @click="cancelEditPrompt"
+                          >
+                            取消
+                          </button>
+                          <button
+                            type="button"
+                            class="creator-primary-button creator-mini-button"
+                            :disabled="promptSavingKey === tpl.promptKey"
+                            @click="savePrompt(tpl)"
+                          >
+                            {{ promptSavingKey === tpl.promptKey ? '保存中…' : '保存并生效' }}
+                          </button>
+                        </div>
+                      </template>
+                    </article>
+                  </div>
+                </div>
+              </div>
             </section>
             </template>
 
@@ -513,6 +740,183 @@ function statusLabel(status: string) {
   .settings-toggle-card,
   .settings-developer-card {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ---- 提示词管理 ---- */
+/* ---- 手风琴折叠分区 ---- */
+.settings-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  padding: var(--s3) 0;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  text-align: left;
+}
+
+.settings-section-toggle:hover {
+  color: var(--accent);
+}
+
+.settings-section-toggle h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: var(--fw-semibold);
+  flex: 0 0 auto;
+}
+
+.settings-section-chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  transition: transform 180ms ease;
+}
+
+.settings-section-chevron.open {
+  transform: rotate(90deg);
+}
+
+.settings-section-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: var(--fw-regular);
+}
+
+.settings-section-body {
+  padding-top: var(--s3);
+}
+
+/* 分隔首屏固定展开的开发者模式卡片与手风琴分区 */
+.settings-developer-card + .settings-section {
+  margin-top: var(--s2);
+}
+
+/* ---- 提示词管理 ---- */
+.prompt-group {
+  margin-bottom: var(--s4);
+}
+
+.prompt-group-title {
+  margin: 0 0 var(--s2);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: var(--fw-semibold);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--border);
+}
+
+.prompt-list {
+  display: grid;
+  gap: var(--s2);
+}
+
+.prompt-card {
+  display: grid;
+  gap: var(--s3);
+  padding: var(--s3);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.prompt-card.expanded {
+  background: var(--surface);
+  border-color: var(--accent);
+}
+
+.prompt-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+
+.prompt-card-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.prompt-card-head strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-family: var(--font-code);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.prompt-type-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  color: var(--accent);
+  background: var(--accent-tint);
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+  line-height: 1.4;
+}
+
+.prompt-card-meta small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.prompt-edit-area {
+  width: 100%;
+  padding: var(--s3);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  resize: vertical;
+}
+
+.prompt-edit-area:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.prompt-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+
+@media (max-width: 640px) {
+  .prompt-card-head {
+    flex-direction: column;
+  }
+
+  .prompt-edit-actions {
+    flex-direction: column;
   }
 }
 </style>

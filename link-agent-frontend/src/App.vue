@@ -1,14 +1,28 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AgentFloatingWindow from '@/components/AgentFloatingWindow.vue'
 import SettingsDrawer from '@/components/SettingsDrawer.vue'
+import ParticleBackground from '@/components/ParticleBackground.vue'
 import { useAppStore } from '@/stores/appStore'
 
 const appStore = useAppStore()
 const { settingsOpen, developerMode } = storeToRefs(appStore)
+
+// 粒子背景：首页完整展示，其他页面降低密度
+const route = useRoute()
+const particleEnabled = computed(() => true) // 全局启用
+const particleDensity = computed(() => route.path === '/' ? 12000 : 20000) // 非首页更稀疏
 </script>
 
 <template>
+  <!-- 粒子背景层（fixed，不影响文档流） -->
+  <ParticleBackground
+    :enabled="particleEnabled"
+    :density="particleDensity"
+  />
+
   <div class="surface-root">
     <nav class="surface-switch" aria-label="导航">
       <RouterLink to="/" custom v-slot="{ navigate, isExactActive }">
@@ -16,7 +30,6 @@ const { settingsOpen, developerMode } = storeToRefs(appStore)
           首页
         </button>
       </RouterLink>
-      <!-- 使用 RouterLink custom v-slot 渲染原生 button，保持现有 CSS 选择器兼容 -->
       <RouterLink to="/creator" custom v-slot="{ navigate, isActive }">
         <button type="button" :class="{ active: isActive }" @click="navigate">
           创作台
@@ -41,7 +54,6 @@ const { settingsOpen, developerMode } = storeToRefs(appStore)
       </button>
     </nav>
 
-    <!-- RouterView 替代原来的 v-if 三选一切换，避免组件销毁导致 SSE 断开和状态丢失 -->
     <RouterView v-slot="{ Component }">
       <component :is="Component" :developer-mode="developerMode" />
     </RouterView>

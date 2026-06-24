@@ -9,7 +9,9 @@ import com.link.linkagent.util.NumberUtil;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.stereotype.Service;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -61,6 +63,7 @@ public class CreatorPreferenceService {
 
     /**
      * 发布前优化只读取最近几期偏好，限制长度是为了避免历史内容无限增长挤占本期文稿上下文。
+     * 同时汇总用户对历史建议的"采用/拒绝"反馈，让 AI 知道用户实际偏好什么风格。
      */
     public String buildPromptContext(String userId) {
         List<CreatorPreferenceRecord> records = creatorPreferenceMapper.listByUserId(
@@ -72,6 +75,8 @@ public class CreatorPreferenceService {
         }
 
         StringBuilder builder = new StringBuilder();
+
+        // 汇总历史偏好内容
         for (int index = 0; index < records.size(); index++) {
             CreatorPreferenceRecord record = records.get(index);
             builder.append(index + 1)
@@ -81,11 +86,52 @@ public class CreatorPreferenceService {
                     .append(record.getPreferenceContent())
                     .append("\n");
         }
+
+        // 追加采用/拒绝反馈记录，让 AI 了解用户实际偏好什么风格
+        List<CreatorPreferenceRecord> feedbackRecords = creatorPreferenceMapper.listAdoptionFeedbackByUserId(
+                normalizeUserId(userId),
+                PROMPT_HISTORY_LIMIT
+        );
+        if (!feedbackRecords.isEmpty()) {
+            builder.append("\n你的标题风格偏好（基于历史采用/拒绝记录）：\n");
+            for (int index = 0; index < feedbackRecords.size(); index++) {
+                CreatorPreferenceRecord record = feedbackRecords.get(index);
+                builder.append(index + 1)
+                        .append(". ")
+                        .append(record.getPreferenceContent())
+                        .append("\n");
+            }
+        }
+
         return TextUtil.abbreviateWithSuffix(
                 builder.toString().trim(),
                 PROMPT_CONTEXT_MAX_LENGTH,
                 "\n[历史偏好过长，已截断用于本次分析]"
         );
+    }
+
+    /**
+     * 记录用户对 AI 建议的采用/拒绝反馈。
+     * 当用户在发布前优化中确认采用某个标题风格或手动修改后采用时，
+     * 将用户的实际选择写入偏好表，供后续生成时参考。
+     *
+     * @param userId         用户ID
+     * @param taskId         当前任务ID
+     * @param preferenceType 偏好类型：ADOPTED（采用）、MODIFIED（修改后采用）、REJECTED（拒绝）
+     * @param description    偏好描述，例如"采用短句+数字开头的标题风格，拒绝长句偏严肃风格"
+     */
+    public void recordAdoptionFeedback(String userId, String taskId, String preferenceType, String description) {
+        if (TextUtil.isBlank(description)) {
+            return;
+        }
+        CreatorPreferenceRecord record = new CreatorPreferenceRecord();
+        record.setPreferenceId(UUID.randomUUID().toString());
+        record.setUserId(normalizeUserId(userId));
+        record.setSourceTaskId(taskId);
+        // 采用/拒绝反馈没有 sourceReportId，使用特殊标记区分
+        record.setSourceReportId("ADOPTION_FEEDBACK_" + preferenceType);
+        record.setPreferenceContent("[" + preferenceType + "] " + description.trim());
+        creatorPreferenceMapper.upsertAdoptionFeedback(record);
     }
 
     private boolean hasPreferenceContent(String preferenceContent) {

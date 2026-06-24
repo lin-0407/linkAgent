@@ -1,5 +1,6 @@
 package com.link.linkagent.creator.workflow.service;
 
+import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionResponse;
@@ -70,6 +71,7 @@ public class CreatorWorkflowService {
     private final CreatorWorkflowEventPublisher workflowEventPublisher;
     private final LlmApiUsageService llmApiUsageService;
     private final RuntimeSettingService runtimeSettingService;
+    private final CreatorPreferenceService creatorPreferenceService;
 
     public CreatorWorkflowService(CreatorTaskMapper creatorTaskMapper,
                                   CreatorSuggestionMapper creatorSuggestionMapper,
@@ -77,7 +79,8 @@ public class CreatorWorkflowService {
                                   PrePublishSuggestionService prePublishSuggestionService,
                                   CreatorWorkflowEventPublisher workflowEventPublisher,
                                   LlmApiUsageService llmApiUsageService,
-                                  RuntimeSettingService runtimeSettingService) {
+                                  RuntimeSettingService runtimeSettingService,
+                                  CreatorPreferenceService creatorPreferenceService) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorWorkflowMapper = creatorWorkflowMapper;
@@ -85,6 +88,7 @@ public class CreatorWorkflowService {
         this.workflowEventPublisher = workflowEventPublisher;
         this.llmApiUsageService = llmApiUsageService;
         this.runtimeSettingService = runtimeSettingService;
+        this.creatorPreferenceService = creatorPreferenceService;
     }
 
     @Transactional
@@ -408,6 +412,22 @@ public class CreatorWorkflowService {
                 "任务状态已推进为 " + CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name(),
                 null
         );
+
+        // 将用户"采用"行为写入偏好，让后续发布前优化能参考用户实际偏好的标题风格
+        try {
+            CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+            String styleDescription = extractTitleStyleFromSuggestion(suggestionRecord);
+            if (TextUtil.hasText(styleDescription)) {
+                creatorPreferenceService.recordAdoptionFeedback(
+                        taskRecord.getUserId(),
+                        taskId,
+                        "ADOPTED",
+                        "采用发布前优化建议：" + styleDescription
+                );
+            }
+        } catch (Exception ignored) {
+            // 偏好记录不影响主流程
+        }
 
         CreatorWorkflowSessionRecord updatedSession = creatorWorkflowMapper.findSession(
                         sessionRecord.getTaskId(),
@@ -848,5 +868,74 @@ public class CreatorWorkflowService {
                 record.getEndTime(),
                 record.getCreateTime()
         );
+    }
+
+    /**
+     * 从用户确认采用的发布前优化建议中提取标题风格特征。
+     * 使用轻量规则描述标题的句式、长度、语气等特征，供后续偏好学习使用。
+     * 不调用 LLM —— 避免在确认流程中增加额外延迟和成本。
+     */
+    private String extractTitleStyleFromSuggestion(CreatorSuggestionRecord suggestionRecord) {
+        String titleSuggestions = suggestionRecord.getTitleSuggestions();
+        if (TextUtil.isBlank(titleSuggestions)) {
+            return null;
+        }
+
+        StringBuilder style = new StringBuilder();
+        // 从标题建议 JSON 中提取标题文本，分析风格特征
+        String lowerTitles = titleSuggestions.toLowerCase(java.util.Locale.ROOT);
+
+        // 句式特征
+        if (lowerTitles.contains("？") || lowerTitles.contains("?")) {
+            style.append("倾向问句式标题；");
+        }
+        if (lowerTitles.matches(".*\\d+.*")) {
+            style.append("标题含数字；");
+        }
+        if (lowerTitles.contains("！") || lowerTitles.contains("!")) {
+            style.append("倾向感叹句式；");
+        }
+
+        // 长度特征：统计标题平均长度
+        int totalLength = 0;
+        int count = 0;
+        java.util.regex.Matcher titleMatcher = java.util.regex.Pattern.compile("\"title\"\\s*:\\s*\"([^\"]+)\"")
+                .matcher(titleSuggestions);
+        while (titleMatcher.find()) {
+            totalLength += titleMatcher.group(1).length();
+            count++;
+        }
+        if (count > 0) {
+            int avgLength = totalLength / count;
+            if (avgLength <= 15) {
+                style.append("短标题风格（≤15字）；");
+            } else if (avgLength <= 25) {
+                style.append("中等长度标题（16-25字）；");
+            } else {
+                style.append("长标题风格（>25字）；");
+            }
+        }
+
+        // 语气特征
+        if (containsAnyKeyword(lowerTitles, "必看", "震惊", "绝了", "爆", "竟然", "居然")) {
+            style.append("偏网感/夸张语气；");
+        }
+        if (containsAnyKeyword(lowerTitles, "教程", "指南", "攻略", "方法", "步骤", "技巧")) {
+            style.append("偏教程/实用导向；");
+        }
+        if (containsAnyKeyword(lowerTitles, "故事", "经历", "回忆", "记得", "当年")) {
+            style.append("偏叙事/故事化表达；");
+        }
+
+        return style.isEmpty() ? "已采用发布前优化建议" : style.toString();
+    }
+
+    private boolean containsAnyKeyword(String text, String... keywords) {
+        for (String keyword : keywords) {
+            if (text.contains(keyword)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -39,6 +39,10 @@ import java.util.UUID;
 public class PrePublishSuggestionService {
 
     private static final int MATERIAL_MAX_LENGTH = 12000;
+    // 三明治截断参数：保留开头2000字（钩子）+ 结尾2000字（总结），中间抽样8000字
+    private static final int SANDWICH_HEAD_CHARS = 2000;
+    private static final int SANDWICH_TAIL_CHARS = 2000;
+    private static final int SANDWICH_MIDDLE_CHARS = 8000;
     private static final String PREFERENCE_MODE_USE_HISTORY = "USE_HISTORY";
     private static final String PREFERENCE_MODE_IGNORE_HISTORY = "IGNORE_HISTORY";
     private static final String PREFERENCE_MODE_EXPERIMENT = "EXPERIMENT";
@@ -315,13 +319,28 @@ public class PrePublishSuggestionService {
         for (CreatorMaterialRecord material : materials) {
             builder.append("\n【")
                     .append(toChineseMaterialName(material.getMaterialType()))
-                    .append("】\n")
-                    .append(TextUtil.abbreviateWithSuffix(
-                            material.getContent(),
-                            MATERIAL_MAX_LENGTH,
-                            "\n[内容过长，已截断用于本次分析]"
-                    ))
-                    .append("\n");
+                    .append("】\n");
+
+            // 文稿和字幕通常很长，用三明治截断保留开头钩子和结尾总结，避免 AI 丢失关键语境
+            String materialType = material.getMaterialType();
+            if (CreatorMaterialType.MANUSCRIPT.name().equals(materialType)
+                    || CreatorMaterialType.SUBTITLE.name().equals(materialType)) {
+                builder.append(TextUtil.abbreviateSandwich(
+                        material.getContent(),
+                        SANDWICH_HEAD_CHARS,
+                        SANDWICH_TAIL_CHARS,
+                        SANDWICH_MIDDLE_CHARS,
+                        "中间段落已抽样保留关键信息"
+                ));
+            } else {
+                // 标题草稿和简介草稿通常较短，直接用简单截断
+                builder.append(TextUtil.abbreviateWithSuffix(
+                        material.getContent(),
+                        MATERIAL_MAX_LENGTH,
+                        "\n[内容过长，已截断用于本次分析]"
+                ));
+            }
+            builder.append("\n");
         }
         return builder.toString();
     }
