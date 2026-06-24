@@ -12,6 +12,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
@@ -79,6 +80,15 @@ public class GlobalExceptionHandler {
                         "数据库操作失败，请确认 backend/src/main/resources/sql/init.sql 已重新执行。",
                         request.getRequestURI()
                 ));
+    }
+
+    /**
+     * SSE 长连接空闲超时属于正常行为（客户端断连或网络静默），不应打 ERROR。
+     * 前端 SSE 客户端收到 onerror 回调后会按重试间隔自动重连，这里只需静默完成请求。
+     */
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    public ResponseEntity<Void> handleAsyncTimeout(AsyncRequestTimeoutException exception) {
+        return ResponseEntity.ok().build();
     }
 
     @ExceptionHandler(Exception.class)
