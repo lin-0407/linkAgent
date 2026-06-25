@@ -4,15 +4,16 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=64M
+      - --max-connections=30
+      - --performance-schema=OFF
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-link_agent_root_password}
-      # init.sql 会固定创建 link_agent，演示环境不把库名做成变量，避免样例数据进错库。
       MYSQL_DATABASE: link_agent
       MYSQL_USER: ${MYSQL_USER:-link_agent}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-link_agent_password}
       TZ: Asia/Shanghai
     volumes:
-      # 初始化脚本只在数据库第一次创建时执行，所以演示环境要尽量把结构和样例一次性放进去。
       - mysql-data:/var/lib/mysql
       - ./backend/src/main/resources/sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
@@ -35,6 +36,46 @@ services:
       retries: 12
     restart: unless-stopped
 
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - etcd-data:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+
+  milvus:
+    image: milvusdb/milvus:v2.4.17
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      COMMON_STORAGETYPE: local
+    volumes:
+      - milvus-data:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -52,6 +93,28 @@ services:
       LLM_GUARD_ENABLED: ${LLM_GUARD_ENABLED:-true}
       LLM_GUARD_MAX_PROMPT_CHARS: ${LLM_GUARD_MAX_PROMPT_CHARS:-30000}
       VECTOR_STORE_TYPE: ${VECTOR_STORE_TYPE:-none}
+      MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      MILVUS_USERNAME: ${MILVUS_USERNAME:-}
+      MILVUS_PASSWORD: ${MILVUS_PASSWORD:-}
+      MILVUS_DATABASE_NAME: ${MILVUS_DATABASE_NAME:-default}
+      MILVUS_COLLECTION_NAME: ${MILVUS_COLLECTION_NAME:-creator_feedback_evidence}
+      MILVUS_INITIALIZE_SCHEMA: ${MILVUS_INITIALIZE_SCHEMA:-true}
+      MILVUS_EMBEDDING_DIMENSION: ${MILVUS_EMBEDDING_DIMENSION:-1024}
+      KNOWLEDGE_RAG_MILVUS_HOST: ${MILVUS_HOST:-milvus}
+      KNOWLEDGE_RAG_MILVUS_PORT: ${MILVUS_PORT:-19530}
+      EMBEDDING_MODEL_TYPE: ${EMBEDDING_MODEL_TYPE:-none}
+      LLM_EMBEDDING_API_KEY: ${LLM_EMBEDDING_API_KEY:-}
+      LLM_EMBEDDING_BASE_URL: ${LLM_EMBEDDING_BASE_URL:-}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
+      LLM_EMBEDDING_DIMENSIONS: ${LLM_EMBEDDING_DIMENSIONS:-1024}
+      CREATOR_FEEDBACK_RAG_ENABLED: ${CREATOR_FEEDBACK_RAG_ENABLED:-false}
+      CREATOR_FEEDBACK_RAG_TOP_K: ${CREATOR_FEEDBACK_RAG_TOP_K:-8}
+      CREATOR_FEEDBACK_RAG_MAX_INDEX_ITEMS: ${CREATOR_FEEDBACK_RAG_MAX_INDEX_ITEMS:-300}
+      KNOWLEDGE_RAG_ENABLED: ${KNOWLEDGE_RAG_ENABLED:-false}
+      KNOWLEDGE_RAG_COLLECTION_NAME: ${KNOWLEDGE_RAG_COLLECTION_NAME:-creator_reference_video}
+      KNOWLEDGE_RAG_INDEX_BATCH_SIZE: ${KNOWLEDGE_RAG_INDEX_BATCH_SIZE:-10}
+      KNOWLEDGE_RAG_INITIALIZE_SCHEMA: ${KNOWLEDGE_RAG_INITIALIZE_SCHEMA:-true}
       SHORT_TERM_MEMORY_STORE_TYPE: redis
       SUMMARY_MEMORY_ENABLED: ${SUMMARY_MEMORY_ENABLED:-false}
       SUMMARY_MEMORY_TRIGGER_MESSAGE_COUNT: ${SUMMARY_MEMORY_TRIGGER_MESSAGE_COUNT:-8}
@@ -64,11 +127,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      milvus:
+        condition: service_started
     restart: unless-stopped
 
   frontend:
     build:
-      context: ./link-agent-frontend
+      context: ./frontend
       dockerfile: Dockerfile
     ports:
       - "${FRONTEND_PORT:-8088}:80"
@@ -79,3 +144,5 @@ services:
 volumes:
   mysql-data:
   redis-data:
+  milvus-data:
+  etcd-data:

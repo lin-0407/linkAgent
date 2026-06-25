@@ -18,4 +18,6 @@ COPY --from=build /workspace/target/linkAgent-0.0.1-SNAPSHOT.jar /app/app.jar
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+# -Xmx512m 限制最大堆内存，避免在 2C4G 服务器上挤占 MySQL/Redis 的可用内存。
+# -XX:+UseSerialGC 在 2 核机器上比并行 GC 更省资源。
+ENTRYPOINT ["java", "-Xms256m", "-Xmx512m", "-XX:+UseSerialGC", "-jar", "/app/app.jar"]
