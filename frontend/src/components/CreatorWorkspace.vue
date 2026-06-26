@@ -40,7 +40,60 @@ import {
 } from '@/api/creator'
 import MessageBubble from '@/components/MessageBubble.vue'
 import GuidanceEditorModal from '@/components/creator/GuidanceEditorModal.vue'
+import FeedbackTab from '@/components/creator/FeedbackTab.vue'
+import MaterialsTab from '@/components/creator/MaterialsTab.vue'
+import PrePublishTab from '@/components/creator/PrePublishTab.vue'
+import ReportTab from '@/components/creator/ReportTab.vue'
+import SuggestionCard from '@/components/creator/SuggestionCard.vue'
+import TaskListPanel from '@/components/creator/TaskListPanel.vue'
+import UsageTab from '@/components/creator/UsageTab.vue'
+import { useCreatorFeedbackEvent } from '@/composables/creator/useCreatorFeedbackEvent'
+import { provideCreatorWorkspace } from '@/composables/creator/useCreatorWorkspaceContext'
+import {
+  clampScriptNumber,
+  contextSaveKey,
+  contextTermPolarity,
+  contextTermSourceLabel,
+  contextTermTypeLabel,
+  evalResultStatusLabel,
+  evalStageLabel,
+  extractBvid,
+  formatDate,
+  formatDuration,
+  formatInputCount,
+  formatMetric,
+  formatPercent,
+  formatUsageToken,
+  formatValue,
+  formatWorkflowCallUsage,
+  getRecordText,
+  hasFeedbackResult,
+  hasPrePublishResult,
+  hasText,
+  isPrePublishSuggestionVisible,
+  isRecord,
+  isWorkflowStatus,
+  materialLabel,
+  normalizeContextTermText,
+  parseJsonArray,
+  preferenceItemText,
+  preferenceModeNoteByMode,
+  previewWorkflowMessage,
+  retrievalModeLabel,
+  shortId,
+  statBarWidth,
+  statusLabel,
+  usageCategoryLabel,
+  usageStatusClass,
+  usageStatusLabel,
+  workflowContentTypeLabel,
+  workflowRoleLabel,
+  workflowSessionLabel,
+  workflowStepStatusLabel,
+  workflowStepTypeLabel,
+} from '@/composables/creator/creatorWorkspaceUtils'
 import type {
+  CreatorActiveStep,
   CreatorFeedback,
   CreatorFeedbackChatResult,
   CreatorFeedbackDashboard,
@@ -54,6 +107,8 @@ import type {
   CreatorContextTerm,
   CreatorContextTermPayload,
   CreatorContextTermType,
+  CreatorEventType,
+  CreatorRejectReason,
   CreatorPreference,
   CreatorPreferenceMode,
   CreatorSuggestion,
@@ -70,6 +125,7 @@ import type {
   LlmApiModelCategory,
   LlmApiUsageCategorySummary,
   LlmApiUsageSummary,
+  ResultModalTarget,
   WorkflowUsageResponse,
 } from '@/types/creator'
 import type { ChatMessage } from '@/types/agent'
@@ -82,11 +138,8 @@ import { useCreatorGuidance } from '@/composables/creator/useCreatorGuidance'
 import { useCreatorTask } from '@/composables/creator/useCreatorTask'
 import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
-type UnknownRecord = Record<string, unknown>
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
-type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | 'feedbackReport'
 type TaskManageMode = 'create' | 'edit'
-type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report' | 'usage'
 type FeedbackChatTurn = {
   id: string
   question: string
@@ -114,13 +167,14 @@ const props = withDefaults(
 )
 
 // 指导词域迁移至 useCreatorGuidance（表单 + guidance 编辑 + localStorage 持久化）
+const guidance = useCreatorGuidance()
 const {
   prePublishForm, feedbackAnalyzeForm,
   guidanceEditorTarget, lastPrePublishPreferenceMode, hasPrePublishPreferenceModeSnapshot,
   defaultPrePublishGuidance, defaultFeedbackGuidance,
   loadGuidanceSettings, openGuidanceEditor, closeGuidanceEditor,
   resetCurrentGuidance, resetPrePublishPreferenceMode,
-} = useCreatorGuidance()
+} = guidance
 const preferenceModeOptions: Array<{
   value: CreatorPreferenceMode
   label: string
@@ -209,6 +263,7 @@ const successMessage = ref('')
 const isTaskManagerOpen = ref(false)
 const isTaskComposerOpen = ref(false)
 // 评测域状态迁移至 useCreatorEvaluation
+const evaluationModule = useCreatorEvaluation(errorMessage)
 const {
   evalCases, selectedEvalCaseId, selectedEvalResultId, evalStageFilter,
   evalResults, evalPromptVersionStats, evalResultDraft,
@@ -216,7 +271,7 @@ const {
   filteredEvalCases, selectedEvalCase, selectedEvalResult, canRecordEvalResult,
   loadEvaluationCases, refreshEvaluationCases, refreshEvaluationResults,
   selectEvalCase, submitEvalResult,
-} = useCreatorEvaluation(errorMessage)
+} = evaluationModule
 const isDeveloperTestOpen = ref(false)
 const pendingDeleteTask = ref<CreatorTaskSummary | null>(null)
 const isResultModalBackdropPointerDown = ref(false)
@@ -233,12 +288,13 @@ const feedbackEvidenceIndexWarnings = ref<string[]>([])
 const feedbackDashboard = ref<CreatorFeedbackDashboard | null>(null)
 const feedbackFetchResult = ref<CreatorFeedbackFetchResult | null>(null)
 // 语境库域迁移至 useCreatorContext（saveContextTerm 作为编排函数留在组件）
+const contextModule = useCreatorContext(errorMessage)
 const {
   creatorPreferences, creatorContextTerms,
   isLoadingCreatorPreferences, isLoadingCreatorContextTerms,
   isSavingCreatorContextTerm, savingContextTermKey,
   loadCreatorPreferences, loadCreatorContextTerms,
-} = useCreatorContext(errorMessage)
+} = contextModule
 // disableContextTerm / feedbackContextTerm 保留在组件：有 errorMessage/successMessage 交互逻辑
 const contextTermForm = reactive({
   term: '',
@@ -248,12 +304,13 @@ const contextTermForm = reactive({
 // feedbackImportFile → see Adapter Layer
 const feedbackImportWarnings = ref<string[]>([])
 // 开销统计域迁移至 useCreatorUsage
+const usageModule = useCreatorUsage(() => selectedTask.value?.taskId ?? '', errorMessage)
 const {
   usageSummary, usageCallPage, usageCategoryFilter, usageCurrentPage,
   isLoadingUsageStats,
   usageCategorySummaries, usageTotalPages,
   refreshUsageStats, changeUsageCategoryFilter, changeUsagePage,
-} = useCreatorUsage(() => selectedTask.value?.taskId ?? '', errorMessage)
+} = usageModule
 const workflowSession = ref<CreatorWorkflowSession | null>(null)
 const workflowMessages = ref<CreatorWorkflowMessage[]>([])
 const workflowSteps = ref<CreatorWorkflowStep[]>([])
@@ -322,6 +379,10 @@ const feedbackForm = feedbackModule.feedbackForm
 const feedbackChatForm = feedbackModule.feedbackChatForm
 const feedbackScriptForm = feedbackModule.feedbackScriptForm
 const feedbackImportFile = feedbackModule.feedbackImportFile
+
+// 建议卡片反馈事件上报：复用已有的 successMessage/errorMessage toast 通道，
+// 点击"采纳/不太好"后由这里统一写 creator_event 表，触发画像增量更新
+const feedbackEvent = useCreatorFeedbackEvent(successMessage, errorMessage)
 
 const selectedTaskId = computed(() => selectedTask.value?.taskId ?? '')
 const hasSelectedTask = computed(() => selectedTaskId.value.length > 0)
@@ -472,6 +533,89 @@ const actionableRevisionPlan = computed(() =>
   parseJsonArray(suggestion.value?.actionableRevisionPlan),
 )
 const tagSuggestions = computed(() => parseJsonArray(suggestion.value?.tagSuggestions))
+
+// ── 建议卡片：把后端返回的 JSON 数组解析成 SuggestionCard 需要的结构 ──
+// 卡片组件只接收已解析的 item，不重复实现 parseJsonArray/getRecordText 逻辑，
+// 这样解析逻辑单一来源，避免卡片和列表两套解析互相漂移。
+type SuggestionCardItem = {
+  content: string
+  viewerPsychology?: string
+  clickReason?: string
+  trustRisk?: string
+  bestScenario?: string
+  reason?: string
+  risk?: string
+}
+
+const titleSuggestionCards = computed<SuggestionCardItem[]>(() =>
+  titleSuggestions.value.map((raw) => ({
+    content: getRecordText(raw, 'title') || formatValue(raw),
+    viewerPsychology: getRecordText(raw, 'viewerPsychology') || undefined,
+    clickReason: getRecordText(raw, 'clickReason') || undefined,
+    trustRisk: getRecordText(raw, 'trustRisk') || undefined,
+    bestScenario: getRecordText(raw, 'bestScenario') || undefined,
+    reason: getRecordText(raw, 'reason') || undefined,
+    risk: getRecordText(raw, 'risk') || undefined,
+  })),
+)
+
+// 标签建议同样转成卡片结构，只是没有那么多元信息字段
+const tagSuggestionCards = computed<SuggestionCardItem[]>(() =>
+  tagSuggestions.value.map((raw) => ({ content: formatValue(raw) })),
+)
+
+// 已采纳的标题集合：用 content 去重，采纳后卡片视觉态切换，避免重复上报
+const acceptedTitleContents = ref<Set<string>>(new Set())
+const acceptedTagContents = ref<Set<string>>(new Set())
+
+/** 卡片"采纳"：上报 ACCEPTED 事件并标记为已采纳 */
+async function onAcceptSuggestion(
+  type: 'title' | 'tag',
+  item: SuggestionCardItem,
+  rank?: number,
+) {
+  const eventType: CreatorEventType =
+    type === 'title' ? 'TITLE_ACCEPTED' : 'TAG_ACCEPTED'
+  const ok = await feedbackEvent.reportAccept(
+    eventType,
+    selectedTaskId.value,
+    item.content,
+    rank,
+  )
+  if (ok) {
+    const store = type === 'title' ? acceptedTitleContents : acceptedTagContents
+    store.value.add(item.content)
+  }
+}
+
+/** 卡片"复制"：写入剪贴板，复制成功由卡片自身给"已复制"提示，这里只负责副作用 */
+async function onCopySuggestion(item: SuggestionCardItem) {
+  try {
+    await navigator.clipboard.writeText(item.content)
+  } catch {
+    // 剪贴板可能被浏览器策略拦截（非 HTTPS / 无焦点），失败不阻塞，静默降级
+  }
+}
+
+/** 卡片"不太好"：上报 REJECTED 事件，带上原因 */
+function onRejectSuggestion(
+  type: 'title' | 'tag',
+  item: SuggestionCardItem,
+  reason: CreatorRejectReason,
+  reasonText: string,
+  rank?: number,
+) {
+  const eventType: CreatorEventType =
+    type === 'title' ? 'TITLE_REJECTED' : 'TAG_REJECTED'
+  void feedbackEvent.reportReject(
+    eventType,
+    selectedTaskId.value,
+    item.content,
+    reason,
+    reasonText,
+    rank,
+  )
+}
 const hotTopics = computed(() => parseJsonArray(feedbackReport.value?.hotTopics))
 const controversyPoints = computed(() => parseJsonArray(feedbackReport.value?.controversyPoints))
 const misunderstandingPoints = computed(() =>
@@ -530,9 +674,14 @@ const lastPreferenceModeLabel = computed(
     preferenceModeOptions.find((option) => option.value === lastPrePublishPreferenceMode.value)
       ?.label ?? '沿用历史偏好',
 )
-const preferenceModeNote = computed(() => preferenceModeNoteByMode(prePublishForm.preferenceMode))
+const preferenceModeNote = computed(() =>
+  preferenceModeNoteByMode(prePublishForm.preferenceMode, historicalPreferenceChips.value.length),
+)
 const lastPreferenceModeNote = computed(() =>
-  preferenceModeNoteByMode(lastPrePublishPreferenceMode.value),
+  preferenceModeNoteByMode(
+    lastPrePublishPreferenceMode.value,
+    historicalPreferenceChips.value.length,
+  ),
 )
 const selectedWorkflowMessage = computed(() => {
   if (workflowMessages.value.length === 0) {
@@ -717,6 +866,14 @@ function openTaskManager() {
 
 function closeTaskManager() {
   isTaskManagerOpen.value = false
+}
+
+function toggleCurrentTaskExpanded() {
+  isCurrentTaskExpanded.value = !isCurrentTaskExpanded.value
+}
+
+function openContextLibrary() {
+  isContextLibraryOpen.value = true
 }
 
 function handleWorkspaceKeydown(event: KeyboardEvent) {
@@ -1096,11 +1253,6 @@ async function saveContextTerm(payload: Omit<CreatorContextTermPayload, 'videoTy
     isSavingCreatorContextTerm.value = false
     savingContextTermKey.value = ''
   }
-}
-
-function normalizeContextTermText(value: string) {
-  const text = value.trim().replace(/\s+/g, ' ')
-  return text.length > 128 ? text.slice(0, 128) : text
 }
 
 async function disableContextTerm(term: CreatorContextTerm) {
@@ -1541,146 +1693,6 @@ async function rebuildFeedbackEvidenceIndex() {
 }
 
 // 把后端检索模式编码翻译成用户能看懂的中文，统一用于状态区和追问回答脚注。
-function retrievalModeLabel(mode: string | null | undefined) {
-  switch (mode) {
-    case 'MILVUS_VECTOR_AND_MYSQL_REPORT':
-      return '向量检索'
-    case 'MILVUS_VECTOR_WITH_SQL_FALLBACK':
-      return '向量检索（含 SQL 兜底）'
-    case 'MYSQL_REPORT_AND_CLASSIFIED_ITEMS':
-      return 'SQL 证据检索'
-    default:
-      return 'SQL 证据检索'
-  }
-}
-
-function usageCategoryLabel(category: string | null | undefined) {
-  switch (category) {
-    case 'TEXT':
-      return '文本 LLM'
-    case 'EMBEDDING':
-      return '向量化模型'
-    case 'RERANK':
-      return 'Rerank 模型'
-    default:
-      return category || '未知模型'
-  }
-}
-
-function usageStatusLabel(status: string | null | undefined) {
-  switch (status) {
-    case 'SUCCESS':
-      return '成功'
-    case 'FAILED':
-      return '失败'
-    case 'SKIPPED':
-      return '跳过'
-    default:
-      return status || '未知'
-  }
-}
-
-function usageStatusClass(status: string | null | undefined) {
-  if (status === 'FAILED') {
-    return 'failed'
-  }
-  if (status === 'SKIPPED') {
-    return 'skipped'
-  }
-  return 'success'
-}
-
-function formatUsageToken(value: number | null | undefined) {
-  if (value === null || value === undefined) {
-    return '未返回'
-  }
-  return value.toLocaleString('zh-CN')
-}
-
-function formatDuration(value: number | null | undefined) {
-  if (value === null || value === undefined) {
-    return '未返回'
-  }
-  if (value < 1000) {
-    return `${value} ms`
-  }
-  if (value < 60_000) {
-    return `${(value / 1000).toFixed(1)} s`
-  }
-  const minutes = Math.floor(value / 60_000)
-  const seconds = Math.round((value % 60_000) / 1000)
-  return `${minutes} min ${seconds} s`
-}
-
-function formatTokenUsage(record: LlmApiCallRecord) {
-  if (record.totalTokens !== null && record.totalTokens !== undefined) {
-    return `${formatUsageToken(record.totalTokens)} token`
-  }
-  return 'token 未返回'
-}
-
-function formatWorkflowCallUsage(record: LlmApiCallRecord) {
-  const statusText = record.status === 'FAILED' ? '失败' : usageStatusLabel(record.status)
-  const base = `${record.modelCategory} · ${record.modelName || '模型未返回'} · ${statusText} · ${formatTokenUsage(record)} · ${formatDuration(record.elapsedMs)}`
-  if (record.errorMessage) {
-    return `${base} · ${record.errorMessage}`
-  }
-  return base
-}
-
-function formatInputCount(record: LlmApiCallRecord) {
-  if (record.inputCount === null || record.inputCount === undefined) {
-    return record.modelCategory === 'TEXT' ? '单次对话' : '未记录'
-  }
-  if (record.modelCategory === 'EMBEDDING') {
-    return `${record.inputCount} 段文本`
-  }
-  if (record.modelCategory === 'RERANK') {
-    return `${record.inputCount} 条候选`
-  }
-  return `${record.inputCount} 条输入`
-}
-
-function contextTermTypeLabel(termType: CreatorContextTermType | string) {
-  switch (termType) {
-    case 'SLANG':
-      return '圈内黑话'
-    case 'MEME':
-      return '梗表达'
-    case 'TABOO':
-      return '慎用表达'
-    case 'TITLE_PATTERN':
-      return '标题套路'
-    case 'AUDIENCE_CONCERN':
-      return '观众关注点'
-    default:
-      return '关键词'
-  }
-}
-
-function contextTermSourceLabel(sourceType: string) {
-  switch (sourceType) {
-    case 'AI_ACCEPTED':
-      return '采纳建议'
-    case 'COMMENT_EXTRACTED':
-      return '评论弹幕'
-    case 'USER_REJECTED':
-      return '用户否定'
-    case 'VIDEO_SUCCESS':
-      return '高质量视频'
-    default:
-      return '手动保存'
-  }
-}
-
-function contextTermPolarity(termType: CreatorContextTermType): CreatorContextPolarity {
-  return termType === 'TABOO' ? 'NEGATIVE' : 'POSITIVE'
-}
-
-function contextSaveKey(term: string, termType: CreatorContextTermType) {
-  return `${termType}-${normalizeContextTermText(term)}`
-}
-
 async function optionalRequest<T>(request: () => Promise<T>) {
   try {
     return await request()
@@ -1785,192 +1797,6 @@ function upsertWorkflowMessage(message: CreatorWorkflowMessage) {
 async function refreshWorkflowSuggestion(taskId: string) {
   suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
   await refreshUsageStats(1, false)
-}
-
-function parseJsonArray(value: string | null | undefined) {
-  if (!value) {
-    return []
-  }
-
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return Array.isArray(parsed) ? parsed : [parsed]
-  } catch {
-    return [value]
-  }
-}
-
-function formatValue(value: unknown) {
-  if (value === null || value === undefined) {
-    return ''
-  }
-  if (typeof value === 'string') {
-    return value
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value)
-  }
-  return JSON.stringify(value, null, 2)
-}
-
-function preferenceItemText(value: unknown) {
-  if (typeof value === 'string') {
-    return value.trim()
-  }
-  if (isRecord(value)) {
-    const keys = ['preference', 'preferenceValue', 'content', 'insight', 'label', 'value', 'suggestion']
-    for (const key of keys) {
-      const text = value[key]
-      if (typeof text === 'string' && text.trim()) {
-        return text.trim()
-      }
-    }
-  }
-  return formatValue(value)
-}
-
-function getRecordText(value: unknown, key: string) {
-  if (isRecord(value)) {
-    const text = value[key]
-    return typeof text === 'string' ? text : ''
-  }
-  return ''
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function extractBvid(value: string) {
-  const matched = value.match(/BV[0-9A-Za-z]{10}/)
-  return matched?.[0] ?? ''
-}
-
-function clampScriptNumber(value: number, min: number, max: number) {
-  if (!Number.isFinite(value)) {
-    return min
-  }
-  return Math.min(max, Math.max(min, Math.trunc(value)))
-}
-
-function isWorkflowStatus(value: string | null): value is CreatorWorkflowStatus {
-  return Boolean(
-    value &&
-    [
-      'CREATED',
-      'CONTEXT_LOADING',
-      'WAITING_USER_INPUT',
-      'RUNNING',
-      'WAITING_CONFIRMATION',
-      'CONFIRMED',
-      'FAILED',
-      'CANCELLED',
-    ].includes(value),
-  )
-}
-
-function hasText(value: string) {
-  return value.trim().length > 0
-}
-
-function previewWorkflowMessage(value: string) {
-  const normalized = value.replace(/\s+/g, ' ').trim()
-  if (!normalized) {
-    return '空消息'
-  }
-  return normalized.length > 64 ? `${normalized.slice(0, 64)}...` : normalized
-}
-
-function workflowRoleLabel(role: string) {
-  const labels: Record<string, string> = {
-    SYSTEM: '系统',
-    USER: '用户',
-    AGENT: 'Agent',
-    TOOL: '工具',
-    RESULT: '结果',
-  }
-  return labels[role] ?? role
-}
-
-function workflowContentTypeLabel(contentType: string) {
-  const labels: Record<string, string> = {
-    TEXT: '文本',
-    MATERIAL_SUMMARY: '材料摘要',
-    RESULT_CARD: '结果卡片',
-    ERROR: '错误',
-  }
-  return labels[contentType] ?? contentType
-}
-
-function workflowStepTypeLabel(stepType: string) {
-  const labels: Record<string, string> = {
-    LOAD_CONTEXT: '读取上下文',
-    AGENT_REASONING: 'Agent 推理',
-    TOOL_CALL: '工具调用',
-    LLM_CALL: '模型调用',
-    SAVE_RESULT: '保存结果',
-    CONFIRM_RESULT: '确认结果',
-  }
-  return labels[stepType] ?? stepType
-}
-
-function workflowStepStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    PENDING: '待执行',
-    RUNNING: '执行中',
-    SUCCESS: '成功',
-    FAILED: '失败',
-  }
-  return labels[status] ?? status
-}
-
-function workflowSessionLabel(status: string) {
-  const labels: Record<string, string> = {
-    CREATED: '已创建',
-    CONTEXT_LOADING: '装载中',
-    WAITING_USER_INPUT: '等待补充',
-    RUNNING: '运行中',
-    WAITING_CONFIRMATION: '等待确认',
-    CONFIRMED: '已确认',
-    FAILED: '失败',
-    CANCELLED: '已取消',
-  }
-  return labels[status] ?? status
-}
-
-function evalStageLabel(stage: CreatorWorkflowStage) {
-  const labels: Record<CreatorWorkflowStage, string> = {
-    PRE_PUBLISH: '发布前优化',
-    FEEDBACK: '评论弹幕',
-    REPORT: '复盘报告',
-  }
-  return labels[stage]
-}
-
-function evalResultStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    SUCCESS: '成功',
-    FAILED: '失败',
-  }
-  return labels[status] ?? status
-}
-
-function isPrePublishSuggestionVisible(status: string) {
-  return ['WAITING_CONFIRMATION', 'CONFIRMED'].includes(status)
-}
-
-function hasPrePublishResult(status: string) {
-  return [
-    'PRE_PUBLISH_ANALYZED',
-    'FEEDBACK_ANALYZED',
-    'COMPETITOR_ANALYZED',
-    'ANALYZED',
-    'ARCHIVED',
-  ].includes(status)
-}
-
-function hasFeedbackResult(status: string) {
-  return ['FEEDBACK_ANALYZED', 'COMPETITOR_ANALYZED', 'ANALYZED', 'ARCHIVED'].includes(status)
 }
 
 function syncWorkflowSelection(messageId?: string) {
@@ -2121,79 +1947,126 @@ function handleDeveloperTestBackdropClick(event: MouseEvent) {
 
 
 
-function materialLabel(type: string) {
-  const labels: Record<string, string> = {
-    TITLE_DRAFT: '标题草稿',
-    DESCRIPTION_DRAFT: '简介草稿',
-    MANUSCRIPT: '文稿',
-    SUBTITLE: '字幕',
-  }
-  return labels[type] ?? type
-}
-
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
-    DRAFT: '草稿',
-    PRE_PUBLISH_ANALYZED: '已发布前优化',
-    FEEDBACK_ANALYZED: '已反馈分析',
-    COMPETITOR_ANALYZED: '已竞品分析',
-    ANALYZED: '已分析',
-    ARCHIVED: '已归档',
-  }
-  return labels[status] ?? status
-}
-
-function shortId(value: string | null | undefined) {
-  if (!value) {
-    return '-'
-  }
-  return value.length <= 14 ? value : `${value.slice(0, 8)}...${value.slice(-4)}`
-}
-
-function formatDate(value: string) {
-  if (!value) {
-    return '-'
-  }
-  return value.replace('T', ' ').slice(0, 16)
-}
-
-function formatMetric(value: number | null | undefined) {
-  if (value === null || value === undefined) {
-    return '-'
-  }
-  return value.toLocaleString('zh-CN')
-}
-
-function formatPercent(value: number | null | undefined) {
-  if (value === null || value === undefined) {
-    return '-'
-  }
-  return `${formatMetric(value)}%`
-}
-
-function statBarWidth(count: number, total: number) {
-  if (total <= 0 || count <= 0) {
-    return '0%'
-  }
-  return `${Math.max(8, Math.round((count / total) * 100))}%`
-}
-
-function preferenceModeNoteByMode(mode: CreatorPreferenceMode) {
-  if (mode === 'IGNORE_HISTORY') {
-    return '历史偏好不参与本次生成'
-  }
-  if (mode === 'EXPERIMENT') {
-    return '本期覆盖要求优先'
-  }
-  if (historicalPreferenceChips.value.length === 0) {
-    return '暂无可用历史偏好'
-  }
-  return `参考 ${historicalPreferenceChips.value.length} 条偏好`
-}
-
 function showError(error: unknown) {
   errorMessage.value = error instanceof Error ? error.message : '请求失败'
 }
+
+// 子组件只负责承载下沉后的模板，核心编排仍由主壳统一持有，
+// 这样任务恢复、SSE 连接和跨 tab 结果弹窗不会因为拆分产生第二份状态。
+provideCreatorWorkspace({
+  taskModule,
+  workflowModule,
+  feedbackModule,
+  guidance,
+  contextModule,
+  usageModule,
+  evaluationModule,
+  feedbackEvent,
+  showDeveloperTools,
+  successMessage,
+  errorMessage,
+  openResultModal,
+  closeResultModal,
+  openWorkflowMessageModal,
+  openWorkflowProcessModal,
+  openFeedbackChatDrawer,
+  closeFeedbackChatDrawer,
+  toggleFeedbackChatDrawer,
+  openDeveloperTest,
+  openUsageStats,
+  openTaskManager,
+  shell: {
+    askDeleteSelectedTask,
+    cancelEditTask,
+    canEnterFeedback,
+    canRunFeedbackAnalyze,
+    canRunPrePublishAnalyze,
+    changeUsageCategoryFilter,
+    changeUsagePage,
+    contextTermChips,
+    currentVideoType,
+    downloadReportMarkdown,
+    feedback,
+    feedbackAnalyzeForm,
+    feedbackDashboard,
+    feedbackFetchResult,
+    feedbackForm,
+    feedbackImportFile,
+    feedbackReport,
+    feedbackScriptBv,
+    feedbackScriptForm,
+    fetchFeedbackByBv,
+    formatDate,
+    formatDuration,
+    formatInputCount,
+    formatUsageToken,
+    hasConfirmedPrePublish,
+    hasFeedbackSampleInput,
+    hasSelectedTask,
+    hasTaskMaterialInput,
+    historicalPreferenceChips,
+    importFeedbackFile,
+    isAnalyzingFeedback,
+    isAnalyzingPrePublish,
+    isContextLibraryOpen,
+    openContextLibrary,
+    isCreatingTask,
+    isCurrentTaskExpanded,
+    isExportingReportMarkdown,
+    isFetchingFeedback,
+    isImportingFeedback,
+    isLoadingCreatorContextTerms,
+    isLoadingCreatorPreferences,
+    isLoadingUsageStats,
+    isSavingFeedback,
+    isUpdatingTask,
+    materialPreview,
+    openGuidanceEditor,
+    openResultModal,
+    openTaskManager,
+    openWorkflowMessageModal,
+    openWorkflowProcessModal,
+    preferenceModeNote,
+    preferenceModeOptions,
+    prePublishForm,
+    refreshUsageStats,
+    runFeedbackAnalyze,
+    runPrePublishAnalyze,
+    selectedPreferenceModeLabel,
+    selectedTask,
+    selectedTaskId,
+    shortId,
+    showDeveloperTools,
+    startEditTask,
+    statusLabel,
+    submitFeedback,
+    submitTask,
+    taskForm,
+    taskFormHint,
+    taskFormTitle,
+    taskManageMode,
+    taskSubmitLabel,
+    usageCallPage,
+    usageCategoryFilter,
+    usageCategoryLabel,
+    usageCategoryOptions,
+    usageCategorySummaries,
+    usageCurrentPage,
+    usageStatusClass,
+    usageStatusLabel,
+    usageSummary,
+    usageTotalPages,
+    videoTypeOptions,
+    workflowFailedStep,
+    workflowProcessSummary,
+    workflowRunningStep,
+    workflowSession,
+    workflowSteps,
+    handleFeedbackFileChange,
+    toggleCurrentTaskExpanded,
+    suggestion,
+  },
+})
 </script>
 
 <template>
@@ -2412,62 +2285,7 @@ function showError(error: unknown) {
 
     <div v-else class="creator-layout">
       <aside class="creator-task-rail">
-        <div v-if="selectedTask" class="creator-panel compact-panel creator-current-task-card">
-          <div class="creator-panel-title">
-            <div>
-              <span>当前视频</span>
-              <b>{{ selectedTask.taskName }}</b>
-            </div>
-            <div class="creator-panel-actions">
-              <button
-                type="button"
-                class="creator-secondary-action creator-mini-button"
-                @click="startEditTask(selectedTask.taskId)"
-              >
-                编辑
-              </button>
-              <button
-                type="button"
-                class="creator-ghost-button creator-mini-button"
-                @click="isCurrentTaskExpanded = !isCurrentTaskExpanded"
-              >
-                {{ isCurrentTaskExpanded ? '收起' : '展开' }}
-              </button>
-              <button
-                type="button"
-                class="creator-danger-action creator-mini-button"
-                @click="askDeleteSelectedTask"
-              >
-                删除
-              </button>
-            </div>
-          </div>
-          <div class="creator-current-task-meta">
-            <span>{{ selectedTask.videoType || '未分类' }}</span>
-            <span>{{ statusLabel(selectedTask.status) }}</span>
-            <span>{{ selectedTask.materials.length }} 份材料</span>
-            <span>{{ formatDate(selectedTask.updateTime) }}</span>
-          </div>
-          <code v-if="isCurrentTaskExpanded" class="creator-task-id">{{ selectedTask.taskId }}</code>
-          <div v-if="isCurrentTaskExpanded" class="creator-material-list">
-            <article v-for="material in materialPreview" :key="material.id">
-              <strong>{{ material.label }}</strong>
-              <p>{{ material.content }}</p>
-            </article>
-          </div>
-        </div>
-        <div v-else class="creator-panel compact-panel creator-task-empty-panel">
-          <div class="creator-panel-title">
-            <div>
-              <span>当前视频</span>
-              <b>未选择</b>
-            </div>
-          </div>
-          <p class="creator-muted">打开项目列表选择历史项目，或直接在右侧创建新视频项目。</p>
-          <button type="button" class="creator-secondary-action" @click="openTaskManager">
-            打开项目列表
-          </button>
-        </div>
+        <TaskListPanel />
       </aside>
 
       <section class="creator-main">
@@ -2523,88 +2341,7 @@ function showError(error: unknown) {
           <span>{{ errorMessage }}</span>
         </div>
 
-        <section v-if="activeStep === 'task'" class="creator-section">
-          <div class="creator-section-head">
-            <div>
-              <h3>{{ taskFormTitle }}</h3>
-            </div>
-            <div class="creator-action-row">
-              <button
-                v-if="taskManageMode === 'edit'"
-                type="button"
-                class="creator-secondary-action"
-                :disabled="isUpdatingTask"
-                @click="cancelEditTask"
-              >
-                取消编辑
-              </button>
-              <button
-                type="button"
-                class="creator-primary-button"
-                :disabled="!hasTaskMaterialInput || isCreatingTask || isUpdatingTask"
-                @click="submitTask"
-              >
-                {{ taskSubmitLabel }}
-              </button>
-            </div>
-          </div>
-
-          <p class="creator-inline-note">{{ taskFormHint }}</p>
-
-          <div class="creator-form-grid">
-            <label>
-              <span>视频主题</span>
-              <input
-                v-model="taskForm.taskName"
-                type="text"
-                maxlength="128"
-                placeholder="例如：第一次做个人知识库踩了哪些坑"
-              />
-            </label>
-            <label>
-              <span>内容类型</span>
-              <select v-model="taskForm.videoType">
-                <option v-for="option in videoTypeOptions" :key="option" :value="option">
-                  {{ option === 'GLOBAL' ? '全局通用' : option }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>现在想到的标题</span>
-              <input
-                v-model="taskForm.titleDraft"
-                type="text"
-                maxlength="200"
-                placeholder="先写一个粗标题，后面再优化"
-              />
-            </label>
-            <label>
-              <span>准备发到简介里的内容</span>
-              <textarea
-                v-model="taskForm.descriptionDraft"
-                maxlength="2000"
-                placeholder="可以先粘贴简介初稿、链接说明或补充信息"
-              ></textarea>
-            </label>
-            <label class="span-full">
-              <span>视频主要内容</span>
-              <textarea
-                v-model="taskForm.manuscript"
-                maxlength="20000"
-                placeholder="粘贴脚本、口播稿或整理后的文稿"
-              ></textarea>
-            </label>
-            <label class="span-full">
-              <span>字幕 / 补充材料</span>
-              <textarea
-                v-model="taskForm.subtitle"
-                maxlength="20000"
-                placeholder="可选：粘贴字幕文本"
-              ></textarea>
-            </label>
-          </div>
-
-        </section>
+        <MaterialsTab v-if="activeStep === 'task'" />
 
         <Teleport to="body">
           <div
@@ -2970,581 +2707,13 @@ function showError(error: unknown) {
           </div>
         </Teleport>
 
-        <section v-if="activeStep === 'prePublish'" class="creator-section">
-          <div class="creator-section-head">
-            <div>
-              <h3>发布方案</h3>
-            </div>
-            <div class="creator-action-row">
-              <button
-                type="button"
-                class="creator-secondary-action"
-                @click="openGuidanceEditor('prePublish')"
-              >
-                调整偏好
-              </button>
-              <button
-                v-if="showDeveloperTools"
-                type="button"
-                class="creator-secondary-action"
-                :disabled="!hasSelectedTask"
-                @click="openWorkflowMessageModal"
-              >
-                查看消息流
-              </button>
-              <button
-                v-if="suggestion"
-                type="button"
-                class="creator-secondary-action"
-                @click="openResultModal('prePublishSuggestion')"
-              >
-                {{ hasConfirmedPrePublish ? '查看建议' : '查看并确认' }}
-              </button>
-              <button
-                type="button"
-                class="creator-primary-button"
-                :disabled="!canRunPrePublishAnalyze || isAnalyzingPrePublish"
-                @click="runPrePublishAnalyze"
-              >
-                {{ isAnalyzingPrePublish ? '生成中...' : '生成发布方案' }}
-              </button>
-            </div>
-          </div>
+        <PrePublishTab v-if="activeStep === 'prePublish'" />
 
-          <div
-            v-if="showDeveloperTools"
-            class="creator-workflow-grid creator-workflow-grid-compact"
-          >
-            <section class="creator-workflow-steps" aria-label="工作流步骤回放">
-              <header class="creator-workflow-head">
-                <div>
-                  <h4>执行过程</h4>
-                </div>
-                <div class="creator-workflow-head-actions">
-                  <button
-                    type="button"
-                    class="creator-ghost-button"
-                    :disabled="!workflowSession"
-                    @click="openWorkflowProcessModal"
-                  >
-                    查看过程
-                  </button>
-                </div>
-              </header>
+        <FeedbackTab v-if="activeStep === 'feedback'" />
 
-              <article class="creator-workflow-process-summary">
-                <strong>{{ workflowProcessSummary }}</strong>
-                <span v-if="workflowRunningStep">当前步骤：{{ workflowRunningStep.stepName }}</span>
-                <span v-else-if="workflowFailedStep">失败原因：{{ workflowFailedStep.errorMessage || '未知错误' }}</span>
-                <span v-else>过程细节、原始输出和模型开销已收进弹窗，避免干扰建议阅读。</span>
-              </article>
-            </section>
-          </div>
+        <ReportTab v-if="activeStep === 'report'" />
 
-          <article class="creator-preference-panel">
-            <div class="creator-preference-head">
-              <div>
-                <span>偏好记忆</span>
-                <strong>{{ selectedPreferenceModeLabel }}</strong>
-              </div>
-              <b>{{ isLoadingCreatorPreferences ? '读取中' : preferenceModeNote }}</b>
-            </div>
-
-            <div class="creator-preference-modes" role="group" aria-label="偏好使用方式">
-              <button
-                v-for="option in preferenceModeOptions"
-                :key="option.value"
-                type="button"
-                :class="{ active: prePublishForm.preferenceMode === option.value }"
-                @click="prePublishForm.preferenceMode = option.value"
-              >
-                <span>{{ option.label }}</span>
-                <small>{{ option.description }}</small>
-              </button>
-            </div>
-
-            <div class="creator-preference-tags">
-              <span
-                v-for="chip in historicalPreferenceChips"
-                :key="`${chip.sourceTaskId}-${chip.text}`"
-                :class="{ muted: prePublishForm.preferenceMode === 'IGNORE_HISTORY' }"
-                :title="`来源任务：${chip.sourceTaskId}`"
-              >
-                {{ chip.text }}
-              </span>
-              <em v-if="!isLoadingCreatorPreferences && historicalPreferenceChips.length === 0">
-                暂无历史偏好
-              </em>
-            </div>
-          </article>
-
-          <article class="creator-preference-panel">
-            <div class="creator-preference-head">
-              <div>
-                <span>类型语境库</span>
-                <strong>{{ currentVideoType === 'GLOBAL' ? '全局通用' : currentVideoType }}</strong>
-              </div>
-              <button
-                type="button"
-                class="creator-secondary-action creator-mini-button"
-                @click="isContextLibraryOpen = true"
-              >
-                管理语境
-              </button>
-            </div>
-
-            <div class="creator-preference-tags">
-              <span v-for="chip in contextTermChips" :key="chip.id" :title="chip.title">
-                {{ chip.label }} · {{ chip.text }}
-              </span>
-              <em v-if="!isLoadingCreatorContextTerms && contextTermChips.length === 0">
-                当前类型暂无语境词
-              </em>
-              <em v-else-if="isLoadingCreatorContextTerms">读取中</em>
-            </div>
-          </article>
-
-          <div class="creator-form-grid">
-            <label>
-              <span>创作目标</span>
-              <textarea
-                v-model="prePublishForm.creatorPreference"
-                maxlength="500"
-                placeholder="这期最想让观众记住什么？也可以补充表达偏好"
-              ></textarea>
-            </label>
-            <label>
-              <span>风格偏好</span>
-              <input
-                v-model="prePublishForm.titleStyle"
-                type="text"
-                maxlength="100"
-                placeholder="更稳重 / 更有网感 / 更像教程 / 更像故事"
-              />
-            </label>
-            <label class="span-full">
-              <span>额外要求</span>
-              <textarea
-                v-model="prePublishForm.extraRequirement"
-                maxlength="500"
-                placeholder="补充标题、简介或标签要求"
-              ></textarea>
-            </label>
-          </div>
-
-          <article v-if="suggestion" class="creator-result-entry">
-            <div>
-              <strong>发布方案已生成</strong>
-              <span>
-                {{
-                  hasConfirmedPrePublish
-                    ? '本轮方案已采用，可以继续导入观众反馈。'
-                    : '进入弹窗查看标题、简介、标签建议，并决定是否采用。'
-                }}
-              </span>
-            </div>
-            <button
-              type="button"
-              class="creator-primary-button"
-              @click="openResultModal('prePublishSuggestion')"
-            >
-              {{ hasConfirmedPrePublish ? '查看建议' : '查看并确认建议' }}
-            </button>
-          </article>
-
-        </section>
-
-        <section v-if="activeStep === 'feedback'" class="creator-section">
-          <div class="creator-section-head">
-            <div>
-              <h3>观众反馈</h3>
-            </div>
-            <div class="creator-action-row">
-              <button
-                type="button"
-                class="creator-secondary-action"
-                @click="openGuidanceEditor('feedback')"
-              >
-                分析偏好
-              </button>
-              <button
-                v-if="feedbackDashboard || feedbackFetchResult"
-                type="button"
-                class="creator-secondary-action"
-                @click="openResultModal('feedbackDashboard')"
-              >
-                查看导入结果
-              </button>
-              <button
-                v-if="feedbackReport"
-                type="button"
-                class="creator-secondary-action"
-                @click="openResultModal('feedbackReport')"
-              >
-                查看分析结果
-              </button>
-              <button
-                type="button"
-                class="creator-secondary-action"
-                :disabled="!canEnterFeedback || !feedbackImportFile || isImportingFeedback || isFetchingFeedback"
-                @click="importFeedbackFile"
-              >
-                {{ isImportingFeedback ? '导入中...' : '导入文件' }}
-              </button>
-              <button
-                type="button"
-                class="creator-secondary-action"
-                :disabled="!canEnterFeedback || !hasFeedbackSampleInput || isSavingFeedback || isFetchingFeedback"
-                @click="submitFeedback"
-              >
-                {{ isSavingFeedback ? '保存中...' : '保存手动粘贴' }}
-              </button>
-              <button
-                type="button"
-                class="creator-primary-button"
-                :disabled="!canRunFeedbackAnalyze"
-                @click="runFeedbackAnalyze"
-              >
-                {{ isAnalyzingFeedback ? '分析中...' : '读懂反馈' }}
-              </button>
-            </div>
-          </div>
-
-          <div class="creator-form-grid">
-            <article class="span-full creator-script-panel">
-              <div class="creator-script-panel-head">
-                <div>
-                  <span>粘贴视频链接 / BV</span>
-                  <p>输入单条视频链接或 BV 号后，系统会读取这条视频的评论和弹幕，并整理成反馈数据。</p>
-                </div>
-                <button
-                  type="button"
-                  class="creator-primary-button"
-                  :disabled="!canEnterFeedback || !feedbackScriptBv || isFetchingFeedback"
-                  @click="fetchFeedbackByBv"
-                >
-                  {{ isFetchingFeedback ? '读取中...' : '自动读取反馈' }}
-                </button>
-              </div>
-              <label class="creator-script-main-input">
-                <span>视频链接 / BV</span>
-                <input
-                  v-model="feedbackScriptForm.bvInput"
-                  type="text"
-                  maxlength="200"
-                  placeholder="BVxxxx 或 https://www.bilibili.com/video/BVxxxx"
-                />
-              </label>
-              <details class="creator-advanced-panel">
-                <summary>高级采集设置</summary>
-                <div class="creator-script-grid">
-                  <label>
-                    <span>主楼评论数</span>
-                    <input
-                      v-model.number="feedbackScriptForm.maxComments"
-                      type="number"
-                      min="0"
-                      max="500"
-                    />
-                  </label>
-                  <label>
-                    <span>每条回复数</span>
-                    <input
-                      v-model.number="feedbackScriptForm.maxRepliesPerComment"
-                      type="number"
-                      min="0"
-                      max="100"
-                    />
-                  </label>
-                  <label>
-                    <span>弹幕数</span>
-                    <input
-                      v-model.number="feedbackScriptForm.maxDanmaku"
-                      type="number"
-                      min="0"
-                      max="2000"
-                    />
-                  </label>
-                  <label>
-                    <span>输出格式</span>
-                    <select v-model="feedbackScriptForm.format">
-                      <option value="both">JSON + TXT</option>
-                      <option value="json">只输出 JSON</option>
-                    </select>
-                  </label>
-                </div>
-              </details>
-            </article>
-
-            <label class="span-full creator-file-field">
-              <span>上传文件</span>
-              <!-- 切换任务时重建文件输入框，避免浏览器保留上一个任务选择过的本地文件。 -->
-              <input
-                :key="selectedTaskId"
-                type="file"
-                accept=".json,.txt,application/json,text/plain"
-                :disabled="!canEnterFeedback || isImportingFeedback || isFetchingFeedback"
-                @change="handleFeedbackFileChange"
-              />
-              <small>
-                可以导入已经整理好的评论或弹幕文件，支持 JSON/TXT。
-              </small>
-            </label>
-            <label>
-              <span>手动粘贴评论</span>
-              <textarea
-                v-model="feedbackForm.commentSamples"
-                maxlength="20000"
-                placeholder="粘贴已整理的评论样例"
-              ></textarea>
-            </label>
-            <label>
-              <span>手动粘贴弹幕</span>
-              <textarea
-                v-model="feedbackForm.danmakuSamples"
-                maxlength="20000"
-                placeholder="粘贴弹幕样例，可换行分隔"
-              ></textarea>
-            </label>
-            <label class="span-full">
-              <span>补充背景</span>
-              <textarea
-                v-model="feedbackForm.extraContext"
-                maxlength="500"
-                placeholder="说明样例来源、时间段或反馈场景"
-              ></textarea>
-            </label>
-            <label>
-              <span>分析重点</span>
-              <textarea
-                v-model="feedbackAnalyzeForm.analysisFocus"
-                maxlength="500"
-                placeholder="如：判断观众是否理解项目价值"
-              ></textarea>
-            </label>
-            <label>
-              <span>额外要求</span>
-              <textarea
-                v-model="feedbackAnalyzeForm.extraRequirement"
-                maxlength="500"
-                placeholder="补充报告输出偏好"
-              ></textarea>
-            </label>
-          </div>
-
-          <p v-if="feedback" class="creator-inline-note">
-            样例已于 {{ formatDate(feedback.updateTime) }} 保存，导入结果和分析报告请通过上方按钮查看。
-          </p>
-        </section>
-
-        <section v-if="activeStep === 'report'" class="creator-section">
-          <div class="creator-section-head">
-            <div>
-              <h3>复盘报告</h3>
-            </div>
-            <div v-if="selectedTaskId" class="creator-action-row">
-              <button
-                type="button"
-                class="creator-secondary-action"
-                :disabled="isExportingReportMarkdown"
-                @click="downloadReportMarkdown"
-              >
-                {{ isExportingReportMarkdown ? '导出中...' : '导出复盘 Markdown' }}
-              </button>
-              <span v-if="feedbackReport" class="creator-parse-status">
-                {{ feedbackReport.parseStatus }}
-              </span>
-              <button
-                v-if="feedbackReport"
-                type="button"
-                class="creator-primary-button"
-                @click="openResultModal('feedbackReport')"
-              >
-                打开分析结果
-              </button>
-            </div>
-          </div>
-
-          <article v-if="feedbackReport" class="creator-result-entry">
-            <div>
-              <strong>复盘报告已生成</strong>
-              <span>
-                先看一句话结论、保留项、修改清单和下一期选题；需要归档时可导出 Markdown。
-              </span>
-            </div>
-            <button
-              type="button"
-              class="creator-primary-button"
-              @click="openResultModal('feedbackReport')"
-            >
-              查看完整报告
-            </button>
-          </article>
-
-          <article v-else class="creator-empty-result">
-            <strong>还没有反馈报告</strong>
-            <span>先提交观众反馈并点击“读懂反馈”，生成后这里会给出下一期行动建议。</span>
-          </article>
-        </section>
-
-        <section v-if="activeStep === 'usage'" class="creator-section creator-usage-section">
-          <div class="creator-section-head">
-            <div>
-              <h3>API 开销统计</h3>
-            </div>
-            <div class="creator-action-row">
-              <span class="creator-parse-status">
-                {{ isLoadingUsageStats ? '读取中' : `${usageSummary?.callCount ?? 0} 次调用` }}
-              </span>
-              <button
-                type="button"
-                class="creator-secondary-action"
-                :disabled="!hasSelectedTask || isLoadingUsageStats"
-                @click="refreshUsageStats(1)"
-              >
-                {{ isLoadingUsageStats ? '刷新中...' : '刷新统计' }}
-              </button>
-            </div>
-          </div>
-
-          <p class="creator-inline-note">
-            这里按当前任务汇总文本 LLM、向量化模型和 Rerank 模型的调用记录，便于核对每一步 AI 调用的耗时、Token 和失败原因。
-          </p>
-
-          <div class="creator-usage-overview" aria-label="当前任务 API 开销总览">
-            <article class="creator-usage-card">
-              <span>总 Token</span>
-              <strong>{{ formatUsageToken(usageSummary?.totalTokens) }}</strong>
-              <small>仅统计模型实际返回的 token usage</small>
-            </article>
-            <article class="creator-usage-card">
-              <span>总耗时</span>
-              <strong>{{ formatDuration(usageSummary?.totalElapsedMs) }}</strong>
-              <small>平均 {{ formatDuration(usageSummary?.averageElapsedMs) }}</small>
-            </article>
-            <article class="creator-usage-card danger">
-              <span>失败调用</span>
-              <strong>{{ usageSummary?.failedCount ?? 0 }}</strong>
-              <small>跳过 {{ usageSummary?.skippedCount ?? 0 }} 次</small>
-            </article>
-          </div>
-
-          <div class="creator-usage-category-grid" aria-label="模型分类开销">
-            <article
-              v-for="item in usageCategorySummaries"
-              :key="item.modelCategory"
-              class="creator-usage-category"
-            >
-              <header>
-                <div>
-                  <span>{{ usageCategoryLabel(item.modelCategory) }}</span>
-                  <strong>{{ item.callCount }} 次调用</strong>
-                </div>
-                <small>{{ item.failedCount > 0 ? `${item.failedCount} 失败` : '无失败' }}</small>
-              </header>
-              <div class="creator-usage-category-metrics">
-                <span>
-                  Token
-                  <b>{{ formatUsageToken(item.totalTokens) }}</b>
-                </span>
-                <span>
-                  耗时
-                  <b>{{ formatDuration(item.totalElapsedMs) }}</b>
-                </span>
-                <span>
-                  成功
-                  <b>{{ item.successCount }}</b>
-                </span>
-                <span>
-                  跳过
-                  <b>{{ item.skippedCount }}</b>
-                </span>
-              </div>
-            </article>
-          </div>
-
-          <div class="creator-usage-toolbar">
-            <div class="creator-usage-filter" role="group" aria-label="模型类型筛选">
-              <button
-                v-for="option in usageCategoryOptions"
-                :key="option.value"
-                type="button"
-                :class="{ active: usageCategoryFilter === option.value }"
-                :disabled="isLoadingUsageStats"
-                @click="changeUsageCategoryFilter(option.value)"
-              >
-                {{ option.label }}
-              </button>
-            </div>
-            <span>
-              共 {{ usageCallPage?.total ?? 0 }} 条明细，第 {{ usageCurrentPage }} / {{ usageTotalPages }} 页
-            </span>
-          </div>
-
-          <div
-            v-if="usageCallPage && usageCallPage.items.length > 0"
-            class="creator-usage-call-list"
-            aria-label="模型调用明细"
-          >
-            <article
-              v-for="record in usageCallPage.items"
-              :key="record.callId"
-              class="creator-usage-call-item"
-            >
-              <header>
-                <div>
-                  <span>{{ usageCategoryLabel(record.modelCategory) }}</span>
-                  <strong>{{ record.scene || '未记录场景' }}</strong>
-                </div>
-                <b
-                  class="creator-usage-status"
-                  :class="usageStatusClass(record.status)"
-                >
-                  {{ usageStatusLabel(record.status) }}
-                </b>
-              </header>
-              <div class="creator-usage-call-meta">
-                <span>模型：{{ record.modelName || '未返回' }}</span>
-                <span>Token：{{ formatUsageToken(record.totalTokens) }}</span>
-                <span>耗时：{{ formatDuration(record.elapsedMs) }}</span>
-                <span>输入：{{ formatInputCount(record) }}</span>
-                <span>时间：{{ formatDate(record.createTime) }}</span>
-              </div>
-              <div class="creator-usage-call-trace">
-                <code>call {{ shortId(record.callId) }}</code>
-                <code v-if="record.traceId">trace {{ shortId(record.traceId) }}</code>
-                <code v-if="record.requestId">request {{ shortId(record.requestId) }}</code>
-              </div>
-              <p v-if="record.errorMessage" class="creator-usage-error">
-                {{ record.errorMessage }}
-              </p>
-            </article>
-          </div>
-
-          <article v-else class="creator-empty-result">
-            <strong>还没有模型调用记录</strong>
-            <span>运行发布前优化、评论弹幕分析、反馈追问或证据索引后，这里会显示当前任务的调用明细。</span>
-          </article>
-
-          <div class="creator-usage-pagination">
-            <button
-              type="button"
-              class="creator-secondary-action"
-              :disabled="usageCurrentPage <= 1 || isLoadingUsageStats"
-              @click="changeUsagePage(-1)"
-            >
-              上一页
-            </button>
-            <button
-              type="button"
-              class="creator-secondary-action"
-              :disabled="usageCurrentPage >= usageTotalPages || isLoadingUsageStats"
-              @click="changeUsagePage(1)"
-            >
-              下一页
-            </button>
-          </div>
-        </section>
+        <UsageTab v-if="activeStep === 'usage'" />
       </section>
     </div>
 
@@ -3965,50 +3134,43 @@ function showError(error: unknown) {
                 </div>
               </article>
               <article class="creator-result-block span-full">
-                <span>标题建议</span>
-                <div class="creator-list">
-                  <section v-for="(item, index) in titleSuggestions" :key="index">
-                    <strong>{{ getRecordText(item, 'title') || formatValue(item) }}</strong>
-                    <p v-if="getRecordText(item, 'viewerPsychology')">
-                      观众心理：{{ getRecordText(item, 'viewerPsychology') }}
-                    </p>
-                    <p v-if="getRecordText(item, 'clickReason')">
-                      点击理由：{{ getRecordText(item, 'clickReason') }}
-                    </p>
-                    <p v-if="getRecordText(item, 'trustRisk')">
-                      信任风险：{{ getRecordText(item, 'trustRisk') }}
-                    </p>
-                    <p v-if="getRecordText(item, 'bestScenario')">
-                      适用场景：{{ getRecordText(item, 'bestScenario') }}
-                    </p>
-                    <p v-if="getRecordText(item, 'reason')">
-                      理由：{{ getRecordText(item, 'reason') }}
-                    </p>
-                    <p v-if="getRecordText(item, 'risk')">
-                      风险：{{ getRecordText(item, 'risk') }}
-                    </p>
-                    <button
-                      type="button"
-                      class="creator-ghost-button creator-mini-button"
-                      :disabled="
-                        isSavingCreatorContextTerm &&
-                        savingContextTermKey ===
-                          contextSaveKey(
-                            getRecordText(item, 'title') || formatValue(item),
+                <span>标题建议{{ titleSuggestionCards.length ? `（${titleSuggestionCards.length} 个）` : '' }}</span>
+                <p v-if="titleSuggestionCards.length === 0" class="creator-muted">未解析到标题建议</p>
+                <!-- 用卡片网格替代原来的纯文本列表，每条标题独立成卡，带采纳/复制/反馈 -->
+                <div v-if="titleSuggestionCards.length > 0" class="suggestion-card-grid">
+                  <SuggestionCard
+                    v-for="(cardItem, index) in titleSuggestionCards"
+                    :key="index"
+                    type="title"
+                    :item="cardItem"
+                    :rank="index + 1"
+                    :reporting="feedbackEvent.isReporting(cardItem.content, 'TITLE_ACCEPTED')"
+                    :accepted="acceptedTitleContents.has(cardItem.content)"
+                    @accept="onAcceptSuggestion('title', $event, titleSuggestionCards.indexOf(cardItem) + 1)"
+                    @copy="onCopySuggestion"
+                    @reject="(item, reason, reasonText) => onRejectSuggestion('title', item, reason, reasonText, titleSuggestionCards.indexOf(item) + 1)"
+                  >
+                    <!-- 二级操作：保留原有"保存为标题套路"，作为沉淀到语境库的入口 -->
+                    <template #secondary-actions>
+                      <button
+                        type="button"
+                        class="creator-ghost-button creator-mini-button"
+                        :disabled="
+                          isSavingCreatorContextTerm &&
+                          savingContextTermKey === contextSaveKey(cardItem.content, 'TITLE_PATTERN')
+                        "
+                        @click="
+                          saveContextTermFromSuggestion(
+                            cardItem.content,
                             'TITLE_PATTERN',
+                            cardItem.reason || cardItem.clickReason,
                           )
-                      "
-                      @click="
-                        saveContextTermFromSuggestion(
-                          getRecordText(item, 'title') || formatValue(item),
-                          'TITLE_PATTERN',
-                          getRecordText(item, 'reason') || getRecordText(item, 'clickReason'),
-                        )
-                      "
-                    >
-                      保存为标题套路
-                    </button>
-                  </section>
+                        "
+                      >
+                        保存为标题套路
+                      </button>
+                    </template>
+                  </SuggestionCard>
                 </div>
               </article>
               <article class="creator-result-block">
@@ -4026,24 +3188,39 @@ function showError(error: unknown) {
                 </ul>
               </article>
               <article class="creator-result-block">
-                <span>标签建议</span>
-                <div class="creator-chip-list">
-                  <span v-for="(item, index) in tagSuggestions" :key="index" class="creator-context-chip">
-                    <b>{{ formatValue(item) }}</b>
-                    <button
-                      type="button"
-                      :disabled="isSavingCreatorContextTerm"
-                      @click="
-                        saveContextTermFromSuggestion(
-                          formatValue(item),
-                          'KEYWORD',
-                          '来自发布前优化的标签建议',
-                        )
-                      "
-                    >
-                      保存
-                    </button>
-                  </span>
+                <span>标签建议{{ tagSuggestionCards.length ? `（${tagSuggestionCards.length} 个）` : '' }}</span>
+                <p v-if="tagSuggestionCards.length === 0" class="creator-muted">未解析到标签建议</p>
+                <!-- 标签建议用紧凑卡片网格，每条可采纳/复制/反馈 -->
+                <div v-if="tagSuggestionCards.length > 0" class="suggestion-card-grid suggestion-card-grid-tags">
+                  <SuggestionCard
+                    v-for="(cardItem, index) in tagSuggestionCards"
+                    :key="index"
+                    type="tag"
+                    :item="cardItem"
+                    :rank="index + 1"
+                    :reporting="feedbackEvent.isReporting(cardItem.content, 'TAG_ACCEPTED')"
+                    :accepted="acceptedTagContents.has(cardItem.content)"
+                    @accept="onAcceptSuggestion('tag', $event)"
+                    @copy="onCopySuggestion"
+                    @reject="(item, reason, reasonText) => onRejectSuggestion('tag', item, reason, reasonText)"
+                  >
+                    <template #secondary-actions>
+                      <button
+                        type="button"
+                        class="creator-ghost-button creator-mini-button"
+                        :disabled="isSavingCreatorContextTerm"
+                        @click="
+                          saveContextTermFromSuggestion(
+                            cardItem.content,
+                            'KEYWORD',
+                            '来自发布前优化的标签建议',
+                          )
+                        "
+                      >
+                        存为关键词
+                      </button>
+                    </template>
+                  </SuggestionCard>
                 </div>
               </article>
               <article class="creator-result-block">

@@ -53,6 +53,19 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # 每次启动自动执行 init.sql，确保新增表/种子提示词在已有数据库中也生效
+  db-init:
+    image: mysql:8.4
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-link_agent_root_password}
+    volumes:
+      - ./backend/src/main/resources/sql/init.sql:/init.sql:ro
+    entrypoint: ["sh", "-c", "mysql -h mysql -u root -p\"$MYSQL_ROOT_PASSWORD\" --default-character-set=utf8mb4 link_agent < /init.sql && echo 'init.sql executed successfully'"]
+    restart: "no"
+
   milvus:
     image: milvusdb/milvus:v2.4.17
     command: ["milvus", "run", "standalone"]
@@ -81,7 +94,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      DB_URL: "jdbc:mysql://mysql:3306/link_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai"
+      DB_URL: "jdbc:mysql://mysql:3306/link_agent?useUnicode=true&characterEncoding=utf8mb4&serverTimezone=Asia/Shanghai"
       DB_USERNAME: ${MYSQL_USER:-link_agent}
       DB_PASSWORD: ${MYSQL_PASSWORD:-link_agent_password}
       REDIS_HOST: redis
@@ -125,6 +138,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       milvus:

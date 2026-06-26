@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.workflow.service;
 
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
+import com.link.linkagent.creator.profile.service.CreatorProfileService;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionResponse;
@@ -72,6 +73,7 @@ public class CreatorWorkflowService {
     private final LlmApiUsageService llmApiUsageService;
     private final RuntimeSettingService runtimeSettingService;
     private final CreatorPreferenceService creatorPreferenceService;
+    private final CreatorProfileService creatorProfileService;
 
     public CreatorWorkflowService(CreatorTaskMapper creatorTaskMapper,
                                   CreatorSuggestionMapper creatorSuggestionMapper,
@@ -80,7 +82,8 @@ public class CreatorWorkflowService {
                                   CreatorWorkflowEventPublisher workflowEventPublisher,
                                   LlmApiUsageService llmApiUsageService,
                                   RuntimeSettingService runtimeSettingService,
-                                  CreatorPreferenceService creatorPreferenceService) {
+                                  CreatorPreferenceService creatorPreferenceService,
+                                  CreatorProfileService creatorProfileService) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorWorkflowMapper = creatorWorkflowMapper;
@@ -89,6 +92,7 @@ public class CreatorWorkflowService {
         this.llmApiUsageService = llmApiUsageService;
         this.runtimeSettingService = runtimeSettingService;
         this.creatorPreferenceService = creatorPreferenceService;
+        this.creatorProfileService = creatorProfileService;
     }
 
     @Transactional
@@ -210,6 +214,10 @@ public class CreatorWorkflowService {
 
         CreatorWorkflowStepRecord currentStep = null;
         try {
+            // 确保创作者画像存在（不存在时从历史偏好中 LLM 初始化）
+            // 放在分析开始前，是为了让首次使用的用户也能体验到个性化建议
+            creatorProfileService.ensureProfile(sessionRecord.getUserId());
+
             updateSessionStatus(
                     sessionRecord.getTaskId(),
                     sessionRecord.getSessionId(),
@@ -413,7 +421,7 @@ public class CreatorWorkflowService {
                 null
         );
 
-        // 将用户"采用"行为写入偏好，让后续发布前优化能参考用户实际偏好的标题风格
+        // 将用户"采用"行为写入偏好和事件流水，让后续发布前优化能参考用户实际偏好的标题风格
         try {
             CreatorTaskRecord taskRecord = getTaskRecord(taskId);
             String styleDescription = extractTitleStyleFromSuggestion(suggestionRecord);
@@ -425,8 +433,18 @@ public class CreatorWorkflowService {
                         "采用发布前优化建议：" + styleDescription
                 );
             }
+            // 记录事件到创作者事件流水（方案一：画像更新的信号源）
+            creatorProfileService.recordEvent(
+                    taskRecord.getUserId(),
+                    "SUGGESTION_ADOPTED",
+                    taskId,
+                    java.util.Map.of("suggestionId", suggestionRecord.getSuggestionId(),
+                            "styleDescription", TextUtil.trimToDefault(styleDescription, "已采用"))
+            );
+            // 检查是否达到画像更新阈值
+            creatorProfileService.tryTriggerProfileUpdate(taskRecord.getUserId());
         } catch (Exception ignored) {
-            // 偏好记录不影响主流程
+            // 偏好记录和事件记录不影响主流程
         }
 
         CreatorWorkflowSessionRecord updatedSession = creatorWorkflowMapper.findSession(
@@ -505,7 +523,7 @@ public class CreatorWorkflowService {
 
     private PrePublishAnalyzeRequest mergeWorkflowGuidance(String sessionId, PrePublishAnalyzeRequest request) {
         PrePublishAnalyzeRequest safeRequest = request == null
-                ? new PrePublishAnalyzeRequest(null, null, null, null, null)
+                ? new PrePublishAnalyzeRequest(null, null, null, null, null, null)
                 : request;
         StringBuilder builder = new StringBuilder();
         if (TextUtil.hasText(safeRequest.customGuidance())) {
@@ -536,7 +554,8 @@ public class CreatorWorkflowService {
                 safeRequest.creatorPreference(),
                 safeRequest.titleStyle(),
                 safeRequest.extraRequirement(),
-                safeRequest.preferenceMode()
+                safeRequest.preferenceMode(),
+                safeRequest.analysisStrategy()
         );
     }
 
@@ -733,7 +752,7 @@ public class CreatorWorkflowService {
     }
 
     private Map<String, Object> buildStepPayload(CreatorWorkflowStepRecord stepRecord) {
-        return payload(
+        Map<String, Object> stepPayload = payload(
                 "stepId", stepRecord.getStepId(),
                 "stepType", stepRecord.getStepType(),
                 "stepName", stepRecord.getStepName(),
@@ -742,6 +761,19 @@ public class CreatorWorkflowService {
                 "outputSummary", stepRecord.getOutputSummary(),
                 "errorMessage", stepRecord.getErrorMessage()
         );
+        // 方案二：面向用户展示的字段，让前端不需要理解业务逻辑就能渲染时间轴
+        // userLabel 用于时间轴节点标题，userDetail 用于节点展开后的详情
+        stepPayload.put("userLabel", stepRecord.getStepName());
+        if (TextUtil.hasText(stepRecord.getOutputSummary())) {
+            stepPayload.put("userDetail", stepRecord.getOutputSummary());
+        }
+        // 步骤耗时：从 startTime 和 endTime 计算，让前端展示每步用时
+        if (stepRecord.getStartTime() != null && stepRecord.getEndTime() != null) {
+            long durationMs = java.time.Duration.between(
+                    stepRecord.getStartTime(), stepRecord.getEndTime()).toMillis();
+            stepPayload.put("durationMs", durationMs);
+        }
+        return stepPayload;
     }
 
     private Map<String, Object> payload(Object... keyValues) {

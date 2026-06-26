@@ -219,9 +219,13 @@ export function useParticleNetwork(
     const seenKeys = new Set<string>()
 
     for (let i = 0; i < len; i++) {
+      const a = particles[i]
+      if (!a) continue
       for (let j = i + 1; j < len; j++) {
-        const dx = particles[i].x - particles[j].x
-        const dy = particles[i].y - particles[j].y
+        const b = particles[j]
+        if (!b) continue
+        const dx = a.x - b.x
+        const dy = a.y - b.y
         const dist = Math.sqrt(dx * dx + dy * dy)
         const key = pairKey(i, j)
         seenKeys.add(key)
@@ -230,11 +234,13 @@ export function useParticleNetwork(
           ? Math.pow(1 - dist / opts.linkDist, 1.5) * 0.55
           : 0
 
-        let conn = connections.get(key)
+        // 显式标注类型：connections.get 返回 Connection | undefined，
+        // 赋值分支后 conn 必为 Connection，但 TS 无法自动收窄 let 变量，需手动标注
+        let conn: Connection | undefined = connections.get(key)
         if (!conn) {
           conn = {
-            from: particles[i],
-            to: particles[j],
+            from: a,
+            to: b,
             opacity: 0,
             wasAlive: false,
             birthGlow: 0,
@@ -244,21 +250,23 @@ export function useParticleNetwork(
           }
           connections.set(key, conn)
         }
+        // 经上方分支后 conn 必然存在，用非空断言收窄，避免后续每处都判空
+        const c = conn!
 
         // 平滑过渡
-        if (targetOpacity > conn.opacity) {
-          conn.opacity += (targetOpacity - conn.opacity) * LINK_FADE_IN_SPEED
+        if (targetOpacity > c.opacity) {
+          c.opacity += (targetOpacity - c.opacity) * LINK_FADE_IN_SPEED
         } else {
-          conn.opacity += (targetOpacity - conn.opacity) * LINK_FADE_OUT_SPEED
+          c.opacity += (targetOpacity - c.opacity) * LINK_FADE_OUT_SPEED
         }
 
         // 出生检测
-        if (!conn.wasAlive && conn.opacity > 0.08) {
-          conn.wasAlive = true
-          conn.birthGlow = 1
+        if (!c.wasAlive && c.opacity > 0.08) {
+          c.wasAlive = true
+          c.birthGlow = 1
         }
-        if (conn.opacity < 0.02) {
-          conn.wasAlive = false
+        if (c.opacity < 0.02) {
+          c.wasAlive = false
         }
       }
     }
@@ -303,6 +311,8 @@ export function useParticleNetwork(
   function updateSignals() {
     for (let i = signals.length - 1; i >= 0; i--) {
       const s = signals[i]
+      // 倒序循环保证 i 在数组范围内，收窄类型让 TS 满意
+      if (!s) continue
       if (s.forward) {
         s.t += s.speed
         if (s.t >= 1) s.t -= 1
@@ -325,6 +335,8 @@ export function useParticleNetwork(
   function updateRipples() {
     for (let i = ripples.length - 1; i >= 0; i--) {
       const rp = ripples[i]
+      // 倒序循环保证 i 在数组范围内，收窄类型让 TS 满意
+      if (!rp) continue
       rp.r += rp.speed
       rp.alpha = 0.5 * (1 - rp.r / rp.maxR)
       if (rp.r >= rp.maxR || rp.alpha <= 0.01) {

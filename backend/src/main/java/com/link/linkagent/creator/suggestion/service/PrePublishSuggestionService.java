@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.core.AgentExecutor;
 import com.link.linkagent.creator.context.service.CreatorContextService;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
+import com.link.linkagent.creator.profile.service.CreatorProfileService;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
+import com.link.linkagent.creator.suggestion.model.AnalysisStrategy;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionResponse;
 import com.link.linkagent.creator.suggestion.model.PrePublishAnalyzeRequest;
@@ -46,11 +48,13 @@ public class PrePublishSuggestionService {
     private static final String PREFERENCE_MODE_USE_HISTORY = "USE_HISTORY";
     private static final String PREFERENCE_MODE_IGNORE_HISTORY = "IGNORE_HISTORY";
     private static final String PREFERENCE_MODE_EXPERIMENT = "EXPERIMENT";
+    private static final int STRATEGY_PROMPT_MAX_LENGTH = 800;
 
     private final CreatorTaskMapper creatorTaskMapper;
     private final CreatorSuggestionMapper creatorSuggestionMapper;
     private final CreatorPreferenceService creatorPreferenceService;
     private final CreatorContextService creatorContextService;
+    private final CreatorProfileService creatorProfileService;
     private final LLMService llmService;
     private final AgentExecutor agentExecutor;
     private final ObjectMapper objectMapper;
@@ -61,6 +65,7 @@ public class PrePublishSuggestionService {
                                        CreatorSuggestionMapper creatorSuggestionMapper,
                                        CreatorPreferenceService creatorPreferenceService,
                                        CreatorContextService creatorContextService,
+                                       CreatorProfileService creatorProfileService,
                                        LLMService llmService,
                                        AgentExecutor agentExecutor,
                                        ObjectMapper objectMapper,
@@ -69,6 +74,7 @@ public class PrePublishSuggestionService {
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorPreferenceService = creatorPreferenceService;
         this.creatorContextService = creatorContextService;
+        this.creatorProfileService = creatorProfileService;
         this.llmService = llmService;
         this.agentExecutor = agentExecutor;
         this.objectMapper = objectMapper;
@@ -83,7 +89,7 @@ public class PrePublishSuggestionService {
                                 ObjectMapper objectMapper,
                                 PromptService promptService) {
         this(creatorTaskMapper, creatorSuggestionMapper, creatorPreferenceService, creatorContextService,
-                llmService, null, objectMapper, promptService);
+                null, llmService, null, objectMapper, promptService);
     }
 
     @Transactional
@@ -283,17 +289,74 @@ public class PrePublishSuggestionService {
             return "本次选择不使用历史创作者偏好和视频类型语境库，请只参考本期用户输入和任务材料。";
         }
 
+        // 创作者画像：跨任务聚合的风格/语气/受众认知（方案一）
+        String profileContext = creatorProfileService == null
+                ? ""
+                : creatorProfileService.buildProfilePromptContext(taskRecord.getUserId());
+
+        // 分析策略：用户指定的分析切入角度（方案三）
+        String strategyContext = buildStrategyPrompt(request.analysisStrategy());
+
         String promptContext = creatorPreferenceService.buildPromptContext(taskRecord.getUserId());
         String typeContext = creatorContextService.buildPromptContext(
                 taskRecord.getUserId(),
                 taskRecord.getVideoType(),
                 "PRE_PUBLISH"
         );
-        String mergedContext = promptContext + "\n\n当前视频类型语境库：\n" + typeContext;
+        String mergedContext = (profileContext.isEmpty() ? "" : profileContext + "\n\n")
+                + (strategyContext.isEmpty() ? "" : strategyContext + "\n\n")
+                + promptContext + "\n\n当前视频类型语境库：\n" + typeContext;
         if (PREFERENCE_MODE_EXPERIMENT.equals(preferenceMode)) {
             return mergedContext + "\n本次选择试验新方向：历史偏好和语境库只用于避开明显不适配点，本期用户手动要求优先。";
         }
         return mergedContext;
+    }
+
+    /**
+     * 根据分析策略构建注入到提示词中的策略指导。
+     * 策略文本控制在 800 字以内，避免挤占本期内容上下文。
+     */
+    private String buildStrategyPrompt(String strategyName) {
+        AnalysisStrategy strategy = AnalysisStrategy.fromString(strategyName);
+        if (strategy == AnalysisStrategy.GENERAL) {
+            return ""; // 通用策略不需要额外注入
+        }
+        String hint = switch (strategy) {
+            case TUTORIAL -> """
+                    分析策略：教程向分析
+                    请侧重以下维度：
+                    1. 知识点是否完整且逻辑递进，观众能否跟着学会
+                    2. 标题应引导用户明确能学到什么，突出技能获得感
+                    3. 标签应覆盖技能关键词，方便用户搜索到教程
+                    4. 是否缺少必要的前置知识说明
+                    不要过度关注情感表达和叙事节奏，教程观众的首要诉求是"学会"。""";
+            case VLOG -> """
+                    分析策略：Vlog向分析
+                    请侧重以下维度：
+                    1. 是否有清晰的情感起伏线和高潮点
+                    2. 标题应引发共鸣而非信息罗列，突出情感钩子
+                    3. 人物弧光和场景转换是否自然流畅
+                    4. 是否有能让观众共情的个人视角
+                    不要过度关注知识点覆盖度和信息密度。""";
+            case REVIEW -> """
+                    分析策略：测评向分析
+                    请侧重以下维度：
+                    1. 对比框架是否清晰，优劣是否客观有依据
+                    2. 标题应突出对比结论或核心差异点
+                    3. 购买建议是否具体可执行，而非泛泛"按需选择"
+                    4. 是否遗漏了目标用户最关心的对比维度
+                    不要过度关注情感叙事，测评观众要的是决策依据。""";
+            case COMMENTARY -> """
+                    分析策略：评论向分析
+                    请侧重以下维度：
+                    1. 观点是否独特且有论据支撑，而非人云亦云
+                    2. 标题应突出核心观点和讨论价值
+                    3. 论据链条是否完整，逻辑是否有漏洞
+                    4. 是否预判了可能的反对意见并做了回应
+                    不要过度关注信息罗列，评论观众要的是思考深度。""";
+            default -> "";
+        };
+        return TextUtil.abbreviateWithSuffix(hint, STRATEGY_PROMPT_MAX_LENGTH, "");
     }
 
     private String normalizePreferenceMode(String preferenceMode) {

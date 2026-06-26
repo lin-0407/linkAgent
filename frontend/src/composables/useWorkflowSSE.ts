@@ -15,6 +15,29 @@ export type SseConnectionStatus =
   | 'reconnecting'   // onerror 触发且浏览器自动重连中（readyState === CONNECTING）
   | 'disconnected'   // 连接已彻底关闭（readyState === CLOSED）
 
+/**
+ * 步骤类 SSE 事件携带的载荷。
+ *
+ * 后端 CreatorWorkflowService.buildStepPayload 推送的字段，原本被前端无参 handler 丢弃。
+ * 现在透传给调用方，用于 AnalysisProgress 时间轴做"实时增量高亮"：
+ * 后端推 step_started 时用 userLabel 立即显示一个"运行中"节点，不必等 HTTP 全量刷新。
+ */
+export interface WorkflowStepEvent {
+  stepId: string
+  stepType?: string
+  stepName?: string
+  status?: string
+  /** 面向用户的步骤标题，如"提取内容要点"，由后端给出，前端无需理解业务 */
+  userLabel?: string
+  /** 面向用户的步骤详情，如"识别到 3 个核心论点" */
+  userDetail?: string
+  inputSummary?: string
+  outputSummary?: string
+  errorMessage?: string
+  /** 步骤耗时毫秒，仅 step_completed/step_failed 事件可能携带 */
+  durationMs?: number
+}
+
 /** 工作流 SSE 事件处理器，由调用方提供业务逻辑 */
 export interface WorkflowSseHandlers {
   onMessageCreated?: (message: CreatorWorkflowMessage, taskId: string) => void
@@ -25,9 +48,12 @@ export interface WorkflowSseHandlers {
   ) => void
   onResultReady?: (taskId: string) => void
   onHeartbeat?: () => void
-  onStepStarted?: () => void
-  onStepCompleted?: () => void
-  onStepFailed?: () => void
+  /** 步骤开始：后端推送 userLabel/userDetail，可用于即时显示"运行中"节点 */
+  onStepStarted?: (event: WorkflowStepEvent) => void
+  /** 步骤完成：携带 durationMs，用于展示每步耗时 */
+  onStepCompleted?: (event: WorkflowStepEvent) => void
+  /** 步骤失败：携带 errorMessage，用于时间轴标红 */
+  onStepFailed?: (event: WorkflowStepEvent) => void
 }
 
 // ═══════════════════════════════════════════
@@ -131,20 +157,20 @@ export function useWorkflowSSE() {
         recordHeartbeat()
         handlers.onHeartbeat?.()
       },
-      step_started: () => {
+      step_started: (payload) => {
         if (versionAtConnect !== connectionVersion) return
         recordHeartbeat()
-        handlers.onStepStarted?.()
+        handlers.onStepStarted?.(toStepEvent(payload))
       },
-      step_completed: () => {
+      step_completed: (payload) => {
         if (versionAtConnect !== connectionVersion) return
         recordHeartbeat()
-        handlers.onStepCompleted?.()
+        handlers.onStepCompleted?.(toStepEvent(payload))
       },
-      step_failed: () => {
+      step_failed: (payload) => {
         if (versionAtConnect !== connectionVersion) return
         recordHeartbeat()
-        handlers.onStepFailed?.()
+        handlers.onStepFailed?.(toStepEvent(payload))
       },
     }
 
@@ -256,4 +282,26 @@ function readStringField(obj: unknown, key: string): string | undefined {
     return typeof value === 'string' ? value : undefined
   }
   return undefined
+}
+
+/**
+ * 把后端 step 事件的原始 payload 整理成 WorkflowStepEvent。
+ * 字段缺失时给安全默认值，保证调用方拿到的对象结构稳定，
+ * 时间轴组件不需要逐字段判空。
+ */
+function toStepEvent(payload: Record<string, unknown>): WorkflowStepEvent {
+  return {
+    stepId: readStringField(payload, 'stepId') ?? '',
+    stepType: readStringField(payload, 'stepType'),
+    stepName: readStringField(payload, 'stepName'),
+    status: readStringField(payload, 'status'),
+    userLabel: readStringField(payload, 'userLabel'),
+    userDetail: readStringField(payload, 'userDetail'),
+    inputSummary: readStringField(payload, 'inputSummary'),
+    outputSummary: readStringField(payload, 'outputSummary'),
+    errorMessage: readStringField(payload, 'errorMessage'),
+    // durationMs 后端按数字推送，这里做一次类型收敛
+    durationMs:
+      typeof payload.durationMs === 'number' ? payload.durationMs : undefined,
+  }
 }

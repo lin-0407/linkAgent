@@ -1667,6 +1667,8 @@ textarea:focus {
 .surface-root {
   display: flow-root;
   min-height: 100vh;
+  /* 底部留白给固定状态栏，避免内容被遮挡 */
+  padding-bottom: 40px;
 }
 
 /* 全局切换入口放回文档流里，避免固定浮层压住工作台右上角的高频操作。 */
@@ -5309,5 +5311,27 @@ textarea:focus {
   .creator-toast-enter-active,
   .creator-toast-leave-active {
     transition: none;
+  }
+}
+
+/* ── 建议卡片网格 ──
+   发布前优化结果里的标题/标签建议用卡片网格展示，替代原来的纯文本列表。
+   响应式：宽屏两列，窄屏单列，移动端天然堆叠。 */
+.suggestion-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--s4);
+  margin-top: var(--s3);
+}
+
+/* 标签建议更紧凑，单行卡片更宽，避免一个标签占满整列 */
+.suggestion-card-grid-tags {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+@media (max-width: 640px) {
+  .suggestion-card-grid,
+  .suggestion-card-grid-tags {
+    grid-template-columns: 1fr;
   }
 }

@@ -32,3 +32,8 @@
 | 前端 P0 用户化重构说明 | `/docs/reference/前端P0用户化重构说明.md` |
 | 前端 P0 用户化重构阶段问题整理 | `/docs/error/前端P0用户化重构阶段问题整理.md` |
 | P0 重构前代码审计报告 | `/docs/develop/P0重构前代码审计报告.md` |
+| 后端体验提升方案（记忆系统/SSE/容错/反馈） | `/docs/develop/linkAgent-backend-improvement-plan.md` |
+| 前端体验提升方案（Tab工作台/时间轴/建议卡片/移动端） | `/docs/develop/linkAgent-frontend-improvement-plan.md` |
+| 前端体验优化落地（阶段一：P0+P1 四件套） | `/docs/develop/前端体验优化落地-阶段一.md` |
+| 前端体验优化落地（阶段二拆分方案） | `/docs/develop/前端体验优化落地-阶段二-拆分方案.md` |
+| 前端体验优化落地（阶段二：CreatorWorkspace 模板拆分） | `/docs/develop/前端体验优化落地-阶段二.md` |

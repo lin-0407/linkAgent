@@ -35,23 +35,27 @@ public class LLMService {
     private final LlmCallGuardProperties guardProperties;
     private final RuntimeSettingService runtimeSettingService;
     private final LlmApiUsageService llmApiUsageService;
+    private final LlmProviderManager llmProviderManager;
 
     protected LLMService() {
         this.chatClient = null;
         this.guardProperties = new LlmCallGuardProperties();
         this.runtimeSettingService = null;
         this.llmApiUsageService = null;
+        this.llmProviderManager = null;
     }
 
     @Autowired
     public LLMService(ChatClient.Builder builder,
                       LlmCallGuardProperties guardProperties,
                       RuntimeSettingService runtimeSettingService,
-                      LlmApiUsageService llmApiUsageService) {
+                      LlmApiUsageService llmApiUsageService,
+                      LlmProviderManager llmProviderManager) {
         this.chatClient = builder.build();
         this.guardProperties = guardProperties;
         this.runtimeSettingService = runtimeSettingService;
         this.llmApiUsageService = llmApiUsageService;
+        this.llmProviderManager = llmProviderManager;
     }
 
     LLMService(LlmCallGuardProperties guardProperties) {
@@ -59,6 +63,7 @@ public class LLMService {
         this.guardProperties = guardProperties;
         this.runtimeSettingService = null;
         this.llmApiUsageService = null;
+        this.llmProviderManager = null;
     }
 
     public String chat(String userMessage) {
@@ -96,6 +101,47 @@ public class LLMService {
             LlmCallResult result = toCallResult(chatResponse, elapsedMs);
             recordTextSuccess(result);
             return result;
+        } catch (RuntimeException exception) {
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            recordTextFailure(elapsedMs, exception);
+            // 方案四：主 Provider 失败时尝试备用 Provider 回退链
+            if (llmProviderManager != null && llmProviderManager.hasAvailableProvider()) {
+                log.warn("主 LLM Provider 调用失败，尝试备用 Provider 回退链：{}", exception.getMessage());
+                try {
+                    LlmCallResult fallbackResult = llmProviderManager.tryFallback(systemPrompt, userMessage);
+                    log.info("备用 Provider 回退成功，使用模型：{}", fallbackResult.modelName());
+                    return fallbackResult;
+                } catch (RuntimeException fallbackException) {
+                    log.error("备用 Provider 回退链也全部失败", fallbackException);
+                    // 抛出原始异常，保留主 Provider 的失败原因供排查
+                }
+            }
+            throw exception;
+        }
+    }
+
+    /**
+     * 指定模型名称的对话。
+     * 用于自动补全等场景调用轻量模型（如 dpv4flash），与主分析模型区分。
+     * 复用同一个 ChatClient，只通过 options 覆盖 model 字段，不额外创建连接。
+     */
+    public String chatWithModel(String modelName, String systemPrompt, String userMessage) {
+        validatePromptLength(systemPrompt, userMessage);
+        long startNanos = System.nanoTime();
+        try {
+            ChatResponse chatResponse = chatClient
+                    .prompt()
+                    .system(systemPrompt)
+                    .user(userMessage)
+                    .options(OpenAiChatOptions.builder()
+                            .model(modelName)
+                            .build())
+                    .call()
+                    .chatResponse();
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            LlmCallResult result = toCallResult(chatResponse, elapsedMs);
+            recordTextSuccess(result);
+            return result.content();
         } catch (RuntimeException exception) {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
             recordTextFailure(elapsedMs, exception);

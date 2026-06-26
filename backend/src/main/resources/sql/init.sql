@@ -809,3 +809,81 @@ CREATE TABLE IF NOT EXISTS llm_api_call_log
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '模型 API 调用流水表';
+
+-- ------------------------------------------------------------
+-- 25. 创作者事件流水表
+--     记录用户对 AI 建议的每一次采纳/拒绝/修改等业务动作，
+--     作为创作者画像增量更新的信号源（方案一：创作者记忆系统）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_event
+(
+    id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    event_id    VARCHAR(64)  NOT NULL COMMENT '事件唯一标识（UUID）',
+    creator_id  VARCHAR(64)  NOT NULL COMMENT '用户标识，关联 creator_profile.creator_id',
+    event_type  VARCHAR(32)  NOT NULL COMMENT '事件类型：TITLE_ACCEPTED / TITLE_REJECTED / TAG_ACCEPTED / TAG_REJECTED / FEEDBACK_INSIGHT_SAVED / SUGGESTION_ADOPTED / SUGGESTION_REJECTED',
+    task_id     VARCHAR(64)           DEFAULT NULL COMMENT '关联 creator_task.task_id，用于追溯事件发生的创作上下文',
+    payload     JSON                  DEFAULT NULL COMMENT '事件详情 JSON，如 { "title": "...", "reason": "风格不符合" }',
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '事件发生时间',
+    is_deleted  TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_event_id (event_id),
+    KEY idx_creator_time (creator_id, created_at),
+    KEY idx_creator_type_time (creator_id, event_type, created_at)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作者事件流水表';
+
+-- ------------------------------------------------------------
+-- 26. 创作者画像表
+--     用户级聚合画像，从 creator_event 和 creator_preference 定期推理生成，
+--     跨任务汇总用户的风格、语气偏好和受众认知（方案一：创作者记忆系统）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_profile
+(
+    id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    creator_id    VARCHAR(64)  NOT NULL COMMENT '用户标识，与 creator_preference.user_id 对应',
+    style_tags    JSON                  DEFAULT NULL COMMENT '风格标签 JSON 数组，如 ["理性分析型", "冷幽默", "数据驱动"]',
+    tone_guide    TEXT                  DEFAULT NULL COMMENT '语气指南，描述标题句式偏好、排斥的表达方式、标签数量倾向等',
+    audience_view TEXT                  DEFAULT NULL COMMENT '受众认知，描述核心观众画像和内容偏好',
+    create_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '画像最后更新时间',
+    is_deleted    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_creator_id (creator_id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创作者画像表';
+
+-- 创作者画像种子提示词：初始画像生成和增量更新
+INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
+VALUES
+    ('creator_profile.init.system', 'SYSTEM', '创作者画像',
+     '你是 B 站创作者画像分析助手。你的任务是根据用户的历史创作偏好记录，提炼出用户的核心创作特征。必须输出 JSON 对象，字段：styleTags（字符串数组，3-5个风格标签，如"理性分析型""冷幽默""数据驱动"）、toneGuide（语气偏好描述，包括标题句式偏好、排斥的表达方式、标签数量倾向等，200字以内）、audienceView（受众认知描述，包括核心观众画像和内容偏好，200字以内）。不要编造不存在的信息，如果某方面证据不足，用"尚不明确"标注。',
+     '创作者画像初始化：从历史偏好生成初始画像'),
+    ('creator_profile.init.user', 'USER', '创作者画像',
+     '以下是该创作者的历史偏好记录（来自多期创作复盘），请提炼出创作者的风格特征、语气偏好和受众认知：\n\n{preferenceSummary}',
+     '创作者画像初始化用户提示词，preferenceSummary 为历史偏好汇总文本'),
+    ('creator_profile.update.system', 'SYSTEM', '创作者画像',
+     '你是 B 站创作者画像分析助手。你的任务是根据用户最近的操作事件，增量更新用户的创作画像。必须输出 JSON 对象，字段与初始化相同：styleTags、toneGuide、audienceView。更新原则：1）确认的趋势（如连续3次拒绝某类标题）要明确写进画像；2）新的偏好变化要更新对应字段；3）旧的仍适用的特征保留，不要因为没出现在最近事件中就删除；4）不确定的变化用"可能倾向于""近期出现"等保守表述。',
+     '创作者画像增量更新：根据最近事件调整画像'),
+    ('creator_profile.update.user', 'USER', '创作者画像',
+     '当前画像：\n{currentProfile}\n\n最近创作事件（按时间倒序）：\n{recentEvents}\n\n请基于这些事件增量更新画像。只修改需要调整的部分，保留仍然适用的旧特征。',
+     '创作者画像增量更新用户提示词，currentProfile 为当前画像文本，recentEvents 为最近事件列表')
+ON DUPLICATE KEY UPDATE
+    prompt_type = VALUES(prompt_type),
+    scene = VALUES(scene),
+    description = VALUES(description),
+    is_deleted = 0;
+
+-- 字段自动补全提示词：前端输入框 AI 按钮用，调轻量模型
+INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
+VALUES
+    ('field_autofill.system', 'SYSTEM', '字段自动补全',
+     '你是 B 站 UP 主创作助手，专门帮助补全创作任务中的表单字段。根据任务全局上下文（材料、画像、偏好、已有分析等），为指定字段生成简洁、可用的补全建议。要求：1）只输出建议文本，不要输出解释、理由或分析过程；2）建议要贴合上下文而非泛泛而谈；3）标题草稿输出1-2个备选标题，用换行分隔；4）其他字段输出一段连贯文本；5）不要照搬上下文中的已有内容，而是结合上下文生成新内容。',
+     '字段自动补全系统提示词'),
+    ('field_autofill.user', 'USER', '字段自动补全',
+     '任务：{taskName}\n视频类型：{videoType}\n待补全字段：{fieldType}\n\n任务全局上下文：\n{globalContext}\n\n请为【{fieldType}】生成补全建议。',
+     '字段自动补全用户提示词，fieldType=字段中文名，globalContext=任务上下文')
+ON DUPLICATE KEY UPDATE
+    prompt_type = VALUES(prompt_type),
+    scene = VALUES(scene),
+    description = VALUES(description),
+    is_deleted = 0;

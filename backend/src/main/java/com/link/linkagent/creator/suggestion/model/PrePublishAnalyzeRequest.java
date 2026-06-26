@@ -24,6 +24,12 @@ public record PrePublishAnalyzeRequest(
                 regexp = "USE_HISTORY|IGNORE_HISTORY|EXPERIMENT",
                 message = "偏好使用方式只能是 USE_HISTORY、IGNORE_HISTORY 或 EXPERIMENT"
         )
-        String preferenceMode
+        String preferenceMode,
+
+        @Pattern(
+                regexp = "GENERAL|TUTORIAL|VLOG|REVIEW|COMMENTARY",
+                message = "分析策略只能是 GENERAL、TUTORIAL、VLOG、REVIEW 或 COMMENTARY"
+        )
+        String analysisStrategy
 ) {
 }

@@ -596,3 +596,67 @@ export type WorkflowUsageResponse = {
   totalElapsedMs: number | null
   steps: WorkflowStepUsage[]
 }
+
+// ═══════════════════════════════════════════
+// 创作者反馈事件（对接 POST /api/creator/profile/events → creator_event 表）
+// ═══════════════════════════════════════════
+
+/**
+ * 创作者反馈事件类型。
+ * 取值与后端 creator_event.event_type 注释保持一致，
+ * 作为创作者画像增量更新的信号源。
+ */
+export type CreatorEventType =
+  | 'TITLE_ACCEPTED' // 用户采纳某条标题建议
+  | 'TITLE_REJECTED' // 用户拒绝某条标题建议（点了"不太好"）
+  | 'TAG_ACCEPTED' // 用户采纳某条标签建议
+  | 'TAG_REJECTED' // 用户拒绝某条标签建议
+  | 'SUGGESTION_ADOPTED' // 用户采纳整组建议
+  | 'SUGGESTION_REJECTED' // 用户拒绝整组建议
+  | 'FEEDBACK_INSIGHT_SAVED' // 用户保存某条观众洞察
+
+/**
+ * 建议反馈的预设原因。
+ * 点"不太好"后展开的面板里给用户选择，提交时随事件写入 payload.reason。
+ * 用预设值而非自由文本，是为了让画像更新能稳定聚类用户的排斥倾向。
+ */
+export type CreatorRejectReason =
+  | 'STYLE_MISMATCH' // 风格不符合我的定位
+  | 'LENGTH_AWKWARD' // 太长或太短
+  | 'TOO_CLICKBAIT' // 太夸张 / 震惊体
+  | 'NOT_ATTRACTIVE' // 不够吸引人
+  | 'OFF_TOPIC' // 偏离视频主题
+  | 'OTHER' // 其他（附 reasonText 自定义说明）
+
+/**
+ * 创作者反馈事件提交载荷。
+ * 后端约定：从 body 中取 userId / eventType / taskId 作为事件主字段，
+ * 整个 body 作为 payload（JSON）落库，因此建议正文相关字段直接平铺在这里。
+ */
+export type CreatorFeedbackEventPayload = {
+  userId: string
+  eventType: CreatorEventType
+  taskId?: string
+  /** 建议的具体内容（标题原文、标签原文等），便于后续回溯是哪一条建议被反馈 */
+  content?: string
+  /** 建议的适用场景/标签等附加信息，按需带上 */
+  scenario?: string
+  /** 拒绝原因预设值，仅 REJECTED 类事件需要 */
+  reason?: CreatorRejectReason
+  /** 当 reason=OTHER 时，用户填写的自定义说明 */
+  reasonText?: string
+  /** 建议在结果列表中的序号（从 1 开始），用于分析"用户更偏好靠前还是靠后的建议" */
+  rank?: number
+}
+
+/**
+ * 创作台结果弹窗目标。
+ * 主壳和子组件共享这个类型，是为了让弹窗入口保持同一组合法值。
+ */
+export type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | 'feedbackReport'
+
+/**
+ * 创作台一级步骤。
+ * 持久化 activeStep 时复用同一类型，避免主壳和子组件各自维护 tab 名称。
+ */
+export type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report' | 'usage'

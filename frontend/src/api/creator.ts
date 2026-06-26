@@ -18,6 +18,7 @@ import type {
   CreatorContextBundle,
   CreatorContextTerm,
   CreatorContextTermPayload,
+  CreatorFeedbackEventPayload,
   CreatorPreference,
   CreatorFeedbackSavePayload,
   CreatorSuggestion,
@@ -308,4 +309,13 @@ export function listTaskLlmApiCalls(
   return get<LlmApiCallPage>(`/llm-usage/tasks/${encodeURIComponent(taskId)}/calls`, {
     params: { page, pageSize, modelCategory },
   })
+}
+
+// ── 创作者反馈事件（画像增量更新信号源）──
+// 后端 POST /api/creator/profile/events：从 body 取 userId/eventType/taskId 作为事件主字段，
+// 整个 body 作为 payload 落 creator_event 表，并尝试触发画像增量更新。
+
+export function recordCreatorEvent(payload: CreatorFeedbackEventPayload) {
+  // 后端约定无响应体（写入后异步触发画像更新），用 void 泛型
+  return post<void>('/creator/profile/events', payload)
 }

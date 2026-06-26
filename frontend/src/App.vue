@@ -5,6 +5,7 @@ import { storeToRefs } from 'pinia'
 import AgentFloatingWindow from '@/components/AgentFloatingWindow.vue'
 import SettingsDrawer from '@/components/SettingsDrawer.vue'
 import ParticleBackground from '@/components/ParticleBackground.vue'
+import SystemStatusBar from '@/components/SystemStatusBar.vue'
 import { useAppStore } from '@/stores/appStore'
 
 const appStore = useAppStore()
@@ -58,6 +59,8 @@ const particleDensity = computed(() => route.path === '/' ? 12000 : 20000) // �
       <component :is="Component" :developer-mode="developerMode" />
     </RouterView>
     <AgentFloatingWindow :developer-mode="developerMode" />
+    <!-- 底部运行时状态栏：全局可见，展示 LLM/向量库/SSE 健康状态 -->
+    <SystemStatusBar />
     <SettingsDrawer v-model:open="settingsOpen" v-model:developer-mode="developerMode" />
   </div>
 </template>

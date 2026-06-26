@@ -51,6 +51,8 @@ spring:
       chat:
         options:
           model: ${LLM_MODEL}
+      # 自动补全专用轻量模型：输入框 AI 按钮用，快速且便宜
+      autofill-model: ${AUTOFILL_LLM_MODEL:${LLM_MODEL}}
       # Embedding 默认复用 LLM 网关凭证；单独留 KEY/BASE_URL 是为了能切换到独立的 embedding 服务
       embedding:
         api-key: ${LLM_EMBEDDING_API_KEY:${LLM_API_KEY}}
@@ -185,6 +187,23 @@ knowledge:
 #   public-key: ${LANGFUSE_PUBLIC_KEY:}
 #   secret-key: ${LANGFUSE_SECRET_KEY:}
 #   host: ${LANGFUSE_HOST:http://localhost:3000}
+
+# ========== LLM 多 Provider 回退链（方案四） ==========
+# 主 Provider 走 spring.ai.openai.* 自动配置；以下为备用 Provider 列表。
+# 主 Provider 调用失败时按配置顺序依次尝试备用 Provider。
+llm:
+  fallback:
+    enabled: ${LLM_FALLBACK_ENABLED:false}
+    cooldown-seconds: ${LLM_FALLBACK_COOLDOWN_SECONDS:60}
+    providers:
+      - name: ${LLM_FALLBACK_1_NAME:}
+        base-url: ${LLM_FALLBACK_1_BASE_URL:}
+        api-key: ${LLM_FALLBACK_1_API_KEY:}
+        model: ${LLM_FALLBACK_1_MODEL:}
+      - name: ${LLM_FALLBACK_2_NAME:}
+        base-url: ${LLM_FALLBACK_2_BASE_URL:}
+        api-key: ${LLM_FALLBACK_2_API_KEY:}
+        model: ${LLM_FALLBACK_2_MODEL:}
 
 # ========== Milvus (向量库) ==========
 # milvus:
