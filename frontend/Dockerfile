@@ -3,10 +3,10 @@ FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
 
-# 先拷贝依赖锁文件，是为了让 npm ci 只在依赖变化时重新安装。
+# 拷贝依赖描述文件，使用 npm install 解析依赖（npm ci 要求 lock 文件完美同步，CI 环境易失败）
 COPY package*.json ./
 
-RUN npm ci
+RUN npm install
 
 COPY . .
 
