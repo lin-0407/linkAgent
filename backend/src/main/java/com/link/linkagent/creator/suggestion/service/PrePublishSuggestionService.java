@@ -166,7 +166,7 @@ public class PrePublishSuggestionService {
         if (request != null) {
             return request;
         }
-        return new PrePublishAnalyzeRequest(null, null, null, null, null);
+        return new PrePublishAnalyzeRequest(null, null, null, null, null, null);
     }
 
     private CreatorSuggestionRecord buildSuggestionRecord(String taskId, String rawOutput) {

@@ -49,7 +49,7 @@ class PrePublishSuggestionServiceTest {
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
-                new PrePublishAnalyzeRequest(null, null, null, null, "USE_HISTORY")
+                new PrePublishAnalyzeRequest(null, null, null, null, "USE_HISTORY", null)
         );
 
         assertThat(response.taskId()).isEqualTo("task-1");
@@ -81,7 +81,7 @@ class PrePublishSuggestionServiceTest {
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
-                new PrePublishAnalyzeRequest(null, null, null, null, "IGNORE_HISTORY")
+                new PrePublishAnalyzeRequest(null, null, null, null, "IGNORE_HISTORY", null)
         );
 
         assertThat(response.taskId()).isEqualTo("task-1");
@@ -144,7 +144,7 @@ class PrePublishSuggestionServiceTest {
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
-                new PrePublishAnalyzeRequest(null, null, null, null, "IGNORE_HISTORY")
+                new PrePublishAnalyzeRequest(null, null, null, null, "IGNORE_HISTORY", null)
         );
 
         assertThat(response.creatorDilemma()).isEqualTo("创作者困境");
