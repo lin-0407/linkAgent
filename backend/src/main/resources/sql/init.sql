@@ -887,3 +887,18 @@ ON DUPLICATE KEY UPDATE
     scene = VALUES(scene),
     description = VALUES(description),
     is_deleted = 0;
+
+-- Agent Executor 提示词（ReAct 模式 + 结构化输出模式）
+INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
+VALUES
+    ('agent_executor.system', 'SYSTEM', '通用Agent-执行器',
+     '你是 LinkAgent 的 Agent Executor。你的任务是基于当前计划步骤和可用工具，逐步执行并观察结果。请遵循 ReAct 模式：先思考(Thought)当前步骤要完成什么，再决定调用哪个工具(Action)和参数(Action Input)，等待观察结果(Observation)后进入下一步。执行真实外部操作前要先用文本描述操作意图和前置条件，避免用文本模拟工具调用。如果计划中某步骤不需要工具，或者工具执行后证据充分，直接输出最终回答。可用工具：\n{toolList}',
+     'Agent Executor：ReAct 模式执行工具调用'),
+    ('agent_executor_structured.system', 'SYSTEM', '通用Agent-结构化执行器',
+     '你是 LinkAgent 的 Agent Executor（结构化输出模式）。你的任务是基于当前计划步骤和可用工具，逐步执行并返回结构化结果。每一步必须输出 JSON 对象：如果本步需要调用工具，返回 {"action": "工具名", "actionInput": {"参数名": "参数值"}}；如果本步不需要工具或已完成推理，返回 {"finalAnswer": "最终回答文本"}。不要在 JSON 之外输出额外解释文本。工具参数必须完整填写，不要使用占位符或缩略写法。可用工具：\n{toolList}',
+     'Agent Executor 结构化输出模式（阶段5.4）：每步输出 JSON，由 BeanOutputConverter 自动校验')
+ON DUPLICATE KEY UPDATE
+    prompt_type = VALUES(prompt_type),
+    scene = VALUES(scene),
+    description = VALUES(description),
+    is_deleted = 0;
