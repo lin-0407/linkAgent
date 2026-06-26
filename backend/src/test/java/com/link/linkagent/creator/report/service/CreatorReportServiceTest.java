@@ -525,6 +525,11 @@ class CreatorReportServiceTest {
         }
 
         @Override
+        public int upsertAdoptionFeedback(CreatorPreferenceRecord record) {
+            return 1;
+        }
+
+        @Override
         public List<CreatorPreferenceRecord> listByUserId(String userId, int limit) {
             return records.stream().limit(limit).toList();
         }
