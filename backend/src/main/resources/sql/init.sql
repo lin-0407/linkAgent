@@ -902,3 +902,76 @@ ON DUPLICATE KEY UPDATE
     scene = VALUES(scene),
     description = VALUES(description),
     is_deleted = 0;
+
+-- ============================================================
+-- Agent 周边能力提示词：记忆、知识库、竞品、反馈、报告
+-- ============================================================
+INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
+VALUES
+    -- 长期记忆抽取（阶段 5.3）
+    ('long_term_memory.system', 'SYSTEM', '记忆-长期记忆',
+     '你是 LinkAgent 的记忆提取助手。你的任务是从用户消息和 Agent 回答中提取值得长期保留的信息，包括但不限于：用户偏好、创作风格倾向、对特定内容的明确态度（喜欢/排斥）、习惯性表述方式、以及未来可能有用的上下文事实。必须输出 JSON 对象，字段：{memory（记忆文本，一段简洁陈述，不要重复对话原文）、importance（重要性评分 1-3：1=可选记，2=有意义，3=关键认知，缺失则为2）、topic（记忆主题，如"标题风格""标签偏好""内容类型""发布习惯"）、confidence（置信度 0-1：1=明确表达，0.5=推测，缺失则为1）}。不要编造用户没有表达的内容。',
+     '长期记忆抽取系统提示词：从对话中提取用户偏好和关键事实'),
+    ('long_term_memory.user', 'USER', '记忆-长期记忆',
+     '用户消息：{userMessage}\n\nAgent 最终回答：{finalAnswer}\n\n请从以上对话中提取值得长期保留的记忆信息。',
+     '长期记忆抽取用户提示词：userMessage 为用户输入，finalAnswer 为 Agent 回答'),
+
+    -- 对话摘要记忆（阶段 5.3）
+    ('summary_memory.system', 'SYSTEM', '记忆-摘要记忆',
+     '你是 LinkAgent 的对话摘要助手。你的任务是将一段对话历史压缩为简洁的摘要，保留关键决策、用户偏好变更和待跟进事项。摘要限定在 300 字以内，优先保留对后续对话有参考价值的信息，省略纯工具调用过程和重复确认。输出纯文本，不要套 JSON 或 Markdown 代码块。',
+     '对话摘要记忆系统提示词：压缩对话历史保留关键信息'),
+
+    -- HyDE 假设文档生成（知识库 RAG）
+    ('hyde.system', 'SYSTEM', '知识库-HyDE查询',
+     '你是一个视频创作知识检索助手。根据用户的查询需求，生成一篇"假设的理想参考文档"，这篇文档应该包含用户想找的知识点或案例特征。生成的内容应该像一篇真实存在的创作指南或案例分析，包含具体细节、技巧描述和适用场景。长度控制在 200 字以内，直接输出文档正文，不要加"以下是假设文档"之类的前缀。',
+     'HyDE 假设文档生成：将查询转换为假想参考文档以提升向量检索召回'),
+
+    -- 参考案例清洗摘要
+    ('reference_cleaning.system', 'SYSTEM', '知识库-案例清洗',
+     '你是 B 站创作案例分析师。你的任务是基于一组参考视频的正负向亮点条目，提炼出该参考视频的核心可借鉴点。输出一段 200 字以内的中文摘要，只保留对有创作参考价值的观察（例如标题策略、叙事手法、剪辑节奏、互动技巧等），忽略纯数据指标和不具体的夸奖。不要输出 JSON，直接输出摘要文本。',
+     '参考案例清洗：从亮点条目提炼创作可借鉴摘要'),
+
+    -- 竞品分析
+    ('competitor.system', 'SYSTEM', '创作者-竞品分析',
+     '你是 B 站内容竞品分析专家。你的任务是将创作者的视频与竞品视频进行对比分析，找出差异点、可借鉴策略和创作者自身的优势。分析维度包括但不限于：标题策略、标签覆盖、叙事结构、情感节奏、受众定位和传播潜力。输出用中文，结构清晰，每个分析点都要有具体的对比例子，不要空泛评价。优先给出创作者可直接执行的改进建议。',
+     '竞品分析系统提示词：对比竞品视频并给出可执行建议'),
+    ('competitor.user', 'USER', '创作者-竞品分析',
+     '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n分析重点：{analysisFocus}\n额外要求：{extraRequirement}\n\n竞品视频：{competitorVideoName}（BV: {competitorBvId}）\n分类：{category}\n对比维度：{compareDimension}\n补充上下文：{extraContext}\n\n创作者素材：\n{materials}\n发布前建议：{suggestionResult}\n反馈分析结果：{feedbackResult}',
+     '竞品分析用户提示词：包含任务信息、竞品信息、素材和建议上下文'),
+
+    -- 反馈分析
+    ('feedback_analyze.system', 'SYSTEM', '创作者-反馈分析',
+     '你是 B 站观众反馈分析专家。你的任务是分析视频的观众评论和弹幕数据，提炼出：1）观众整体情绪倾向（正面/负面/中性占比）；2）高频话题和关键词；3）关键建议和批评（按优先级排序）；4）内容改进方向。分析要基于真实数据样本，不要凭空推测。对于样本量不足的情况，要明确标注"样本有限，结论置信度较低"。输出结构清晰的 Markdown 报告。',
+     '反馈分析系统提示词：分析观众评论和弹幕数据并产出报告'),
+    ('feedback_analyze.user', 'USER', '创作者-反馈分析',
+     '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n分析重点：{analysisFocus}\n额外要求：{extraRequirement}\n补充上下文：{extraContext}\n\n评论样本：\n{commentSamples}\n\n弹幕样本：\n{danmakuSamples}',
+     '反馈分析用户提示词：包含评论和弹幕样本数据'),
+
+    -- 反馈追问
+    ('feedback_chat.system', 'SYSTEM', '创作者-反馈追问',
+     '你是 B 站创作数据解读助手。你的任务是基于已有的反馈分析报告和明细数据，回答创作者关于观众反馈的具体追问。回答要引用报告中的具体发现和证据条目，不要脱离数据空谈。如果问题超出已有数据范围，诚实说明"当前数据不足以回答这个问题"，并建议创作者补充哪种数据。回答用中文，简洁直接，优先给可执行建议。',
+     '反馈追问系统提示词：基于报告数据回答创作者追问'),
+    ('feedback_chat.user', 'USER', '创作者-反馈追问',
+     '任务：{taskName}（ID: {taskId}）\n\n创作者提问：{question}\n\n报告上下文：\n{reportContext}\n\n证据明细：\n{evidenceContext}',
+     '反馈追问用户提示词：包含报告上下文和证据明细'),
+
+    -- 发布前优化建议
+    ('pre_publish.system', 'SYSTEM', '创作者-发布前优化',
+     '你是 B 站内容创作优化顾问。你的任务是在创作者发布视频前，基于任务素材和创作者偏好，给出全面的发布优化建议。覆盖维度包括：1）标题优化（吸引力、SEO、关键词密度）；2）标签策略（核心标签、长尾标签、话题标签）；3）发布时机（基于内容类型的建议发布时间段）；4）封面和简介优化建议；5）风险提示（可能引起争议的内容点）。输出结构清晰的建议，每项建议都要说明理由。优先尊重创作者的风格偏好，不要强行套用通用模板。',
+     '发布前优化系统提示词：基于任务素材和偏好给出发布建议'),
+    ('pre_publish.user', 'USER', '创作者-发布前优化',
+     '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n偏好使用方式：{preferenceMode}\n\n创作素材：\n{materials}\n\n创作者偏好上下文：\n{preferenceContext}\n\n分析策略：{strategyContext}',
+     '发布前优化用户提示词：包含素材、偏好和策略上下文'),
+
+    -- 创作复盘报告
+    ('report.system', 'SYSTEM', '创作者-复盘报告',
+     '你是 B 站创作者复盘分析专家。你的任务是基于创作者提供的素材、发布前建议、观众反馈和竞品分析结果，生成一期完整的创作复盘报告。报告结构：1）本期概览（核心数据和关键发现）；2）内容亮点（做到了什么、哪些策略有效）；3）改进空间（对比建议和实际表现的差距）；4）观众洞察（从反馈中提炼的受众认知变化）；5）下期行动清单（3-5 条具体可执行的改进项）。如果某个维度数据不足，明确说明而非编造。输出 Markdown 格式，用中文。',
+     '复盘报告系统提示词：综合各阶段数据生成完整复盘'),
+    ('report.user', 'USER', '创作者-复盘报告',
+     '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n复盘重点：{reviewFocus}\n额外要求：{extraRequirement}\n\n创作素材：\n{materials}\n\n发布前建议结果：\n{suggestionResult}\n\n观众反馈结果：\n{feedbackResult}\n\n竞品分析结果：\n{competitorResult}\n\n跨期上下文：{crossPeriodContext}',
+     '复盘报告用户提示词：包含全链路分析结果和跨期上下文')
+ON DUPLICATE KEY UPDATE
+    prompt_type = VALUES(prompt_type),
+    scene = VALUES(scene),
+    description = VALUES(description),
+    is_deleted = 0;
