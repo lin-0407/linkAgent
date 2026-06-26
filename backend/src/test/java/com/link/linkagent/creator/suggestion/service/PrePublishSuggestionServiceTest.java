@@ -322,5 +322,10 @@ class PrePublishSuggestionServiceTest {
             callCount++;
             return records.stream().limit(limit).toList();
         }
+
+        @Override
+        public List<CreatorPreferenceRecord> listAdoptionFeedbackByUserId(String userId, int limit) {
+            return List.of();
+        }
     }
 }

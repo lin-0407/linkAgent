@@ -528,5 +528,10 @@ class CreatorReportServiceTest {
         public List<CreatorPreferenceRecord> listByUserId(String userId, int limit) {
             return records.stream().limit(limit).toList();
         }
+
+        @Override
+        public List<CreatorPreferenceRecord> listAdoptionFeedbackByUserId(String userId, int limit) {
+            return List.of();
+        }
     }
 }
