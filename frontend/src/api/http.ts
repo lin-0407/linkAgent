@@ -38,7 +38,8 @@ export interface RequestOptions {
 const http = axios.create({
   // 通过 Vite 环境变量支持自定义 API 前缀，默认 '/api'
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
-  timeout: 30_000,
+  // 默认 5 分钟超时，AI 对话、分析等接口响应时间远超普通 CRUD
+  timeout: 300_000,
   headers: { 'Content-Type': 'application/json' },
 })
 
