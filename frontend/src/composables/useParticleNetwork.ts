@@ -4,7 +4,7 @@
 // 设计理念：
 //   - 粒子 = 创作者脑海中的灵感碎片，不断游走
 //   - 连线 = AI Agent 串联创意，有"方生方死"的生命节律（浮现 → 闪光 → 稳定 → 消亡）
-//   - 配色引用项目 CSS 变量（--accent: 石榴红），自动跟随主题
+//   - 配色引用项目 CSS 变量（--bili-blue），自动跟随主题
 //
 // 用法：
 //   const { mount, unmount, setEnabled } = useParticleNetwork(canvasRef)
@@ -105,9 +105,9 @@ export function useParticleNetwork(
 
   // ---- 从 CSS 变量读取项目配色 ----
   function getAccentColor(): string {
-    if (typeof window === 'undefined') return '#e5294a'
+    if (typeof window === 'undefined') return '#00aeec'
     const style = getComputedStyle(document.documentElement)
-    return style.getPropertyValue('--accent').trim() || '#e5294a'
+    return style.getPropertyValue('--bili-blue').trim() || '#00aeec'
   }
 
   // ---- 连线参数 ----
@@ -389,10 +389,10 @@ export function useParticleNetwork(
       const birthWidth = conn.birthGlow * 1.5
       ctx.lineWidth = baseWidth + birthWidth
 
-      // 出生闪光时颜色偏亮
-      const r = 229 + conn.birthGlow * 26
-      const g = 41 - conn.birthGlow * 20
-      const b = 74 - conn.birthGlow * 40
+      // 连线使用 B 站青蓝，出生闪光稍微提亮，避免旧红色粒子破坏当前主题。
+      const r = 0 + conn.birthGlow * 64
+      const g = 174 + conn.birthGlow * 32
+      const b = 236 + conn.birthGlow * 12
       ctx.strokeStyle = `rgba(${r},${g},${b},${finalAlpha})`
 
       // 中点 + 正弦波动
@@ -420,15 +420,15 @@ export function useParticleNetwork(
     for (const s of signals) {
       const sx = s.from.x + (s.to.x - s.from.x) * s.t
       const sy = s.from.y + (s.to.y - s.from.y) * s.t
-      ctx.fillStyle = 'rgba(200,30,60,0.75)'
+      ctx.fillStyle = 'rgba(251,114,153,0.75)'
       ctx.beginPath()
       ctx.arc(sx, sy, 1.3, 0, Math.PI * 2)
       ctx.fill()
     }
 
-    // 涟漪（直接拼 rgba，不用从 CSS 变量解析）
+    // 涟漪使用粉色做短暂反馈，和青蓝连线形成 B 站配色对比。
     for (const rp of ripples) {
-      ctx.strokeStyle = `rgba(229,41,74,${rp.alpha})`
+      ctx.strokeStyle = `rgba(251,114,153,${rp.alpha})`
       ctx.lineWidth = 1.5
       ctx.beginPath()
       ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2)
@@ -450,8 +450,8 @@ export function useParticleNetwork(
       // 光晕
       const particleGlow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 4)
       const glowAlpha = 0.25 * brightness
-      particleGlow.addColorStop(0, `rgba(229,41,74,${glowAlpha})`)
-      particleGlow.addColorStop(1, 'rgba(229,41,74,0)')
+      particleGlow.addColorStop(0, `rgba(0,174,236,${glowAlpha})`)
+      particleGlow.addColorStop(1, 'rgba(0,174,236,0)')
       ctx.fillStyle = particleGlow
       ctx.beginPath()
       ctx.arc(p.x, p.y, p.r * 4, 0, Math.PI * 2)
@@ -459,7 +459,7 @@ export function useParticleNetwork(
 
       // 核心
       const coreAlpha = Math.min(0.75, 0.3 * brightness)
-      ctx.fillStyle = `rgba(229,41,74,${coreAlpha})`
+      ctx.fillStyle = `rgba(0,174,236,${coreAlpha})`
       ctx.beginPath()
       ctx.arc(p.x, p.y, p.r * brightness, 0, Math.PI * 2)
       ctx.fill()
@@ -533,9 +533,10 @@ export function useParticleNetwork(
 
     createParticles()
 
-    canvas.addEventListener('mousemove', onMouseMove)
-    canvas.addEventListener('mouseleave', onMouseLeave)
-    canvas.addEventListener('click', onClick)
+    // Canvas 需要 pointer-events: none 才不挡住页面操作，所以交互事件挂到 window。
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseleave', onMouseLeave)
+    window.addEventListener('click', onClick)
     window.addEventListener('resize', onResize)
     document.addEventListener('visibilitychange', onVisibilityChange)
 
@@ -546,12 +547,9 @@ export function useParticleNetwork(
     cancelAnimationFrame(rafId)
     if (mouseSettleTimer) clearTimeout(mouseSettleTimer)
 
-    const canvas = canvasRef.value
-    if (canvas) {
-      canvas.removeEventListener('mousemove', onMouseMove)
-      canvas.removeEventListener('mouseleave', onMouseLeave)
-      canvas.removeEventListener('click', onClick)
-    }
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseleave', onMouseLeave)
+    window.removeEventListener('click', onClick)
     window.removeEventListener('resize', onResize)
     document.removeEventListener('visibilitychange', onVisibilityChange)
 

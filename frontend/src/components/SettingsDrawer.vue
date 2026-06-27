@@ -475,14 +475,14 @@ function statusLabel(status: string) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: var(--s4);
-  padding: var(--s4) var(--s5);
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
   border-bottom: 1px solid var(--border);
 }
 
 .settings-header h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: var(--fw-bold);
   letter-spacing: 0;
 }
@@ -497,7 +497,7 @@ function statusLabel(status: string) {
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
   cursor: pointer;
-  font-size: 26px;
+  font-size: 22px;
   line-height: 1;
 }
 
@@ -509,10 +509,10 @@ function statusLabel(status: string) {
 
 .settings-body {
   display: grid;
-  gap: var(--s4);
+  gap: var(--s3);
   max-height: calc(min(840px, 100vh - 40px) - 69px);
   overflow-y: auto;
-  padding: var(--s4) var(--s5) var(--s5);
+  padding: var(--s3) var(--s4) var(--s4);
 }
 
 .settings-section {
@@ -531,8 +531,8 @@ function statusLabel(status: string) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
-  gap: var(--s4);
-  padding: var(--s4);
+  gap: var(--s3);
+  padding: var(--s3);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
@@ -546,7 +546,7 @@ function statusLabel(status: string) {
 
 .settings-developer-card strong {
   color: var(--ink);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: var(--fw-semibold);
 }
 
@@ -558,7 +558,7 @@ function statusLabel(status: string) {
 }
 
 .settings-toggle-list {
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 .settings-toggle-card,
@@ -566,7 +566,7 @@ function statusLabel(status: string) {
 .settings-connectivity-card {
   display: grid;
   gap: 6px;
-  padding: var(--s3) var(--s4);
+  padding: 10px var(--s3);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -575,14 +575,14 @@ function statusLabel(status: string) {
 .settings-toggle-card {
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
-  column-gap: var(--s4);
+  column-gap: var(--s3);
 }
 
 .settings-toggle-card strong,
 .settings-readonly-card strong,
 .settings-connectivity-card strong {
   color: var(--ink);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: var(--fw-semibold);
 }
 
@@ -765,7 +765,7 @@ function statusLabel(status: string) {
 
 .settings-section-toggle h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: var(--fw-semibold);
   flex: 0 0 auto;
 }

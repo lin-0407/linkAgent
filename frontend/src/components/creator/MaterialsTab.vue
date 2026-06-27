@@ -20,7 +20,7 @@ const {
   <section class="creator-section">
     <div class="creator-section-head">
       <div>
-        <h3>{{ taskFormTitle }}</h3>
+        <h3>{{ taskManageMode === 'edit' ? taskFormTitle : '视频资料' }}</h3>
       </div>
       <div class="creator-action-row">
         <button

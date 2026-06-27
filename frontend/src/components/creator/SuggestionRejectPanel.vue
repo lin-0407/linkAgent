@@ -113,9 +113,9 @@ function labelOf(value: CreatorRejectReason): string {
 <style scoped>
 .reject-panel {
   display: grid;
-  gap: var(--s3);
-  margin-top: var(--s3);
-  padding: var(--s4);
+  gap: var(--s2);
+  margin-top: var(--s2);
+  padding: var(--s3);
   background: var(--surface-sub);
   border: 1px solid var(--border);
   border-radius: var(--r);
@@ -138,7 +138,7 @@ function labelOf(value: CreatorRejectReason): string {
   display: flex;
   align-items: center;
   gap: var(--s2);
-  padding: var(--s2) var(--s3);
+  padding: 7px var(--s3);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);

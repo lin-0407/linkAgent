@@ -40,7 +40,11 @@
       "Bash(git rm *)",
       "Bash(python3 *)",
       "Bash(git checkout *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(gh pr *)",
+      "Bash(bash *)",
+      "Bash(ssh *)",
+      "Bash(scp *)"
     ]
   }
 }

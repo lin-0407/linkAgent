@@ -643,13 +643,13 @@ onMounted(() => {
 }
 
 .creator-section + .creator-section {
-  margin-top: var(--s4);
+  margin-top: var(--s3);
 }
 
 .knowledge-form {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(140px, 0.34fr) minmax(220px, 0.66fr);
-  gap: var(--s4);
+  gap: var(--s3);
 }
 
 .knowledge-form label {
@@ -669,7 +669,7 @@ onMounted(() => {
 .knowledge-toolbar input,
 .knowledge-toolbar select {
   width: 100%;
-  min-height: 44px;
+  min-height: 38px;
   padding: 0 var(--s3);
   color: var(--ink);
   background: var(--surface);
@@ -734,15 +734,15 @@ onMounted(() => {
 
 .knowledge-card-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--s3);
 }
 
 .knowledge-card {
   display: grid;
   align-content: start;
-  gap: var(--s3);
-  padding: var(--s4);
+  gap: var(--s2);
+  padding: var(--s3);
   color: inherit;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -773,13 +773,13 @@ onMounted(() => {
 
 .knowledge-card > strong {
   color: var(--ink);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.45;
 }
 
 .knowledge-card-title {
   color: var(--ink);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: var(--fw-semibold);
   line-height: 1.45;
 }
@@ -794,18 +794,18 @@ onMounted(() => {
 .knowledge-card-summary {
   margin: 0;
   color: var(--text);
-  font-size: 14px;
-  line-height: 1.62;
+  font-size: 13px;
+  line-height: 1.56;
 }
 
 .knowledge-stats {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--s2);
+  gap: 6px;
 }
 
 .knowledge-stats span {
-  padding: 3px 9px;
+  padding: 2px 8px;
   color: var(--muted);
   background: var(--surface-sub);
   border: 1px solid var(--border);
@@ -848,8 +848,8 @@ onMounted(() => {
 
 .knowledge-card-action {
   justify-self: start;
-  min-height: 34px;
-  padding: 7px 12px;
+  min-height: 30px;
+  padding: 5px 10px;
   color: var(--accent);
   background: var(--accent-tint);
   border: 1px solid var(--accent-ring);

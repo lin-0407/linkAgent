@@ -93,7 +93,6 @@ import {
   workflowStepTypeLabel,
 } from '@/composables/creator/creatorWorkspaceUtils'
 import type {
-  CreatorActiveStep,
   CreatorFeedback,
   CreatorFeedbackChatResult,
   CreatorFeedbackDashboard,
@@ -388,15 +387,6 @@ const selectedTaskId = computed(() => selectedTask.value?.taskId ?? '')
 const hasSelectedTask = computed(() => selectedTaskId.value.length > 0)
 const hasSelectedTaskMaterials = computed(() => (selectedTask.value?.materials.length ?? 0) > 0)
 const showDeveloperTools = computed(() => props.developerMode)
-const activeStepIndex = computed(() => {
-  const stepOrder: CreatorActiveStep[] = showDeveloperTools.value
-    ? ['task', 'prePublish', 'feedback', 'report', 'usage']
-    : ['task', 'prePublish', 'feedback', 'report']
-  return Math.max(stepOrder.indexOf(activeStep.value as CreatorActiveStep), 0)
-})
-const activeStepStyle = computed<Record<string, string>>(() => ({
-  '--creator-active-step-index': String(activeStepIndex.value),
-}))
 const hasTaskMaterialInput = computed(
   () =>
     hasText(taskForm.titleDraft) ||
@@ -2070,7 +2060,7 @@ provideCreatorWorkspace({
 </script>
 
 <template>
-  <section class="creator-shell">
+  <section class="creator-shell creator-workbench-shell">
     <Transition name="creator-toast">
       <div
         v-if="successMessage"
@@ -2093,7 +2083,7 @@ provideCreatorWorkspace({
       </div>
     </Transition>
 
-    <header class="creator-header">
+    <header v-if="!selectedTask && !isTaskComposerOpen" class="creator-header">
       <div>
         <p class="creator-kicker">创作台</p>
         <h2>视频发布与复盘助手</h2>
@@ -2285,57 +2275,119 @@ provideCreatorWorkspace({
 
     <div v-else class="creator-layout">
       <aside class="creator-task-rail">
+        <section class="creator-flow-card" aria-label="视频发布流程">
+          <header class="creator-flow-head">
+            <strong>视频发布流程</strong>
+            <span>完成以下步骤，高效发布视频</span>
+          </header>
+
+          <nav class="creator-tabs creator-tabs-vertical" aria-label="创作步骤">
+            <button
+              type="button"
+              :class="{ active: activeStep === 'task' }"
+              :aria-current="activeStep === 'task' ? 'step' : undefined"
+              @click="activeStep = 'task'"
+            >
+              <span class="creator-step-count">1</span>
+              <span class="creator-step-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M7 3.5h7l3.5 3.5v13.5h-11v-17z" />
+                  <path d="M14 3.5v4h3.5" />
+                  <path d="M9 11h6M9 15h5" />
+                </svg>
+              </span>
+              <span class="creator-step-text">
+                <strong>视频资料</strong>
+                <small>填写视频基础信息</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              :disabled="!hasSelectedTask"
+              :class="{ active: activeStep === 'prePublish' }"
+              :aria-current="activeStep === 'prePublish' ? 'step' : undefined"
+              @click="activeStep = 'prePublish'"
+            >
+              <span class="creator-step-count">2</span>
+              <span class="creator-step-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M6 5.5h12v13h-12z" />
+                  <path d="M9 9h6M9 12.5h5M9 16h3.5" />
+                  <path d="M16.5 4v3M18 5.5h-3" />
+                </svg>
+              </span>
+              <span class="creator-step-text">
+                <strong>发布方案</strong>
+                <small>生成发布计划与方案</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              :disabled="!canEnterFeedback"
+              :class="{ active: activeStep === 'feedback' }"
+              :aria-current="activeStep === 'feedback' ? 'step' : undefined"
+              @click="activeStep = 'feedback'"
+            >
+              <span class="creator-step-count">3</span>
+              <span class="creator-step-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M5 6.5h14v8.5h-8l-4 3v-3h-2z" />
+                  <path d="M8.5 10.5h7M8.5 13h4.5" />
+                </svg>
+              </span>
+              <span class="creator-step-text">
+                <strong>观众反馈</strong>
+                <small>收集观众意见与反馈</small>
+              </span>
+            </button>
+            <button
+              type="button"
+              :disabled="!feedbackReport"
+              :class="{ active: activeStep === 'report' }"
+              :aria-current="activeStep === 'report' ? 'step' : undefined"
+              @click="activeStep = 'report'"
+            >
+              <span class="creator-step-count">4</span>
+              <span class="creator-step-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M6 4.5h12v15h-12z" />
+                  <path d="M9 16v-3M12 16v-6M15 16v-4" />
+                  <path d="M8.5 8h7" />
+                </svg>
+              </span>
+              <span class="creator-step-text">
+                <strong>复盘报告</strong>
+                <small>生成复盘总结报告</small>
+              </span>
+            </button>
+            <button
+              v-if="showDeveloperTools"
+              type="button"
+              :disabled="!hasSelectedTask"
+              :class="{ active: activeStep === 'usage' }"
+              :aria-current="activeStep === 'usage' ? 'step' : undefined"
+              @click="openUsageStats"
+            >
+              <span class="creator-step-count">5</span>
+              <span class="creator-step-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M7 8.5c0-1.7 2.2-3 5-3s5 1.3 5 3-2.2 3-5 3-5-1.3-5-3z" />
+                  <path d="M7 8.5v6.5c0 1.7 2.2 3 5 3s5-1.3 5-3v-6.5" />
+                  <path d="M7 12c0 1.7 2.2 3 5 3s5-1.3 5-3" />
+                </svg>
+              </span>
+              <span class="creator-step-text">
+                <strong>开销统计</strong>
+                <small>查看模型调用与成本</small>
+              </span>
+            </button>
+          </nav>
+        </section>
+
         <TaskListPanel />
       </aside>
 
       <section class="creator-main">
-        <nav
-          class="creator-tabs"
-          aria-label="创作步骤"
-          :style="activeStepStyle"
-        >
-          <button
-            type="button"
-            :class="{ active: activeStep === 'task' }"
-            @click="activeStep = 'task'"
-          >
-            视频资料
-          </button>
-          <button
-            type="button"
-            :disabled="!hasSelectedTask"
-            :class="{ active: activeStep === 'prePublish' }"
-            @click="activeStep = 'prePublish'"
-          >
-            发布方案
-          </button>
-          <button
-            type="button"
-            :disabled="!canEnterFeedback"
-            :class="{ active: activeStep === 'feedback' }"
-            @click="activeStep = 'feedback'"
-          >
-            观众反馈
-          </button>
-          <button
-            type="button"
-            :disabled="!feedbackReport"
-            :class="{ active: activeStep === 'report' }"
-            @click="activeStep = 'report'"
-          >
-            复盘报告
-          </button>
-          <button
-            v-if="showDeveloperTools"
-            type="button"
-            :disabled="!hasSelectedTask"
-            :class="{ active: activeStep === 'usage' }"
-            @click="openUsageStats"
-          >
-            开销统计
-          </button>
-        </nav>
-
         <div v-if="errorMessage" class="creator-alert error-alert">
           <strong>请求失败</strong>
           <span>{{ errorMessage }}</span>

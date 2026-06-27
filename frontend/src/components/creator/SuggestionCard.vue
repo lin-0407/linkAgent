@@ -103,7 +103,7 @@ function onCopy() {
   <article class="suggestion-card" :class="[`type-${type}`, { accepted }]">
     <!-- 角标：推荐 / 已采纳 -->
     <div class="card-badges">
-      <span v-if="showRecommendBadge" class="badge recommend">⭐ 推荐</span>
+      <span v-if="showRecommendBadge" class="badge recommend">推荐</span>
       <span v-if="accepted" class="badge accepted">已采纳</span>
     </div>
 
@@ -165,8 +165,8 @@ function onCopy() {
 .suggestion-card {
   position: relative;
   display: grid;
-  gap: var(--s3);
-  padding: var(--s4) var(--s5);
+  gap: var(--s2);
+  padding: var(--s3);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
@@ -217,9 +217,9 @@ function onCopy() {
 
 .card-content {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: var(--fw-semibold);
-  line-height: 1.6;
+  line-height: 1.52;
   color: var(--ink);
   word-break: break-word;
 }
@@ -240,7 +240,7 @@ function onCopy() {
 .card-meta p {
   margin: 0;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.5;
   color: var(--muted);
 }
 

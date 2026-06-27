@@ -59,16 +59,28 @@ const {
       </article>
     </div>
   </div>
-  <div v-else class="creator-panel compact-panel creator-task-empty-panel">
-    <div class="creator-panel-title">
-      <div>
-        <span>当前视频</span>
-        <b>未选择</b>
-      </div>
-    </div>
-    <p class="creator-muted">打开项目列表选择历史项目，或直接在右侧创建新视频项目。</p>
-    <button type="button" class="creator-secondary-action" @click="openTaskManager">
-      打开项目列表
-    </button>
-  </div>
+  <button
+    v-else
+    type="button"
+    class="creator-panel compact-panel creator-task-empty-panel creator-history-entry"
+    aria-label="打开历史项目"
+    @click="openTaskManager"
+  >
+    <span class="creator-history-entry-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24">
+        <path d="M7 3.5h7l3.5 3.5v13.5h-11v-17z" />
+        <path d="M14 3.5v4h3.5" />
+        <path d="M9 12h6M9 16h4" />
+      </svg>
+    </span>
+    <span class="creator-history-entry-copy">
+      <strong>历史项目</strong>
+      <small>查看和管理过往项目</small>
+    </span>
+    <span class="creator-history-entry-arrow" aria-hidden="true">
+      <svg viewBox="0 0 24 24">
+        <path d="M9 5l7 7-7 7" />
+      </svg>
+    </span>
+  </button>
 </template>

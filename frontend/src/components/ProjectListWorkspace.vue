@@ -206,7 +206,7 @@ function formatDate(value: string) {
 .project-list-toolbar {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(180px, 260px);
-  gap: var(--s4);
+  gap: var(--s3);
 }
 
 .project-list-toolbar label {
@@ -223,7 +223,7 @@ function formatDate(value: string) {
 .project-list-toolbar input,
 .project-list-toolbar select {
   width: 100%;
-  min-height: 44px;
+  min-height: 38px;
   padding: 0 var(--s3);
   color: var(--ink);
   background: var(--surface);
@@ -240,18 +240,19 @@ function formatDate(value: string) {
 
 .project-list {
   display: grid;
-  gap: var(--s3);
+  gap: var(--s2);
 }
 
 .project-list-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
-  gap: var(--s4);
-  padding: var(--s4);
+  gap: var(--s3);
+  padding: var(--s3);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
+  box-shadow: var(--sh-sm);
 }
 
 .project-list-item div {
@@ -263,7 +264,7 @@ function formatDate(value: string) {
 .project-list-item strong {
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.45;
 }
 

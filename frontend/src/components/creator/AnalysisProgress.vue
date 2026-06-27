@@ -187,8 +187,8 @@ function nodeClass(status: string): string {
 <style scoped>
 .analysis-progress {
   display: grid;
-  gap: var(--s3);
-  padding: var(--s4);
+  gap: var(--s2);
+  padding: var(--s3);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
@@ -223,7 +223,7 @@ function nodeClass(status: string): string {
 
 .progress-empty {
   margin: 0;
-  padding: var(--s4) 0;
+  padding: var(--s3) 0;
   text-align: center;
   font-size: 13px;
   color: var(--muted);
@@ -240,8 +240,8 @@ function nodeClass(status: string): string {
   position: relative;
   display: grid;
   grid-template-columns: 24px 1fr;
-  gap: var(--s3);
-  padding-bottom: var(--s4);
+  gap: var(--s2);
+  padding-bottom: var(--s3);
 }
 
 /* 连接线：除最后一个外，每个节点向下延伸竖线 */
@@ -364,7 +364,7 @@ function nodeClass(status: string): string {
   display: grid;
   gap: var(--s1);
   margin-top: var(--s2);
-  padding: var(--s3);
+  padding: var(--s2);
   background: var(--surface-sub);
   border-radius: var(--r-sm);
 }
