@@ -3813,114 +3813,116 @@ provideCreatorWorkspace({
       </section>
     </div>
 
-    <div v-if="isContextLibraryOpen" class="creator-modal-backdrop" role="presentation">
-      <section
-        class="creator-result-modal creator-context-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="类型语境库"
-      >
-        <header class="creator-result-modal-head">
-          <div>
-            <p class="creator-kicker">类型语境库</p>
-            <h3>{{ currentVideoType === 'GLOBAL' ? '全局通用' : currentVideoType }}</h3>
-          </div>
-          <button type="button" class="creator-ghost-button" @click="isContextLibraryOpen = false">
-            关闭
-          </button>
-        </header>
-
-        <div class="creator-result-modal-body">
-          <form class="creator-form-grid creator-context-form" @submit.prevent="saveManualContextTerm">
-            <label>
-              <span>词条</span>
-              <input
-                v-model="contextTermForm.term"
-                type="text"
-                maxlength="128"
-                placeholder="输入关键词、黑话、梗或慎用表达"
-              />
-            </label>
-            <label>
-              <span>类型</span>
-              <select v-model="contextTermForm.termType">
-                <option
-                  v-for="option in contextTermOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
-            <label class="span-full">
-              <span>证据说明</span>
-              <textarea
-                v-model="contextTermForm.evidenceText"
-                maxlength="1000"
-                placeholder="为什么这个词适合或不适合当前类型"
-              ></textarea>
-            </label>
-            <div class="creator-action-row span-full">
-              <button
-                type="submit"
-                class="creator-primary-button creator-mini-button"
-                :disabled="!canSaveContextTerm"
-              >
-                {{ isSavingCreatorContextTerm ? '保存中...' : '保存词条' }}
-              </button>
-              <button type="button" class="creator-ghost-button creator-mini-button" @click="resetContextTermForm">
-                清空
-              </button>
+    <Teleport to="body">
+      <div v-if="isContextLibraryOpen" class="creator-modal-backdrop" role="presentation">
+        <section
+          class="creator-result-modal creator-context-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="类型语境库"
+        >
+          <header class="creator-result-modal-head">
+            <div>
+              <p class="creator-kicker">类型语境库</p>
+              <h3>{{ currentVideoType === 'GLOBAL' ? '全局通用' : currentVideoType }}</h3>
             </div>
-          </form>
+            <button type="button" class="creator-ghost-button" @click="isContextLibraryOpen = false">
+              关闭
+            </button>
+          </header>
 
-          <div class="creator-context-list">
-            <article
-              v-for="term in creatorContextTerms"
-              :key="term.termId"
-              class="creator-result-block"
-              :class="{ muted: !term.enabled }"
-            >
-              <span>{{ contextTermTypeLabel(term.termType) }}</span>
-              <strong>{{ term.term }}</strong>
-              <p v-if="term.evidenceText">{{ term.evidenceText }}</p>
-              <small>
-                {{ contextTermSourceLabel(term.sourceType) }} · 权重 {{ term.weight }} ·
-                接受 {{ term.acceptCount }} · 拒绝 {{ term.rejectCount }}
-              </small>
-              <div class="creator-action-row">
+          <div class="creator-result-modal-body">
+            <form class="creator-form-grid creator-context-form" @submit.prevent="saveManualContextTerm">
+              <label>
+                <span>词条</span>
+                <input
+                  v-model="contextTermForm.term"
+                  type="text"
+                  maxlength="128"
+                  placeholder="输入关键词、黑话、梗或慎用表达"
+                />
+              </label>
+              <label>
+                <span>类型</span>
+                <select v-model="contextTermForm.termType">
+                  <option
+                    v-for="option in contextTermOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+              </label>
+              <label class="span-full">
+                <span>证据说明</span>
+                <textarea
+                  v-model="contextTermForm.evidenceText"
+                  maxlength="1000"
+                  placeholder="为什么这个词适合或不适合当前类型"
+                ></textarea>
+              </label>
+              <div class="creator-action-row span-full">
                 <button
-                  type="button"
-                  class="creator-ghost-button creator-mini-button"
-                  @click="feedbackContextTerm(term, true)"
+                  type="submit"
+                  class="creator-primary-button creator-mini-button"
+                  :disabled="!canSaveContextTerm"
                 >
-                  提高权重
+                  {{ isSavingCreatorContextTerm ? '保存中...' : '保存词条' }}
                 </button>
-                <button
-                  type="button"
-                  class="creator-ghost-button creator-mini-button"
-                  @click="feedbackContextTerm(term, false)"
-                >
-                  降低权重
-                </button>
-                <button
-                  v-if="term.enabled"
-                  type="button"
-                  class="creator-danger-action creator-mini-button"
-                  @click="disableContextTerm(term)"
-                >
-                  禁用
+                <button type="button" class="creator-ghost-button creator-mini-button" @click="resetContextTermForm">
+                  清空
                 </button>
               </div>
-            </article>
-            <p v-if="!isLoadingCreatorContextTerms && creatorContextTerms.length === 0" class="creator-muted">
-              当前类型还没有语境词条。
-            </p>
+            </form>
+
+            <div class="creator-context-list">
+              <article
+                v-for="term in creatorContextTerms"
+                :key="term.termId"
+                class="creator-result-block"
+                :class="{ muted: !term.enabled }"
+              >
+                <span>{{ contextTermTypeLabel(term.termType) }}</span>
+                <strong>{{ term.term }}</strong>
+                <p v-if="term.evidenceText">{{ term.evidenceText }}</p>
+                <small>
+                  {{ contextTermSourceLabel(term.sourceType) }} · 权重 {{ term.weight }} ·
+                  接受 {{ term.acceptCount }} · 拒绝 {{ term.rejectCount }}
+                </small>
+                <div class="creator-action-row">
+                  <button
+                    type="button"
+                    class="creator-ghost-button creator-mini-button"
+                    @click="feedbackContextTerm(term, true)"
+                  >
+                    提高权重
+                  </button>
+                  <button
+                    type="button"
+                    class="creator-ghost-button creator-mini-button"
+                    @click="feedbackContextTerm(term, false)"
+                  >
+                    降低权重
+                  </button>
+                  <button
+                    v-if="term.enabled"
+                    type="button"
+                    class="creator-danger-action creator-mini-button"
+                    @click="disableContextTerm(term)"
+                  >
+                    禁用
+                  </button>
+                </div>
+              </article>
+              <p v-if="!isLoadingCreatorContextTerms && creatorContextTerms.length === 0" class="creator-muted">
+                当前类型还没有语境词条。
+              </p>
+            </div>
           </div>
-        </div>
-      </section>
-    </div>
+        </section>
+      </div>
+    </Teleport>
 
     <GuidanceEditorModal
       :target="guidanceEditorTarget"
