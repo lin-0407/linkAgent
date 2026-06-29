@@ -518,11 +518,9 @@ public interface CreatorBilibiliMapper {
 
     /**
      * 批量按 taskId 列表查询任务记录。
-     * 用于 getLinkedVideos 中避免逐条查询的 N+1 问题——原来每个 binding 都调一次
-     * CreatorTaskMapper.findTaskByTaskId，绑定多时会产生大量单条查询。
-     *
-     * @ResultMap 引用 CreatorTaskMapper 中定义的 "CreatorTaskRecordMap"，
-     * MyBatis 的 ResultMap 是全局注册的，跨 Mapper 引用有效。
+     * 用于 getLinkedVideos 中避免逐条查询的 N+1 问题。
+     * 列名 task_id / user_id 等通过 MyBatis mapUnderscoreToCamelCase 自动映射到驼峰属性，
+     * 不需要显式 @Results 或跨 Mapper 引用 @ResultMap。
      */
     @Select("""
             <script>
@@ -535,6 +533,5 @@ public interface CreatorBilibiliMapper {
               AND is_deleted = 0
             </script>
             """)
-    @ResultMap("CreatorTaskRecordMap")
     List<com.link.linkagent.creator.task.model.CreatorTaskRecord> findTasksByTaskIds(@Param("taskIds") List<String> taskIds);
 }

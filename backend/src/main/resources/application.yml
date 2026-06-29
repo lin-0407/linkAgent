@@ -15,6 +15,12 @@ spring:
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+# ========== MyBatis ==========
+mybatis:
+  configuration:
+    # 自动将列名 task_id 映射到属性 taskId，数据库规范下不需要手写 @Results
+    map-underscore-to-camel-case: true
+
   # ========== Redis ==========
   data:
     redis:

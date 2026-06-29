@@ -48,16 +48,6 @@ public interface CreatorTaskMapper {
               AND is_deleted = 0
             LIMIT 1
             """)
-    @Results(id = "CreatorTaskRecordMap", value = {
-            @Result(column = "id", property = "id"),
-            @Result(column = "task_id", property = "taskId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "task_name", property = "taskName"),
-            @Result(column = "video_type", property = "videoType"),
-            @Result(column = "status", property = "status"),
-            @Result(column = "create_time", property = "createTime"),
-            @Result(column = "update_time", property = "updateTime")
-    })
     Optional<CreatorTaskRecord> findTaskByTaskId(@Param("taskId") String taskId);
 
     @Select("""
