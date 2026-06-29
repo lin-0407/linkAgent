@@ -7,7 +7,10 @@ spring:
 
   servlet:
     multipart:
-      max-file-size: 5MB
+      # 补充背景文档服务层按 10MB/个校验；这里同步前置限制，避免请求先被 Spring 拦截。
+      max-file-size: 10MB
+      # 多文件上传需要总请求上限高于单文件上限；业务层仍逐文件校验格式和大小。
+      max-request-size: 32MB
   # ========== MySQL ==========
   datasource:
     url: ${DB_URL}

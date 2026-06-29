@@ -64,6 +64,8 @@ export interface WorkflowSseHandlers {
 const HEARTBEAT_TIMEOUT_MS = 45_000
 /** 心跳检测轮询间隔 */
 const HEARTBEAT_CHECK_INTERVAL_MS = 5_000
+/** SSE 与 axios 使用同一 API 前缀，避免分域部署时普通请求和消息流地址不一致 */
+const API_BASE_URL = normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL || '/api')
 
 // ═══════════════════════════════════════════
 // Composable
@@ -110,7 +112,7 @@ export function useWorkflowSSE() {
 
     workflowStore.connectionStatus = 'connecting'
 
-    const url = `/api/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/events`
+    const url = buildWorkflowEventUrl(taskId, sessionId)
     const es = new EventSource(url)
     eventSource.value = es
 
@@ -256,6 +258,16 @@ export function useWorkflowSSE() {
 // ═══════════════════════════════════════════
 // 内部工具（模块私有，仅供 useWorkflowSSE 使用）
 // ═══════════════════════════════════════════
+
+function normalizeApiBaseUrl(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed === '/') return ''
+  return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed
+}
+
+function buildWorkflowEventUrl(taskId: string, sessionId: string): string {
+  return `${API_BASE_URL}/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/events`
+}
 
 function parseSseData(rawData: string): Record<string, unknown> | null {
   try {

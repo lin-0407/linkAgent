@@ -1155,6 +1155,28 @@ CREATE TABLE IF NOT EXISTS creator_video_analysis_report
 -- 用 INFORMATION_SCHEMA 判断列是否存在，兼容所有 MySQL 8.x 版本
 -- ============================================================
 
+-- 参考视频质量分可信度字段：这里仅补齐旧库缺失列，避免 db-init 每次执行时清空已有质量分数据
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_reference_video ADD COLUMN raw_quality_score DECIMAL(12, 6) DEFAULT NULL COMMENT ''单视频独立原始质量分，由互动率和情绪因子直接计算；不依赖同分区其它视频，用于小样本兜底排序'' AFTER highlight_summary',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_reference_video' AND COLUMN_NAME = 'raw_quality_score');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_reference_video ADD COLUMN quality_sample_count INT UNSIGNED NOT NULL DEFAULT 0 COMMENT ''本次分区归一化可参与打分的有效视频数；用于判断 quality_score 是否具备展示可信度'' AFTER quality_score',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_reference_video' AND COLUMN_NAME = 'quality_sample_count');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_reference_video ADD COLUMN quality_score_reliable TINYINT NOT NULL DEFAULT 0 COMMENT ''质量分是否达到展示可信度：1=可展示相对质量分，0=仅保留原始分作内部排序或样本不足'' AFTER quality_sample_count',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_reference_video' AND COLUMN_NAME = 'quality_score_reliable');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- 阶段6.3：交互式创作会话新增补充背景文档和AI理解确认字段
 SET @sql = (SELECT IF(COUNT(*) = 0,
     'ALTER TABLE creator_interactive_session ADD COLUMN background_context LONGTEXT DEFAULT NULL COMMENT ''用户上传的补充背景资料（从文档中提取的纯文本，可累积追加多个文件的内容）''',

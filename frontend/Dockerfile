@@ -10,9 +10,8 @@ RUN npm install
 
 COPY . .
 
-# 跳过 vue-tsc 类型检查，Docker 构建只需要 Vite 打包产物。
-# 类型检查已在本地开发阶段完成，线上构建无须重复校验。
-RUN npm run build-only
+# 使用正式 build，让 Docker 构建阶段也执行 vue-tsc，避免类型错误进入镜像。
+RUN npm run build
 
 # 静态站点用 Nginx 承载，既能直接服务 SPA，又能顺手把 /api 转发给后端。
 FROM nginx:1.27-alpine
