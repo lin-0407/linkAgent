@@ -42,5 +42,8 @@
 | 前端体验优化落地（阶段一：P0+P1 四件套） | `/docs/develop/前端体验优化落地-阶段一.md` |
 | 前端体验优化落地（阶段二拆分方案） | `/docs/develop/前端体验优化落地-阶段二-拆分方案.md` |
 | 前端体验优化落地（阶段二：CreatorWorkspace 模板拆分） | `/docs/develop/前端体验优化落地-阶段二.md` |
+| 前端 P0-4 视觉和响应式收口 | `/docs/develop/前端P0-4视觉和响应式收口.md` |
+| 前端 P0-4 视觉和响应式收口问题整理 | `/docs/error/前端P0-4视觉和响应式收口问题整理.md` |
+| 前端 P0-4 视觉和响应式收口说明 | `/docs/reference/前端P0-4视觉和响应式收口说明.md` |
 | 发布前优化金标准集 V1 设计 | `/docs/develop/发布前优化金标准集V1设计.md` |
 | 发布前优化金标准集 V1 机器可读样例 | `/docs/develop/pre_publish_golden_v1_cases.jsonl` |
