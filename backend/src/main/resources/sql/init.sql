@@ -1032,3 +1032,117 @@ ON DUPLICATE KEY UPDATE
     scene = VALUES(scene),
     description = VALUES(description),
     is_deleted = 0;
+
+-- ------------------------------------------------------------
+-- 27. B站账号绑定表
+--     保存用户绑定的 B 站 UID 和同步状态，作为视频缓存和任务视频绑定的前置依赖
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_bilibili_account
+(
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    account_id      VARCHAR(64)  NOT NULL COMMENT '平台内账号绑定唯一标识（UUID）',
+    user_id         VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '平台用户标识，与 creator_task.user_id 对应',
+    bilibili_uid    VARCHAR(32)  NOT NULL COMMENT '用户填写的 B 站 UID，用于同步公开视频列表和校验 BV 归属',
+    nickname        VARCHAR(128)          DEFAULT NULL COMMENT '同步到的 B 站昵称，取不到则为空',
+    bind_status     VARCHAR(32)  NOT NULL DEFAULT 'ACTIVE' COMMENT '绑定状态：ACTIVE=正常绑定，UNVERIFIED=UID未校验，SYNC_FAILED=同步失败',
+    last_sync_time  DATETIME              DEFAULT NULL COMMENT '最近一次同步视频列表时间',
+    last_sync_error VARCHAR(500)          DEFAULT NULL COMMENT '最近一次同步失败原因摘要，截断保存避免异常堆栈撑爆表',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_bilibili_account_id (account_id),
+    UNIQUE KEY uk_bilibili_user_id (user_id),
+    KEY idx_bilibili_uid (bilibili_uid)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = 'B站账号绑定表';
+
+-- ------------------------------------------------------------
+-- 28. B站视频缓存表
+--     缓存从 B 站接口同步到的公开视频信息，作为任务视频绑定的数据源和自动采集的触发依据
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_bilibili_video
+(
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    video_id        VARCHAR(64)  NOT NULL COMMENT '平台内视频缓存唯一标识（UUID）',
+    bilibili_uid    VARCHAR(32)  NOT NULL COMMENT '归属 B 站 UID，用于关联账号和校验 BV 归属',
+    bvid            VARCHAR(20)  NOT NULL COMMENT 'B 站 BV 号，用于任务关联和排错',
+    aid             BIGINT UNSIGNED       DEFAULT NULL COMMENT 'B 站 AV 号，取不到则为空',
+    title           VARCHAR(255)          DEFAULT NULL COMMENT '视频标题，来自 B 站公开信息',
+    cover_url       VARCHAR(500)          DEFAULT NULL COMMENT '视频封面 URL，来自 B 站公开信息',
+    publish_time    DATETIME              DEFAULT NULL COMMENT 'B 站发布时间，用于判断评论弹幕成熟度',
+    view_count      BIGINT UNSIGNED       DEFAULT NULL COMMENT '播放量，取不到为空',
+    like_count      BIGINT UNSIGNED       DEFAULT NULL COMMENT '点赞量，取不到为空',
+    coin_count      BIGINT UNSIGNED       DEFAULT NULL COMMENT '投币量，取不到为空',
+    favorite_count  BIGINT UNSIGNED       DEFAULT NULL COMMENT '收藏量，取不到为空',
+    share_count     BIGINT UNSIGNED       DEFAULT NULL COMMENT '分享量，取不到为空',
+    sync_status     VARCHAR(32)  NOT NULL DEFAULT 'SYNCED' COMMENT '同步状态：SYNCED=已同步，STALE=数据过期，FAILED=同步失败',
+    last_sync_time  DATETIME              DEFAULT NULL COMMENT '最近同步时间',
+    raw_snapshot    JSON                  DEFAULT NULL COMMENT '原始同步快照 JSON，用于排查字段缺失和后续数据修复',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_bilibili_video_id (video_id),
+    UNIQUE KEY uk_bilibili_bv_uid (bvid, bilibili_uid),
+    KEY idx_bilibili_uid (bilibili_uid),
+    KEY idx_bilibili_bvid (bvid)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = 'B站视频缓存表';
+
+-- ------------------------------------------------------------
+-- 29. 任务视频绑定表
+--     把创作任务和具体的 B 站 BV 号关联起来，支持校验 BV 归属后触发自动视频分析
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_task_video_binding
+(
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    binding_id      VARCHAR(64)  NOT NULL COMMENT '绑定唯一标识（UUID）',
+    task_id         VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id，每个任务第一版只绑定一个 BV',
+    user_id         VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '平台用户标识',
+    bilibili_uid    VARCHAR(32)           DEFAULT NULL COMMENT '绑定时使用的 B 站 UID，用于后续校验 BV 是否属于该创作者',
+    bvid            VARCHAR(20)  NOT NULL COMMENT '任务绑定的 BV 号，用于视频分析页筛选和自动采集触发',
+    binding_status  VARCHAR(32)  NOT NULL DEFAULT 'WAITING_VERIFY' COMMENT '绑定状态：WAITING_VERIFY=等待校验，BOUND=已绑定校验通过，UID_MISMATCH=BV不属于该UID，VIDEO_NOT_FOUND=BV查不到视频',
+    verify_message  VARCHAR(500)          DEFAULT NULL COMMENT '校验说明，用于前端展示绑定异常原因给用户',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_task_video_binding_id (binding_id),
+    UNIQUE KEY uk_task_video_binding_task (task_id),
+    KEY idx_binding_bvid (bvid),
+    KEY idx_binding_status (binding_status)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '任务视频绑定表';
+
+-- ------------------------------------------------------------
+-- 30. 视频分析报告表
+--     保存 LLM 对已绑定视频的完整分析结果，涵盖发布方案兑现、观众关注点、误解争议和下一期行动清单
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_video_analysis_report
+(
+    id                      BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    analysis_id             VARCHAR(64)  NOT NULL COMMENT '视频分析唯一标识（UUID）',
+    task_id                 VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id',
+    bvid                    VARCHAR(20)  NOT NULL COMMENT '分析的视频 BV 号',
+    workflow_session_id     VARCHAR(64)           DEFAULT NULL COMMENT '关联工作流会话 ID，用于失败回放和步骤级开销追溯',
+    analysis_status         VARCHAR(32)  NOT NULL DEFAULT 'PENDING' COMMENT '分析状态：PENDING=待分析，SYNCING=同步视频信息中，FETCHING=采集评论弹幕中，ANALYZING=LLM分析中，COMPLETED=已完成，FAILED=失败',
+    one_sentence_summary    VARCHAR(200)          DEFAULT NULL COMMENT '一句话复盘，不超过80字，说明这条视频当前最重要的结论',
+    publish_plan_review     TEXT                  DEFAULT NULL COMMENT '发布方案兑现情况 JSON，对比第二阶段确认方案说明哪些做到哪些偏离',
+    audience_focus          TEXT                  DEFAULT NULL COMMENT '观众关注点 JSON 数组，总结评论弹幕高频观点和代表证据',
+    misunderstanding_points TEXT                  DEFAULT NULL COMMENT '误解点 JSON 数组，说明观众哪里没看懂及可能原因',
+    controversy_points      TEXT                  DEFAULT NULL COMMENT '争议点 JSON 数组，含风险等级和回应建议',
+    next_action_plan        TEXT                  DEFAULT NULL COMMENT '下一期行动清单 JSON，包含标题、内容结构、互动和选题建议',
+    evidence_summary        TEXT                  DEFAULT NULL COMMENT '证据摘要 JSON，可展开查看评论弹幕时间点和分类理由',
+    raw_output              LONGTEXT              DEFAULT NULL COMMENT 'LLM 原始输出，用于失败回放和人工检查',
+    parse_status            VARCHAR(32)  NOT NULL DEFAULT 'PENDING' COMMENT '解析状态：PENDING=未生成，PARSED=已解析，RAW_ONLY=仅保存原文',
+    create_time             DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time             DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted              TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_video_analysis_id (analysis_id),
+    UNIQUE KEY uk_video_analysis_task (task_id),
+    KEY idx_analysis_bvid (bvid),
+    KEY idx_analysis_status (analysis_status)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '视频分析报告表';

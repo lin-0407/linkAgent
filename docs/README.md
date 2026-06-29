@@ -2,6 +2,13 @@
 
 本文件统一记录阶段文档、功能说明和踩坑记录。`AGENTS.md` 只保留项目协作规则，避免随着阶段增加变得过长。
 
+
+## 项目访问入口
+
+| 类型 | 地址 |
+|---|---|
+| 项目域名 | <https://www.linkagent.cloud> |
+
 ## 阶段文档
 
 | 文档 | 路径 |
@@ -32,6 +39,11 @@
 | 阶段 6.3 P0-1 - AI 创意方案入口踩坑记录 | `/docs/error/阶段6.3-P0-1-AI创意方案入口踩坑记录.md` |
 | 发布前优化 AI 交互台说明 | `/docs/reference/发布前优化AI交互台说明.md` |
 | 阶段 6.3 P0-2 - 发布前优化 AI 交互台踩坑记录 | `/docs/error/阶段6.3-P0-2-发布前优化AI交互台踩坑记录.md` |
+| 阶段 6.3 P0-3 - BV 绑定与 UID 绑定（后端） | `/docs/reference/` — 参见阶段 6.3 总方案文档 §14-15 |
+| 阶段 6.3 P0-3 - B站账号、BV绑定与视频分析页（前端） | `/docs/reference/` — 参见阶段 6.3 总方案文档 §16 |
+| B站账号与视频绑定 API 接口 | `/backend/src/main/java/com/link/linkagent/creator/bilibili/`（Controller / Service / Mapper） |
+| B站账号与视频绑定前端组件 | `/frontend/src/components/creator/BvBindingPanel.vue`、`BilibiliAccountPanel.vue`、`LinkedVideoCard.vue`、`LinkedVideoGrid.vue` |
+| 视频分析页 | `/frontend/src/views/VideoAnalysisPage.vue` — 路由 `/video-analysis` |
 | LinkAgent 前端全链路用户化重构方案 | `/docs/develop/项目前端业务流程重构.md` |
 | 前端 P0 用户化重构落地记录 | `/docs/develop/前端P0用户化重构落地.md` |
 | 前端 P0 用户化重构说明 | `/docs/reference/前端P0用户化重构说明.md` |

@@ -45,7 +45,9 @@
       "Bash(bash *)",
       "Bash(ssh *)",
       "Bash(scp *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(echo \"exit: $?\")",
+      "Skill(code-review)"
     ]
   }
 }

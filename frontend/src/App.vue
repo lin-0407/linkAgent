@@ -63,6 +63,12 @@ const guideOpen = ref(false)
             项目列表
           </button>
         </RouterLink>
+        <!-- P0-3: 视频分析独立页面入口 — 展示已绑定任务的视频并支持复盘追问 -->
+        <RouterLink to="/video-analysis" custom v-slot="{ navigate, isActive }">
+          <button type="button" :class="{ active: isActive }" @click="navigate">
+            视频分析
+          </button>
+        </RouterLink>
       </nav>
 
       <div class="surface-topbar-actions" aria-label="辅助入口">

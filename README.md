@@ -2,7 +2,7 @@
 
 LinkAgent Creator Copilot 是一个面向 B 站内容创作者的 AI 创作与复盘工作台。
 
-它不是通用聊天机器人，而是围绕 UP 主的真实创作流程设计：从选题与稿件准备，到发布前标题、简介、标签优化，再到评论弹幕复盘、报告沉淀和创作者偏好记忆。
+它不是通用聊天机器人，而是围绕 UP 主的真实创作流程设计：从用户输入自然语言创作想法，AI 生成创意方案和主动追问，到发布前标题、简介、标签优化，BV 号绑定，再到视频分析复盘、报告沉淀和创作者偏好记忆。
 
 ## 项目访问入口
 
@@ -64,17 +64,20 @@ flowchart LR
 
 ## 创作者业务链路
 
-下面这张图说明一次创作任务从材料进入系统，到形成发布前优化和发布后复盘的过程。
+下面这张图说明一次创作任务从用户输入想法，到 AI 生成创意方案、发布前优化、BV 绑定和视频分析复盘的过程。
 
 ```mermaid
 flowchart TD
-    Task[创建创作任务] --> Material[导入字幕 / 文稿 / 草稿]
-    Material --> PrePublish[发布前优化]
-    PrePublish --> Suggestions[标题 / 简介 / 标签建议]
-    Suggestions --> Publish[人工确认后发布]
-    Publish --> Feedback[导入评论 / 弹幕样例]
-    Feedback --> Review[反馈分析与追问]
-    Review --> Report[生成复盘报告]
+    Idea[用户输入创作想法] --> Creative[AI 生成 3 个创意卡片]
+    Creative --> Select[用户选择创意方向]
+    Select --> PrePublish[发布前优化 AI 交互台]
+    PrePublish --> Draft[文稿草稿补全]
+    Draft --> Suggestions[标题 / 简介 / 标签建议]
+    Suggestions --> Confirm[确认发布方案]
+    Confirm --> BindBv[绑定已发布视频 BV 号]
+    BindBv --> BindUid[绑定 B 站 UID]
+    BindUid --> VideoAnalysis[视频分析与复盘]
+    VideoAnalysis --> Report[生成复盘报告]
     Report --> Preference[沉淀创作者偏好]
     Preference --> NextTask[服务下一次创作任务]
 ```
@@ -83,6 +86,8 @@ flowchart TD
 
 ### 创作任务工作台
 
+- **AI 创意方案入口**：用户输入自然语言创作想法，AI 生成 3 张结构化的创意卡片（标题大纲、内容大纲、简介大纲、亮点和风险），用户选择后自动进入发布前优化。
+- **发布前优化 AI 交互台**：AI 主动追问缺失信息（文稿、字幕、风格偏好），用户可补充素材或让 AI 生成可编辑文稿草稿，最终生成发布方案并确认。
 - 创建、编辑、删除创作任务。
 - 保存标题草稿、简介草稿、字幕、文稿和其他创作材料。
 - 支持材料文件导入，方便把分析入口集中到单个任务下。
@@ -105,6 +110,12 @@ SSE 是服务器主动推送事件的机制，适合把模型分析过程一段�
 - 支持反馈追问，并可在开启 RAG 后结合证据回答。
 
 RAG 是先检索相关材料，再让模型基于材料回答。它能减少模型脱离证据直接发挥的问题。
+
+### 视频分析与复盘
+
+- **BV 号绑定**：用户确认发布方案后填回已发布视频的 BV 号，系统自动关联任务和视频。
+- **B 站 UID 绑定**：绑定 B 站 UID 后，视频分析页只展示和平台任务关联的视频卡片，不展示账号下全部视频。
+- **视频分析页**：独立页面展示已绑定任务的视频卡片（封面、标题、指标），点击可查看分析结果。后续版本将支持自动采集评论弹幕、生成复盘报告和追问 AI。
 
 ### 创作复盘报告
 
@@ -155,11 +166,13 @@ RAG 是先检索相关材料，再让模型基于材料回答。它能减少模�
 flowchart TB
     Controller[Controller 接口层] --> Creator[creator 创作者业务]
     Creator --> Task[task 创作任务]
+    Creator --> Interactive[interactive AI交互式创作]
     Creator --> Suggestion[suggestion 发布前建议]
     Creator --> Feedback[feedback 评论弹幕分析]
     Creator --> Report[report 复盘报告]
     Creator --> Preference[preference 创作者偏好]
     Creator --> Context[context 视频类型语境]
+    Creator --> Bilibili[bilibili B站账号与BV绑定]
     Creator --> Workflow[workflow 工作流事件]
     Creator --> Knowledge[knowledge 案例知识库]
     Creator --> Core[core Agent 内核]
@@ -175,6 +188,9 @@ linkAgent/
 ├── backend/                         # Spring Boot 后端
 │   ├── src/main/java/com/link/linkagent
 │   │   ├── creator/                 # 创作者工作台业务模块
+│   │   │   ├── bilibili/             #   B站账号绑定、BV绑定、视频分析（P0-3）
+│   │   │   ├── interactive/          #   AI交互式创作与创意卡片（P0-1）
+│   │   │   └── workflow/             #   工作流会话与SSE事件
 │   │   ├── knowledge/               # 视频案例知识库与 RAG
 │   │   ├── core/                    # ReAct Agent 执行内核
 │   │   ├── tool/                    # 工具注册、执行和 MCP 适配

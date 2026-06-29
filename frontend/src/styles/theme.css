@@ -6033,6 +6033,9 @@ body {
   --creator-panel-strong: #ffffff;
   --creator-line: rgba(23, 32, 51, 0.08);
   --creator-muted-ink: var(--muted);
+  --creator-text: #1d1d1f;
+  --creator-accent: var(--bili-blue, #0071e3);
+  --creator-surface-sub: rgba(23, 32, 51, 0.04);
   padding: 12px 18px 24px;
   background: transparent;
 }
