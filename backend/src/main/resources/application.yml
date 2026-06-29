@@ -15,12 +15,6 @@ spring:
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
-# ========== MyBatis ==========
-mybatis:
-  configuration:
-    # 自动将列名 task_id 映射到属性 taskId，数据库规范下不需要手写 @Results
-    map-underscore-to-camel-case: true
-
   # ========== Redis ==========
   data:
     redis:
@@ -119,6 +113,12 @@ agent:
       enabled: ${SUMMARY_MEMORY_ENABLED:false}
       trigger-message-count: ${SUMMARY_MEMORY_TRIGGER_MESSAGE_COUNT:8}
       retained-message-count: ${SUMMARY_MEMORY_RETAINED_MESSAGE_COUNT:2}
+
+# ========== MyBatis ==========
+mybatis:
+  configuration:
+    # 自动将列名 task_id 映射到属性 taskId，数据库规范下不需要手写 @Results
+    map-underscore-to-camel-case: true
 
 # ========== 创作者反馈追问 RAG（阶段 4.13） ==========
 # 业务开关独立于 spring.ai 基础设施开关：即使 Milvus/Embedding 连上，也只有 enabled=true 才让追问走向量检索，
