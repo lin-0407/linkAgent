@@ -7510,10 +7510,8 @@ body {
   }
 }
 
-/* ───────────────────────────────────────────
-   P0-4：视觉和响应式收口。
-   这些规则放在文件末尾覆盖历史样式，目的是先统一创作台的容器、按钮、结果块和移动端步骤条，避免继续扩大旧样式分叉。
-   ─────────────────────────────────────────── */
+/* P0-4：视觉和响应式收口。
+   这些规则放在文件末尾覆盖历史样式，目的是先统一创作台的容器、按钮、结果块和移动端步骤条，避免继续扩大旧样式分叉。 */
 .creator-workbench-shell {
   overflow-x: clip;
 }
@@ -7793,81 +7791,4 @@ body {
   .creator-mini-button {
     width: 100%;
   }
-}
-
-/* P0-3: 创作台通用按钮样式 — 被 BvBindingPanel、BilibiliAccountPanel 等组件复用 */
-.creator-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 16px;
-  font-size: 13px;
-  font-weight: 500;
-  border: 1px solid var(--creator-line, rgba(23, 32, 51, 0.08));
-  border-radius: 8px;
-  background: var(--creator-panel-strong, #fff);
-  color: var(--creator-text, #1d1d1f);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.creator-btn:hover {
-  background: var(--creator-surface-sub, rgba(23, 32, 51, 0.04));
-}
-
-.creator-btn:active {
-  transform: scale(0.98);
-}
-
-.creator-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.creator-btn-primary {
-  background: linear-gradient(180deg, var(--creator-accent, #0071e3), #005bb5);
-  border-color: transparent;
-  color: #ffffff;
-}
-
-.creator-btn-primary:hover {
-  background: linear-gradient(180deg, #0077ed, #0066cc);
-}
-
-.creator-btn-secondary {
-  background: var(--creator-surface-sub, rgba(23, 32, 51, 0.04));
-  border-color: var(--creator-line, rgba(23, 32, 51, 0.08));
-}
-
-.creator-btn-secondary:hover {
-  background: rgba(23, 32, 51, 0.08);
-}
-
-/* P0-3: 创作台通用输入框样式 — 跨组件复用，放在全局而非 scoped */
-.creator-input {
-  width: 100%;
-  height: 40px;
-  padding: 0 12px;
-  font-size: 14px;
-  border: 1px solid var(--creator-line, rgba(23, 32, 51, 0.08));
-  border-radius: 8px;
-  background: var(--creator-panel-strong, #fff);
-  color: var(--creator-text, #1d1d1f);
-  outline: none;
-  transition: border-color 0.15s;
-  box-sizing: border-box;
-}
-
-.creator-input:focus {
-  border-color: var(--creator-accent, #0071e3);
-  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12);
-}
-
-.creator-input.has-error {
-  border-color: #ff3b30;
 }
