@@ -103,18 +103,20 @@ async function handleBind() {
 
     <!-- 绑定输入区（无已有绑定时展示）-->
     <div v-else-if="!loading" class="bv-binding-form">
-      <label class="bv-binding-field">
+      <label class="bv-binding-field" for="bv-binding-uid">
         <span class="bv-binding-field-label">B站 UID</span>
         <input
+          id="bv-binding-uid"
           v-model="uidInput"
           type="text"
           class="creator-input"
           placeholder="你的B站UID，用于校验BV归属"
         />
       </label>
-      <label class="bv-binding-field">
+      <label class="bv-binding-field" for="bv-binding-bv">
         <span class="bv-binding-field-label">BV 号</span>
         <input
+          id="bv-binding-bv"
           v-model="bvInput"
           type="text"
           class="creator-input"
@@ -237,24 +239,7 @@ async function handleBind() {
   color: var(--creator-text, #1d1d1f);
 }
 
-.creator-input {
-  width: 100%;
-  height: 40px;
-  padding: 0 12px;
-  font-size: 14px;
-  border: 1px solid var(--creator-line);
-  border-radius: 8px;
-  background: var(--creator-panel-strong, #fff);
-  color: var(--creator-text, #1d1d1f);
-  outline: none;
-  transition: border-color 0.15s;
-  box-sizing: border-box;
-}
-
-.creator-input:focus {
-  border-color: var(--creator-accent, #0071e3);
-}
-
+/* .creator-input 通用输入框样式已移至全局 theme.css，此处只保留组件特有覆盖 */
 .creator-input.has-error {
   border-color: #ff3b30;
 }

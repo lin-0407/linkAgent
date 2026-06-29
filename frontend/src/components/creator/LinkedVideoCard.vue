@@ -34,6 +34,7 @@ function analysisLabel(video: BilibiliVideo): { text: string; cls: string } {
     class="linked-video-card"
     role="button"
     tabindex="0"
+    :aria-labelledby="'video-title-' + video.bvid"
     @click="emit('select', video)"
     @keydown.enter="emit('select', video)"
   >
@@ -45,6 +46,8 @@ function analysisLabel(video: BilibiliVideo): { text: string; cls: string } {
         :alt="video.title || '视频封面'"
         class="card-cover-img"
         loading="lazy"
+        width="320"
+        height="180"
       />
       <div v-else class="card-cover-placeholder" aria-hidden="true">
         <svg viewBox="0 0 48 48" fill="none">
@@ -56,7 +59,7 @@ function analysisLabel(video: BilibiliVideo): { text: string; cls: string } {
 
     <!-- 信息区 -->
     <div class="card-body">
-      <h4 class="card-title">{{ video.title || '未获取到标题' }}</h4>
+      <h4 :id="'video-title-' + video.bvid" class="card-title">{{ video.title || '未获取到标题' }}</h4>
 
       <div class="card-meta">
         <code class="card-bv">{{ video.bvid }}</code>

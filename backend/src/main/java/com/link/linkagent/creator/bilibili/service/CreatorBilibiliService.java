@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
@@ -53,16 +54,11 @@ public class CreatorBilibiliService {
     public BilibiliAccountResponse bindAccount(BindAccountRequest request) {
         var existing = bilibiliMapper.findAccountByUserId(request.userId());
         if (existing.isPresent()) {
-            // 已有绑定：更新 UID 和状态，重置同步信息（因为 UID 变了，旧缓存不再有效）
             BilibiliAccountRecord record = existing.get();
-            bilibiliMapper.updateAccountSyncResult(
-                    record.accountId(),
-                    null, // 昵称等下次同步时再更新
-                    "ACTIVE",
-                    null, // 清除旧同步时间
-                    null  // 清除旧错误
-            );
-            // 重新查询返回最新状态
+            // 已有绑定：更新 UID，同时重置昵称和同步信息。
+            // 因为 UID 变了意味着旧缓存和昵称不再有效，等下次同步时重新拉取。
+            // 使用专用的 updateAccountUid 而非 updateAccountSyncResult——后者没有权限改动 UID。
+            bilibiliMapper.updateAccountUid(record.accountId(), request.bilibiliUid());
             var updated = bilibiliMapper.findAccountByUserId(request.userId()).orElseThrow();
             return toAccountResponse(updated);
         }
@@ -145,16 +141,25 @@ public class CreatorBilibiliService {
             return toBindingResponse(existingBinding.get());
         }
 
-        // 检查 BV 是否已被其他任务绑定——记录警告但不阻止
+        // 检查 BV 是否已被其他任务绑定——区分同用户和跨用户冲突
         var conflictingBindings = bilibiliMapper.findBindingsByBvid(request.bvid());
         String verifyMessage = null;
         if (!conflictingBindings.isEmpty()) {
-            verifyMessage = String.format("该BV号已被%d个其他任务绑定，请确认是否正确",
+            // 区分同用户和跨用户冲突：跨用户冲突应阻止而非仅警告
+            boolean hasCrossUserConflict = conflictingBindings.stream()
+                    .anyMatch(b -> !request.userId().equals(b.userId()));
+            if (hasCrossUserConflict) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "该BV号已被其他用户绑定，请确认BV号是否正确");
+            }
+            // 同用户冲突：警告但允许，用户可能想对同一视频做多次分析
+            verifyMessage = String.format("该BV号已被你的%d个其他任务绑定，请确认是否需要重复分析",
                     conflictingBindings.size());
-            log.warn("BV冲突：bvid={}, 已有绑定数={}", request.bvid(), conflictingBindings.size());
+            log.warn("BV同用户冲突：bvid={}, userId={}, 已有绑定数={}",
+                    request.bvid(), request.userId(), conflictingBindings.size());
         }
 
-        // 创建绑定
+        // 创建绑定（并发安全：捕获 DuplicateKeyException 后返回已有记录）
         var record = new TaskVideoBindingRecord(
                 null,
                 UUID.randomUUID().toString(),
@@ -167,7 +172,14 @@ public class CreatorBilibiliService {
                 null,
                 null
         );
-        bilibiliMapper.insertBinding(record);
+        try {
+            bilibiliMapper.insertBinding(record);
+        } catch (DuplicateKeyException e) {
+            // 并发场景下另一个请求已经创建了绑定，重新查询并返回已有记录
+            log.info("并发创建绑定冲突，返回已有记录：taskId={}", taskId);
+            var existing = bilibiliMapper.findBindingByTaskId(taskId).orElseThrow();
+            return toBindingResponse(existing);
+        }
 
         var created = bilibiliMapper.findBindingByTaskId(taskId).orElseThrow();
         return toBindingResponse(created);
@@ -190,22 +202,44 @@ public class CreatorBilibiliService {
      * 关联逻辑：binding (按 UID 过滤) → task (获取 taskName) → video (获取封面/指标)。
      * 如果视频缓存表中还没有对应记录（用户绑了 BV 但还没同步），
      * 也返回一条只含 bvid + taskId + taskName 的基础响应，保证卡片列表不丢数据。
+     * <p>
+     * userId 参数用于数据隔离：只返回当前用户的绑定，防止跨用户数据泄露。
+     * bindingStatus 只保留 "BOUND"，null 状态（未校验）视为不展示。
+     * 批量查询 taskName 替代原来的逐条 N+1 查询。
      */
-    public List<BilibiliVideoResponse> getLinkedVideos(String bilibiliUid) {
+    @Transactional(readOnly = true)
+    public List<BilibiliVideoResponse> getLinkedVideos(String bilibiliUid, String userId) {
         var bindings = bilibiliMapper.listBindingsByUid(bilibiliUid);
-        List<BilibiliVideoResponse> result = new ArrayList<>();
+        if (bindings.isEmpty()) {
+            return List.of();
+        }
 
+        // 收集所有关联的 taskId，批量查询任务名称，避免 N+1
+        List<String> taskIds = bindings.stream()
+                .map(TaskVideoBindingRecord::taskId)
+                .distinct()
+                .toList();
+        var tasks = bilibiliMapper.findTasksByTaskIds(taskIds);
+        // 转为 Map 以便 O(1) 查找
+        var taskMap = tasks.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        com.link.linkagent.creator.task.model.CreatorTaskRecord::getTaskId,
+                        com.link.linkagent.creator.task.model.CreatorTaskRecord::getTaskName,
+                        (a, b) -> a
+                ));
+
+        List<BilibiliVideoResponse> result = new ArrayList<>();
         for (var binding : bindings) {
-            // 跳过异常状态绑定（UID 不匹配等），不展示在正常列表里
-            if ("UID_MISMATCH".equals(binding.bindingStatus())) {
+            // 只展示已校验通过的绑定；null 状态视为未校验，不展示
+            if (!"BOUND".equals(binding.bindingStatus())) {
+                continue;
+            }
+            // userId 隔离：只返回当前用户的绑定，防止跨用户数据泄露
+            if (!userId.equals(binding.userId())) {
                 continue;
             }
 
-            String taskName = null;
-            var task = taskMapper.findTaskByTaskId(binding.taskId());
-            if (task.isPresent()) {
-                taskName = task.get().getTaskName();
-            }
+            String taskName = taskMap.getOrDefault(binding.taskId(), null);
 
             // 查找视频缓存
             var video = bilibiliMapper.findVideoByBvidAndUid(binding.bvid(), bilibiliUid);

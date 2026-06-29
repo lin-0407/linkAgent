@@ -406,9 +406,10 @@ export function getTaskVideoBinding(taskId: string) {
 
 // ── 已绑定视频列表（P0-3）──
 
-/** 查询某B站UID下已和平台任务绑定的视频列表（不含UID_MISMATCH状态的绑定） */
-export function listLinkedVideos(bilibiliUid: string) {
+/** 查询某B站UID下已和平台任务绑定的视频列表（仅BOUND状态+当前用户） */
+export function listLinkedVideos(bilibiliUid: string, userId = 'default') {
   return get<BilibiliVideo[]>(
     `/creator/bilibili/accounts/${encodeURIComponent(bilibiliUid)}/linked-videos`,
+    { params: { userId } },
   )
 }

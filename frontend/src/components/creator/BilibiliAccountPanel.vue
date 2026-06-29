@@ -117,9 +117,10 @@ async function handleSync() {
 
     <!-- 未绑定 -->
     <div v-else-if="!loading" class="account-bind-form">
-      <label class="account-bind-field">
+      <label class="account-bind-field" for="account-bind-uid">
         <span class="account-bind-label">B站 UID</span>
         <input
+          id="account-bind-uid"
           v-model="uidInput"
           type="text"
           class="creator-input"

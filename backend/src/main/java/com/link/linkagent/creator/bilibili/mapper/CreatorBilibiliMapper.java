@@ -111,6 +111,26 @@ public interface CreatorBilibiliMapper {
                                 @Param("lastSyncTime") LocalDateTime lastSyncTime,
                                 @Param("lastSyncError") String lastSyncError);
 
+    /**
+     * 更新 B 站 UID。
+     * 独立于 updateAccountSyncResult，因为 UID 只能通过 bindAccount 接口修改，
+     * 同步流程不应有权限改动 UID。
+     * 修改 UID 同时重置昵称和同步信息，因为旧缓存和昵称对新 UID 不再有效。
+     */
+    @Update("""
+            UPDATE creator_bilibili_account
+            SET bilibili_uid = #{bilibiliUid},
+                nickname = NULL,
+                last_sync_time = NULL,
+                last_sync_error = NULL,
+                bind_status = 'ACTIVE',
+                update_time = CURRENT_TIMESTAMP
+            WHERE account_id = #{accountId}
+              AND is_deleted = 0
+            """)
+    int updateAccountUid(@Param("accountId") String accountId,
+                         @Param("bilibiliUid") String bilibiliUid);
+
     // ══════════════════════════════════════════════════════════════
     // B站视频缓存（creator_bilibili_video）
     // ══════════════════════════════════════════════════════════════
@@ -154,20 +174,20 @@ public interface CreatorBilibiliMapper {
                 #{syncStatus},
                 #{lastSyncTime},
                 #{rawSnapshot}
-            )
+            ) AS new_row
             ON DUPLICATE KEY UPDATE
-                aid = VALUES(aid),
-                title = VALUES(title),
-                cover_url = VALUES(cover_url),
-                publish_time = VALUES(publish_time),
-                view_count = VALUES(view_count),
-                like_count = VALUES(like_count),
-                coin_count = VALUES(coin_count),
-                favorite_count = VALUES(favorite_count),
-                share_count = VALUES(share_count),
-                sync_status = VALUES(sync_status),
-                last_sync_time = VALUES(last_sync_time),
-                raw_snapshot = VALUES(raw_snapshot),
+                aid = new_row.aid,
+                title = new_row.title,
+                cover_url = new_row.cover_url,
+                publish_time = new_row.publish_time,
+                view_count = new_row.view_count,
+                like_count = new_row.like_count,
+                coin_count = new_row.coin_count,
+                favorite_count = new_row.favorite_count,
+                share_count = new_row.share_count,
+                sync_status = new_row.sync_status,
+                last_sync_time = new_row.last_sync_time,
+                raw_snapshot = new_row.raw_snapshot,
                 update_time = CURRENT_TIMESTAMP
             """)
     int insertVideo(BilibiliVideoRecord record);
@@ -495,4 +515,26 @@ public interface CreatorBilibiliMapper {
               AND is_deleted = 0
             """)
     int updateAnalysisReport(VideoAnalysisReportRecord record);
+
+    /**
+     * 批量按 taskId 列表查询任务记录。
+     * 用于 getLinkedVideos 中避免逐条查询的 N+1 问题——原来每个 binding 都调一次
+     * CreatorTaskMapper.findTaskByTaskId，绑定多时会产生大量单条查询。
+     *
+     * @ResultMap 引用 CreatorTaskMapper 中定义的 "CreatorTaskRecordMap"，
+     * MyBatis 的 ResultMap 是全局注册的，跨 Mapper 引用有效。
+     */
+    @Select("""
+            <script>
+            SELECT id, task_id, user_id, task_name, video_type, status, create_time, update_time
+            FROM creator_task
+            WHERE task_id IN
+            <foreach collection="taskIds" item="id" open="(" separator="," close=")">
+                #{id}
+            </foreach>
+              AND is_deleted = 0
+            </script>
+            """)
+    @ResultMap("CreatorTaskRecordMap")
+    List<com.link.linkagent.creator.task.model.CreatorTaskRecord> findTasksByTaskIds(@Param("taskIds") List<String> taskIds);
 }

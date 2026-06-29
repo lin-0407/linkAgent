@@ -8,6 +8,7 @@ import com.link.linkagent.creator.bilibili.model.TaskVideoBindingResponse;
 import com.link.linkagent.creator.bilibili.service.CreatorBilibiliService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.annotation.Validated;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -59,6 +61,7 @@ public class CreatorBilibiliController {
             @PathVariable
             @NotBlank(message = "用户ID不能为空")
             @Size(max = 64, message = "用户ID长度不能超过64个字符")
+            @Pattern(regexp = "^[a-zA-Z0-9_-]+$", message = "用户ID格式不正确")
             String userId) {
         BilibiliAccountResponse account = bilibiliService.getAccount(userId);
         if (account == null) {
@@ -77,6 +80,7 @@ public class CreatorBilibiliController {
             @PathVariable
             @NotBlank(message = "用户ID不能为空")
             @Size(max = 64, message = "用户ID长度不能超过64个字符")
+            @Pattern(regexp = "^[a-zA-Z0-9_-]+$", message = "用户ID格式不正确")
             String userId) {
         return bilibiliService.syncVideos(userId);
     }
@@ -90,8 +94,12 @@ public class CreatorBilibiliController {
             @PathVariable
             @NotBlank(message = "B站UID不能为空")
             @Size(max = 32, message = "B站UID长度不能超过32个字符")
-            String bilibiliUid) {
-        return bilibiliService.getLinkedVideos(bilibiliUid);
+            @Pattern(regexp = "^[0-9]+$", message = "B站UID只能包含数字")
+            String bilibiliUid,
+            @RequestParam(defaultValue = "default")
+            @Size(max = 64, message = "用户ID长度不能超过64个字符")
+            String userId) {
+        return bilibiliService.getLinkedVideos(bilibiliUid, userId);
     }
 
     /**
@@ -103,6 +111,7 @@ public class CreatorBilibiliController {
             @PathVariable
             @NotBlank(message = "任务ID不能为空")
             @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            @Pattern(regexp = "^[a-zA-Z0-9_-]+$", message = "任务ID格式不正确")
             String taskId,
             @Valid @RequestBody BindBvRequest request) {
         return bilibiliService.bindBvToTask(taskId, request);
@@ -117,6 +126,7 @@ public class CreatorBilibiliController {
             @PathVariable
             @NotBlank(message = "任务ID不能为空")
             @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            @Pattern(regexp = "^[a-zA-Z0-9_-]+$", message = "任务ID格式不正确")
             String taskId) {
         TaskVideoBindingResponse binding = bilibiliService.getTaskBinding(taskId);
         if (binding == null) {
