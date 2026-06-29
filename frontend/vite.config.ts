@@ -35,13 +35,23 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // 手动拆包：把 node_modules 中的大库独立成 chunk，利用浏览器缓存
-        manualChunks: {
+        // Vite 8 / Rolldown 要求 manualChunks 为函数，不支持对象形式
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return
           // Vue 全家桶（核心运行时极少变动，长期缓存命中率高）
-          'vendor-vue': ['vue', 'vue-router', 'pinia', 'pinia-plugin-persistedstate'],
-          // 文档渲染相关（markdown-it + katex，体积大但按需加载）
-          'vendor-md': ['markdown-it', 'markdown-it-katex', 'katex'],
-          // HTTP 客户端（axios 单独拆，便于替换时不影响其他 chunk）
-          'vendor-axios': ['axios'],
+          if (id.includes('/vue/') || id.includes('/vue-router/') || id.includes('/pinia/') || id.includes('/@vue/')) {
+            return 'vendor-vue'
+          }
+          // 文档渲染（markdown-it + katex，体积大但按需加载）
+          if (id.includes('markdown-it') || id.includes('katex')) {
+            return 'vendor-md'
+          }
+          // HTTP 客户端
+          if (id.includes('axios')) {
+            return 'vendor-axios'
+          }
+          // 其余 node_modules 归入通用 vendor
+          return 'vendor'
         },
         // 按模块类型拆分 CSS，避免单个 CSS 文件过大阻塞首屏渲染
         assetFileNames: (assetInfo) => {
@@ -53,16 +63,6 @@ export default defineConfig({
         },
         chunkFileNames: 'js/[name]-[hash:8].js',
         entryFileNames: 'js/[name]-[hash:8].js',
-      },
-    },
-    // 生产环境压缩：移除 console 和 debugger，减小输出体积
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: true,
-        drop_debugger: true,
-        // 保留 console.warn 和 console.error，方便生产环境排错
-        pure_funcs: ['console.log', 'console.info', 'console.debug'],
       },
     },
   },
