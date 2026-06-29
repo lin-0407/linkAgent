@@ -331,6 +331,22 @@ const selectedWorkflowMessageId = ref('')
 // activeStep / restoredTaskId 从 Pinia creatorStore 读取，替代原来的 localStorage + persistWorkspaceState 模式
 const creatorStore = useCreatorStore()
 const { activeStep, restoredTaskId } = storeToRefs(creatorStore)
+const creatorStepMetas = [
+  { key: 'task', label: '视频资料', shortLabel: '资料', description: '填写视频基础信息' },
+  { key: 'prePublish', label: '发布方案', shortLabel: '发布', description: '生成发布计划与方案' },
+  { key: 'feedback', label: '观众反馈', shortLabel: '反馈', description: '收集观众意见与反馈' },
+  { key: 'report', label: '复盘报告', shortLabel: '复盘', description: '生成复盘总结报告' },
+]
+const activeCreatorStepIndex = computed(() => {
+  const matchedIndex = creatorStepMetas.findIndex((step) => step.key === activeStep.value)
+  // 开销统计属于开发者辅助入口，不参与普通创作者四步流程；移动端进度条保持在复盘阶段，避免第五步挤压窄屏。
+  if (activeStep.value === 'usage') {
+    return creatorStepMetas.length - 1
+  }
+  return matchedIndex >= 0 ? matchedIndex : 0
+})
+const activeCreatorStepMeta = computed(() => creatorStepMetas[activeCreatorStepIndex.value])
+const creatorProgressPercent = computed(() => `${((activeCreatorStepIndex.value + 1) / creatorStepMetas.length) * 100}%`)
 // 当前任务详情默认折叠，让发布前优化和复盘区域成为页面第一视觉重点。
 const isCurrentTaskExpanded = ref(false)
 const isLoadingTasks = ref(false)
@@ -2362,6 +2378,21 @@ provideCreatorWorkspace({
             <strong>视频发布流程</strong>
             <span>完成以下步骤，高效发布视频</span>
           </header>
+
+          <div
+            class="creator-mobile-progress"
+            aria-label="当前创作进度"
+            :style="{ '--creator-progress-percent': creatorProgressPercent }"
+          >
+            <div class="creator-mobile-progress-head">
+              <span>第 {{ activeCreatorStepIndex + 1 }} / {{ creatorStepMetas.length }} 步</span>
+              <strong>{{ activeCreatorStepMeta.label }}</strong>
+            </div>
+            <div class="creator-mobile-progress-track" aria-hidden="true">
+              <span></span>
+            </div>
+            <p>{{ activeCreatorStepMeta.description }}</p>
+          </div>
 
           <nav class="creator-tabs creator-tabs-vertical creator-tabs-readonly" aria-label="创作步骤">
             <button
