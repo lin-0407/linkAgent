@@ -51,6 +51,48 @@ export type CreatorTaskUpdatePayload = {
   subtitle?: string
 }
 
+export type CreativeIdeaOption = {
+  id: number
+  optionId: string
+  sessionId: string
+  taskId: string
+  optionName: string
+  targetAudience: string | null
+  titleOutline: string | null
+  contentOutline: string | null
+  descriptionOutline: string | null
+  sellingPoints: string | null
+  riskPoints: string | null
+  recommendReason: string | null
+  selected: boolean
+  createTime: string
+  updateTime: string
+}
+
+export type InteractiveTask = {
+  taskId: string
+  sessionId: string
+  userId: string
+  idea: string
+  videoType: string
+  status: string
+  selectedOptionId: string | null
+  parseStatus: string
+  createTime: string
+  updateTime: string
+  options: CreativeIdeaOption[]
+}
+
+export type InteractiveTaskCreatePayload = {
+  userId?: string
+  idea: string
+  videoType?: string
+}
+
+export type CreativeOptionsRegeneratePayload = {
+  extraRequirement?: string
+}
+
 export type CreatorWorkflowStage = 'PRE_PUBLISH' | 'FEEDBACK' | 'REPORT'
 
 export type CreatorEvalCase = {
@@ -159,6 +201,18 @@ export type PrePublishAnalyzePayload = {
   titleStyle?: string
   extraRequirement?: string
   preferenceMode?: CreatorPreferenceMode
+}
+
+export type PrePublishDraftPayload = {
+  extraRequirement?: string
+}
+
+export type PrePublishDraftResult = {
+  taskId: string
+  sessionId: string
+  materialType: CreatorMaterialType
+  content: string
+  message: CreatorWorkflowMessage
 }
 
 export type CreatorPreferenceMode = 'USE_HISTORY' | 'IGNORE_HISTORY' | 'EXPERIMENT'

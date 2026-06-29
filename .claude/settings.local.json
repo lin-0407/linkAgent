@@ -44,7 +44,8 @@
       "Bash(gh pr *)",
       "Bash(bash *)",
       "Bash(ssh *)",
-      "Bash(scp *)"
+      "Bash(scp *)",
+      "Bash(git config *)"
     ]
   }
 }

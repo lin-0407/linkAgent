@@ -19,6 +19,7 @@ import type {
   CreatorContextTerm,
   CreatorContextTermPayload,
   CreatorFeedbackEventPayload,
+  CreativeOptionsRegeneratePayload,
   CreatorPreference,
   CreatorFeedbackSavePayload,
   CreatorSuggestion,
@@ -34,10 +35,14 @@ import type {
   CreatorWorkflowStage,
   CreatorWorkflowStep,
   CreatorWorkflowStartPayload,
+  InteractiveTask,
+  InteractiveTaskCreatePayload,
   LlmApiCallPage,
   LlmApiModelCategory,
   LlmApiUsageSummary,
   PrePublishAnalyzePayload,
+  PrePublishDraftPayload,
+  PrePublishDraftResult,
   WorkflowUsageResponse,
 } from '@/types/creator'
 import { cleanPayload, del, download, get, post, put, upload } from './http'
@@ -73,6 +78,32 @@ export function listCreatorTasks(limit = 20) {
 
 export function getCreatorTask(taskId: string) {
   return get<CreatorTask>(`/creator/tasks/${encodeURIComponent(taskId)}`)
+}
+
+// ── AI 交互式创作 ──
+
+export function createInteractiveTask(payload: InteractiveTaskCreatePayload) {
+  return post<InteractiveTask>('/creator/interactive/tasks', cleanPayload(payload))
+}
+
+export function getInteractiveTask(taskId: string) {
+  return get<InteractiveTask>(`/creator/interactive/tasks/${encodeURIComponent(taskId)}`)
+}
+
+export function regenerateCreativeOptions(
+  taskId: string,
+  payload: CreativeOptionsRegeneratePayload = {},
+) {
+  return post<InteractiveTask>(
+    `/creator/interactive/tasks/${encodeURIComponent(taskId)}/creative-options/regenerate`,
+    cleanPayload(payload),
+  )
+}
+
+export function confirmCreativeOption(taskId: string, optionId: string) {
+  return post<InteractiveTask>(
+    `/creator/interactive/tasks/${encodeURIComponent(taskId)}/creative-options/${encodeURIComponent(optionId)}/confirm`,
+  )
 }
 
 // ── 偏好 & 语境 ──
@@ -174,6 +205,17 @@ export function analyzePrePublishWorkflow(
 ) {
   return post<CreatorSuggestion>(
     `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/analyze`,
+    cleanPayload(payload),
+  )
+}
+
+export function generatePrePublishManuscriptDraft(
+  taskId: string,
+  sessionId: string,
+  payload: PrePublishDraftPayload = {},
+) {
+  return post<PrePublishDraftResult>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/manuscript-draft`,
     cleanPayload(payload),
   )
 }

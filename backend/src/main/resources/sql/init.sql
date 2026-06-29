@@ -158,6 +158,63 @@ CREATE TABLE IF NOT EXISTS creator_material
   COMMENT = '创作材料表';
 
 -- ------------------------------------------------------------
+-- 7.1 交互式创作会话表
+--     保存用户自然语言想法和 AI 创意方案状态，让创意卡片不混入普通任务材料
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_interactive_session
+(
+    id                 BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    session_id         VARCHAR(64)  NOT NULL COMMENT '交互式创作会话唯一标识（UUID）',
+    task_id            VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id，一次创意会话最终沉淀为一个创作任务',
+    user_id            VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识，第一版沿用默认用户便于本地演示',
+    idea               TEXT         NOT NULL COMMENT '用户输入的原始创作想法，用于后续复盘 AI 是否偏离需求',
+    video_type         VARCHAR(64)  NOT NULL DEFAULT '未分类' COMMENT '用户选择或系统兜底的视频类型，用于后续语境库检索',
+    status             VARCHAR(32)  NOT NULL DEFAULT 'IDEA_INPUT' COMMENT '会话状态：IDEA_INPUT=等待输入，CREATIVE_GENERATING=生成中，CREATIVE_OPTIONS_READY=待选择，CREATIVE_CONFIRMED=已确认',
+    selected_option_id VARCHAR(64)           DEFAULT NULL COMMENT '用户最终确认的创意卡片 ID，未确认时为空',
+    raw_output         LONGTEXT              DEFAULT NULL COMMENT 'LLM 生成创意卡片的原始输出，用于失败回放和人工检查',
+    parse_status       VARCHAR(32)  NOT NULL DEFAULT 'PENDING' COMMENT '解析状态：PENDING=未生成，PARSED=已解析，RAW_ONLY=仅保存原文并使用兜底卡片',
+    create_time        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted         TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_interactive_session_id (session_id),
+    UNIQUE KEY uk_interactive_task_id (task_id),
+    KEY idx_interactive_user_update_time (user_id, update_time),
+    KEY idx_interactive_status_update_time (status, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '交互式创作会话表';
+
+-- ------------------------------------------------------------
+-- 7.2 创意卡片表
+--     保存 AI 为一个创作想法生成的候选方向，用户确认后回写到标准任务材料
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_idea_option
+(
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    option_id           VARCHAR(64)  NOT NULL COMMENT '创意卡片唯一标识（UUID）',
+    session_id          VARCHAR(64)  NOT NULL COMMENT '关联 creator_interactive_session.session_id',
+    task_id             VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id，便于按任务追溯候选方案',
+    option_name         VARCHAR(128) NOT NULL COMMENT '创意名称，一句话概括该方向',
+    target_audience     TEXT                  DEFAULT NULL COMMENT '适合人群，说明该方向面向的观众',
+    title_outline       TEXT                  DEFAULT NULL COMMENT '标题大纲 JSON 数组，保存标题表达方向而非单个最终标题',
+    content_outline     TEXT                  DEFAULT NULL COMMENT '内容大纲 JSON 数组，保存开头、主体和结尾结构',
+    description_outline TEXT                  DEFAULT NULL COMMENT '简介大纲 JSON 数组，保存 B 站简介卖点、关键词和引导语',
+    selling_points      TEXT                  DEFAULT NULL COMMENT '亮点 JSON 数组，说明该方向为什么贴合用户想法',
+    risk_points         TEXT                  DEFAULT NULL COMMENT '风险 JSON 数组，说明可能跑偏、过度承诺或误解的地方',
+    recommend_reason    TEXT                  DEFAULT NULL COMMENT 'AI 推荐理由，用于帮助用户在三张卡片中做选择',
+    selected            TINYINT      NOT NULL DEFAULT 0 COMMENT '是否被用户选择：0=未选择，1=已选择',
+    create_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted          TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_idea_option_id (option_id),
+    KEY idx_idea_session_id (session_id),
+    KEY idx_idea_task_id (task_id),
+    KEY idx_idea_selected (session_id, selected)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '创意卡片表';
+
+-- ------------------------------------------------------------
 -- 8. 发布前优化建议表
 --    保存 LLM 基于创作材料生成的标题、简介、标签和风险建议，便于后续复盘与评测
 -- ------------------------------------------------------------

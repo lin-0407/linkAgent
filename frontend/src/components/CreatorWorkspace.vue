@@ -18,6 +18,7 @@ import {
   getWorkflowUsage,
   getPrePublishSuggestion,
   fetchCreatorFeedbackByBv,
+  generatePrePublishManuscriptDraft,
   importCreatorFeedbackFile,
   disableCreatorContextTerm,
   listCreatorContextTerms,
@@ -39,6 +40,7 @@ import {
   updateCreatorTask,
 } from '@/api/creator'
 import MessageBubble from '@/components/MessageBubble.vue'
+import AiCreationConsole from '@/components/creator/AiCreationConsole.vue'
 import GuidanceEditorModal from '@/components/creator/GuidanceEditorModal.vue'
 import FeedbackTab from '@/components/creator/FeedbackTab.vue'
 import MaterialsTab from '@/components/creator/MaterialsTab.vue'
@@ -217,6 +219,8 @@ const videoTypeOptions = [
   '生活记录',
   '鬼畜娱乐',
 ]
+// 短文稿在 P0-1 中可能只是“已确认创意方向”，不能当成完整成片文稿来阻断 AI 补稿。
+const fullScriptMinLength = 800
 const contextTermOptions: ContextTermOption[] = [
   { value: 'KEYWORD', label: '关键词', polarity: 'POSITIVE' },
   { value: 'SLANG', label: '圈内黑话', polarity: 'POSITIVE' },
@@ -334,6 +338,7 @@ const isCreatingTask = ref(false)
 const isUpdatingTask = ref(false)
 const isDeletingTask = ref(false)
 const isAnalyzingPrePublish = ref(false)
+const isGeneratingPrePublishDraft = ref(false)
 const isConfirmingPrePublish = ref(false)
 const isLoadingWorkflow = ref(false)
 const isSendingWorkflowMessage = ref(false)
@@ -454,6 +459,16 @@ const hasConfirmedPrePublish = computed(() => {
   }
   return selectedTask.value ? hasPrePublishResult(selectedTask.value.status) : false
 })
+const hasFullScriptMaterial = computed(() =>
+  Boolean(
+    selectedTask.value?.materials.some(
+      (material) =>
+        (material.materialType === 'MANUSCRIPT' || material.materialType === 'SUBTITLE') &&
+        hasText(material.content) &&
+        material.content.trim().length >= fullScriptMinLength,
+    ),
+  ),
+)
 const canEnterFeedback = computed(() => hasSelectedTask.value && hasConfirmedPrePublish.value)
 const canSendWorkflowMessage = computed(() => {
   const status = workflowSession.value?.status
@@ -461,7 +476,19 @@ const canSendWorkflowMessage = computed(() => {
     workflowSession.value &&
     status !== 'RUNNING' &&
     status !== 'CONFIRMED' &&
-    status !== 'CANCELLED',
+      status !== 'CANCELLED',
+  )
+})
+const canGeneratePrePublishDraft = computed(() => {
+  const status = workflowSession.value?.status
+  return Boolean(
+    hasSelectedTask.value &&
+      hasSelectedTaskMaterials.value &&
+      workflowSession.value &&
+      !hasFullScriptMaterial.value &&
+      status !== 'RUNNING' &&
+      status !== 'CONFIRMED' &&
+      status !== 'CANCELLED',
   )
 })
 const canRunPrePublishAnalyze = computed(() => {
@@ -1149,6 +1176,12 @@ async function selectTask(taskId: string) {
   closeTaskManager()
 }
 
+async function handleCreativeOptionConfirmed(taskId: string) {
+  await selectTask(taskId)
+  activeStep.value = 'prePublish'
+  successMessage.value = '创意方向已确认，下一步可以继续做发布前优化。'
+}
+
 async function loadOptionalResults(task: CreatorTask) {
   suggestion.value = null
   feedback.value = null
@@ -1387,6 +1420,45 @@ async function loadWorkflowUsage(reportError = false) {
     if (reportError) {
       showError(error)
     }
+  }
+}
+
+async function generatePrePublishManuscriptDraftForCurrentTask(extraRequirement = '') {
+  if (!selectedTaskId.value) {
+    return
+  }
+  if (hasFullScriptMaterial.value) {
+    errorMessage.value = '当前任务已有较完整文稿或字幕，可以直接生成发布方案。'
+    return
+  }
+  if (!workflowSession.value) {
+    await loadPrePublishWorkflow(selectedTaskId.value)
+  }
+  if (!workflowSession.value || !canGeneratePrePublishDraft.value) {
+    return
+  }
+
+  isGeneratingPrePublishDraft.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const result = await generatePrePublishManuscriptDraft(
+      selectedTaskId.value,
+      workflowSession.value.sessionId,
+      { extraRequirement },
+    )
+    if (result.message) {
+      upsertWorkflowMessage(result.message)
+    }
+    selectedTask.value = await getCreatorTask(selectedTaskId.value)
+    await refreshPrePublishWorkflowMessages()
+    await refreshUsageStats(1, false)
+    await scrollWorkflowMessagesToBottom()
+    successMessage.value = 'AI 已补全文稿草稿，可以继续补充修改要求或生成发布方案。'
+  } catch (error) {
+    showError(error)
+  } finally {
+    isGeneratingPrePublishDraft.value = false
   }
 }
 
@@ -1969,10 +2041,14 @@ provideCreatorWorkspace({
     askDeleteSelectedTask,
     cancelEditTask,
     canEnterFeedback,
+    canConfirmPrePublish,
+    canGeneratePrePublishDraft,
     canRunFeedbackAnalyze,
     canRunPrePublishAnalyze,
+    canSendWorkflowMessage,
     changeUsageCategoryFilter,
     changeUsagePage,
+    confirmPrePublishResult,
     contextTermChips,
     currentVideoType,
     downloadReportMarkdown,
@@ -1991,10 +2067,12 @@ provideCreatorWorkspace({
     formatInputCount,
     formatUsageToken,
     hasConfirmedPrePublish,
+    hasFullScriptMaterial,
     hasFeedbackSampleInput,
     hasSelectedTask,
     hasTaskMaterialInput,
     historicalPreferenceChips,
+    generatePrePublishManuscriptDraftForCurrentTask,
     importFeedbackFile,
     isAnalyzingFeedback,
     isAnalyzingPrePublish,
@@ -2004,10 +2082,13 @@ provideCreatorWorkspace({
     isCurrentTaskExpanded,
     isExportingReportMarkdown,
     isFetchingFeedback,
+    isGeneratingPrePublishDraft,
     isImportingFeedback,
     isLoadingCreatorContextTerms,
     isLoadingCreatorPreferences,
     isLoadingUsageStats,
+    isConfirmingPrePublish,
+    isSendingWorkflowMessage,
     isSavingFeedback,
     isUpdatingTask,
     materialPreview,
@@ -2048,10 +2129,15 @@ provideCreatorWorkspace({
     usageTotalPages,
     videoTypeOptions,
     workflowFailedStep,
+    workflowMessageDraft,
+    workflowMessages,
     workflowProcessSummary,
     workflowRunningStep,
     workflowSession,
+    workflowSseText,
+    workflowStatusText,
     workflowSteps,
+    sendWorkflowSupplement,
     handleFeedbackFileChange,
     toggleCurrentTaskExpanded,
     suggestion,
@@ -2258,17 +2344,13 @@ provideCreatorWorkspace({
       class="creator-start-screen"
       aria-label="创作台入口"
     >
-      <div>
-        <p class="creator-kicker">开始</p>
-        <h3>先选择你要优化哪条视频</h3>
-        <p>新项目会从视频资料开始；历史项目会继续上次的发布方案、观众反馈或复盘报告。</p>
-      </div>
+      <AiCreationConsole @confirmed="handleCreativeOptionConfirmed" />
       <div class="creator-start-actions">
-        <button type="button" class="creator-primary-button" @click="startCreateTask">
-          开始优化一条视频
-        </button>
         <button type="button" class="creator-secondary-action" @click="openTaskManager">
           继续上次复盘
+        </button>
+        <button type="button" class="creator-ghost-button" @click="startCreateTask">
+          手动填写资料
         </button>
       </div>
     </section>
@@ -2281,12 +2363,13 @@ provideCreatorWorkspace({
             <span>完成以下步骤，高效发布视频</span>
           </header>
 
-          <nav class="creator-tabs creator-tabs-vertical" aria-label="创作步骤">
+          <nav class="creator-tabs creator-tabs-vertical creator-tabs-readonly" aria-label="创作步骤">
             <button
               type="button"
               :class="{ active: activeStep === 'task' }"
               :aria-current="activeStep === 'task' ? 'step' : undefined"
-              @click="activeStep = 'task'"
+              aria-disabled="true"
+              tabindex="-1"
             >
               <span class="creator-step-count">1</span>
               <span class="creator-step-icon" aria-hidden="true">
@@ -2306,7 +2389,8 @@ provideCreatorWorkspace({
               :disabled="!hasSelectedTask"
               :class="{ active: activeStep === 'prePublish' }"
               :aria-current="activeStep === 'prePublish' ? 'step' : undefined"
-              @click="activeStep = 'prePublish'"
+              aria-disabled="true"
+              tabindex="-1"
             >
               <span class="creator-step-count">2</span>
               <span class="creator-step-icon" aria-hidden="true">
@@ -2326,7 +2410,8 @@ provideCreatorWorkspace({
               :disabled="!canEnterFeedback"
               :class="{ active: activeStep === 'feedback' }"
               :aria-current="activeStep === 'feedback' ? 'step' : undefined"
-              @click="activeStep = 'feedback'"
+              aria-disabled="true"
+              tabindex="-1"
             >
               <span class="creator-step-count">3</span>
               <span class="creator-step-icon" aria-hidden="true">
@@ -2345,7 +2430,8 @@ provideCreatorWorkspace({
               :disabled="!feedbackReport"
               :class="{ active: activeStep === 'report' }"
               :aria-current="activeStep === 'report' ? 'step' : undefined"
-              @click="activeStep = 'report'"
+              aria-disabled="true"
+              tabindex="-1"
             >
               <span class="creator-step-count">4</span>
               <span class="creator-step-icon" aria-hidden="true">
@@ -2358,27 +2444,6 @@ provideCreatorWorkspace({
               <span class="creator-step-text">
                 <strong>复盘报告</strong>
                 <small>生成复盘总结报告</small>
-              </span>
-            </button>
-            <button
-              v-if="showDeveloperTools"
-              type="button"
-              :disabled="!hasSelectedTask"
-              :class="{ active: activeStep === 'usage' }"
-              :aria-current="activeStep === 'usage' ? 'step' : undefined"
-              @click="openUsageStats"
-            >
-              <span class="creator-step-count">5</span>
-              <span class="creator-step-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M7 8.5c0-1.7 2.2-3 5-3s5 1.3 5 3-2.2 3-5 3-5-1.3-5-3z" />
-                  <path d="M7 8.5v6.5c0 1.7 2.2 3 5 3s5-1.3 5-3v-6.5" />
-                  <path d="M7 12c0 1.7 2.2 3 5 3s5-1.3 5-3" />
-                </svg>
-              </span>
-              <span class="creator-step-text">
-                <strong>开销统计</strong>
-                <small>查看模型调用与成本</small>
               </span>
             </button>
           </nav>

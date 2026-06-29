@@ -8,6 +8,8 @@ import com.link.linkagent.creator.workflow.model.CreatorWorkflowMessageResponse;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowSessionResponse;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStartRequest;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepResponse;
+import com.link.linkagent.creator.workflow.model.PrePublishDraftRequest;
+import com.link.linkagent.creator.workflow.model.PrePublishDraftResponse;
 import com.link.linkagent.creator.workflow.service.CreatorWorkflowService;
 import com.link.linkagent.llm.usage.WorkflowUsageResponse;
 import jakarta.validation.Valid;
@@ -137,6 +139,22 @@ public class CreatorWorkflowController {
 
             @Valid @RequestBody(required = false) PrePublishAnalyzeRequest request) {
         return creatorWorkflowService.analyzePrePublishWorkflow(taskId, sessionId, request);
+    }
+
+    @PostMapping("/sessions/{sessionId}/pre-publish/manuscript-draft")
+    public PrePublishDraftResponse generatePrePublishManuscriptDraft(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            String taskId,
+
+            @PathVariable
+            @NotBlank(message = "工作流会话ID不能为空")
+            @Size(max = 64, message = "工作流会话ID长度不能超过64个字符")
+            String sessionId,
+
+            @Valid @RequestBody(required = false) PrePublishDraftRequest request) {
+        return creatorWorkflowService.generatePrePublishManuscriptDraft(taskId, sessionId, request);
     }
 
     @PostMapping("/sessions/{sessionId}/pre-publish/confirm")

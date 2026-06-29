@@ -27,6 +27,11 @@
 | 阶段 6.2 - PaE 重规划 | `/docs/develop/阶段6.2-PaE重规划.md` |
 | PaE 重规划说明 | `/docs/reference/PaE重规划说明.md` |
 | 阶段 6.2 - PaE 重规划踩坑记录 | `/docs/error/阶段6.2-PaE重规划踩坑记录.md` |
+| 阶段 6.3 - AI 交互式创作与视频复盘工作流重构 | `/docs/develop/阶段6.3-AI交互式创作与视频复盘工作流重构.md` |
+| AI 交互式创意方案入口说明 | `/docs/reference/AI交互式创意方案入口说明.md` |
+| 阶段 6.3 P0-1 - AI 创意方案入口踩坑记录 | `/docs/error/阶段6.3-P0-1-AI创意方案入口踩坑记录.md` |
+| 发布前优化 AI 交互台说明 | `/docs/reference/发布前优化AI交互台说明.md` |
+| 阶段 6.3 P0-2 - 发布前优化 AI 交互台踩坑记录 | `/docs/error/阶段6.3-P0-2-发布前优化AI交互台踩坑记录.md` |
 | LinkAgent 前端全链路用户化重构方案 | `/docs/develop/项目前端业务流程重构.md` |
 | 前端 P0 用户化重构落地记录 | `/docs/develop/前端P0用户化重构落地.md` |
 | 前端 P0 用户化重构说明 | `/docs/reference/前端P0用户化重构说明.md` |
@@ -37,3 +42,5 @@
 | 前端体验优化落地（阶段一：P0+P1 四件套） | `/docs/develop/前端体验优化落地-阶段一.md` |
 | 前端体验优化落地（阶段二拆分方案） | `/docs/develop/前端体验优化落地-阶段二-拆分方案.md` |
 | 前端体验优化落地（阶段二：CreatorWorkspace 模板拆分） | `/docs/develop/前端体验优化落地-阶段二.md` |
+| 发布前优化金标准集 V1 设计 | `/docs/develop/发布前优化金标准集V1设计.md` |
+| 发布前优化金标准集 V1 机器可读样例 | `/docs/develop/pre_publish_golden_v1_cases.jsonl` |

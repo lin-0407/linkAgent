@@ -31,6 +31,9 @@ import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepRecord;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepResponse;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepStatus;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStepType;
+import com.link.linkagent.creator.workflow.model.PrePublishDraftRequest;
+import com.link.linkagent.creator.workflow.model.PrePublishDraftResponse;
+import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.usage.LlmApiUsageService;
 import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.llm.usage.WorkflowUsageResponse;
@@ -64,6 +67,9 @@ public class CreatorWorkflowService {
     private static final String DETAIL_REF_TYPE_SUGGESTION = "SUGGESTION";
     private static final int WORKFLOW_GUIDANCE_MAX_LENGTH = 2000;
     private static final int ERROR_MESSAGE_MAX_LENGTH = 480;
+    private static final int FULL_SCRIPT_MIN_LENGTH = 800;
+    private static final int DRAFT_MATERIAL_MAX_LENGTH = 20000;
+    private static final int DRAFT_CONTEXT_MATERIAL_MAX_LENGTH = 4000;
 
     private final CreatorTaskMapper creatorTaskMapper;
     private final CreatorSuggestionMapper creatorSuggestionMapper;
@@ -71,6 +77,7 @@ public class CreatorWorkflowService {
     private final PrePublishSuggestionService prePublishSuggestionService;
     private final CreatorWorkflowEventPublisher workflowEventPublisher;
     private final LlmApiUsageService llmApiUsageService;
+    private final LLMService llmService;
     private final RuntimeSettingService runtimeSettingService;
     private final CreatorPreferenceService creatorPreferenceService;
     private final CreatorProfileService creatorProfileService;
@@ -81,6 +88,7 @@ public class CreatorWorkflowService {
                                   PrePublishSuggestionService prePublishSuggestionService,
                                   CreatorWorkflowEventPublisher workflowEventPublisher,
                                   LlmApiUsageService llmApiUsageService,
+                                  LLMService llmService,
                                   RuntimeSettingService runtimeSettingService,
                                   CreatorPreferenceService creatorPreferenceService,
                                   CreatorProfileService creatorProfileService) {
@@ -90,6 +98,7 @@ public class CreatorWorkflowService {
         this.prePublishSuggestionService = prePublishSuggestionService;
         this.workflowEventPublisher = workflowEventPublisher;
         this.llmApiUsageService = llmApiUsageService;
+        this.llmService = llmService;
         this.runtimeSettingService = runtimeSettingService;
         this.creatorPreferenceService = creatorPreferenceService;
         this.creatorProfileService = creatorProfileService;
@@ -372,6 +381,130 @@ public class CreatorWorkflowService {
     }
 
     @Transactional
+    public PrePublishDraftResponse generatePrePublishManuscriptDraft(String taskId,
+                                                                     String sessionId,
+                                                                     PrePublishDraftRequest request) {
+        CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
+        ensureCanGeneratePrePublishDraft(sessionRecord);
+
+        CreatorTaskRecord taskRecord = getTaskRecord(sessionRecord.getTaskId());
+        List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(sessionRecord.getTaskId());
+        if (materials.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "创作任务缺少可扩写材料");
+        }
+        if (hasFullScriptMaterial(materials)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前任务已有较完整文稿或字幕，请直接生成发布方案");
+        }
+
+        CreatorWorkflowStepRecord currentStep = null;
+        try {
+            updateSessionStatus(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowStatus.RUNNING,
+                    null
+            );
+            appendAndPublishMessage(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowMessageRole.AGENT,
+                    "我会先根据已确认的创意方向和你的补充要求，补一版可编辑文稿草稿。",
+                    CreatorWorkflowMessageContentType.TEXT,
+                    null,
+                    null
+            );
+
+            currentStep = startStep(
+                    sessionRecord,
+                    CreatorWorkflowStepType.LLM_CALL,
+                    "生成可编辑文稿草稿",
+                    "基于当前任务材料、创意方向和用户补充消息生成文稿草稿。"
+            );
+            String draftContent = generateManuscriptDraftInWorkflowStep(
+                    sessionRecord,
+                    currentStep,
+                    taskRecord,
+                    materials,
+                    request
+            );
+            completeStepSuccess(
+                    sessionRecord,
+                    currentStep,
+                    "已生成文稿草稿，约 " + draftContent.length() + " 字。",
+                    draftContent
+            );
+            currentStep = null;
+
+            currentStep = startStep(
+                    sessionRecord,
+                    CreatorWorkflowStepType.SAVE_RESULT,
+                    "保存文稿草稿",
+                    "把 AI 补全内容写入任务材料，后续发布方案会读取这份文稿。"
+            );
+            CreatorMaterialRecord materialRecord = new CreatorMaterialRecord();
+            materialRecord.setTaskId(sessionRecord.getTaskId());
+            materialRecord.setMaterialType(CreatorMaterialType.MANUSCRIPT.name());
+            materialRecord.setContent(draftContent);
+            creatorTaskMapper.upsertMaterial(materialRecord);
+            CreatorWorkflowMessageRecord messageRecord = appendAndPublishMessage(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowMessageRole.AGENT,
+                    "已把 AI 补全的文稿草稿写入任务材料。你可以继续补充修改要求，也可以直接生成发布方案。",
+                    CreatorWorkflowMessageContentType.TEXT,
+                    null,
+                    null
+            );
+            completeStepSuccess(
+                    sessionRecord,
+                    currentStep,
+                    "文稿草稿已保存为 " + CreatorMaterialType.MANUSCRIPT.name() + " 材料。",
+                    null
+            );
+            currentStep = null;
+
+            updateSessionStatus(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowStatus.WAITING_USER_INPUT,
+                    null
+            );
+            return new PrePublishDraftResponse(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorMaterialType.MANUSCRIPT.name(),
+                    draftContent,
+                    toMessageResponse(messageRecord)
+            );
+        } catch (RuntimeException exception) {
+            if (currentStep != null) {
+                completeStepFailure(sessionRecord, currentStep, exception);
+            }
+            String errorMessage = TextUtil.abbreviateWithSuffix(
+                    exception.getMessage(),
+                    ERROR_MESSAGE_MAX_LENGTH,
+                    "..."
+            );
+            appendAndPublishMessage(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowMessageRole.AGENT,
+                    "文稿草稿生成失败：" + TextUtil.trimToDefault(errorMessage, "未知错误"),
+                    CreatorWorkflowMessageContentType.ERROR,
+                    null,
+                    null
+            );
+            updateSessionStatus(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowStatus.FAILED,
+                    TextUtil.trimToDefault(errorMessage, "文稿草稿生成失败")
+            );
+            throw exception;
+        }
+    }
+
+    @Transactional
     public CreatorWorkflowSessionResponse confirmPrePublishSuggestion(String taskId,
                                                                       String sessionId,
                                                                       CreatorWorkflowConfirmRequest request) {
@@ -577,6 +710,123 @@ public class CreatorWorkflowService {
             }
             return prePublishSuggestionService.generateSuggestion(sessionRecord.getTaskId(), request);
         }
+    }
+
+    private String generateManuscriptDraftInWorkflowStep(CreatorWorkflowSessionRecord sessionRecord,
+                                                         CreatorWorkflowStepRecord stepRecord,
+                                                         CreatorTaskRecord taskRecord,
+                                                         List<CreatorMaterialRecord> materials,
+                                                         PrePublishDraftRequest request) {
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.openWorkflowStep(
+                sessionRecord.getTaskId(),
+                sessionRecord.getSessionId(),
+                stepRecord.getStepId(),
+                stepRecord.getStepName(),
+                sessionRecord.getStage(),
+                "发布前优化文稿草稿"
+        )) {
+            String rawOutput = llmService.chat(
+                    buildManuscriptDraftSystemPrompt(),
+                    buildManuscriptDraftUserPrompt(sessionRecord, taskRecord, materials, request)
+            );
+            String draftContent = TextUtil.trimToNull(rawOutput);
+            if (draftContent == null) {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "AI 未返回可用文稿草稿");
+            }
+            String markedDraftContent = "【AI 可编辑文稿草稿】\n" + draftContent;
+            return TextUtil.abbreviateWithSuffix(
+                    markedDraftContent,
+                    DRAFT_MATERIAL_MAX_LENGTH,
+                    "\n[文稿草稿过长，已截断保存]"
+            );
+        }
+    }
+
+    private String buildManuscriptDraftSystemPrompt() {
+        return """
+                你是 B 站内容创作者的发布前文稿助手。
+                你的任务是根据用户已确认的创意方向、标题/简介草稿和补充要求，补一版可继续编辑的视频文稿草稿。
+                不要输出 JSON，不要输出 Markdown 代码块，不要解释你的工作过程。
+                草稿必须服务后续发布前优化：要能体现核心卖点、观众钩子、内容结构和风险边界。
+                """;
+    }
+
+    private String buildManuscriptDraftUserPrompt(CreatorWorkflowSessionRecord sessionRecord,
+                                                  CreatorTaskRecord taskRecord,
+                                                  List<CreatorMaterialRecord> materials,
+                                                  PrePublishDraftRequest request) {
+        String extraRequirement = request == null ? null : request.extraRequirement();
+        return """
+                请为下面这期 B 站视频补一版可编辑文稿草稿。
+
+                任务信息：
+                - 任务名称：%s
+                - 视频类型：%s
+
+                用户在当前 AI 交互台里补充过的要求：
+                %s
+
+                本次草稿额外要求：
+                %s
+
+                已有任务材料：
+                %s
+
+                输出要求：
+                1. 直接输出文稿草稿正文，不要输出解释。
+                2. 文稿要分成「开场钩子」「主体段落」「结尾互动」三类段落，但不要写成表格。
+                3. 如果已有材料只是创意大纲，就把它扩写成自然口播；不要假装用户已经提供完整成片数据。
+                4. 不要编造真实播放量、评论、弹幕、竞品数据或未给出的事实。
+                5. 标出仍需用户确认的占位内容，例如「【这里补充真实案例】」。
+                6. 所有内容使用中文。
+                """.formatted(
+                TextUtil.trimToDefault(taskRecord.getTaskName(), "未命名任务"),
+                TextUtil.trimToDefault(taskRecord.getVideoType(), "未分类"),
+                buildWorkflowUserMessagePrompt(sessionRecord.getSessionId()),
+                TextUtil.trimToDefault(extraRequirement, "无"),
+                buildDraftMaterialPrompt(materials)
+        );
+    }
+
+    private String buildWorkflowUserMessagePrompt(String sessionId) {
+        List<String> userMessages = creatorWorkflowMapper.listMessages(sessionId)
+                .stream()
+                .filter(message -> CreatorWorkflowMessageRole.USER.name().equals(message.getRole()))
+                .map(CreatorWorkflowMessageRecord::getContent)
+                .filter(TextUtil::hasText)
+                .map(String::trim)
+                .toList();
+        if (userMessages.isEmpty()) {
+            return "无";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (String userMessage : userMessages) {
+            builder.append("- ").append(userMessage).append("\n");
+        }
+        return TextUtil.abbreviateWithSuffix(
+                builder.toString().trim(),
+                WORKFLOW_GUIDANCE_MAX_LENGTH,
+                "\n[用户补充要求过长，已截断]"
+        );
+    }
+
+    private String buildDraftMaterialPrompt(List<CreatorMaterialRecord> materials) {
+        StringBuilder builder = new StringBuilder();
+        for (CreatorMaterialRecord material : materials) {
+            builder.append("\n【")
+                    .append(toChineseMaterialName(material.getMaterialType()))
+                    .append("】\n")
+                    .append(TextUtil.trimToDefault(
+                            TextUtil.abbreviateWithSuffix(
+                                    material.getContent(),
+                                    DRAFT_CONTEXT_MATERIAL_MAX_LENGTH,
+                                    "\n[材料过长，已截断用于草稿生成]"
+                            ),
+                            "（空）"
+                    ))
+                    .append("\n");
+        }
+        return builder.toString();
     }
 
     private CreatorWorkflowMessageRecord appendAndPublishMessage(String taskId,
@@ -820,6 +1070,30 @@ public class CreatorWorkflowService {
         if (CreatorWorkflowStatus.CANCELLED.name().equals(sessionRecord.getStatus())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前工作流会话不可继续分析");
         }
+    }
+
+    private void ensureCanGeneratePrePublishDraft(CreatorWorkflowSessionRecord sessionRecord) {
+        if (!CreatorWorkflowStage.PRE_PUBLISH.name().equals(sessionRecord.getStage())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前工作流会话不是发布前优化阶段");
+        }
+        if (CreatorWorkflowStatus.RUNNING.name().equals(sessionRecord.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前工作流正在运行，请勿重复触发文稿生成");
+        }
+        if (CreatorWorkflowStatus.CONFIRMED.name().equals(sessionRecord.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "发布前优化建议已确认，不能再自动覆盖文稿");
+        }
+        if (CreatorWorkflowStatus.CANCELLED.name().equals(sessionRecord.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前工作流会话不可继续生成文稿");
+        }
+    }
+
+    private boolean hasFullScriptMaterial(List<CreatorMaterialRecord> materials) {
+        return materials.stream()
+                .filter(material -> CreatorMaterialType.MANUSCRIPT.name().equals(material.getMaterialType())
+                        || CreatorMaterialType.SUBTITLE.name().equals(material.getMaterialType()))
+                .map(CreatorMaterialRecord::getContent)
+                .filter(TextUtil::hasText)
+                .anyMatch(content -> content.trim().length() >= FULL_SCRIPT_MIN_LENGTH);
     }
 
     private boolean shouldResumeLatest(CreatorWorkflowStartRequest request) {
