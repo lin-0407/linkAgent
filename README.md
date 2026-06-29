@@ -2,37 +2,82 @@
 
 LinkAgent Creator Copilot 是一个面向 B 站内容创作者的 AI 创作与复盘工作台。
 
-项目基于 Spring Boot、Spring AI、Vue3 和 SSE 构建。它保留了 ReAct Agent 编排、工具调用、会话记忆、RAG 检索、LLM 用量追踪等底层能力，但对外主线聚焦在创作者工作流：从稿件准备、发布前优化，到评论弹幕分析和创作复盘。
+它不是通用聊天机器人，而是围绕 UP 主的真实创作流程设计：从选题与稿件准备，到发布前标题、简介、标签优化，再到评论弹幕复盘、报告沉淀和创作者偏好记忆。
+
+## 项目访问入口
+
+| 类型 | 地址 |
+|---|---|
+| 项目域名 | <https://www.linkagent.cloud> |
 
 ## 项目定位
 
 一句话说明：
 
 ```text
-帮助 UP 主围绕单个创作任务完成稿件分析、标题简介标签建议、评论弹幕复盘、报告沉淀和偏好记忆。
+帮助 UP 主把一次视频创作任务中的材料、优化建议、观众反馈和复盘结论沉淀到同一个工作台。
 ```
 
-目标用户：
+项目重点解决三个问题：
 
-| 角色 | 典型诉求 |
+| 问题 | LinkAgent 的处理方式 |
 |---|---|
-| B 站中小 UP 主 | 发布前希望快速优化标题、简介、标签和表达重点 |
-| 内容运营学习者 | 希望用结构化方式复盘评论、弹幕和观众反馈 |
-| AI 应用学习者 | 希望看到一个可演示、可观测、可评测的 Spring AI 项目 |
+| 发布前不知道标题、简介、标签怎么改 | 基于字幕、文稿和创作材料生成结构化优化建议 |
+| 发布后评论弹幕信息分散，难以复盘 | 把评论、弹幕和反馈样例汇总成观点、情绪、争议点和下一期建议 |
+| 每次都要重复说明自己的账号风格 | 通过创作者偏好和语境库沉淀长期记忆，减少重复沟通 |
 
 当前明确不做：
 
 - 不做自动投稿。
-- 不做批量或定时后台采集。
 - 不模拟 B 站推荐算法。
 - 不绕过平台限制获取数据。
-- 后端部署后不内置任何定时采集任务。
+- 不内置无人确认的批量采集或定时采集任务。
 
 允许的数据入口：
 
 - 用户主动粘贴或上传的字幕、文稿、评论、弹幕样例。
 - 用户输入单个 BV 后显式触发的限量样例采集。
 - `scripts/` 下由作者本地离线运行的采集脚本，采集结果再通过导入接口合规入库。
+
+## 整体链路图
+
+下面这张图说明用户从浏览器访问到后端 Agent 工作流的主链路。
+
+```mermaid
+flowchart LR
+    User[创作者 / UP 主] --> Browser[浏览器]
+    Browser --> Nginx[前端 Nginx]
+    Nginx --> Vue[Vue3 创作工作台]
+    Vue --> Rest[REST API]
+    Vue --> Sse[SSE 实时事件流]
+    Rest --> Backend[Spring Boot 后端]
+    Sse --> Backend
+    Backend --> Creator[Creator 业务模块]
+    Creator --> Agent[Agent 编排层]
+    Agent --> Tools[工具注册与调用]
+    Agent --> Memory[会话记忆]
+    Agent --> Llm[DeepSeek / OpenAI 兼容模型]
+    Creator --> Mysql[(MySQL 长期数据)]
+    Memory --> Redis[(Redis 短期记忆)]
+    Creator --> Milvus[(Milvus 可选向量库)]
+```
+
+## 创作者业务链路
+
+下面这张图说明一次创作任务从材料进入系统，到形成发布前优化和发布后复盘的过程。
+
+```mermaid
+flowchart TD
+    Task[创建创作任务] --> Material[导入字幕 / 文稿 / 草稿]
+    Material --> PrePublish[发布前优化]
+    PrePublish --> Suggestions[标题 / 简介 / 标签建议]
+    Suggestions --> Publish[人工确认后发布]
+    Publish --> Feedback[导入评论 / 弹幕样例]
+    Feedback --> Review[反馈分析与追问]
+    Review --> Report[生成复盘报告]
+    Report --> Preference[沉淀创作者偏好]
+    Preference --> NextTask[服务下一次创作任务]
+```
 
 ## 核心能力
 
@@ -104,34 +149,24 @@ RAG 是先检索相关材料，再让模型基于材料回答。它能减少模�
 | 流式交互 | SSE |
 | 部署 | Docker Compose、Nginx |
 
-## 架构概览
+## 后端模块关系
 
-```text
-Vue3 创作工作台
-  -> Nginx 同源代理
-  -> REST API / SSE
-  -> Creator 业务层
-  -> Agent 编排层
-  -> Tool Registry
-  -> Memory
-  -> MySQL / Redis / Milvus
-  -> LLM API
+```mermaid
+flowchart TB
+    Controller[Controller 接口层] --> Creator[creator 创作者业务]
+    Creator --> Task[task 创作任务]
+    Creator --> Suggestion[suggestion 发布前建议]
+    Creator --> Feedback[feedback 评论弹幕分析]
+    Creator --> Report[report 复盘报告]
+    Creator --> Preference[preference 创作者偏好]
+    Creator --> Context[context 视频类型语境]
+    Creator --> Workflow[workflow 工作流事件]
+    Creator --> Knowledge[knowledge 案例知识库]
+    Creator --> Core[core Agent 内核]
+    Core --> Tool[tool 工具生态]
+    Core --> Memory[memory 会话记忆]
+    Creator --> Usage[llm.usage 调用追踪]
 ```
-
-后端分层重点：
-
-| 模块 | 说明 |
-|---|---|
-| `creator.task` | 创作任务、稿件材料和任务列表 |
-| `creator.suggestion` | 发布前标题、简介、标签建议 |
-| `creator.feedback` | 评论弹幕保存、分析、追问和证据索引 |
-| `creator.report` | 创作复盘报告与 Markdown 导出 |
-| `creator.preference` | 创作者偏好记忆 |
-| `creator.context` | 创作者语境库 |
-| `creator.workflow` | 发布前工作流、消息流和 SSE 事件 |
-| `knowledge` | 跨分区视频案例知识库和 RAG 检索 |
-| `core` / `tool` / `memory` | 底层 Agent、工具调用和记忆能力 |
-| `llm.usage` | LLM 调用记录、成本统计和链路追踪 |
 
 ## 目录结构
 
@@ -145,9 +180,11 @@ linkAgent/
 │   │   ├── tool/                    # 工具注册、执行和 MCP 适配
 │   │   ├── memory/                  # 短期记忆和长期记忆
 │   │   ├── llm/                     # LLM 调用与用量统计
+│   │   ├── prompt/                  # Prompt 版本与评测配置
+│   │   ├── settings/                # 系统配置
 │   │   └── common/                  # 通用异常与响应结构
 │   └── src/main/resources/sql/      # 数据库初始化脚本
-├── link-agent-frontend/             # Vue3 前端
+├── frontend/                        # Vue3 前端
 │   ├── src/api/                     # 前端 API 封装
 │   ├── src/components/              # 工作台组件
 │   ├── src/composables/             # SSE 和 Agent 会话逻辑
@@ -218,6 +255,7 @@ docker compose up -d --build
 
 - MySQL
 - Redis
+- Milvus 与 etcd
 - Spring Boot 后端
 - Vue 前端 + Nginx
 
@@ -225,6 +263,12 @@ docker compose up -d --build
 
 ```text
 http://localhost:8088
+```
+
+线上域名：
+
+```text
+https://www.linkagent.cloud
 ```
 
 ### 4. 查看日志
@@ -242,7 +286,7 @@ docker compose logs -f frontend
 - `frontend` 没起来：检查前端构建日志。
 - `backend` 没起来：检查数据库连接、Redis 连接和环境变量。
 - LLM 分析失败：检查 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。
-- 样例数据没出现：确认 MySQL 是否是首次启动，初始化脚本只会在数据库卷第一次创建时执行。
+- 样例数据没出现：确认 MySQL 初始化脚本是否已执行。
 
 如果要重置演示数据，可以删除 Docker 数据卷后重新启动：
 
@@ -251,222 +295,14 @@ docker compose down -v
 docker compose up -d --build
 ```
 
-注意：`docker compose down -v` 会删除本项目 Docker Compose 创建的 MySQL 和 Redis 数据卷。
+## 文档索引
 
-## 本地开发
+完整阶段文档、功能说明和踩坑记录统一维护在 [`docs/README.md`](docs/README.md)。
 
-### 后端
+## 协作约定
 
-后端目录：
-
-```text
-backend/
-```
-
-本地运行后端前，需要在 IDE 运行配置或系统环境变量中配置 `.env.example` 里的变量，至少包括：
-
-```text
-DB_URL=jdbc:mysql://localhost:3306/link_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
-DB_USERNAME=link_agent
-DB_PASSWORD=你的数据库密码
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_PASSWORD=
-LLM_API_KEY=你的模型服务密钥
-LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
-VECTOR_STORE_TYPE=none
-EMBEDDING_MODEL_TYPE=none
-```
-
-作者可执行的后端启动命令：
-
-```bash
-cd backend
-mvn spring-boot:run
-```
-
-后端默认端口：
-
-```text
-http://localhost:8080
-```
-
-### 前端
-
-前端目录：
-
-```text
-link-agent-frontend/
-```
-
-作者可执行的前端开发命令：
-
-```bash
-cd link-agent-frontend
-npm ci
-npm run dev
-```
-
-前端开发端口以 Vite 输出为准。
-
-### 本地验证命令
-
-作者在修改后可以执行：
-
-```bash
-cd backend
-mvn test
-```
-
-```bash
-cd link-agent-frontend
-npm run type-check
-npm run build
-```
-
-预期结果：
-
-- 后端测试通过，没有编译错误。
-- 前端类型检查通过，构建产物正常生成。
-- 页面可以创建任务、查看演示任务、触发发布前分析、查看评论弹幕复盘和导出报告。
-
-## 主要环境变量
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `LLM_API_KEY` | 空 | 模型服务密钥，真实分析必须配置 |
-| `LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI 兼容模型服务地址 |
-| `LLM_MODEL` | `deepseek-chat` | 聊天模型名称 |
-| `LLM_GUARD_ENABLED` | `true` | 是否开启单次 LLM 输入规模保护 |
-| `LLM_GUARD_MAX_PROMPT_CHARS` | `30000` | 单次 LLM 请求最大 prompt 字符数 |
-| `DB_URL` | 无 | 后端连接 MySQL 的 JDBC 地址 |
-| `DB_USERNAME` | 无 | MySQL 业务账号 |
-| `DB_PASSWORD` | 无 | MySQL 业务账号密码 |
-| `REDIS_HOST` | 无 | Redis 地址 |
-| `REDIS_PORT` | 无 | Redis 端口 |
-| `VECTOR_STORE_TYPE` | `none` | 向量库开关，启用 Milvus 时设为 `milvus` |
-| `EMBEDDING_MODEL_TYPE` | `none` | Embedding 模型开关，启用时设为 `openai` |
-| `CREATOR_FEEDBACK_RAG_ENABLED` | `false` | 评论弹幕追问是否走 RAG |
-| `KNOWLEDGE_RAG_ENABLED` | `false` | 视频案例知识库是否启用 RAG |
-| `FRONTEND_PORT` | `8088` | Docker Compose 前端访问端口 |
-
-## RAG 与 Milvus
-
-RAG 和 Milvus 默认关闭。这样做是为了让演示环境先稳定跑起来，避免没有向量库或 Embedding Key 时启动失败。
-
-默认关闭配置：
-
-```text
-VECTOR_STORE_TYPE=none
-EMBEDDING_MODEL_TYPE=none
-CREATOR_FEEDBACK_RAG_ENABLED=false
-KNOWLEDGE_RAG_ENABLED=false
-```
-
-启用视频案例知识库 RAG 时，需要准备：
-
-- Milvus 服务。
-- Embedding 模型 Key 和 Base URL。
-- 与模型输出一致的向量维度。
-- 对应的业务开关。
-
-可参考：
-
-- `docs/reference/反馈追问证据链与RAG最小闭环说明.md`
-- `docs/reference/跨分区视频案例知识库说明.md`
-- `docs/reference/高级检索链路说明.md`
-
-## 主要 API
-
-| API | 说明 |
-|---|---|
-| `POST /api/creator/tasks` | 创建创作任务 |
-| `GET /api/creator/tasks` | 查询创作任务列表 |
-| `GET /api/creator/tasks/{taskId}` | 查询任务详情 |
-| `POST /api/creator/tasks/{taskId}/materials/import` | 导入任务材料文件 |
-| `POST /api/creator/tasks/{taskId}/workflow/pre-publish/start` | 启动发布前工作流会话 |
-| `GET /api/creator/tasks/{taskId}/workflow/sessions/{sessionId}/events` | 订阅工作流 SSE 事件 |
-| `POST /api/creator/tasks/{taskId}/pre-publish/analyze` | 生成发布前优化建议 |
-| `POST /api/creator/tasks/{taskId}/feedback/analyze` | 分析评论弹幕 |
-| `POST /api/creator/tasks/{taskId}/feedback/fetch` | 显式触发单 BV 样例采集 |
-| `POST /api/creator/tasks/{taskId}/feedback/chat` | 基于反馈证据追问 |
-| `POST /api/creator/tasks/{taskId}/report/analyze` | 生成创作复盘报告 |
-| `GET /api/creator/tasks/{taskId}/report/markdown` | 导出 Markdown 复盘报告 |
-| `GET /api/creator/preferences` | 查询创作者偏好 |
-| `GET /api/creator/context/bundle` | 查询创作者语境包 |
-| `POST /api/knowledge/reference-videos/import` | 导入视频案例知识 |
-| `POST /api/knowledge/reference-videos/search` | 检索视频案例 |
-| `GET /api/llm-usage/tasks/{taskId}/summary` | 查询任务 LLM 用量汇总 |
-| `GET /api/settings/status` | 查询运行时设置状态 |
-
-## 演示数据
-
-MySQL 首次启动时会执行：
-
-```text
-backend/src/main/resources/sql/init.sql
-```
-
-初始化脚本包含：
-
-- 创作任务样例。
-- 发布前建议样例。
-- 评论弹幕分析样例。
-- 创作复盘报告样例。
-- Prompt 评测样例。
-- LLM 用量追踪样例。
-
-演示库名固定为：
-
-```text
-link_agent
-```
-
-首屏默认会选中最新的完整复盘样例：
-
-```text
-sample-task-report-001
-```
-
-## 文档入口
-
-项目文档集中在 `docs/` 目录：
-
-| 目录 | 说明 |
-|---|---|
-| `docs/develop/` | 阶段开发方案和功能设计 |
-| `docs/reference/` | 功能详细说明和接口说明 |
-| `docs/error/` | 阶段性踩坑记录和排查经验 |
-| `docs/README.md` | 文档索引入口 |
-
-建议优先阅读：
-
-- `docs/develop/阶段4-UP主智能工作台总流程大纲.md`
-- `docs/reference/创作工作台前端说明.md`
-- `docs/reference/发布前优化Agent接口说明.md`
-- `docs/reference/评论弹幕分析接口说明.md`
-- `docs/reference/创作复盘报告接口说明.md`
-- `docs/reference/LLM API开销统计与全链路追溯说明.md`
-
-## 开发约定
-
-- 新功能必须优先服务创作者工作流，不能退回通用 Agent 展示。
-- 对外 API 使用 Spring Boot 自带的 Jakarta Validation / Hibernate Validator 做入参校验。
+- 新功能开发优先参考 `docs/` 下的阶段文档。
 - 数据库 Schema 统一维护在 `backend/src/main/resources/sql/`。
-- 注释必须使用中文，并解释为什么这样做。
-- 新增功能时同步补充 `docs/develop/`、`docs/reference/`、`docs/error/` 中的对应文档。
-- 前端相关变更不得修改 `package.json` 里的 Node 版本约束。
-- 开发协作中，AI 助手只提供需要作者执行的验证命令，不直接执行编译、测试、构建、运行或启动命令。
-
-## 当前状态
-
-项目已经从通用 Agent 框架收敛为 UP 主智能工作台。
-
-底层 Agent 能力仍然保留，但它们的价值需要落到具体创作者场景里：
-
-- 工具调用解决资料整理和检索问题。
-- 记忆解决创作者偏好沉淀问题。
-- RAG 解决建议缺少证据的问题。
-- SSE 解决长流程分析不可见的问题。
-- 用量追踪和失败回放解决 AI 输出不可评估的问题。
+- 对外 API 入参校验使用 Spring Boot 自带的 Jakarta Validation / Hibernate Validator。
+- 项目注释优先使用中文，并解释为什么这样做，而不是只描述做了什么。
+- 前端相关变更不得随意修改 `package.json` 中的 Node.js 版本约束。
