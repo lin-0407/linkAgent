@@ -83,6 +83,25 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- ===== 文档解析（Apache Tika 1.28.5，提取 PDF/DOCX/TXT/MD 文本）===== -->
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-core</artifactId>
+            <version>1.28.5</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parsers</artifactId>
+            <version>1.28.5</version>
+            <!-- 排除 Tika 自带的 commons-logging，避免与 Spring Boot 的 jcl-over-slf4j 冲突 -->
+            <exclusions>
+                <exclusion>
+                    <groupId>commons-logging</groupId>
+                    <artifactId>commons-logging</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- ===== 工具 ===== -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -12,6 +12,9 @@ public record InteractiveTaskResponse(
         String status,
         String selectedOptionId,
         String parseStatus,
+        String backgroundContext,
+        String understandingSummary,
+        String understandingStatus,
         LocalDateTime createTime,
         LocalDateTime updateTime,
         List<CreativeIdeaOptionResponse> options

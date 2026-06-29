@@ -18,6 +18,9 @@ public class InteractiveSessionRecord {
     private String selectedOptionId;
     private String rawOutput;
     private String parseStatus;
+    private String backgroundContext;
+    private String understandingSummary;
+    private String understandingStatus;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 
@@ -99,6 +102,30 @@ public class InteractiveSessionRecord {
 
     public void setParseStatus(String parseStatus) {
         this.parseStatus = parseStatus;
+    }
+
+    public String getBackgroundContext() {
+        return backgroundContext;
+    }
+
+    public void setBackgroundContext(String backgroundContext) {
+        this.backgroundContext = backgroundContext;
+    }
+
+    public String getUnderstandingSummary() {
+        return understandingSummary;
+    }
+
+    public void setUnderstandingSummary(String understandingSummary) {
+        this.understandingSummary = understandingSummary;
+    }
+
+    public String getUnderstandingStatus() {
+        return understandingStatus;
+    }
+
+    public void setUnderstandingStatus(String understandingStatus) {
+        this.understandingStatus = understandingStatus;
     }
 
     public LocalDateTime getCreateTime() {

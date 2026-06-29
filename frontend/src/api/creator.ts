@@ -52,6 +52,19 @@ import type {
   BindBvPayload,
   SyncVideosResult,
   VideoAnalysisReport,
+  // 创作者画像
+  CreatorProfile,
+  // 竞品分析
+  CreatorCompetitorSample,
+  CreatorCompetitorReport,
+  CreatorCompetitorSavePayload,
+  CreatorCompetitorAnalyzePayload,
+  // 字段自动补全
+  FieldAutofillPayload,
+  FieldAutofillResult,
+  // 创作复盘报告
+  CreatorReport,
+  CreatorReportAnalyzePayload,
 } from '@/types/creator'
 import { cleanPayload, del, download, get, post, put, upload } from './http'
 
@@ -104,6 +117,33 @@ export function regenerateCreativeOptions(
 ) {
   return post<InteractiveTask>(
     `/creator/interactive/tasks/${encodeURIComponent(taskId)}/creative-options/regenerate`,
+    cleanPayload(payload),
+  )
+}
+
+/** 上传补充背景文档（多文件，multipart/form-data） */
+export function uploadContextDocuments(taskId: string, files: File[]) {
+  const formData = new FormData()
+  files.forEach((file) => formData.append('files', file))
+  return upload<InteractiveTask>(
+    `/creator/interactive/tasks/${encodeURIComponent(taskId)}/context-documents`,
+    formData,
+    { timeout: 180_000 },
+  )
+}
+
+/** AI 理解确认 —— 调用 LLM 理解创作意图 */
+export function triggerUnderstanding(taskId: string) {
+  return post<InteractiveTask>(`/creator/interactive/tasks/${encodeURIComponent(taskId)}/understand`)
+}
+
+/** 生成创意方向卡（在 AI 理解确认之后调用） */
+export function generateCreativeOptions(
+  taskId: string,
+  payload: CreativeOptionsRegeneratePayload = {},
+) {
+  return post<InteractiveTask>(
+    `/creator/interactive/tasks/${encodeURIComponent(taskId)}/creative-options/generate`,
     cleanPayload(payload),
   )
 }
@@ -411,5 +451,104 @@ export function listLinkedVideos(bilibiliUid: string, userId = 'default') {
   return get<BilibiliVideo[]>(
     `/creator/bilibili/accounts/${encodeURIComponent(bilibiliUid)}/linked-videos`,
     { params: { userId } },
+  )
+}
+
+// ── 创作者画像（P0-3）──
+// 后端 CreatorProfileController，路径前缀 /api/creator/profile
+
+/** 获取当前用户的创作者画像；不存在时返回空画像（非 404） */
+export function getCreatorProfile(userId?: string) {
+  return get<CreatorProfile>('/creator/profile', {
+    params: userId ? { userId } : undefined,
+  })
+}
+
+/** 手动触发画像刷新（立即重推理，不检查阈值） */
+export function refreshCreatorProfile(userId?: string) {
+  return post<CreatorProfile>('/creator/profile/refresh', undefined, {
+    params: userId ? { userId } : undefined,
+  })
+}
+
+// ── 竞品分析 ──
+// 后端 CreatorCompetitorController，路径前缀 /api/creator/tasks/{taskId}/competitors
+
+/** 保存竞品视频信息 */
+export function saveCompetitorVideo(taskId: string, payload: CreatorCompetitorSavePayload) {
+  return post<CreatorCompetitorSample>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/competitors`,
+    cleanPayload(payload),
+  )
+}
+
+/** 获取已保存的竞品视频信息 */
+export function getCompetitorVideo(taskId: string) {
+  return get<CreatorCompetitorSample>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/competitors`,
+  )
+}
+
+/** 触发竞品分析 */
+export function analyzeCompetitor(taskId: string, payload: CreatorCompetitorAnalyzePayload) {
+  return post<CreatorCompetitorReport>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/competitors/analyze`,
+    cleanPayload(payload),
+  )
+}
+
+/** 获取竞品分析报告 */
+export function getCompetitorReport(taskId: string) {
+  return get<CreatorCompetitorReport>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/competitors/report`,
+  )
+}
+
+// ── 字段自动补全 ──
+// 后端 TaskAutofillController，路径 POST /api/creator/tasks/{taskId}/autofill
+
+/** AI 自动补全任务字段（标题草稿 / 简介草稿 / 自定义指导 / 标题风格 / 额外要求） */
+export function autofillTaskField(taskId: string, payload: FieldAutofillPayload) {
+  return post<FieldAutofillResult>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/autofill`,
+    cleanPayload(payload),
+  )
+}
+
+// ── 创作复盘报告 ──
+// 后端 CreatorReportController，路径前缀 /api/creator/tasks/{taskId}/report
+
+/** 触发创作复盘分析 */
+export function analyzeCreatorReport(taskId: string, payload: CreatorReportAnalyzePayload) {
+  return post<CreatorReport>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/report/analyze`,
+    cleanPayload(payload),
+  )
+}
+
+/** 获取已生成的创作复盘报告 */
+export function getCreatorReport(taskId: string) {
+  return get<CreatorReport>(`/creator/tasks/${encodeURIComponent(taskId)}/report`)
+}
+
+// ── 评测：createCase / getCase 补充 ──
+
+/** 创建评测用例 */
+export function createCreatorEvalCase(payload: {
+  userId?: string
+  caseName: string
+  targetStage: CreatorWorkflowStage
+  taskId?: string
+  inputSnapshot: string
+  expectedPoints?: string
+  scoringRubric?: string
+}) {
+  return post<CreatorEvalCase>('/creator/evaluations/cases', cleanPayload(payload))
+}
+
+/** 获取单个评测用例详情 */
+export function getCreatorEvalCase(caseId: string) {
+  return get<CreatorEvalCase>(
+    `/creator/evaluations/cases/${encodeURIComponent(caseId)}`,
   )
 }

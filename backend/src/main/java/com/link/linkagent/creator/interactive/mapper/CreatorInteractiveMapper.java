@@ -31,7 +31,10 @@ public interface CreatorInteractiveMapper {
                 status,
                 selected_option_id,
                 raw_output,
-                parse_status
+                parse_status,
+                background_context,
+                understanding_summary,
+                understanding_status
             )
             VALUES (
                 #{sessionId},
@@ -42,7 +45,10 @@ public interface CreatorInteractiveMapper {
                 #{status},
                 #{selectedOptionId},
                 #{rawOutput},
-                #{parseStatus}
+                #{parseStatus},
+                #{backgroundContext},
+                #{understandingSummary},
+                #{understandingStatus}
             )
             """)
     int insertSession(InteractiveSessionRecord record);
@@ -84,6 +90,9 @@ public interface CreatorInteractiveMapper {
                    selected_option_id,
                    raw_output,
                    parse_status,
+                   background_context,
+                   understanding_summary,
+                   understanding_status,
                    create_time,
                    update_time
             FROM creator_interactive_session
@@ -102,6 +111,9 @@ public interface CreatorInteractiveMapper {
             @Result(column = "selected_option_id", property = "selectedOptionId"),
             @Result(column = "raw_output", property = "rawOutput"),
             @Result(column = "parse_status", property = "parseStatus"),
+            @Result(column = "background_context", property = "backgroundContext"),
+            @Result(column = "understanding_summary", property = "understandingSummary"),
+            @Result(column = "understanding_status", property = "understandingStatus"),
             @Result(column = "create_time", property = "createTime"),
             @Result(column = "update_time", property = "updateTime")
     })
@@ -233,4 +245,37 @@ public interface CreatorInteractiveMapper {
               AND is_deleted = 0
             """)
     int selectOption(@Param("sessionId") String sessionId, @Param("optionId") String optionId);
+
+    /**
+     * 追加补充背景资料文本。
+     * 使用 CONCAT 在已有背景资料后面追加新提取的文本，用换行分隔不同文件。
+     */
+    @Update("""
+            UPDATE creator_interactive_session
+            SET background_context = CONCAT(
+                    IFNULL(background_context, ''),
+                    IF(IFNULL(background_context, '') = '', '', '\n\n---\n\n'),
+                    #{contextText}
+                ),
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            """)
+    int appendBackgroundContext(@Param("taskId") String taskId,
+                                @Param("contextText") String contextText);
+
+    /**
+     * 更新 AI 理解确认结果。
+     */
+    @Update("""
+            UPDATE creator_interactive_session
+            SET understanding_summary = #{summary},
+                understanding_status = #{status},
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            """)
+    int updateUnderstanding(@Param("taskId") String taskId,
+                           @Param("summary") String summary,
+                           @Param("status") String status);
 }

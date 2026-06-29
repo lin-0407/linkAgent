@@ -78,6 +78,12 @@ export type InteractiveTask = {
   status: string
   selectedOptionId: string | null
   parseStatus: string
+  /** 用户上传的补充背景资料（从文档中提取的纯文本） */
+  backgroundContext: string | null
+  /** AI 对创作者想法的理解摘要 */
+  understandingSummary: string | null
+  /** 理解确认状态：NONE / UNDERSTANDING / READY / CONFIRMED */
+  understandingStatus: string
   createTime: string
   updateTime: string
   options: CreativeIdeaOption[]
@@ -201,6 +207,8 @@ export type PrePublishAnalyzePayload = {
   titleStyle?: string
   extraRequirement?: string
   preferenceMode?: CreatorPreferenceMode
+  /** 分析策略：后端 P0-3 新增字段，用于切换 LLM 分析口径（GENERAL/TUTORIAL/VLOG/REVIEW/COMMENTARY） */
+  analysisStrategy?: string
 }
 
 export type PrePublishDraftPayload = {
@@ -830,4 +838,125 @@ export type VideoAnalysisReport = {
   parseStatus: string
   createTime: string
   updateTime: string
+}
+
+// ═══════════════════════════════════════════
+// 创作者画像
+// ═══════════════════════════════════════════
+
+/**
+ * 创作者画像，对应后端 CreatorProfileRecord 和 GET /api/creator/profile。
+ * 由反馈事件和任务偏好推理生成的用户级聚合画像，
+ * 与 CreatorPreference（单期任务快照）不同。
+ */
+export type CreatorProfile = {
+  creatorId: string
+  /** 风格标签 JSON 数组字符串，如 '["幽默","知识型"]' */
+  styleTags: string
+  /** 语气指引，描述创作者的语言风格特征 */
+  toneGuide: string | null
+  /** 受众画像，描述创作者的受众群体认知 */
+  audienceView: string | null
+  createTime: string | null
+  updateTime: string | null
+}
+
+// ═══════════════════════════════════════════
+// 竞品分析
+// ═══════════════════════════════════════════
+
+/** 竞品视频样本，对应后端 CreatorCompetitorSampleResponse */
+export type CreatorCompetitorSample = {
+  id: number
+  competitorBvId: string
+  competitorVideoName: string
+  taskId: string
+  category: string | null
+  competitorSamples: string
+  compareDimension: string | null
+  extraContext: string | null
+  createTime: string
+  updateTime: string
+}
+
+/** 竞品分析报告，对应后端 CreatorCompetitorReportResponse */
+export type CreatorCompetitorReport = {
+  id: number
+  reportId: string
+  taskId: string
+  competitorSummary: string | null
+  competitorAdvantages: string | null
+  ownAdvantages: string | null
+  ownDisadvantages: string | null
+  gapAnalysis: string | null
+  improvementSuggestions: string | null
+  differentiationStrategy: string | null
+  rawOutput: string
+  parseStatus: string
+  createTime: string
+  updateTime: string
+}
+
+/** 竞品视频保存请求，对应后端 CreatorCompetitorSaveRequest */
+export type CreatorCompetitorSavePayload = {
+  competitorBvId: string
+  competitorVideoName: string
+  category?: string
+  competitorSamples: string
+  compareDimension?: string
+  extraContext?: string
+}
+
+/** 竞品分析触发请求，对应后端 CreatorCompetitorAnalyzeRequest */
+export type CreatorCompetitorAnalyzePayload = {
+  customGuidance?: string
+  analysisFocus?: string
+  extraRequirement?: string
+}
+
+// ═══════════════════════════════════════════
+// 字段自动补全
+// ═══════════════════════════════════════════
+
+/** 字段自动补全请求，对应后端 FieldAutofillRequest */
+export type FieldAutofillPayload = {
+  /** 字段类型：TITLE_DRAFT / DESCRIPTION_DRAFT / CUSTOM_GUIDANCE / TITLE_STYLE / EXTRA_REQUIREMENT */
+  fieldType: string
+}
+
+/** 字段自动补全响应，对应后端 FieldAutofillResponse */
+export type FieldAutofillResult = {
+  fieldType: string
+  suggestion: string
+}
+
+// ═══════════════════════════════════════════
+// 创作复盘报告
+// ═══════════════════════════════════════════
+
+/** 创作复盘报告，对应后端 CreatorReportResponse */
+export type CreatorReport = {
+  id: number
+  reportId: string
+  taskId: string
+  contentSummary: string | null
+  coreSellingPoints: string | null
+  titleDescriptionReview: string | null
+  audienceFeedbackSummary: string | null
+  competitorComparison: string | null
+  controversyAndMisunderstanding: string | null
+  nextActionSuggestions: string | null
+  creatorPreferenceInsight: string | null
+  overallConclusion: string | null
+  rawOutput: string
+  parseStatus: string
+  createTime: string
+  updateTime: string
+}
+
+/** 创作复盘分析请求，对应后端 CreatorReportAnalyzeRequest */
+export type CreatorReportAnalyzePayload = {
+  customGuidance?: string
+  reviewFocus?: string
+  extraRequirement?: string
 }

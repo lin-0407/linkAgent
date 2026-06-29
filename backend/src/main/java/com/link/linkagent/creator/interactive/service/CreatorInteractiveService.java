@@ -14,6 +14,8 @@ import com.link.linkagent.creator.task.model.CreatorTaskCreateRequest;
 import com.link.linkagent.creator.task.model.CreatorTaskUpdateRequest;
 import com.link.linkagent.creator.task.model.CreatorTaskResponse;
 import com.link.linkagent.creator.task.service.CreatorTaskService;
+import com.link.linkagent.common.DocumentExtractionService;
+import com.link.linkagent.common.DocumentExtractionService.ExtractedDocument;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.util.LlmJsonUtil;
@@ -21,6 +23,7 @@ import com.link.linkagent.util.TextUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
@@ -40,22 +43,32 @@ public class CreatorInteractiveService {
     private static final int OPTION_NAME_MAX_LENGTH = 128;
     private static final int TASK_MATERIAL_MAX_LENGTH = 20000;
     private static final int OPTION_COUNT = 3;
+    /** 补充背景文档累计最大字符数，超出后不再追加，避免 Prompt 过长 */
+    private static final int MAX_BACKGROUND_CONTEXT_CHARS = 100000;
 
     private final CreatorInteractiveMapper creatorInteractiveMapper;
     private final CreatorTaskService creatorTaskService;
     private final LLMService llmService;
     private final ObjectMapper objectMapper;
+    private final DocumentExtractionService documentExtractionService;
 
     public CreatorInteractiveService(CreatorInteractiveMapper creatorInteractiveMapper,
                                      CreatorTaskService creatorTaskService,
                                      LLMService llmService,
-                                     ObjectMapper objectMapper) {
+                                     ObjectMapper objectMapper,
+                                     DocumentExtractionService documentExtractionService) {
         this.creatorInteractiveMapper = creatorInteractiveMapper;
         this.creatorTaskService = creatorTaskService;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
+        this.documentExtractionService = documentExtractionService;
     }
 
+    /**
+     * 创建交互式创作任务。
+     * 只创建任务和会话记录，不再自动生成创意方向卡。
+     * 改为由用户先（可选）上传补充背景文档 → AI 理解确认 → 再生成方向卡。
+     */
     @Transactional
     public InteractiveTaskResponse createInteractiveTask(InteractiveTaskCreateRequest request) {
         String userId = normalizeUserId(request.userId());
@@ -78,12 +91,118 @@ public class CreatorInteractiveService {
         session.setUserId(userId);
         session.setIdea(idea);
         session.setVideoType(videoType);
-        session.setStatus("CREATIVE_GENERATING");
+        session.setStatus("IDEA_INPUT");
         session.setParseStatus("PENDING");
+        session.setUnderstandingStatus("NONE");
         creatorInteractiveMapper.insertSession(session);
 
-        generateAndStoreOptions(session, null);
         return getInteractiveTask(task.taskId());
+    }
+
+    /**
+     * 上传补充背景文档。
+     * 接收一个或多个文件，通过 Tika 提取纯文本后追加到会话的 background_context 字段。
+     * 返回每个文件提取后的文本长度和文件名，方便前端展示。
+     */
+    @Transactional
+    public InteractiveTaskResponse appendContextDocuments(String taskId, List<MultipartFile> files) {
+        InteractiveSessionRecord session = getSessionRecord(taskId);
+        if (files == null || files.isEmpty()) {
+            return getInteractiveTask(session.getTaskId());
+        }
+
+        // 先读取当前已有的背景上下文长度，避免重复递增超出上限
+        String currentContext = session.getBackgroundContext();
+        int currentLength = currentContext == null ? 0 : currentContext.length();
+
+        // 用于累积本次请求中新提取的文本，最终通过 mapper 追加到 DB 已有内容之后
+        StringBuilder appended = new StringBuilder();
+        int extractedCount = 0;
+        for (MultipartFile file : files) {
+            if (file.isEmpty()) {
+                continue;
+            }
+            ExtractedDocument doc = documentExtractionService.extract(file);
+            // 累计长度控制：避免背景资料过长占用 LLM 上下文窗口
+            if (currentLength + appended.length() + doc.text().length() > MAX_BACKGROUND_CONTEXT_CHARS) {
+                appended.append("\n\n[后续文件 \"")
+                        .append(doc.fileName())
+                        .append("\" 因背景资料总长度已达上限 ")
+                        .append(MAX_BACKGROUND_CONTEXT_CHARS)
+                        .append(" 字符，已跳过]\n");
+                break;
+            }
+            // 每个文件前加分隔标记，方便 LLM 区分不同文档来源
+            if (!appended.isEmpty()) {
+                appended.append("\n\n---\n\n");
+            }
+            appended.append("【文档：").append(doc.fileName()).append("】\n");
+            appended.append(doc.text());
+            extractedCount++;
+        }
+
+        if (extractedCount == 0) {
+            return getInteractiveTask(session.getTaskId());
+        }
+
+        creatorInteractiveMapper.appendBackgroundContext(session.getTaskId(), appended.toString());
+        return getInteractiveTask(session.getTaskId());
+    }
+
+    /**
+     * AI 理解确认。
+     * 调用 LLM 理解用户想法 + 补充背景资料，输出结构化理解摘要，
+     * 让用户在生成方向卡前核验 AI 是否准确理解了创作意图。
+     * 理解确认不可跳过——必须 AI 理解完成后才能进入方向卡生成。
+     */
+    @Transactional
+    public InteractiveTaskResponse triggerUnderstanding(String taskId) {
+        InteractiveSessionRecord session = getSessionRecord(taskId);
+
+        // 更新状态为生成中，防止重复提交
+        creatorInteractiveMapper.updateUnderstanding(session.getTaskId(), null, "UNDERSTANDING");
+
+        String summary;
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(session.getTaskId(), "AI理解确认")) {
+            summary = llmService.chat(
+                    buildUnderstandingSystemPrompt(),
+                    buildUnderstandingUserPrompt(session)
+            );
+        } catch (RuntimeException exception) {
+            // AI 理解失败时回退状态，让用户可以重试
+            creatorInteractiveMapper.updateUnderstanding(session.getTaskId(), null, "NONE");
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "AI 理解确认失败: " + exception.getMessage(), exception);
+        }
+
+        creatorInteractiveMapper.updateUnderstanding(session.getTaskId(), summary, "READY");
+        return getInteractiveTask(session.getTaskId());
+    }
+
+    /**
+     * 生成创意方向卡。
+     * 在 AI 理解确认完成后调用，基于原始想法 + 补充背景 + AI 理解摘要生成 3 张方向卡。
+     * 与 regenerateOptions 的区别：本方法首次生成，需要理解状态为 READY 或 CONFIRMED。
+     */
+    @Transactional
+    public InteractiveTaskResponse generateCreativeOptions(String taskId, String extraRequirement) {
+        InteractiveSessionRecord session = getSessionRecord(taskId);
+        String understandingStatus = session.getUnderstandingStatus() == null ? "NONE" : session.getUnderstandingStatus();
+
+        // 理解确认是必要步骤，防止跳过理解直接生成导致偏差
+        if (!"READY".equals(understandingStatus) && !"CONFIRMED".equals(understandingStatus)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "请先完成 AI 理解确认。当前状态：" + understandingStatus);
+        }
+
+        // 用户确认了理解 → 标记为 CONFIRMED
+        if ("READY".equals(understandingStatus)) {
+            creatorInteractiveMapper.updateUnderstanding(session.getTaskId(),
+                    session.getUnderstandingSummary(), "CONFIRMED");
+        }
+
+        generateAndStoreOptions(session, extraRequirement);
+        return getInteractiveTask(session.getTaskId());
     }
 
     @Transactional
@@ -330,6 +449,52 @@ public class CreatorInteractiveService {
                 .orElse(null);
     }
 
+    // ──────────────────────────── AI 理解确认 Prompt ────────────────────────────
+
+    private String buildUnderstandingSystemPrompt() {
+        return """
+                你是 B 站内容创作意图的理解分析助手。
+                你的任务是把用户的自然语言想法和补充背景资料结合起来，
+                用清晰的中文总结你对创作意图的理解。
+                如果背景资料充分，你要基于事实给出理解；如果背景资料不足，你要诚实地指出不确定的地方。
+                你必须只输出纯文本，不要使用 Markdown 格式，不要输出 JSON。
+                """;
+    }
+
+    private String buildUnderstandingUserPrompt(InteractiveSessionRecord session) {
+        String backgroundContext = TextUtil.trimToNull(session.getBackgroundContext());
+
+        return """
+                请基于下面的信息，总结你对这位创作者的创作意图的理解。
+
+                用户原始想法：
+                %s
+
+                视频类型：
+                %s
+
+                补充背景资料：
+                %s
+
+                请从以下维度分析并输出你的理解：
+                1. **视频主题**：用户想做什么内容？核心要传达什么？
+                2. **目标观众**：这期视频是拍给谁看的？他们的认知水平和兴趣点是什么？
+                3. **核心要点**：视频必须覆盖哪些关键信息？有哪些不可遗漏的事实？
+                4. **需要避免的问题**：有哪些容易跑偏、过度承诺、或引发观众误解的地方？
+                5. **不确定的地方**：基于现有信息，你还有哪些不确定、需要用户补充的地方？（如果没有不确定，说"信息充分，无需补充"）
+
+                注意：
+                - 如果补充背景资料中有具体事实（如技术栈、项目名称、数据），务必在理解中准确引用。
+                - 不要在理解中提出创作建议或方向——你的任务只是确认你理解了创作者的意图。
+                """.formatted(
+                session.getIdea(),
+                TextUtil.trimToDefault(session.getVideoType(), DEFAULT_VIDEO_TYPE),
+                backgroundContext != null ? backgroundContext : "（未提供补充背景资料）"
+        );
+    }
+
+    // ──────────────────────────── 创意方向卡生成 Prompt ────────────────────────────
+
     private String buildCreativeSystemPrompt() {
         return """
                 你是 B 站内容创作者的选题策划助手。
@@ -340,6 +505,9 @@ public class CreatorInteractiveService {
     }
 
     private String buildCreativeUserPrompt(InteractiveSessionRecord session, String extraRequirement) {
+        String backgroundContext = TextUtil.trimToNull(session.getBackgroundContext());
+        String understandingSummary = TextUtil.trimToNull(session.getUnderstandingSummary());
+
         return """
                 请基于下面信息生成 3 张 B 站视频创意卡片。
 
@@ -350,6 +518,12 @@ public class CreatorInteractiveService {
                 %s
 
                 本轮额外要求：
+                %s
+
+                补充背景资料（用户上传的文档内容，必须据此生成，不要凭空编造与资料矛盾的信息）：
+                %s
+
+                AI 对创作想法的理解（已获用户确认，请按此理解生成方向卡）：
                 %s
 
                 输出 JSON 字段固定如下：
@@ -374,10 +548,13 @@ public class CreatorInteractiveService {
                 3. 每张卡片的创意角度必须明显不同。
                 4. 风险必须具体指出可能跑偏、过度承诺或观众误解的地方。
                 5. 所有内容使用中文。
+                6. 如果背景资料中包含具体事实（如项目名称、技术栈、数据），方向卡中必须准确引用，不得编造。
                 """.formatted(
                 session.getIdea(),
                 TextUtil.trimToDefault(session.getVideoType(), DEFAULT_VIDEO_TYPE),
-                TextUtil.trimToDefault(extraRequirement, "无")
+                TextUtil.trimToDefault(extraRequirement, "无"),
+                backgroundContext != null ? backgroundContext : "（未提供补充背景资料）",
+                understandingSummary != null ? understandingSummary : "（AI 理解尚未完成）"
         );
     }
 
@@ -405,6 +582,9 @@ public class CreatorInteractiveService {
                 session.getStatus(),
                 session.getSelectedOptionId(),
                 session.getParseStatus(),
+                session.getBackgroundContext(),
+                session.getUnderstandingSummary(),
+                session.getUnderstandingStatus(),
                 session.getCreateTime(),
                 session.getUpdateTime(),
                 options

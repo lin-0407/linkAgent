@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import {
   confirmCreativeOption,
   createInteractiveTask,
+  generateCreativeOptions,
   regenerateCreativeOptions,
+  triggerUnderstanding,
+  uploadContextDocuments,
 } from '@/api/creator'
 import type { CreativeIdeaOption, InteractiveTask } from '@/types/creator'
 
@@ -22,6 +25,10 @@ const videoTypeOptions = [
   '鬼畜娱乐',
 ]
 
+// ═══════════════════════════════════════════
+// 表单状态
+// ═══════════════════════════════════════════
+
 const form = reactive({
   idea: '',
   videoType: '未分类',
@@ -32,21 +39,90 @@ const interactiveTask = ref<InteractiveTask | null>(null)
 const selectedOptionId = ref('')
 const errorMessage = ref('')
 const isCreating = ref(false)
+const isUnderstanding = ref(false)
+const isGenerating = ref(false)
 const isRegenerating = ref(false)
 const isConfirming = ref(false)
+const isUploading = ref(false)
 
-const canSubmit = computed(() => form.idea.trim().length >= 10 && !isCreating.value)
+// ═══════════════════════════════════════════
+// 文件上传
+// ═══════════════════════════════════════════
+
+/** 用户已上传的文件列表（记录文件名和大小用于展示） */
+const uploadedFiles = ref<{ name: string; size: number }[]>([])
+/** 拖拽悬停状态，用于高亮上传区域 */
+const isDragging = ref(false)
+/** 文件上传 input 引用 */
+const fileInputRef = ref<HTMLInputElement | null>(null)
+/** 预览弹窗状态 */
+const previewModalVisible = ref(false)
+const previewFileName = ref('')
+const previewText = ref('')
+
+/** 文件大小限制：10 MB */
+const MAX_FILE_SIZE = 10 * 1024 * 1024
+/** 支持的文件扩展名 */
+const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.pptx', '.ppt', '.txt', '.md', '.markdown', '.html', '.htm', '.rtf', '.odt', '.epub']
+
+function removeFile(index: number) {
+  uploadedFiles.value.splice(index, 1)
+}
+
+/** 打开文件预览弹窗——复用 session 的 backgroundContext 展示提取的文本 */
+function openPreview(fileName: string) {
+  previewFileName.value = fileName
+  previewText.value = interactiveTask.value?.backgroundContext ?? '（暂无提取内容）'
+  previewModalVisible.value = true
+}
+
+function closePreview() {
+  previewModalVisible.value = false
+  previewFileName.value = ''
+  previewText.value = ''
+}
+
+// ═══════════════════════════════════════════
+// 计算属性
+// ═══════════════════════════════════════════
+
+const canSubmitIdea = computed(() => form.idea.trim().length >= 10 && !isCreating.value)
 const options = computed(() => interactiveTask.value?.options ?? [])
 const hasOptions = computed(() => options.value.length > 0)
+const understandingReady = computed(() =>
+  interactiveTask.value?.understandingStatus === 'READY'
+  || interactiveTask.value?.understandingStatus === 'CONFIRMED',
+)
+const canGenerate = computed(() => understandingReady.value && !isGenerating.value)
+const hasBackgroundContext = computed(() =>
+  (interactiveTask.value?.backgroundContext?.length ?? 0) > 0,
+)
+
+/** 已上传的文件名集合，用于去重展示 */
+const uploadedFileNames = computed(() =>
+  uploadedFiles.value.map((f) => f.name),
+)
+
 const statusText = computed(() => {
-  if (isCreating.value || isRegenerating.value) return 'AI 正在拆解想法'
+  if (isCreating.value) return '正在创建任务...'
+  if (isUploading.value) return '正在上传并解析文档...'
+  if (isUnderstanding.value) return 'AI 正在理解你的想法...'
+  if (isGenerating.value || isRegenerating.value) return 'AI 正在拆解想法'
+  if (interactiveTask.value?.understandingStatus === 'CONFIRMED'
+      && interactiveTask.value?.status === 'CREATIVE_OPTIONS_READY') return '方向卡已生成'
   if (interactiveTask.value?.status === 'CREATIVE_CONFIRMED') return '创意方向已确认'
-  if (hasOptions.value) return '等待选择一个方向'
+  if (understandingReady.value) return 'AI 已理解，可以生成方向卡'
+  if (interactiveTask.value?.status === 'IDEA_INPUT') return '可以上传补充资料或直接让 AI 理解'
   return '等待输入想法'
 })
 
+// ═══════════════════════════════════════════
+// 流程：1. 创建任务 → 2. 上传文档(可选) → 3. AI理解 → 4. 生成方向卡
+// ═══════════════════════════════════════════
+
+/** Step 1: 输入想法，创建交互式创作任务 */
 async function submitIdea() {
-  if (!canSubmit.value) return
+  if (!canSubmitIdea.value) return
   isCreating.value = true
   errorMessage.value = ''
   selectedOptionId.value = ''
@@ -62,6 +138,76 @@ async function submitIdea() {
   }
 }
 
+/** Step 2: 上传补充背景文档文件 */
+async function handleFilesUpload(fileList: FileList | null) {
+  if (!fileList || fileList.length === 0 || !interactiveTask.value) return
+  const files = Array.from(fileList).filter((file) => {
+    if (file.size > MAX_FILE_SIZE) {
+      errorMessage.value = `文件 "${file.name}" 超过 10 MB 限制`
+      return false
+    }
+    const lowerName = file.name.toLowerCase()
+    if (!ALLOWED_EXTENSIONS.some((ext) => lowerName.endsWith(ext))) {
+      errorMessage.value = `文件 "${file.name}" 格式不支持`
+      return false
+    }
+    return true
+  })
+  if (files.length === 0) return
+
+  isUploading.value = true
+  errorMessage.value = ''
+  try {
+    const result = await uploadContextDocuments(interactiveTask.value.taskId, files)
+    interactiveTask.value = result
+    // 记录已上传的文件名
+    uploadedFiles.value.push(...files.map((f) => ({ name: f.name, size: f.size })))
+  } catch (error) {
+    showError(error)
+  } finally {
+    isUploading.value = false
+  }
+}
+
+function onFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  handleFilesUpload(input.files)
+  // 重置 input 值，允许重复上传同名文件
+  input.value = ''
+}
+
+/** Step 3: AI 理解确认 */
+async function submitUnderstanding() {
+  if (!interactiveTask.value || isUnderstanding.value) return
+  isUnderstanding.value = true
+  errorMessage.value = ''
+  try {
+    interactiveTask.value = await triggerUnderstanding(interactiveTask.value.taskId)
+  } catch (error) {
+    showError(error)
+  } finally {
+    isUnderstanding.value = false
+  }
+}
+
+/** Step 4: 生成创意方向卡 */
+async function submitGenerateOptions() {
+  if (!canGenerate.value || !interactiveTask.value) return
+  isGenerating.value = true
+  errorMessage.value = ''
+  selectedOptionId.value = ''
+  try {
+    interactiveTask.value = await generateCreativeOptions(interactiveTask.value.taskId, {
+      extraRequirement: form.extraRequirement.trim() || undefined,
+    })
+  } catch (error) {
+    showError(error)
+  } finally {
+    isGenerating.value = false
+  }
+}
+
+/** 重新生成方向卡（微调） */
 async function regenerateOptions() {
   if (!interactiveTask.value || isRegenerating.value) return
   isRegenerating.value = true
@@ -78,6 +224,7 @@ async function regenerateOptions() {
   }
 }
 
+/** 确认选中某张方向卡 */
 async function confirmOption(option: CreativeIdeaOption) {
   if (!interactiveTask.value || isConfirming.value) return
   isConfirming.value = true
@@ -93,6 +240,10 @@ async function confirmOption(option: CreativeIdeaOption) {
     isConfirming.value = false
   }
 }
+
+// ═══════════════════════════════════════════
+// 工具函数
+// ═══════════════════════════════════════════
 
 function parseTextList(value: string | null) {
   if (!value) return []
@@ -116,10 +267,31 @@ function formatValue(value: unknown) {
 function showError(error: unknown) {
   errorMessage.value = error instanceof Error ? error.message : '请求失败'
 }
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** 拖拽事件 —— 阻止默认行为以支持拖放上传 */
+function onDragOver(event: DragEvent) {
+  event.preventDefault()
+  isDragging.value = true
+}
+function onDragLeave() {
+  isDragging.value = false
+}
+function onDrop(event: DragEvent) {
+  event.preventDefault()
+  isDragging.value = false
+  handleFilesUpload(event.dataTransfer?.files ?? null)
+}
 </script>
 
 <template>
   <section class="ai-creation-console" aria-label="AI 创作台">
+    <!-- ═══════════ 顶部状态栏 ═══════════ -->
     <div class="ai-creation-header">
       <div>
         <p class="creator-kicker">AI 创作台</p>
@@ -129,6 +301,7 @@ function showError(error: unknown) {
       <span class="ai-creation-status">{{ statusText }}</span>
     </div>
 
+    <!-- ═══════════ Step 1: 创作想法输入 + 创建任务 ═══════════ -->
     <form class="ai-creation-composer" @submit.prevent="submitIdea">
       <label class="ai-creation-field ai-creation-field-main">
         <span>创作想法</span>
@@ -136,29 +309,144 @@ function showError(error: unknown) {
           v-model="form.idea"
           rows="5"
           maxlength="3000"
-          placeholder="例如：我想做一期讲 Spring AI Agent 工作流的视频，面向会 Java 但没接触过 Agent 的人，希望别太学术。"
+          :disabled="interactiveTask !== null"
+          placeholder="例如：对 linkagent 项目进行视频演示，目的是分享自己的开源项目，让更多开发者了解并使用"
         />
       </label>
       <label class="ai-creation-field">
         <span>视频类型</span>
-        <select v-model="form.videoType">
+        <select v-model="form.videoType" :disabled="interactiveTask !== null">
           <option v-for="option in videoTypeOptions" :key="option" :value="option">
             {{ option }}
           </option>
         </select>
       </label>
-      <button type="submit" class="creator-primary-button" :disabled="!canSubmit">
-        {{ isCreating ? '生成中...' : '生成 3 个方向' }}
+      <button
+        v-if="!interactiveTask"
+        type="submit"
+        class="creator-primary-button"
+        :disabled="!canSubmitIdea"
+      >
+        {{ isCreating ? '创建任务中...' : '提交想法' }}
       </button>
     </form>
 
     <p v-if="errorMessage" class="ai-creation-error" role="alert">{{ errorMessage }}</p>
 
-    <div v-if="isCreating || isRegenerating" class="ai-creation-loading" aria-live="polite">
-      <span />
-      <p>AI 正在整理标题大纲、内容大纲和简介大纲。</p>
-    </div>
+    <!-- ═══════════ 任务创建后：补充背景 + AI理解 → 生成方向卡 ═══════════ -->
+    <template v-if="interactiveTask && !hasOptions">
 
+      <!-- Step 2: 上传补充背景文档 -->
+      <div
+        class="ai-creation-upload-zone"
+        :class="{ dragging: isDragging }"
+        @dragover="onDragOver"
+        @dragleave="onDragLeave"
+        @drop="onDrop"
+      >
+        <div class="upload-zone-header">
+          <span>📎 补充背景资料（可选）</span>
+          <span class="upload-hint">上传项目文档、竞品分析等，让 AI 更准确理解你的创作背景</span>
+        </div>
+        <label class="upload-zone-body">
+          <input
+            ref="fileInputRef"
+            type="file"
+            multiple
+            accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.md,.markdown,.html,.htm,.rtf,.odt,.epub"
+            :disabled="isUploading"
+            @change="onFileInputChange"
+          />
+          <span v-if="isUploading">⏳ 正在解析文档...</span>
+          <span v-else>点击或拖拽上传文档（支持 PDF / DOCX / TXT / MD 等）</span>
+        </label>
+
+        <!-- 已上传文件列表 -->
+        <ul v-if="uploadedFiles.length > 0" class="uploaded-file-list">
+          <li v-for="(file, index) in uploadedFiles" :key="`${file.name}-${index}`">
+            <span class="file-icon">📄</span>
+            <button
+              type="button"
+              class="file-name-btn"
+              :disabled="!hasBackgroundContext"
+              :title="hasBackgroundContext ? '点击预览提取内容' : '暂无提取内容'"
+              @click="openPreview(file.name)"
+            >
+              {{ file.name }}
+            </button>
+            <span class="file-size">{{ formatFileSize(file.size) }}</span>
+            <button
+              type="button"
+              class="file-remove-btn"
+              title="移除"
+              :disabled="isUploading"
+              @click="removeFile(index)"
+            >
+              ✕
+            </button>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Step 3: AI 理解确认 -->
+      <div class="ai-creation-understanding">
+        <button
+          type="button"
+          class="creator-primary-button"
+          :disabled="isUnderstanding || (understandingReady && !isUnderstanding)"
+          @click="submitUnderstanding"
+        >
+          <template v-if="isUnderstanding">AI 正在理解...</template>
+          <template v-else-if="understandingReady">✓ AI 已理解，可重新理解</template>
+          <template v-else>AI 理解确认</template>
+        </button>
+
+        <!-- AI 理解结果展示 -->
+        <div v-if="understandingReady && interactiveTask?.understandingSummary" class="understanding-result">
+          <div class="understanding-result-header">
+            <span>💡 AI 对你的想法的理解：</span>
+            <button type="button" class="creator-secondary-action" :disabled="isUnderstanding" @click="submitUnderstanding">
+              重新理解
+            </button>
+          </div>
+          <pre class="understanding-content">{{ interactiveTask.understandingSummary }}</pre>
+        </div>
+      </div>
+
+      <!-- Step 3 进行中的加载态 -->
+      <div v-if="isUnderstanding" class="ai-creation-loading" aria-live="polite">
+        <span />
+        <p>AI 正在阅读你的想法和补充资料，生成理解摘要...</p>
+      </div>
+
+      <!-- Step 4: 生成方向卡（仅理解完成后可用） -->
+      <div v-if="understandingReady" class="ai-creation-generate">
+        <label class="ai-creation-field">
+          <span>微调要求（可选）</span>
+          <input
+            v-model="form.extraRequirement"
+            maxlength="2000"
+            placeholder="例如：更适合新手，标题别太像教程课"
+          />
+        </label>
+        <button
+          type="button"
+          class="creator-primary-button"
+          :disabled="!canGenerate"
+          @click="submitGenerateOptions"
+        >
+          {{ isGenerating ? '生成中...' : '确认理解，生成 3 个方向' }}
+        </button>
+      </div>
+
+      <!-- 方向卡生成中的加载态 -->
+      <div v-if="isGenerating" class="ai-creation-loading" aria-live="polite">
+        <span />
+        <p>AI 正在整理标题大纲、内容大纲和简介大纲。</p>
+      </div>
+    </template>
+
+    <!-- ═══════════ 方向卡展示 ═══════════ -->
     <div v-if="hasOptions" class="ai-creation-options" aria-label="AI 创意卡片">
       <article
         v-for="(option, index) in options"
@@ -232,6 +520,7 @@ function showError(error: unknown) {
       </article>
     </div>
 
+    <!-- 方向卡微调 -->
     <div v-if="hasOptions" class="ai-creation-regenerate">
       <label class="ai-creation-field">
         <span>让 AI 微调</span>
@@ -250,5 +539,20 @@ function showError(error: unknown) {
         {{ isRegenerating ? '调整中...' : '重新生成' }}
       </button>
     </div>
+
+    <!-- ═══════════ 文档内容预览弹窗 ═══════════ -->
+    <Teleport to="body">
+      <div v-if="previewModalVisible" class="preview-modal-overlay" @click.self="closePreview">
+        <div class="preview-modal">
+          <div class="preview-modal-header">
+            <h4>📄 {{ previewFileName }}</h4>
+            <button type="button" class="preview-modal-close" @click="closePreview">✕</button>
+          </div>
+          <div class="preview-modal-body">
+            <pre class="preview-content">{{ previewText }}</pre>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </section>
 </template>
