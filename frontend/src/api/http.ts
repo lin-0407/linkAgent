@@ -40,7 +40,9 @@ const http = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   // 默认 5 分钟超时，AI 对话、分析等接口响应时间远超普通 CRUD
   timeout: 300_000,
-  headers: { 'Content-Type': 'application/json' },
+  // 不设默认 Content-Type：axios 对 JSON body 会自动设 application/json，
+  // 对 FormData 则交由浏览器自动附加 multipart/form-data boundary。
+  // 显式写死会导致 upload() 时发错 Content-Type，后端拒绝请求（415）。
 })
 
 // ═══════════════════════════════════════════
