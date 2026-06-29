@@ -25,6 +25,12 @@ const router = createRouter({
       name: 'projects',
       component: () => import('@/components/ProjectListWorkspace.vue'),
     },
+    {
+      // P0-3: 视频分析页 — 展示已绑定任务的视频卡片并支持分析追问
+      path: '/video-analysis',
+      name: 'videoAnalysis',
+      component: () => import('@/views/VideoAnalysisPage.vue'),
+    },
   ],
 })
 

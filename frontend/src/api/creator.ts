@@ -44,6 +44,14 @@ import type {
   PrePublishDraftPayload,
   PrePublishDraftResult,
   WorkflowUsageResponse,
+  // P0-3: B站账号绑定 + 视频分析
+  BilibiliAccount,
+  BindAccountPayload,
+  BilibiliVideo,
+  TaskVideoBinding,
+  BindBvPayload,
+  SyncVideosResult,
+  VideoAnalysisReport,
 } from '@/types/creator'
 import { cleanPayload, del, download, get, post, put, upload } from './http'
 
@@ -360,4 +368,47 @@ export function listTaskLlmApiCalls(
 export function recordCreatorEvent(payload: CreatorFeedbackEventPayload) {
   // 后端约定无响应体（写入后异步触发画像更新），用 void 泛型
   return post<void>('/creator/profile/events', payload)
+}
+
+// ── B站账号绑定（P0-3）──
+
+/** 绑定或更新B站账号（第一版只需UID，不做OAuth授权） */
+export function bindBilibiliAccount(payload: BindAccountPayload) {
+  return post<BilibiliAccount>('/creator/bilibili/accounts', cleanPayload(payload))
+}
+
+/** 查询B站账号绑定状态 */
+export function getBilibiliAccount(userId: string) {
+  return get<BilibiliAccount>(`/creator/bilibili/accounts/${encodeURIComponent(userId)}`)
+}
+
+/** 触发B站视频同步（P0-3为占位实现，后续接入B站公开API） */
+export function syncBilibiliVideos(userId: string) {
+  return post<SyncVideosResult>(`/creator/bilibili/accounts/${encodeURIComponent(userId)}/sync`)
+}
+
+// ── 任务BV绑定（P0-3）──
+
+/** 将BV号绑定到创作任务，绑定后视频分析页才能展示该视频卡片 */
+export function bindBvToTask(taskId: string, payload: BindBvPayload) {
+  return post<TaskVideoBinding>(
+    `/creator/bilibili/tasks/${encodeURIComponent(taskId)}/video-binding`,
+    cleanPayload(payload),
+  )
+}
+
+/** 查询任务的BV绑定状态，不存在时后端返回404 */
+export function getTaskVideoBinding(taskId: string) {
+  return get<TaskVideoBinding>(
+    `/creator/bilibili/tasks/${encodeURIComponent(taskId)}/video-binding`,
+  )
+}
+
+// ── 已绑定视频列表（P0-3）──
+
+/** 查询某B站UID下已和平台任务绑定的视频列表（不含UID_MISMATCH状态的绑定） */
+export function listLinkedVideos(bilibiliUid: string) {
+  return get<BilibiliVideo[]>(
+    `/creator/bilibili/accounts/${encodeURIComponent(bilibiliUid)}/linked-videos`,
+  )
 }

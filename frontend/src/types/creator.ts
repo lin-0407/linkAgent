@@ -713,4 +713,121 @@ export type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | '
  * 创作台一级步骤。
  * 持久化 activeStep 时复用同一类型，避免主壳和子组件各自维护 tab 名称。
  */
-export type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report' | 'usage'
+export type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report' | 'usage' | 'videoAnalysis'
+
+// ═══════════════════════════════════════════
+// P0-3: B站账号绑定
+// ═══════════════════════════════════════════
+
+/** B站账号绑定信息，对应后端 creator_bilibili_account 表 */
+export type BilibiliAccount = {
+  accountId: string
+  userId: string
+  bilibiliUid: string
+  nickname: string | null
+  /** 绑定状态：ACTIVE=正常绑定，UNVERIFIED=UID未校验，SYNC_FAILED=同步失败 */
+  bindStatus: string
+  lastSyncTime: string | null
+  lastSyncError: string | null
+  createTime: string
+  updateTime: string
+}
+
+/** B站账号绑定/更新请求 */
+export type BindAccountPayload = {
+  userId: string
+  bilibiliUid: string
+}
+
+// ═══════════════════════════════════════════
+// P0-3: B站视频缓存
+// ═══════════════════════════════════════════
+
+/** B站视频缓存信息，对应后端 creator_bilibili_video 表 + 任务关联信息 */
+export type BilibiliVideo = {
+  videoId: string
+  bilibiliUid: string
+  bvid: string
+  aid: number | null
+  title: string | null
+  coverUrl: string | null
+  publishTime: string | null
+  viewCount: number | null
+  likeCount: number | null
+  coinCount: number | null
+  favoriteCount: number | null
+  shareCount: number | null
+  /** 同步状态：SYNCED=已同步，STALE=数据过期，FAILED=同步失败 */
+  syncStatus: string
+  lastSyncTime: string | null
+  /** 是否已和平台任务绑定 */
+  hasTaskBinding: boolean
+  /** 关联的任务ID，未绑定时为空 */
+  taskId: string | null
+  /** 关联的任务名称，未绑定时为空 */
+  taskName: string | null
+}
+
+// ═══════════════════════════════════════════
+// P0-3: 任务视频绑定
+// ═══════════════════════════════════════════
+
+/** 任务视频绑定信息，对应后端 creator_task_video_binding 表 */
+export type TaskVideoBinding = {
+  bindingId: string
+  taskId: string
+  userId: string
+  bilibiliUid: string | null
+  bvid: string
+  /** 绑定状态：WAITING_VERIFY=等待校验，BOUND=已绑定校验通过，UID_MISMATCH=BV不属于该UID，VIDEO_NOT_FOUND=BV查不到视频 */
+  bindingStatus: string
+  verifyMessage: string | null
+  createTime: string
+  updateTime: string
+}
+
+/** BV绑定请求 */
+export type BindBvPayload = {
+  userId: string
+  bilibiliUid: string
+  bvid: string
+}
+
+// ═══════════════════════════════════════════
+// P0-3: 视频同步结果
+// ═══════════════════════════════════════════
+
+/** B站视频同步结果 */
+export type SyncVideosResult = {
+  bilibiliUid: string
+  syncedCount: number
+  linkedCount: number
+  anomalyCount: number
+  lastError: string | null
+  message?: string
+}
+
+// ═══════════════════════════════════════════
+// P0-3: 视频分析报告（P0-4开始写入和读取）
+// ═══════════════════════════════════════════
+
+/** 视频分析报告，对应后端 creator_video_analysis_report 表 */
+export type VideoAnalysisReport = {
+  analysisId: string
+  taskId: string
+  bvid: string
+  workflowSessionId: string | null
+  /** 分析状态：PENDING=待分析，SYNCING=同步中，FETCHING=采集中，ANALYZING=分析中，COMPLETED=已完成，FAILED=失败 */
+  analysisStatus: string
+  oneSentenceSummary: string | null
+  publishPlanReview: string | null
+  audienceFocus: string | null
+  misunderstandingPoints: string | null
+  controversyPoints: string | null
+  nextActionPlan: string | null
+  evidenceSummary: string | null
+  rawOutput: string | null
+  parseStatus: string
+  createTime: string
+  updateTime: string
+}
