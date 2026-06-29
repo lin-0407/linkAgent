@@ -1151,18 +1151,28 @@ CREATE TABLE IF NOT EXISTS creator_video_analysis_report
   COMMENT = '视频分析报告表';
 
 -- ============================================================
--- 幂等迁移：为已存在的表补充新列（MySQL 8.0.29+ 支持 IF NOT EXISTS）
+-- 幂等迁移：为已存在的表补充新列
+-- 用 INFORMATION_SCHEMA 判断列是否存在，兼容所有 MySQL 8.x 版本
 -- ============================================================
 
 -- 阶段6.3：交互式创作会话新增补充背景文档和AI理解确认字段
-ALTER TABLE creator_interactive_session
-    ADD COLUMN IF NOT EXISTS background_context LONGTEXT DEFAULT NULL
-        COMMENT '用户上传的补充背景资料（从文档中提取的纯文本，可累积追加多个文件的内容）';
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_interactive_session ADD COLUMN background_context LONGTEXT DEFAULT NULL COMMENT ''用户上传的补充背景资料（从文档中提取的纯文本，可累积追加多个文件的内容）''',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_interactive_session' AND COLUMN_NAME = 'background_context');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-ALTER TABLE creator_interactive_session
-    ADD COLUMN IF NOT EXISTS understanding_summary TEXT DEFAULT NULL
-        COMMENT 'AI 对用户创作想法的理解摘要，用于用户在生成方向卡前核验 AI 是否准确理解了创作意图';
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_interactive_session ADD COLUMN understanding_summary TEXT DEFAULT NULL COMMENT ''AI 对用户创作想法的理解摘要，用于用户在生成方向卡前核验 AI 是否准确理解了创作意图''',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_interactive_session' AND COLUMN_NAME = 'understanding_summary');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-ALTER TABLE creator_interactive_session
-    ADD COLUMN IF NOT EXISTS understanding_status VARCHAR(32) NOT NULL DEFAULT 'NONE'
-        COMMENT '理解确认状态：NONE=未开始，UNDERSTANDING=生成中，READY=待用户确认，CONFIRMED=用户已确认';
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_interactive_session ADD COLUMN understanding_status VARCHAR(32) NOT NULL DEFAULT ''NONE'' COMMENT ''理解确认状态：NONE=未开始，UNDERSTANDING=生成中，READY=待用户确认，CONFIRMED=用户已确认''',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_interactive_session' AND COLUMN_NAME = 'understanding_status');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
