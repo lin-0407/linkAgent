@@ -40,6 +40,7 @@ import {
   updateCreatorTask,
 } from '@/api/creator'
 import MessageBubble from '@/components/MessageBubble.vue'
+import NotificationToast from '@/components/NotificationToast.vue'
 import AiCreationConsole from '@/components/creator/AiCreationConsole.vue'
 import GuidanceEditorModal from '@/components/creator/GuidanceEditorModal.vue'
 import FeedbackTab from '@/components/creator/FeedbackTab.vue'
@@ -372,7 +373,7 @@ const isContextLibraryOpen = ref(false)
 const resultModalTarget = ref<ResultModalTarget | null>(null)
 const isFeedbackChatDrawerOpen = ref(false)
 const isDeveloperTestBackdropPointerDown = ref(false)
-let successMessageTimer: number | undefined
+
 
 // ═══════════════════════════════════════════
 // Phase 5.8 Adapter Layer — 桥接模式
@@ -838,20 +839,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   closeWorkflowEventSource()
-  clearSuccessMessageTimer()
   window.removeEventListener('keydown', handleWorkspaceKeydown)
-})
-
-watch(successMessage, (message) => {
-  clearSuccessMessageTimer()
-  if (!message) {
-    return
-  }
-
-  successMessageTimer = window.setTimeout(() => {
-    successMessage.value = ''
-    successMessageTimer = undefined
-  }, 2800)
 })
 
 watch(
@@ -885,14 +873,6 @@ watch(() => taskModule.isLoadingTasks.value, (val) => { isLoadingTasks.value = v
 watch(() => taskModule.isCreatingTask.value, (val) => { isCreatingTask.value = val })
 watch(() => taskModule.isUpdatingTask.value, (val) => { isUpdatingTask.value = val })
 watch(() => taskModule.isDeletingTask.value, (val) => { isDeletingTask.value = val })
-
-function clearSuccessMessageTimer() {
-  if (successMessageTimer === undefined) {
-    return
-  }
-  window.clearTimeout(successMessageTimer)
-  successMessageTimer = undefined
-}
 
 function openTaskManager() {
   pendingDeleteTask.value = null
@@ -984,8 +964,8 @@ function updateFeedbackChatTurn(turnId: string, patch: Partial<FeedbackChatTurn>
   )
 }
 
+/** 关闭成功通知（NotificationToast 组件通过 @close 事件触发，定时器由组件内部管理） */
 function closeSuccessToast() {
-  clearSuccessMessageTimer()
   successMessage.value = ''
 }
 
@@ -2165,27 +2145,11 @@ provideCreatorWorkspace({
 
 <template>
   <section class="creator-shell creator-workbench-shell">
-    <Transition name="creator-toast">
-      <div
-        v-if="successMessage"
-        class="creator-toast success-toast"
-        role="status"
-        aria-live="polite"
-      >
-        <div>
-          <strong>操作完成</strong>
-          <span>{{ successMessage }}</span>
-        </div>
-        <button
-          type="button"
-          class="creator-toast-close"
-          aria-label="关闭成功提示"
-          @click="closeSuccessToast"
-        >
-          ×
-        </button>
-      </div>
-    </Transition>
+    <NotificationToast
+      type="success"
+      :message="successMessage"
+      @close="closeSuccessToast"
+    />
 
     <header v-if="!selectedTask && !isTaskComposerOpen" class="creator-header">
       <div>
@@ -2486,10 +2450,11 @@ provideCreatorWorkspace({
       </aside>
 
       <section class="creator-main">
-        <div v-if="errorMessage" class="creator-alert error-alert">
-          <strong>请求失败</strong>
-          <span>{{ errorMessage }}</span>
-        </div>
+        <NotificationToast
+          type="error"
+          :message="errorMessage"
+          @close="errorMessage = ''"
+        />
 
         <MaterialsTab v-if="activeStep === 'task'" />
 

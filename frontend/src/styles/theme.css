@@ -1083,16 +1083,11 @@ textarea:focus {
 
 .agent-floating-session-item span,
 .agent-floating-session-item small,
-.agent-floating-session-empty,
-.agent-floating-session-error {
+.agent-floating-session-empty {
   margin: 0;
   color: rgba(63, 38, 49, 0.64);
   font-size: 12px;
   line-height: 1.45;
-}
-
-.agent-floating-session-error {
-  color: var(--danger);
 }
 
 .agent-floating-context-panel {
@@ -1871,78 +1866,8 @@ textarea:focus {
   text-transform: uppercase;
 }
 
-.creator-toast {
-  position: fixed;
-  top: 22px;
-  right: 22px;
-  z-index: 90;
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  width: min(420px, calc(100vw - 44px));
-  padding: 12px 12px 12px 14px;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--ok);
-  border-radius: var(--r);
-  box-shadow: var(--sh-md);
-  backdrop-filter: blur(14px);
-}
 
-.creator-toast div {
-  display: grid;
-  flex: 1;
-  gap: 2px;
-  min-width: 0;
-}
 
-.creator-toast strong {
-  font-size: 13px;
-  font-weight: 650;
-  line-height: 1.35;
-}
-
-.creator-toast span {
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.creator-toast-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
-  color: var(--muted);
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  cursor: pointer;
-  font-size: 18px;
-  font-weight: var(--fw-semibold);
-  line-height: 1;
-}
-
-.creator-toast-close:hover {
-  color: var(--ink);
-  background: var(--surface);
-}
-
-.creator-toast-enter-active,
-.creator-toast-leave-active {
-  transition:
-    opacity 180ms ease,
-    transform 180ms ease;
-}
-
-.creator-toast-enter-from,
-.creator-toast-leave-to {
-  opacity: 0;
-  transform: translateY(-8px);
-}
 
 .creator-status-strip {
   display: flex;
@@ -5449,13 +5374,6 @@ textarea:focus {
     width: 100%;
   }
 
-  .creator-toast {
-    top: 12px;
-    right: 12px;
-    left: 12px;
-    width: auto;
-  }
-
   .creator-task-rail,
   .creator-task-toolbar,
   .creator-task-overview,
@@ -5615,13 +5533,6 @@ textarea:focus {
   .plan-trace-step header b {
     grid-column: 2;
     width: fit-content;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .creator-toast-enter-active,
-  .creator-toast-leave-active {
-    transition: none;
   }
 }
 
@@ -7871,7 +7782,6 @@ body {
 .creator-mini-button,
 .creator-tabs button,
 .creator-task-select,
-.creator-toast-close,
 .creator-guide-close,
 .surface-guide-close,
 .surface-action-pill,

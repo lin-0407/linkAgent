@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChatComposer from '@/components/ChatComposer.vue'
-import ErrorNotice from '@/components/ErrorNotice.vue'
+import NotificationToast from '@/components/NotificationToast.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import { useAgentChat } from '@/composables/useAgentChat'
 import type { SessionListItem } from '@/types/agent'
@@ -626,7 +626,11 @@ function clipText(value: string, maxLength: number) {
             </button>
             <p v-if="sessions.length === 0" class="agent-floating-session-empty">还没有保存的会话</p>
           </template>
-          <p v-if="sessionsError" class="agent-floating-session-error">{{ sessionsError }}</p>
+          <NotificationToast
+            type="warning"
+            :message="sessionsError"
+            @close="sessionsError = ''"
+          />
         </section>
 
         <section v-if="knowledgeContext" class="agent-floating-context-panel" aria-label="已加载的视频上下文">
@@ -752,7 +756,11 @@ function clipText(value: string, maxLength: number) {
           </button>
         </div>
 
-        <ErrorNotice :error-message="errorMessage" />
+        <NotificationToast
+          type="error"
+          :message="errorMessage"
+          @close="errorMessage = ''"
+        />
 
         <ChatComposer
           ref="composerRef"
