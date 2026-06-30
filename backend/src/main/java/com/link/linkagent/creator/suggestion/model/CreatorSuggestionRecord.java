@@ -23,6 +23,11 @@ public class CreatorSuggestionRecord {
     private String actionableRevisionPlan;
     private String tagSuggestions;
     private String partitionSuggestion;
+    private String evidenceRefs;
+    private String missingInfo;
+    private String generationMode;
+    private String qualityStatus;
+    private String auditReport;
     private String rawOutput;
     private String parseStatus;
     private LocalDateTime createTime;
@@ -146,6 +151,46 @@ public class CreatorSuggestionRecord {
 
     public void setPartitionSuggestion(String partitionSuggestion) {
         this.partitionSuggestion = partitionSuggestion;
+    }
+
+    public String getEvidenceRefs() {
+        return evidenceRefs;
+    }
+
+    public void setEvidenceRefs(String evidenceRefs) {
+        this.evidenceRefs = evidenceRefs;
+    }
+
+    public String getMissingInfo() {
+        return missingInfo;
+    }
+
+    public void setMissingInfo(String missingInfo) {
+        this.missingInfo = missingInfo;
+    }
+
+    public String getGenerationMode() {
+        return generationMode;
+    }
+
+    public void setGenerationMode(String generationMode) {
+        this.generationMode = generationMode;
+    }
+
+    public String getQualityStatus() {
+        return qualityStatus;
+    }
+
+    public void setQualityStatus(String qualityStatus) {
+        this.qualityStatus = qualityStatus;
+    }
+
+    public String getAuditReport() {
+        return auditReport;
+    }
+
+    public void setAuditReport(String auditReport) {
+        this.auditReport = auditReport;
     }
 
     public String getRawOutput() {

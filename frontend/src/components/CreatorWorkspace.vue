@@ -354,12 +354,10 @@ const activeCreatorStepIndex = computed(() => {
   }
   return matchedIndex >= 0 ? matchedIndex : 0
 })
+// 使用 ?? 兜底第一个步骤元信息，满足 TypeScript 对数组索引可能返回 undefined 的严格检查；creatorStepMetas 是常量数组，始终有 4 个元素，所以 [0] 安全非空。
 const activeCreatorStepMeta = computed(
   () => creatorStepMetas[activeCreatorStepIndex.value] ?? creatorStepMetas[0]!,
 )
-// 使用 ?? 兜底第一个步骤元信息，满足 TypeScript 对数组索引可能返回 undefined 的严格检查
-// creatorStepMetas 是常量数组，始终有 4 个元素，所以 [0] 安全非空
-const activeCreatorStepMeta = computed(() => creatorStepMetas[activeCreatorStepIndex.value] ?? creatorStepMetas[0]!)
 const creatorProgressPercent = computed(() => `${((activeCreatorStepIndex.value + 1) / creatorStepMetas.length) * 100}%`)
 const currentTaskProgressIndex = computed(() => {
   if (!selectedTask.value) {

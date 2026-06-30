@@ -1,4 +1,4 @@
-﻿-- ============================================================
+-- ============================================================
 -- link_agent 数据库初始化脚本
 -- 执行方式：mysql -u root -p < init.sql
 -- ============================================================
@@ -238,6 +238,11 @@ CREATE TABLE IF NOT EXISTS creator_suggestion
     actionable_revision_plan TEXT                DEFAULT NULL COMMENT '可执行修改计划 JSON，用于把建议落成标题、开头、简介等具体动作',
     tag_suggestions        TEXT                  DEFAULT NULL COMMENT '标签建议列表 JSON',
     partition_suggestion   VARCHAR(128)          DEFAULT NULL COMMENT '分区建议',
+    evidence_refs          JSON                  DEFAULT NULL COMMENT '发布前优化可引用证据 JSON，记录任务材料、创作者偏好、类型语境和同类案例等依据',
+    missing_info           JSON                  DEFAULT NULL COMMENT '缺失信息 JSON，记录会影响建议准确性但当前没有提供的信息',
+    generation_mode        VARCHAR(64)           DEFAULT NULL COMMENT '生成模式：DIRECT_LLM_EVIDENCE=直连模型证据化，AGENT_RAG_EVIDENCE=Agent证据化',
+    quality_status         VARCHAR(64)           DEFAULT NULL COMMENT '质量状态：AUDIT_PASSED=审查通过，AUDIT_WARNED=存在警告，AUDIT_FAILED=存在错误，AUDIT_SKIPPED=未审查',
+    audit_report           JSON                  DEFAULT NULL COMMENT '发布前优化建议审查报告 JSON，记录证据引用、夸大承诺和结构完整性检查结果',
     raw_output             LONGTEXT     NOT NULL COMMENT 'LLM 原始输出，用于失败回放和人工检查',
     parse_status           VARCHAR(32)  NOT NULL DEFAULT 'PARSED' COMMENT '解析状态：PARSED=已解析，RAW_ONLY=仅保存原文',
     create_time            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -1197,4 +1202,40 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_interactive_session' AND COLUMN_NAME = 'understanding_status');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 发布前优化证据化字段兼容补丁：已有本地库执行 init.sql 时自动补齐，不引入迁移框架。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_suggestion ADD COLUMN evidence_refs JSON DEFAULT NULL COMMENT ''发布前优化可引用证据 JSON，记录任务材料、创作者偏好、类型语境和同类案例等依据'' AFTER partition_suggestion',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_suggestion' AND COLUMN_NAME = 'evidence_refs');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_suggestion ADD COLUMN missing_info JSON DEFAULT NULL COMMENT ''缺失信息 JSON，记录会影响建议准确性但当前没有提供的信息'' AFTER evidence_refs',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_suggestion' AND COLUMN_NAME = 'missing_info');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_suggestion ADD COLUMN generation_mode VARCHAR(64) DEFAULT NULL COMMENT ''生成模式：DIRECT_LLM_EVIDENCE=直连模型证据化，AGENT_RAG_EVIDENCE=Agent证据化'' AFTER missing_info',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_suggestion' AND COLUMN_NAME = 'generation_mode');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_suggestion ADD COLUMN quality_status VARCHAR(64) DEFAULT NULL COMMENT ''质量状态：AUDIT_PASSED=审查通过，AUDIT_WARNED=存在警告，AUDIT_FAILED=存在错误，AUDIT_SKIPPED=未审查'' AFTER generation_mode',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_suggestion' AND COLUMN_NAME = 'quality_status');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_suggestion ADD COLUMN audit_report JSON DEFAULT NULL COMMENT ''发布前优化建议审查报告 JSON，记录证据引用、夸大承诺和结构完整性检查结果'' AFTER quality_status',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_suggestion' AND COLUMN_NAME = 'audit_report');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

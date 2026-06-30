@@ -313,6 +313,11 @@ export type CreatorSuggestion = {
   actionableRevisionPlan: string | null
   tagSuggestions: string | null
   partitionSuggestion: string | null
+  evidenceRefs: string | null
+  missingInfo: string | null
+  generationMode: string | null
+  qualityStatus: string | null
+  auditReport: string | null
   rawOutput: string
   parseStatus: string
   createTime: string

@@ -176,6 +176,11 @@ function parseSseEvent(raw: string): AgentStreamEvent | null {
 
   if (!eventType || !dataStr) return null
 
+  // token 事件由后端按纯文本片段发送，不能先 JSON.parse，否则中文和普通文本会被静默丢弃。
+  if (eventType === 'token') {
+    return { type: 'token', text: dataStr }
+  }
+
   try {
     const data = JSON.parse(dataStr)
     switch (eventType) {
@@ -183,9 +188,6 @@ function parseSseEvent(raw: string): AgentStreamEvent | null {
         return { type: 'session', sessionId: data.sessionId ?? '' }
       case 'step':
         return { type: 'step', step: data as AgentStep }
-      case 'token':
-        // token 事件的数据是纯字符串，由后端直接发送
-        return { type: 'token', text: typeof data === 'string' ? data : String(data) }
       case 'error':
         return { type: 'error', message: typeof data === 'string' ? data : (data.message ?? '未知错误') }
       case 'done':

@@ -13,6 +13,8 @@ import com.link.linkagent.creator.suggestion.model.AnalysisStrategy;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionResponse;
 import com.link.linkagent.creator.suggestion.model.PrePublishAnalyzeRequest;
+import com.link.linkagent.creator.suggestion.model.PrePublishAuditReport;
+import com.link.linkagent.creator.suggestion.model.PrePublishEvidenceRef;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.creator.task.model.CreatorMaterialType;
@@ -103,6 +105,10 @@ public class PrePublishSuggestionService {
     private final ObjectMapper objectMapper;
     /** 提示词模板服务 */
     private final PromptService promptService;
+    /** 发布前优化证据收集器，用于把材料、偏好和案例库结果整理成可追溯依据 */
+    private final PrePublishEvidenceCollector evidenceCollector;
+    /** 发布前优化建议审查器，用确定性规则标记无证据和夸大承诺等质量问题 */
+    private final PrePublishSuggestionAuditor suggestionAuditor;
 
     @Autowired
     public PrePublishSuggestionService(CreatorTaskMapper creatorTaskMapper,
@@ -113,7 +119,9 @@ public class PrePublishSuggestionService {
                                        LLMService llmService,
                                        AgentExecutor agentExecutor,
                                        ObjectMapper objectMapper,
-                                       PromptService promptService) {
+                                       PromptService promptService,
+                                       PrePublishEvidenceCollector evidenceCollector,
+                                       PrePublishSuggestionAuditor suggestionAuditor) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorPreferenceService = creatorPreferenceService;
@@ -123,6 +131,8 @@ public class PrePublishSuggestionService {
         this.agentExecutor = agentExecutor;
         this.objectMapper = objectMapper;
         this.promptService = promptService;
+        this.evidenceCollector = evidenceCollector;
+        this.suggestionAuditor = suggestionAuditor;
     }
 
     /**
@@ -137,7 +147,7 @@ public class PrePublishSuggestionService {
                                 ObjectMapper objectMapper,
                                 PromptService promptService) {
         this(creatorTaskMapper, creatorSuggestionMapper, creatorPreferenceService, creatorContextService,
-                null, llmService, null, objectMapper, promptService);
+                null, llmService, null, objectMapper, promptService, null, null);
     }
 
     /**
@@ -179,12 +189,16 @@ public class PrePublishSuggestionService {
         }
 
         PrePublishAnalyzeRequest safeRequest = normalizeRequest(request);
+        String preferenceContext = buildPreferencePromptContext(taskRecord, safeRequest);
+        List<PrePublishEvidenceRef> evidenceRefs = collectEvidence(taskRecord, materials, safeRequest, preferenceContext);
         String rawOutput;
         // 用 try-with-resources 打开用量上下文，确保 LLM 调用被 Langfuse 正确追踪
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "发布前优化")) {
-            rawOutput = llmService.chat(buildSystemPrompt(), buildUserPrompt(taskRecord, materials, safeRequest));
+            rawOutput = llmService.chat(buildSystemPrompt(),
+                    buildUserPrompt(taskRecord, materials, safeRequest, preferenceContext, evidenceRefs));
         }
-        CreatorSuggestionRecord suggestionRecord = buildSuggestionRecord(taskRecord.getTaskId(), rawOutput);
+        CreatorSuggestionRecord suggestionRecord = buildSuggestionRecord(taskRecord.getTaskId(), rawOutput,
+                evidenceRefs, "DIRECT_LLM_EVIDENCE", "EVIDENCE_COLLECTED");
         creatorSuggestionMapper.upsert(suggestionRecord);
         return getSuggestion(taskRecord.getTaskId());
     }
@@ -219,10 +233,13 @@ public class PrePublishSuggestionService {
         }
 
         PrePublishAnalyzeRequest safeRequest = normalizeRequest(request);
+        String preferenceContext = buildPreferencePromptContext(taskRecord, safeRequest);
+        List<PrePublishEvidenceRef> evidenceRefs = collectEvidence(taskRecord, materials, safeRequest, preferenceContext);
         if (agentExecutor == null) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化 Agent 未初始化");
         }
-        AgentChatResponse agentResponse = agentExecutor.runTask(buildAgentTaskPrompt(taskRecord, materials, safeRequest));
+        AgentChatResponse agentResponse = agentExecutor.runTask(
+                buildAgentTaskPrompt(taskRecord, materials, safeRequest, preferenceContext, evidenceRefs));
         if (TextUtil.hasText(agentResponse.stopReason()) && !TextUtil.hasText(agentResponse.finalAnswer())) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化 Agent 未能生成最终答案：" + agentResponse.stopReason());
         }
@@ -231,7 +248,8 @@ public class PrePublishSuggestionService {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化 Agent 返回为空");
         }
 
-        CreatorSuggestionRecord suggestionRecord = buildSuggestionRecord(taskRecord.getTaskId(), rawOutput);
+        CreatorSuggestionRecord suggestionRecord = buildSuggestionRecord(taskRecord.getTaskId(), rawOutput,
+                evidenceRefs, "AGENT_RAG_EVIDENCE", "EVIDENCE_COLLECTED");
         if (!"PARSED".equals(suggestionRecord.getParseStatus())) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化 Agent 输出无法解析为结构化 JSON");
         }
@@ -273,13 +291,103 @@ public class PrePublishSuggestionService {
      * 根据 LLM 原始输出构建建议记录。
      * 生成唯一 suggestionId、关联 taskId、保存原始文本，然后尝试解析为结构化字段。
      */
-    private CreatorSuggestionRecord buildSuggestionRecord(String taskId, String rawOutput) {
+    private CreatorSuggestionRecord buildSuggestionRecord(String taskId, String rawOutput,
+                                                          List<PrePublishEvidenceRef> evidenceRefs,
+                                                          String generationMode,
+                                                          String qualityStatus) {
         CreatorSuggestionRecord record = new CreatorSuggestionRecord();
         record.setSuggestionId(UUID.randomUUID().toString());
         record.setTaskId(taskId);
         record.setRawOutput(rawOutput);
+        record.setEvidenceRefs(toJson(evidenceRefs));
+        record.setGenerationMode(generationMode);
+        record.setQualityStatus(qualityStatus);
         fillParsedFields(record, rawOutput);
+        auditSuggestion(record, evidenceRefs);
         return record;
+    }
+    private void auditSuggestion(CreatorSuggestionRecord record, List<PrePublishEvidenceRef> evidenceRefs) {
+        if (suggestionAuditor == null) {
+            record.setAuditReport(toJson(new PrePublishAuditReport(
+                    "AUDIT_SKIPPED",
+                    0,
+                    "当前运行环境未注入建议审查器，无法执行确定性质量审查。",
+                    List.of(),
+                    null
+            )));
+            record.setQualityStatus("AUDIT_SKIPPED");
+            return;
+        }
+        PrePublishAuditReport auditReport = suggestionAuditor.audit(record, evidenceRefs);
+        record.setAuditReport(toJson(auditReport));
+        record.setQualityStatus(auditReport.status());
+    }
+
+
+    private List<PrePublishEvidenceRef> collectEvidence(CreatorTaskRecord taskRecord,
+                                                        List<CreatorMaterialRecord> materials,
+                                                        PrePublishAnalyzeRequest request,
+                                                        String preferenceContext) {
+        if (evidenceCollector == null) {
+            return List.of(new PrePublishEvidenceRef(
+                    "E1",
+                    "SYSTEM_LIMITATION",
+                    "证据收集",
+                    "pre_publish:evidence_collector",
+                    "",
+                    "当前运行环境未注入证据收集器，本次建议只保存基础生成结果。",
+                    0.3D
+            ));
+        }
+        return evidenceCollector.collect(taskRecord, materials, request, preferenceContext);
+    }
+
+    private String buildEvidencePromptInstruction(List<PrePublishEvidenceRef> evidenceRefs) {
+        return """
+                可引用证据：
+                %s
+
+                证据使用要求：
+                1. 标题建议、风险点和 HIGH 优先级修改计划必须尽量引用 evidenceIds。
+                2. evidenceIds 只能使用上方已经出现的编号，不要编造新编号。
+                3. 不要声称知道 B 站推荐算法、真实完播率或未提供的竞品数据。
+                4. 如果证据不足，请在 missingInfo 中说明缺失信息。
+                5. titleSuggestions 单项请补充 evidenceIds、confidence、assumption；actionableRevisionPlan 单项请补充 evidenceIds、confidence。
+                """.formatted(formatEvidenceRefs(evidenceRefs));
+    }
+
+    private String formatEvidenceRefs(List<PrePublishEvidenceRef> evidenceRefs) {
+        if (evidenceRefs == null || evidenceRefs.isEmpty()) {
+            return "没有可引用证据。";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (PrePublishEvidenceRef evidence : evidenceRefs) {
+            builder.append("[")
+                    .append(evidence.evidenceId())
+                    .append("] ")
+                    .append(evidence.type())
+                    .append("｜")
+                    .append(TextUtil.trimToDefault(evidence.sourceName(), "未知来源"))
+                    .append("｜置信度=")
+                    .append(evidence.confidence())
+                    .append("\n摘录：")
+                    .append(TextUtil.trimToDefault(evidence.quote(), "无原文摘录"))
+                    .append("\n说明：")
+                    .append(TextUtil.trimToDefault(evidence.summary(), "无说明"))
+                    .append("\n");
+        }
+        return builder.toString();
+    }
+
+    private String toJson(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化证据序列化失败");
+        }
     }
 
     /**
@@ -304,6 +412,7 @@ public class PrePublishSuggestionService {
             record.setActionableRevisionPlan(LlmJsonUtil.json(objectMapper, rootNode, "actionableRevisionPlan"));
             record.setTagSuggestions(LlmJsonUtil.json(objectMapper, rootNode, "tagSuggestions"));
             record.setPartitionSuggestion(LlmJsonUtil.text(rootNode, "partitionSuggestion"));
+            record.setMissingInfo(LlmJsonUtil.json(objectMapper, rootNode, "missingInfo"));
             record.setParseStatus("PARSED");
         } catch (JsonProcessingException | IllegalArgumentException exception) {
             // LLM 输出格式异常时不做二次重试：保留原始文本，让调用方根据 RAW_ONLY 状态决定后续处理
@@ -328,18 +437,21 @@ public class PrePublishSuggestionService {
      */
     private String buildUserPrompt(CreatorTaskRecord taskRecord,
                                    List<CreatorMaterialRecord> materials,
-                                   PrePublishAnalyzeRequest request) {
-        return promptService.render("pre_publish.user", Map.of(
+                                   PrePublishAnalyzeRequest request,
+                                   String preferenceContext,
+                                   List<PrePublishEvidenceRef> evidenceRefs) {
+        String basePrompt = promptService.render("pre_publish.user", Map.of(
                 "taskName", taskRecord.getTaskName(),
                 "taskId", taskRecord.getTaskId(),
                 "customGuidance", TextUtil.trimToDefault(request.customGuidance(), "未提供"),
                 "preferenceMode", preferenceModeLabel(request.preferenceMode()),
-                "preferenceContext", buildPreferencePromptContext(taskRecord, request),
+                "preferenceContext", preferenceContext,
                 "creatorPreference", TextUtil.trimToDefault(request.creatorPreference(), "未提供"),
                 "titleStyle", TextUtil.trimToDefault(request.titleStyle(), "未提供"),
                 "extraRequirement", TextUtil.trimToDefault(request.extraRequirement(), "未提供"),
                 "materials", buildMaterialPrompt(materials)
         ));
+        return basePrompt + "\n\n" + buildEvidencePromptInstruction(evidenceRefs);
     }
 
     /**
@@ -358,7 +470,9 @@ public class PrePublishSuggestionService {
      */
     private String buildAgentTaskPrompt(CreatorTaskRecord taskRecord,
                                         List<CreatorMaterialRecord> materials,
-                                        PrePublishAnalyzeRequest request) {
+                                        PrePublishAnalyzeRequest request,
+                                        String preferenceContext,
+                                        List<PrePublishEvidenceRef> evidenceRefs) {
         return """
                 你正在帮助 B 站 UP 主做发布前优化。
 
@@ -375,17 +489,21 @@ public class PrePublishSuggestionService {
                 创作者历史偏好和当前视频类型语境：
                 %s
 
+                已收集的可引用证据：
+                %s
+
                 用户主动提供的任务材料：
                 %s
 
                 你的目标：
                 1. 判断当前内容的核心卖点。
-                2. 如果系统工具列表中存在 knowledge_search，且当前有明确视频类型、内容主题或标题方向，优先调用它检索同类型案例。
+                2. 可以继续调用 knowledge_search 补充案例，但最终结论必须优先引用“已收集的可引用证据”。
                 3. 如果 knowledge_search 不在工具列表中、知识库为空或检索失败，不要报错，按无案例降级生成。
                 4. 参考案例时必须说明借鉴点，而不是照搬标题或话术。
-                5. 输出标题建议、简介建议、标签建议、风险点、修改计划。
+                5. 输出标题建议、简介建议、标签建议、风险点、修改计划。标题建议和 HIGH 优先级修改计划必须尽量填写 evidenceIds。
                 6. 最终回答必须是一个 JSON 对象，不要使用 Markdown 代码块，不要输出 JSON 之外的解释。
                 7. 如果当前 Agent 内核要求通过 finalAnswer 字段结束，请把完整 JSON 对象作为 finalAnswer 的字符串内容，不要把 finalAnswer 写成嵌套对象。
+                8. 如果证据不足，请写入 missingInfo，不要编造 B 站算法、播放增长或竞品数据。
 
                 JSON 字段固定如下：
                 {
@@ -397,14 +515,15 @@ public class PrePublishSuggestionService {
                   "sellingPoints": ["核心卖点1", "核心卖点2", "核心卖点3"],
                   "riskPoints": ["可能的表达风险或内容短板"],
                   "titleSuggestions": [
-                    {"title": "标题1", "viewerPsychology": "对应的观众心理", "clickReason": "为什么会点", "trustRisk": "可能损伤信任的点", "bestScenario": "最适合的使用场景", "reason": "推荐理由", "risk": "风险提醒"}
+                    {"title": "标题1", "viewerPsychology": "对应的观众心理", "clickReason": "为什么会点", "trustRisk": "可能损伤信任的点", "bestScenario": "最适合的使用场景", "reason": "推荐理由", "risk": "风险提醒", "evidenceIds": ["E1"], "confidence": "HIGH/MEDIUM/LOW", "assumption": "成立前提"}
                   ],
                   "descriptionSuggestion": "简介建议",
                   "actionableRevisionPlan": [
-                    {"priority": "HIGH/MEDIUM/LOW", "target": "标题/开头/简介/标签/结构", "problem": "当前具体问题", "action": "可以直接执行的修改动作", "expectedEffect": "这个动作解决的观众或创作者问题"}
+                    {"priority": "HIGH/MEDIUM/LOW", "target": "标题/开头/简介/标签/结构", "problem": "当前具体问题", "action": "可以直接执行的修改动作", "expectedEffect": "这个动作解决的观众或创作者问题", "evidenceIds": ["E1"], "confidence": "HIGH/MEDIUM/LOW"}
                   ],
                   "tagSuggestions": ["标签1", "标签2", "标签3", "标签4", "标签5"],
-                  "partitionSuggestion": "建议分区"
+                  "partitionSuggestion": "建议分区",
+                  "missingInfo": ["会影响判断但当前缺失的信息"]
                 }
                 """.formatted(
                 taskRecord.getTaskId(),
@@ -415,7 +534,8 @@ public class PrePublishSuggestionService {
                 TextUtil.trimToDefault(request.creatorPreference(), "未提供"),
                 TextUtil.trimToDefault(request.titleStyle(), "未提供"),
                 TextUtil.trimToDefault(request.extraRequirement(), "未提供"),
-                buildPreferencePromptContext(taskRecord, request),
+                preferenceContext,
+                formatEvidenceRefs(evidenceRefs),
                 buildMaterialPrompt(materials)
         );
     }
@@ -621,6 +741,11 @@ public class PrePublishSuggestionService {
                 record.getActionableRevisionPlan(),
                 record.getTagSuggestions(),
                 record.getPartitionSuggestion(),
+                record.getEvidenceRefs(),
+                record.getMissingInfo(),
+                record.getGenerationMode(),
+                record.getQualityStatus(),
+                record.getAuditReport(),
                 record.getRawOutput(),
                 record.getParseStatus(),
                 record.getCreateTime(),

@@ -1,4 +1,4 @@
-﻿# 项目文档索引
+# 项目文档索引
 
 本文件统一记录阶段文档、功能说明和踩坑记录。`AGENTS.md` 只保留项目协作规则，避免随着阶段增加变得过长。
 
@@ -48,6 +48,7 @@
 | 前端 P0 用户化重构落地记录 | `/docs/develop/前端P0用户化重构落地.md` |
 | 前端 P0 用户化重构说明 | `/docs/reference/前端P0用户化重构说明.md` |
 | 前端 P0 用户化重构阶段问题整理 | `/docs/error/前端P0用户化重构阶段问题整理.md` |
+| P0 主链路验收清单 | `/docs/develop/P0主链路验收清单.md` |
 | P0 重构前代码审计报告 | `/docs/develop/P0重构前代码审计报告.md` |
 | 后端体验提升方案（记忆系统/SSE/容错/反馈） | `/docs/develop/linkAgent-backend-improvement-plan.md` |
 | 前端体验提升方案（Tab工作台/时间轴/建议卡片/移动端） | `/docs/develop/linkAgent-frontend-improvement-plan.md` |
@@ -59,3 +60,9 @@
 | 前端 P0-4 视觉和响应式收口说明 | `/docs/reference/前端P0-4视觉和响应式收口说明.md` |
 | 发布前优化金标准集 V1 设计 | `/docs/develop/发布前优化金标准集V1设计.md` |
 | 发布前优化金标准集 V1 机器可读样例 | `/docs/develop/pre_publish_golden_v1_cases.jsonl` |
+| 阶段 6.4 - 发布前优化证据化建议链路 | `/docs/develop/阶段6.4-发布前优化证据化建议链路.md` |
+| 发布前优化证据化建议链路说明 | `/docs/reference/发布前优化证据化建议链路说明.md` |
+| 阶段 6.4 - 发布前优化证据化建议链路踩坑记录 | `/docs/error/阶段6.4-发布前优化证据化建议链路踩坑记录.md` |
+| 阶段 6.5 - 发布前优化建议审查器 | `/docs/develop/阶段6.5-发布前优化建议审查器.md` |
+| 发布前优化建议审查器说明 | `/docs/reference/发布前优化建议审查器说明.md` |
+| 阶段 6.5 - 发布前优化建议审查器踩坑记录 | `/docs/error/阶段6.5-发布前优化建议审查器踩坑记录.md` |

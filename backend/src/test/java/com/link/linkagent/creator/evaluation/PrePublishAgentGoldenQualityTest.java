@@ -109,7 +109,9 @@ public class PrePublishAgentGoldenQualityTest {
                 llmService,
                 agentExecutor,
                 objectMapper,
-                promptService
+                promptService,
+                null,
+                null
         );
 
         return service.generateSuggestionByAgent(goldenCase.taskId(), buildAnalyzeRequest(goldenCase));
