@@ -2214,8 +2214,9 @@ provideCreatorWorkspace({
               <div>
                 <span>项目列表</span>
                 <h3 id="creator-task-manager-title">
-                  {{ filteredTasks.length }} / {{ taskSummaryStats.total }}
+                  历史视频项目
                 </h3>
+                <p>{{ filteredTasks.length }} 个匹配项目，共 {{ taskSummaryStats.total }} 个项目</p>
               </div>
               <div class="creator-panel-actions">
                 <button type="button" class="creator-ghost-button" @click="startCreateTask">
@@ -2292,12 +2293,20 @@ provideCreatorWorkspace({
                     </button>
                   </div>
                 </article>
-                <p v-if="!isLoadingTasks && tasks.length === 0" class="creator-muted">
-                  还没有视频项目，先新建一个。
-                </p>
-                <p v-else-if="!isLoadingTasks && filteredTasks.length === 0" class="creator-muted">
-                  没有匹配当前筛选条件的视频项目。
-                </p>
+                <div v-if="!isLoadingTasks && tasks.length === 0" class="creator-task-empty-state">
+                  <strong>还没有视频项目</strong>
+                  <span>先新建一条视频资料，后续发布方案和复盘报告都会沉淀在这里。</span>
+                  <button type="button" class="creator-primary-button creator-mini-button" @click="startCreateTask">
+                    新建项目
+                  </button>
+                </div>
+                <div
+                  v-else-if="!isLoadingTasks && filteredTasks.length === 0"
+                  class="creator-task-empty-state"
+                >
+                  <strong>没有匹配的项目</strong>
+                  <span>换一个关键词，或把状态筛选切回全部状态。</span>
+                </div>
               </div>
             </div>
           </section>

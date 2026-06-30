@@ -4864,15 +4864,16 @@ textarea:focus {
 }
 
 .creator-task-manager-backdrop {
-  align-items: start;
-  padding-top: 48px;
+  align-items: center;
+  padding: 32px;
 }
 
 .creator-task-manager-modal {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(760px, 100%);
-  max-height: min(820px, calc(100vh - 96px));
+  width: min(clamp(1040px, 72vw, 1360px), calc(100vw - 64px));
+  height: min(760px, calc(100vh - 64px));
+  max-height: calc(100vh - 64px);
   gap: 14px;
   padding: 18px;
   overflow: hidden;
@@ -4885,24 +4886,149 @@ textarea:focus {
 
 .creator-task-manager-head {
   align-items: flex-start;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
 }
 
 .creator-task-manager-head span {
-  color: rgba(44, 55, 74, 0.58);
+  color: var(--accent-strong);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 800;
+}
+
+.creator-task-manager-head h3 {
+  margin-top: 2px;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.creator-task-manager-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.creator-task-manager-head .creator-panel-actions {
+  gap: 8px;
+}
+
+.creator-task-manager-head .creator-panel-actions button {
+  min-height: 38px;
+  padding-inline: 13px;
+  background: rgba(248, 250, 252, 0.84);
 }
 
 .creator-task-manager-body {
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
-  gap: 12px;
+  gap: 10px;
   overflow: hidden;
 }
 
 .creator-task-manager-list {
+  display: grid;
   max-height: none;
   min-height: 0;
+}
+
+.creator-task-manager-list .creator-task-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.creator-task-manager-list .creator-task-select {
+  gap: 3px;
+}
+
+.creator-task-manager-list .creator-task-actions {
+  justify-content: flex-end;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.creator-task-manager-list .creator-task-actions button {
+  min-height: 32px;
+}
+
+.creator-task-manager-modal .creator-task-toolbar {
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
+  gap: 10px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.creator-task-manager-modal .creator-task-toolbar label {
+  gap: 5px;
+}
+
+.creator-task-manager-modal .creator-task-toolbar span {
+  color: rgba(44, 55, 74, 0.7);
+  font-weight: 750;
+}
+
+.creator-task-manager-modal .creator-task-toolbar input,
+.creator-task-manager-modal .creator-task-toolbar select {
+  min-height: 40px;
+  background: rgba(248, 250, 252, 0.82);
+  border-color: rgba(23, 32, 51, 0.1);
+}
+
+.creator-task-manager-modal .creator-task-overview {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.creator-task-manager-modal .creator-task-overview span {
+  display: grid;
+  min-height: 56px;
+  align-content: center;
+  gap: 3px;
+  padding: 9px 12px;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.98));
+  border-color: rgba(23, 32, 51, 0.08);
+  border-radius: var(--r);
+}
+
+.creator-task-manager-modal .creator-task-overview b {
+  color: #111827;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.creator-task-empty-state {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px;
+  text-align: center;
+  background: rgba(248, 250, 252, 0.7);
+  border: 1px dashed rgba(23, 32, 51, 0.16);
+  border-radius: var(--r);
+}
+
+.creator-task-empty-state strong {
+  color: #111827;
+  font-size: 16px;
+}
+
+.creator-task-empty-state span {
+  max-width: 420px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.creator-task-empty-state button {
+  min-width: 112px;
 }
 
 .creator-delete-modal-backdrop {
@@ -8082,6 +8208,31 @@ body {
   .creator-panel-actions,
   .creator-action-row {
     width: 100%;
+  }
+
+  .creator-task-manager-backdrop {
+    align-items: start;
+    padding: 12px;
+  }
+
+  .creator-task-manager-modal {
+    width: 100%;
+    height: min(760px, calc(100vh - 24px));
+    max-height: calc(100vh - 24px);
+    padding: 14px;
+  }
+
+  .creator-task-manager-modal .creator-task-toolbar,
+  .creator-task-manager-modal .creator-task-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .creator-task-manager-list .creator-task-item {
+    grid-template-columns: 1fr;
+  }
+
+  .creator-task-manager-list .creator-task-actions {
+    justify-content: flex-start;
   }
 
   .creator-panel-actions > button,
