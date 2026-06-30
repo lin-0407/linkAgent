@@ -13,9 +13,19 @@ import java.io.IOException;
 import java.util.Set;
 
 /**
- * 文档文本提取服务。
- * 基于 Apache Tika，从 PDF / DOCX / TXT / MD / PPTX 等常见格式中提取纯文本，
- * 用于创作者上传补充背景资料时自动解析文档内容。
+ * 文档文本提取服务 —— 在服务端完成"文件上传 → 纯文本"的转换。
+ * <p>
+ * 基于 Apache Tika 的自动检测引擎，从创作者上传的常见文档格式中提取纯文本，
+ * 作为 LLM 对话的补充背景资料。提取后的文本会注入到 Agent 的上下文窗口中，
+ * 因此需要在提取后做截断处理，避免 Prompt 过长导致 LLM Token 超限或成本失控。
+ * <p>
+ * 设计决策：
+ * <ul>
+ *   <li><b>三阶段校验链</b>：文件大小 → 扩展名白名单 → Tika 解析，逐层拦截不合规文件，避免无效解析消耗资源。</li>
+ *   <li><b>扩展名白名单</b>：只接受 Tika 能可靠解析的文档格式，防止用户上传图片、视频等二进制让 Tika 返回乱码。</li>
+ *   <li><b>文本截断</b>：保留文档前段而非尾段，因为文档开头通常是摘要/引言等最重要的背景信息。</li>
+ *   <li><b>Tika 实例复用</b>：Tika 对象线程安全，构造时初始化一次并全局复用，避免每次提取都创建新实例。</li>
+ * </ul>
  */
 @Service
 public class DocumentExtractionService {
@@ -37,18 +47,32 @@ public class DocumentExtractionService {
 
     private final Tika tika;
 
+    /**
+     * 初始化 Tika 实例。Tika 对象是线程安全的，因此作为单例复用而非每次提取都创建新实例，
+     * 避免重复加载 Parser 和 Detector 的内部配置（每次创建约 50-100ms 开销）。
+     */
     public DocumentExtractionService() {
-        // Tika 实例线程安全且可复用，构造时初始化一次即可
         this.tika = new Tika();
     }
 
     /**
-     * 从上传的文件中提取纯文本。
-     * 先校验文件大小和扩展名，再通过 Tika 自动检测 MIME 类型并提取文本。
+     * 从上传文件中提取纯文本 —— 三层校验 + 自动解析 + 截断。
+     * <p>
+     * 处理流程：
+     * <ol>
+     *   <li>文件名非空校验</li>
+     *   <li>文件大小校验（≤10MB）：在读取字节前拦截超大文件，避免 OOM</li>
+     *   <li>扩展名白名单校验：只接受 Tika 能可靠解析的文档格式</li>
+     *   <li>Tika 自动识别 MIME 类型并解析为纯文本</li>
+     *   <li>截断超过 50000 字符的文本</li>
+     * </ol>
+     * <p>
+     * 异常策略：所有校验失败返回 400（客户端输入问题），
+     * IO/Tika 内部错误返回 500（服务端能力问题）。
      *
-     * @param file 用户上传的文档文件
-     * @return 文件名 + 提取的纯文本（已截断到最大长度）
-     * @throws ResponseStatusException 文件不符合要求或提取失败时抛出
+     * @param file 用户上传的文档文件（由 Spring MultipartResolver 注入）
+     * @return 文件名 + 提取的纯文本（已截断到最大长度，保证不超过 Token 预算）
+     * @throws ResponseStatusException 校验失败（400）或提取失败（500）
      */
     public ExtractedDocument extract(MultipartFile file) {
         String originalFilename = file.getOriginalFilename();
@@ -107,8 +131,14 @@ public class DocumentExtractionService {
     }
 
     /**
-     * 截断文本到最大长度，并在末尾添加截断提示。
-     * 保留前面的内容而非后面的，因为文档开头通常是最重要的背景信息。
+     * 截断文本到最大长度，超出部分丢弃并在末尾附加提示。
+     * <p>
+     * 保留前 MAX_EXTRACTED_CHARS 个字符而非后段：文档开头通常是标题、摘要、引言等
+     * 最重要的背景信息，尾部多为附录、参考文献等次要内容，优先保留前段对 LLM 更有价值。
+     * 超过限制时附加截断提示，让创作者知道其原始文档未被完整读取。
+     *
+     * @param text 原始提取文本
+     * @return 截断后的文本（不超过 MAX_EXTRACTED_CHARS + 提示长度）
      */
     private String truncate(String text) {
         if (text.length() <= MAX_EXTRACTED_CHARS) {

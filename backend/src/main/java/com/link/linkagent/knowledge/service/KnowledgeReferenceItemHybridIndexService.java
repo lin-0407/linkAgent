@@ -21,14 +21,20 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 案例库<b>子条目</b>原生 hybrid 索引服务（阶段 5.2d-3）：把子表优质评论 / 弹幕原文灌入自建 schema 的子 hybrid 集合
- * （dense + BM25 sparse），供 5.2d-2 检索在 hybrid 开启时走子集合 small-to-big 召回。
+ * 案例库<b>子条目</b>原生 hybrid 索引服务 — hybrid 架构的 small 端索引器。
+ * <p>
+ * <b>Pipeline 角色</b>：
+ * 与 {@link KnowledgeReferenceItemIndexService}（Spring AI 子集合）平行，但使用自建 schema 的 Milvus hybrid 子集合
+ * （dense 稠密向量 + BM25 稀疏向量）。当 hybrid 开关开启时，检索走本集合的 small-to-big 召回，命中更准。
  * <p>
  * <b>与父 hybrid 索引（{@link KnowledgeReferenceHybridIndexService}）结构平行、有意分开</b>：集合不同（子 hybrid 集合）、
  * 文本不同（子条目原文 vs 父卡片富文本）、主键不同（item_id vs video_id）。整库重灌、手动 embedding、双开关门控、
  * 部分失败降级——范式与父 hybrid 完全一致；仅两个 hybrid 索引器，暂不抽公共骨架（简单优先，真出现第三个再上提）。
  * <p>
  * <b>不回写 embedding_status</b>：那套状态属于 5.2c-1 的 Spring AI 子集合；子 hybrid 是独立集合、整库重灌，不共享该状态机。
+ * <p>
+ * <b>整库重灌 vs 增量</b>：与父 hybrid 一样，子 hybrid 也是 drop 重建 + 全量灌入。子条目量级远超父表（数千条 vs 数百条），
+ * 但原理相同——MySQL 是事实源，Milvus 是派生副本，全量重灌简单可复现。增量优化留后续。
  */
 @Service
 public class KnowledgeReferenceItemHybridIndexService {
@@ -61,8 +67,20 @@ public class KnowledgeReferenceItemHybridIndexService {
     }
 
     /**
-     * 重建（整库重灌）子条目 hybrid 索引：drop 旧子 hybrid 集合 → 自建 schema 建集合 → 从 MySQL 全量重灌未删子条目。
-     * 双开关未启用 / hybrid 库未就绪 → 400；建集合失败 → 400（带原因）；部分批次失败写 failedCount/warnings。
+     * 重建（整库重灌）子条目 hybrid 索引。
+     * <p>
+     * <b>执行流程</b>：
+     * <ol>
+     *   <li>双开关门控：RAG 启用 + hybrid 子开关启用 + hybrid 库就绪</li>
+     *   <li>取所有未删子条目（JOIN 父表确保父案例存活，反范式带出 category/tier）</li>
+     *   <li>drop 旧子 hybrid 集合 → 自建 schema 建子集合（失败整体 400）</li>
+     *   <li>按批构造 HybridChildDoc 并灌入 Milvus 子 hybrid 集合</li>
+     * </ol>
+     * <p>
+     * <b>注意</b>：不看 embedding_status——子 hybrid 是独立集合，与 Spring AI 子集合状态机无关。
+     *
+     * @param request 索引请求，含可选的 maxItems 上限
+     * @return 索引结果，含 indexed/failed 计数 + warnings
      */
     public ReferenceVideoIndexResponse rebuildChildHybrid(ReferenceVideoIndexRequest request) {
         if (!knowledgeRagProperties.isEnabled()) {
@@ -125,8 +143,12 @@ public class KnowledgeReferenceItemHybridIndexService {
     }
 
     /**
-     * 子 hybrid 索引状态：双开关 + 子 hybrid 库是否就绪 + 可重灌子条目总数 + 检索模式预测。
-     * 整库重灌、不在 MySQL 维护 per-item 状态，故 indexed/pending/failed 恒 0；totalCount 是重灌源的未删子条目数。
+     * 子 hybrid 索引状态：双开关 + 子 hybrid 库就绪 + 可重灌子条目总数 + 检索模式预测。
+     * <p>
+     * 整库重灌、不在 MySQL 维护 per-item 状态，故 indexed/pending/failed 恒 0；
+     * totalCount 是重灌源的未删子条目总数（JOIN 父表存活）。
+     *
+     * @return 索引状态，检索模式预测为 HYBRID 或 SQL
      */
     public ReferenceVideoIndexStatusResponse childHybridStatus() {
         boolean ragEnabled = knowledgeRagProperties.isEnabled();
@@ -150,8 +172,12 @@ public class KnowledgeReferenceItemHybridIndexService {
     }
 
     /**
-     * 子 hybrid 文本就是子条目原文（评论 / 弹幕）：small 端要「这条具体内容」的精确语义与关键词，
-     * 不堆父级字段（与 5.2c-1 子索引 {@link KnowledgeReferenceItemIndexService} 的 buildItemDocumentText 同口径）。
+     * 子 hybrid 文档文本——子条目原文（评论/弹幕）本身。
+     * <p>
+     * 与 5.2c-1 子索引（{@link KnowledgeReferenceItemIndexService}）同口径——small 端要
+     * 「这条具体内容」的精确语义和 BM25 关键词匹配，不堆父级字段（那是父 hybrid 文档的职责）。
+     * 在 hybrid 集合里，dense 向量捕捉语义相似度，BM25 稀疏向量按中文关键词精确匹配，
+     * 两者互补——这正是 hybrid 相比纯 dense 的优势所在。
      */
     private String buildItemText(ReferenceVideoItemIndexRow row) {
         String content = TextUtil.trimToDefault(row.getContent(), "");

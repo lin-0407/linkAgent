@@ -40,16 +40,22 @@ public class KnowledgeReferenceHybridIndexService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeReferenceHybridIndexService.class);
 
-    /** 单次重灌硬上限，与接口层 @Max(1000) 对齐，二次防御一次性全库重嵌入的高成本。 */
+    /**
+     * 单次重灌硬上限，与接口层 @Max(1000) 对齐。
+     * 整库重灌是 O(总量) 操作，上限比增量索引更重要——当成全量重建，1000 条足够覆盖当前规模的案例库。
+     */
     private static final int MAX_INDEX_HARD_LIMIT = 1000;
 
     /** 失败提示最多收集条数。 */
     private static final int MAX_WARNINGS = 10;
 
-    /** 单条卡片文本上限，防超长简介撑爆单条 Embedding（与 5.1c 父索引一致）。 */
+    /**
+     * 单条卡片文本上限，防超长简介撑爆单条 Embedding。
+     * 与 5.1c 父索引（{@link KnowledgeReferenceIndexService}）保持一致取 4000。
+     */
     private static final int DOC_TEXT_MAX_CHARS = 4000;
 
-    /** 检索模式预测值：hybrid 就绪且有案例时预计走 HYBRID，否则 SQL。 */
+    /** 检索模式预测值：hybrid 就绪且有案例时预计走 HYBRID（dense + BM25），否则 SQL 降级。 */
     private static final String MODE_HYBRID = "HYBRID";
     private static final String MODE_SQL = "SQL";
 
@@ -66,8 +72,24 @@ public class KnowledgeReferenceHybridIndexService {
     }
 
     /**
-     * 重建（整库重灌）父表 hybrid 索引：drop 旧集合 → 自建 schema 建集合 → 从 MySQL 全量重灌父卡片。
-     * RAG/hybrid 开关未启用或 hybrid 库未就绪 → 400；建集合失败 → 400（带原因）；部分批次失败写 failedCount/warnings。
+     * 重建（整库重灌）父表 hybrid 索引。
+     * <p>
+     * <b>执行流程</b>：
+     * <ol>
+     *   <li>双开关门控：RAG 启用 + hybrid 子开关启用 + hybrid 库就绪</li>
+     *   <li>取所有非删除父卡片（不限 embedding_status——hybrid 是独立集合）</li>
+     *   <li>drop 旧 hybrid 集合 → 自建 schema 建集合（失败整体 400）</li>
+     *   <li>按批构造 HybridParentDoc 并灌入 Milvus hybrid 集合</li>
+     * </ol>
+     * <p>
+     * <b>为什么是整库重灌而非增量</b>：
+     * hybrid 集合是 MySQL 的派生副本，schema 自建，与 Spring AI 集合隔离。
+     * 整库重灌 = drop 重建 + 全量灌入，简单可复现。增量优化留后续。
+     * <p>
+     * <b>注意</b>：本方法<b>不回写 embedding_status</b>——那套状态属于 Spring AI 父集合路径。
+     *
+     * @param request 索引请求，含可选的 maxItems 上限
+     * @return 索引结果，含 indexed/failed 计数 + warnings
      */
     public ReferenceVideoIndexResponse rebuildHybrid(ReferenceVideoIndexRequest request) {
         if (!knowledgeRagProperties.isEnabled()) {
@@ -130,9 +152,12 @@ public class KnowledgeReferenceHybridIndexService {
     }
 
     /**
-     * hybrid 索引状态：RAG/hybrid 是否就绪 + 可重灌的父卡片总数 + 检索模式预测。
+     * hybrid 索引状态：双开关就绪 + 可重灌父卡片总数 + 检索模式预测。
+     * <p>
      * 注意：hybrid 是整库重灌、不在 MySQL 维护 per-card 状态，故 indexedCount/pendingCount/failedCount 恒 0，
-     * totalCount 是「重灌源」的非删除父卡片数；rebuild 响应才给本次实际灌入数。
+     * totalCount 是「重灌源」的非删除父卡片数。rebuild 的响应才给出本次实际灌入数。
+     *
+     * @return 索引状态，检索模式预测为 HYBRID 或 SQL
      */
     public ReferenceVideoIndexStatusResponse hybridStatus() {
         boolean ragEnabled = knowledgeRagProperties.isEnabled();
@@ -156,9 +181,12 @@ public class KnowledgeReferenceHybridIndexService {
     }
 
     /**
-     * 拼装案例卡片文本（与 5.1c 父索引同款结构）：标题/分区/层级/标签/简介/亮点/热度/可靠质量分。
-     * 该 text 在 hybrid 集合里同时服务 BM25（关键词）与 dense（语义），故保持与父卡片一致的富文本。
-     * 与 {@link KnowledgeReferenceIndexService} 的同名逻辑有意各自保留（简单优先；真出现第三处再上提共用）。
+     * 拼装案例卡片文本——与 5.1c 父索引（{@link KnowledgeReferenceIndexService}）同款结构。
+     * <p>
+     * 此 text 在 hybrid 集合里同时服务 BM25 全文检索（稀疏向量，按中文关键词匹配）与 dense 语义检索（稠密向量），
+     * 因此必须保持与父索引一致的富文本（中文标签 + 多字段拼接），不能只放标题一维信息。
+     * <p>
+     * 与 {@link KnowledgeReferenceIndexService} 的同名逻辑有意各自保留——简单优先，真出现第三处再上提共用。
      */
     private String buildDocumentText(ReferenceVideoRecord video) {
         StringBuilder builder = new StringBuilder();

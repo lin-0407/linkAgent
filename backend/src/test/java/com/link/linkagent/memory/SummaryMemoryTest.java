@@ -38,7 +38,7 @@ class SummaryMemoryTest {
         AtomicInteger callCount = new AtomicInteger();
         SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 2, 2), countingModel(callCount), new StubPromptService());
 
-        boolean summarized = memory.shouldSummarize("session-1", List.of(
+        boolean summarized = memory.trySummarize("session-1", List.of(
                 new MemoryMessage("Human", "first"),
                 new MemoryMessage("AI", "second")
         ));
@@ -53,7 +53,7 @@ class SummaryMemoryTest {
         AtomicInteger callCount = new AtomicInteger();
         SummaryMemory memory = new SummaryMemory(new SummaryMemoryProperties(true, 2, 2), countingModel(callCount), new StubPromptService());
 
-        boolean summarized = memory.shouldSummarize("session-1", List.of(
+        boolean summarized = memory.trySummarize("session-1", List.of(
                 new MemoryMessage("Human", "first"),
                 new MemoryMessage("AI", "second"),
                 new MemoryMessage("Human", "third")

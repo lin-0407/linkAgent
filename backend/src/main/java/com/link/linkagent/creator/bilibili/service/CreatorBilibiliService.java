@@ -25,18 +25,26 @@ import java.util.UUID;
 
 /**
  * B站账号绑定与任务视频绑定服务（P0-3）。
+ * <p>
  * 独立于已有的 CreatorInteractiveService 和 CreatorTaskService，
- * 避免把账号管理和任务管理耦合在一起。
+ * 避免把账号管理和任务管理耦合在一起——账号绑定是一次性操作（绑定/解绑/查询），
+ * 任务视频绑定是任务生命周期中的关键步骤（BV 号关联分析），两者在业务语义上正交，
+ * 拆分可让各自独立演进，不互相拖累。
  * <p>
  * P0-3 的 syncVideos 是第一版占位实现——B站公开API同步能力在后续迭代补齐。
  * 当前只提供账号绑定、BV绑定和已绑定视频查询能力。
+ * <p>
+ * 架构位置：本服务位于 creator.bilibili 模块的 service 层，向下依赖 Mapper 层做数据读写，
+ * 向上被 Controller 层直接调用。不依赖任何其他业务 Service，避免循环依赖。
  */
 @Service
 public class CreatorBilibiliService {
 
     private static final Logger log = LoggerFactory.getLogger(CreatorBilibiliService.class);
 
+    /** B站账号与任务视频绑定的数据访问层，负责 MySQL 的 CRUD */
     private final CreatorBilibiliMapper bilibiliMapper;
+    /** 创作任务数据访问层，仅用于校验任务是否存在（不侵入任务管理逻辑） */
     private final CreatorTaskMapper taskMapper;
 
     public CreatorBilibiliService(CreatorBilibiliMapper bilibiliMapper,
@@ -47,8 +55,17 @@ public class CreatorBilibiliService {
 
     /**
      * 绑定或更新 B 站账号。
-     * 如果用户已有绑定记录则更新 UID（用户可能换号或填错），
-     * 没有则创建新记录。这样保证每个平台用户只有一条绑定。
+     * <p>
+     * 设计决策：每个平台用户只维护一条绑定记录，不往历史表里堆叠。
+     * 如果用户已有绑定记录则更新 UID（用户可能换号或填错），没有则创建新记录。
+     * 这样保证每个平台用户只有一条绑定，查询和同步时不会出现"到底用哪个 UID"的歧义。
+     * <p>
+     * UID 变更时同步重置昵称：因为 UID 变了意味着旧缓存和昵称不再有效，
+     * 等下次同步时重新拉取。使用专用的 updateAccountUid 而非 updateAccountSyncResult——
+     * 后者没有权限改动 UID，强制走正确的方法防止误操作。
+     *
+     * @param request 绑定请求，含 userId 和 bilibiliUid
+     * @return 绑定后的账号响应（含新/更新后的完整记录）
      */
     @Transactional
     public BilibiliAccountResponse bindAccount(BindAccountRequest request) {
@@ -83,7 +100,13 @@ public class CreatorBilibiliService {
 
     /**
      * 查询 B 站账号绑定状态。
+     * <p>
      * 不存在时返回 null，由 Controller 层处理 404。
+     * 返回 null 而非抛异常的设计考量：Controller 层可能需要区分"未绑定"和"查询失败"两种情况，
+     * null 表示正常的未绑定状态，异常表示系统错误。
+     *
+     * @param userId 平台用户 ID
+     * @return 账号绑定响应；不存在时返回 null
      */
     public BilibiliAccountResponse getAccount(String userId) {
         return bilibiliMapper.findAccountByUserId(userId)
@@ -93,8 +116,15 @@ public class CreatorBilibiliService {
 
     /**
      * 同步 B 站视频列表（P0-3 占位实现）。
+     * <p>
      * 第一版不实际调用 B 站 API，只更新同步时间并返回提示信息。
      * 后续迭代会接入 B 站公开视频接口，自动拉取创作者视频列表。
+     * 为什么现在就要做占位：提前把接口契约和调用方（前端）对齐，后续接入真实 API 时
+     * 只需改本方法内部逻辑，前端和 Controller 层的调用关系无需变动。
+     *
+     * @param userId 平台用户 ID，需要已绑定 B 站 UID
+     * @return 同步结果，含占位提示信息
+     * @throws ResponseStatusException 404 如果用户未绑定 B 站账号
      */
     @Transactional
     public Map<String, Object> syncVideos(String userId) {
@@ -124,8 +154,23 @@ public class CreatorBilibiliService {
 
     /**
      * 将 BV 号绑定到创作任务。
-     * 校验链：任务存在 → 已有绑定检查 → BV 冲突检测（警告但不阻止）。
+     * <p>
+     * 校验链：任务存在 → 已有绑定检查 → BV 冲突检测（同用户警告、跨用户阻止）。
      * 绑定后默认状态为 WAITING_VERIFY，等待后续 UID 同步校验。
+     * <p>
+     * 设计决策：
+     * <ul>
+     *   <li>已有绑定不可覆盖——防止用户误操作清掉完成校验的 BOUND 状态。</li>
+     *   <li>同用户 BV 冲突只警告不阻止——用户可能想对同一视频做多次分析（不同版本/不同角度）。</li>
+     *   <li>跨用户 BV 冲突直接拒绝——同一 BV 属于两个不同创作者在业务上不合理。</li>
+     *   <li>DuplicateKeyException 并发兜底——高并发下 insert 可能触发唯一索引冲突，
+     *       捕获后重新查询已有记录返回，保证幂等性。</li>
+     * </ul>
+     *
+     * @param taskId 创作任务 ID
+     * @param request 绑定请求，含 BV 号和用户信息
+     * @return 绑定响应
+     * @throws ResponseStatusException 404 任务不存在，409 跨用户 BV 冲突
      */
     @Transactional
     public TaskVideoBindingResponse bindBvToTask(String taskId, BindBvRequest request) {
@@ -187,7 +232,12 @@ public class CreatorBilibiliService {
 
     /**
      * 查询任务视频绑定。
+     * <p>
      * 不存在时返回 null，由 Controller 层处理 404。
+     * 与 getAccount 一致：返回 null 表示正常的未绑定状态，异常表示系统错误。
+     *
+     * @param taskId 创作任务 ID
+     * @return 绑定响应；不存在时返回 null
      */
     public TaskVideoBindingResponse getTaskBinding(String taskId) {
         return bilibiliMapper.findBindingByTaskId(taskId)
@@ -196,16 +246,27 @@ public class CreatorBilibiliService {
     }
 
     /**
-     * 获取某 B 站 UID 下已绑定任务的视频列表。
-     * 这是视频分析页的核心查询：只展示和平台任务关联的视频，不展示账号下全部视频。
+     * 获取某 B 站 UID 下已绑定任务的视频列表（视频分析页核心查询）。
      * <p>
-     * 关联逻辑：binding (按 UID 过滤) → task (获取 taskName) → video (获取封面/指标)。
+     * 只展示和平台任务关联的视频，不展示账号下全部视频——因为创作复盘关注的是"某任务对应的具体视频"，
+     * 而不是该创作者的全部作品列表。这是视频分析页的核心查询，直接驱动前端卡片列表渲染。
+     * <p>
+     * 关联链路：binding (按 UID 过滤) → task (获取 taskName) → video (获取封面/指标)。
      * 如果视频缓存表中还没有对应记录（用户绑了 BV 但还没同步），
      * 也返回一条只含 bvid + taskId + taskName 的基础响应，保证卡片列表不丢数据。
      * <p>
-     * userId 参数用于数据隔离：只返回当前用户的绑定，防止跨用户数据泄露。
-     * bindingStatus 只保留 "BOUND"，null 状态（未校验）视为不展示。
-     * 批量查询 taskName 替代原来的逐条 N+1 查询。
+     * 安全性设计：
+     * <ul>
+     *   <li>userId 参数用于数据隔离——只返回当前用户的绑定，防止跨用户数据泄露。</li>
+     *   <li>bindingStatus 只保留 "BOUND"，null 状态（未校验）视为不展示。</li>
+     * </ul>
+     * <p>
+     * 性能优化：批量查询 taskName 替代原来的逐条 N+1 查询。将 taskIds 集合一次性送入
+     * Mapper 的 IN 查询，再用 Collectors.toMap 转为 O(1) 查找的 Map。
+     *
+     * @param bilibiliUid B 站 UID，用于过滤该创作者的所有绑定记录
+     * @param userId 平台用户 ID，用于数据隔离
+     * @return 已绑定视频列表（按 taskId 维度），空列表表示无绑定数据
      */
     @Transactional(readOnly = true)
     public List<BilibiliVideoResponse> getLinkedVideos(String bilibiliUid, String userId) {
@@ -269,7 +330,17 @@ public class CreatorBilibiliService {
     }
 
     // ── 内部转换方法 ──
+    // 将数据库 Record 转为前端 Response，实现数据访问层与展示层的解耦。
+    // 如果将来响应字段需要脱敏、格式化或合并其他数据源，只需改这里的转换逻辑。
 
+    /**
+     * 将账号数据库记录转为前端响应对象。
+     * <p>
+     * 一对一字段映射；如果将来需要脱敏或追加"绑定天数"等计算字段，可在此扩展。
+     *
+     * @param record 数据库中的账号绑定记录
+     * @return 前端可消费的账号响应
+     */
     private BilibiliAccountResponse toAccountResponse(BilibiliAccountRecord record) {
         return new BilibiliAccountResponse(
                 record.accountId(),
@@ -284,6 +355,14 @@ public class CreatorBilibiliService {
         );
     }
 
+    /**
+     * 将任务视频绑定记录转为前端响应对象。
+     * <p>
+     * verifyMessage 可作为前端提示直接在卡片下方展示，帮助用户理解绑定状态的来由。
+     *
+     * @param record 数据库中的绑定记录
+     * @return 前端可消费的绑定响应
+     */
     private TaskVideoBindingResponse toBindingResponse(TaskVideoBindingRecord record) {
         return new TaskVideoBindingResponse(
                 record.bindingId(),

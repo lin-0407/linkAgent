@@ -24,9 +24,17 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * 跨分区视频案例库存储服务（阶段 5.1a）。
- * 本阶段只做「导入落库 + 分页列表」，完全不依赖 Milvus 与 Embedding：
- * 评论 / 弹幕清洗（5.1b）、质量打分与向量索引（5.1c）都还没接入，因此在 RAG 关闭、甚至没有向量库环境下也能独立跑通，
+ * 跨分区视频案例库存储服务 — Pipeline 中「导入落库 + 分页列表」的核心枢纽。
+ * <p>
+ * <b>Pipeline 角色</b>：
+ * 这是案例库导入链路的<b>数据中心节点</b>——所有导入路径（前端 BV 一键采集 / 脚本批量导入 / 种子数据）
+ * 最终都汇聚到这个服务完成落库。它编排了清洗、中块生成、质量打分三个子步骤，形成完整的导入事务：
+ * <pre>
+ * 原始数据 → 清洗（CleaningService）→ 写父表 → 写子表 → 生成中块（ChunkService）→ 写中块表 → 质量重算（ScoringService）
+ * </pre>
+ * <p>
+ * 本阶段完全不依赖 Milvus 与 Embedding——向量索引由独立的 IndexService 负责，
+ * 因此即使 RAG 关闭、向量库不可用，本服务的导入和列表功能也能独立跑通，
  * 这正是阶段 5「基础设施可关、关掉时优雅降级」要求的存储底座。
  */
 @Service
@@ -70,9 +78,28 @@ public class KnowledgeReferenceVideoService {
     }
 
     /**
-     * 导入一批视频案例到父表。
-     * 整批共用一个 source/tier：tier 优先取请求显式值（如 manual_bv 指定 COMPETITOR），否则由 source 推导。
-     * 加事务是为了让「一批要么全进、要么全不进」，避免中途异常留下半批脏数据。
+     * 导入一批视频案例到父表，是 Pipeline 中最核心的编排方法。
+     * <p>
+     * <b>事务内编排流程（逐视频循环）</b>：
+     * <ol>
+     *   <li>白名单校验 source + 解析 tier/category</li>
+     *   <li>构造父表记录 + 拷贝热度指标</li>
+     *   <li><b>清洗评论/弹幕</b>（含一次 LLM 摘要调用）→ 得优质子条目 + 亮点摘要</li>
+     *   <li>写父表</li>
+     *   <li>逐条写子表</li>
+     *   <li><b>生成主题中块</b>（纯规则、无 LLM）→ 逐中块写中块表</li>
+     *   <li>同一 BV 号去重（库里已有 / 本批已出现过则跳过）</li>
+     *   <li>收集受影响分区</li>
+     * </ol>
+     * 循环结束后，<b>质量分重算</b>：导入会改变所在分区的 min/max，需重算影响分区的全部视频归一化分。
+     * <p>
+     * 整批共用一个 source/tier：tier 优先取请求显式值（如 manual_bv 指定 COMPETITOR），否则默认 BENCHMARK。
+     * 加 {@code @Transactional} 是为了让「一批要么全进、要么全不进」，避免中途异常留下半批脏数据。
+     * 注意：清洗含一次 LLM 调用在事务内（样例量小可接受）；
+     * 后续接离线脚本大批量导入时，可改为先清洗后落库、拆分事务以缩短锁持有时间。
+     *
+     * @param request 导入请求，含 source/videos 列表和可选的 tier/category
+     * @return 导入结果，含请求总数/实际导入数/跳过数
      */
     @Transactional
     public ReferenceVideoImportResponse importReferenceVideos(ReferenceVideoImportRequest request) {
@@ -144,7 +171,13 @@ public class KnowledgeReferenceVideoService {
 
     /**
      * 分页查询案例列表，支持分区 / 层级可选过滤。
-     * page、size 在这里做兜底纠偏（最小 1、size 上限 100），即使控制器层校验被绕过也不会产生非法 OFFSET。
+     * page、size 在这里做兜底纠偏（最小 1、size 上限 100）——即使控制器层校验被绕过也不会产生非法 OFFSET 或过度查询。
+     *
+     * @param category 分区过滤，null 或空则不限制
+     * @param tier     层级过滤，null 或空则不限制
+     * @param page     页码（从 1 开始）
+     * @param size     每页条数（上限 100）
+     * @return 分页结果，含 items/total/page/size
      */
     public ReferenceVideoPageResponse listReferenceVideos(String category, String tier, int page, int size) {
         String categoryFilter = TextUtil.trimToNull(category);
@@ -162,7 +195,9 @@ public class KnowledgeReferenceVideoService {
 
     /**
      * 解析最终层级：显式 tier 优先（统一大写后校验白名单），否则默认 BENCHMARK。
-     * 当前榜单 / seed / 手动导入默认都视为「值得参照的优品」(BENCHMARK)，COMPETITOR / OWN_HISTORY 需调用方显式声明。
+     * <p>
+     * 榜单/seed/手动导入默认都视为「值得参照的优品」（BENCHMARK），
+     * COMPETITOR / OWN_HISTORY 需调用方显式声明——这防止采集脚本或 API 无意中把别人的视频标成「自己历史」。
      */
     private String resolveTier(String requestTier) {
         String provided = TextUtil.trimToNull(requestTier);

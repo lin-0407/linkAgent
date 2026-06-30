@@ -139,6 +139,19 @@ export function upload<T>(url: string, formData: FormData, options?: RequestOpti
   return http.post(url, formData, {
     ...options,
     timeout: options?.timeout ?? 120_000,
+    // 强制删除 Content-Type，交由浏览器为 FormData 自动附加正确的 multipart boundary。
+    // 即使 axios 实例默认 header 或调用方 options.headers 里带了 Content-Type，
+    // 也会在这里被清除 —— 避免后端因 Content-Type 不匹配而拒收（415）。
+    transformRequest: [
+      (data, headers) => {
+        if (headers) {
+          // axios 的 headers 对象可能是 AxiosHeaders 实例，delete 比设 undefined 更可靠
+          delete headers['Content-Type']
+          delete headers['content-type']
+        }
+        return data
+      },
+    ],
   }) as Promise<T>
 }
 

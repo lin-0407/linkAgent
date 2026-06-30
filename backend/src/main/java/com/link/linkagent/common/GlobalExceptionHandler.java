@@ -16,18 +16,43 @@ import org.springframework.web.context.request.async.AsyncRequestTimeoutExceptio
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * 全局异常处理。
- * 显式返回 message，是为了避免前端只能看到 Internal Server Error 而无法判断真实失败层。
+ * 全局异常处理器 —— Spring MVC 统一异常翻译层。
+ * <p>
+ * 核心职责：将 Controller / Service 层抛出的各类异常转换为结构化的 {@link ApiErrorResponse}，
+ * 使前端无需解析 Spring Boot 默认的 HTML 错误页或 Whitelabel Error JSON。
+ * <p>
+ * 设计决策：
+ * <ul>
+ *   <li><b>区分 4xx 与 5xx</b>：客户端问题（入参校验、格式错误）返回 400，服务端问题（DB、未知异常）返回 500，
+ *       让前端能根据状态码做差异化处理（如 400 提示用户修正输入，500 提示联系管理员）。</li>
+ *   <li><b>前端可读信息</b>：message 字段包含中文业务描述而非技术堆栈，前端可直接展示给用户。</li>
+ *   <li><b>日志分级</b>：5xx 打 ERROR 便于告警，4xx 打 WARN 避免噪音，SSE 超时静默处理。</li>
+ *   <li><b>兜底处理器</b>：最下层的 {@link Exception} 处理器捕获所有未显式处理的异常，防止异常泄漏到 Servlet 容器。</li>
+ * </ul>
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    /**
+     * 处理 {@link ResponseStatusException}（Spring 5 引入的携带 HTTP 状态码的通用异常）。
+     * <p>
+     * 场景：Controller 中通过 {@code throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任务不存在")} 主动抛出，
+     * 这里直接按异常携带的状态码和 reason 构造响应。
+     * <p>
+     * 日志策略：5xx 打 WARN 级别，因为这是业务层主动抛出的"已知错误"，不一定是系统 bug；
+     * 4xx 不打日志（前端已能展示），避免日志被客户端输入错误淹没。
+     *
+     * @param exception 携带 HTTP 状态码和可选 reason 的异常
+     * @param request   HTTP 请求，用于提取路径放入响应
+     * @return 状态码与异常一致、body 包含 reason 或标准状态短语的错误响应
+     */
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ApiErrorResponse> handleResponseStatusException(ResponseStatusException exception,
                                                                          HttpServletRequest request) {
         HttpStatus status = HttpStatus.valueOf(exception.getStatusCode().value());
+        // reason 为 null 时回退到 HTTP 标准状态短语（如 404 → "Not Found"），保证前端始终有文本可展示
         String message = exception.getReason() == null ? status.getReasonPhrase() : exception.getReason();
         if (status.is5xxServerError()) {
             log.warn("业务接口返回服务端错误: path={}, message={}", request.getRequestURI(), message, exception);
@@ -36,15 +61,43 @@ public class GlobalExceptionHandler {
                 .body(new ApiErrorResponse(status.value(), message, request.getRequestURI()));
     }
 
+    /**
+     * 处理 {@link MethodArgumentNotValidException}（Controller 方法参数 @Valid 校验失败）。
+     * <p>
+     * 触发条件：DTO 字段上的验证注解（@NotBlank、@Size 等）在参数绑定时校验失败。
+     * 从 BindingResult 中提取第一个字段错误的信息回传给前端，避免返回 Spring 默认的冗长 JSON。
+     * <p>
+     * 为什么只取第一个错误：对用户来说逐字段提示更友好，但 Spring 默认会列出全部错误，
+     * 这里简化处理，前端可以根据单条提示逐步修正。
+     *
+     * @param exception 包含所有字段校验错误的异常
+     * @param request   HTTP 请求
+     * @return 400 + 第一个字段的错误描述
+     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiErrorResponse> handleMethodArgumentNotValid(MethodArgumentNotValidException exception,
                                                                         HttpServletRequest request) {
         FieldError fieldError = exception.getBindingResult().getFieldError();
+        // 理论上不会为 null，但防御性编程以防 BindingResult 为空
         String message = fieldError == null ? "请求参数不合法" : fieldError.getDefaultMessage();
         return ResponseEntity.badRequest()
                 .body(new ApiErrorResponse(HttpStatus.BAD_REQUEST.value(), message, request.getRequestURI()));
     }
 
+    /**
+     * 处理 {@link ConstraintViolationException}（方法级 @Validated 校验失败，如 @RequestParam 上的约束）。
+     * <p>
+     * 与 MethodArgumentNotValidException 的区别：
+     * <ul>
+     *   <li>后者是 Controller 方法参数的 @Valid DTO 绑定失败（Spring MVC 内建机制）</li>
+     *   <li>前者是 Service 层或方法级 @Validated 约束失败（JSR-380 Bean Validation 机制）</li>
+     * </ul>
+     * 两者都映射为 400，因为都是客户端输入不合法。
+     *
+     * @param exception 违反约束时抛出的异常，message 包含具体校验信息
+     * @param request   HTTP 请求
+     * @return 400 + 校验失败详情
+     */
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ApiErrorResponse> handleConstraintViolation(ConstraintViolationException exception,
                                                                      HttpServletRequest request) {
@@ -56,6 +109,21 @@ public class GlobalExceptionHandler {
                 ));
     }
 
+    /**
+     * 处理 {@link HttpMessageNotReadableException}（请求体 JSON 反序列化失败）。
+     * <p>
+     * 典型原因：
+     * <ul>
+     *   <li>JSON 字段名或字符串值未用双引号包裹（单引号或裸字符串）</li>
+     *   <li>Content-Type 不是 application/json</li>
+     *   <li>请求体为空或格式非 JSON（如纯文本、XML）</li>
+     * </ul>
+     * 返回 400 并附带明确的修正指引，让前端开发者无需翻看后端日志就能定位问题。
+     *
+     * @param exception 包含 Jackson 解析失败细节的异常
+     * @param request   HTTP 请求
+     * @return 400 + 格式修正指引
+     */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiErrorResponse> handleHttpMessageNotReadable(HttpMessageNotReadableException exception,
                                                                          HttpServletRequest request) {
@@ -69,6 +137,17 @@ public class GlobalExceptionHandler {
                 ));
     }
 
+    /**
+     * 处理 {@link DataAccessException}（Spring 数据库访问底层统一异常）。
+     * <p>
+     * 捕获范围：涵盖 JDBC、JPA、MyBatis 等所有数据访问层的异常（连接失败、SQL 语法错误、约束冲突等）。
+     * 统一返回 500 并指引开发者检查 init.sql 是否执行，因为开发环境中最常见的数据库错误就是表不存在。
+     * 生产环境应该通过更精细的异常映射区分具体数据库问题（如唯一约束冲突 → 409）。
+     *
+     * @param exception 数据访问异常（具体子类由 ORM 框架决定）
+     * @param request   HTTP 请求
+     * @return 500 + 数据库修复指引
+     */
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<ApiErrorResponse> handleDataAccess(DataAccessException exception,
                                                             HttpServletRequest request) {
@@ -83,14 +162,36 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * SSE 长连接空闲超时属于正常行为（客户端断连或网络静默），不应打 ERROR。
-     * 前端 SSE 客户端收到 onerror 回调后会按重试间隔自动重连，这里只需静默完成请求。
+     * 处理 {@link AsyncRequestTimeoutException}（SSE / 异步请求空闲超时）。
+     * <p>
+     * SSE 长连接在无数据交互时会在容器配置的超时时间后触发此异常。
+     * 这属于正常的连接生命周期事件而非错误：前端 SSE EventSource 收到 onerror 后
+     * 会按内置重试间隔自动发起重连，后端无需额外处理。
+     * <p>
+     * 返回 200 OK 而非错误码：让 HTTP 层面正常结束，
+     * 避免异步超时在访问日志中产生 500 误报或触发监控告警。
+     *
+     * @param exception 异步超时异常（不含业务信息）
+     * @return 200 OK，空 body
      */
     @ExceptionHandler(AsyncRequestTimeoutException.class)
     public ResponseEntity<Void> handleAsyncTimeout(AsyncRequestTimeoutException exception) {
         return ResponseEntity.ok().build();
     }
 
+    /**
+     * 兜底异常处理器 —— 捕获所有未被上述处理器匹配的异常。
+     * <p>
+     * 这是最后一道防线，确保任何未预期的异常都不会以 Spring Boot 默认的
+     * Whitelabel Error Page / JSON 返回，而是统一包装为 {@link ApiErrorResponse}。
+     * <p>
+     * 日志级别 ERROR：因为走到这里说明异常未在业务层被正确分类处理，
+     * 应引起开发者注意并补充对应的异常映射。
+     *
+     * @param exception 未被其他 handler 匹配的任意异常
+     * @param request   HTTP 请求
+     * @return 500 + 通用错误提示
+     */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiErrorResponse> handleException(Exception exception, HttpServletRequest request) {
         log.error("未处理的服务端异常: path={}", request.getRequestURI(), exception);
