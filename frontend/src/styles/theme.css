@@ -2166,27 +2166,6 @@ textarea:focus {
   font-size: 17px;
 }
 
-.creator-delete-confirm {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  color: var(--danger);
-  background: var(--surface);
-  border: 1px solid rgba(220, 38, 38, 0.18);
-  border-radius: var(--r-sm);
-}
-
-.creator-delete-confirm strong {
-  color: #7c1d29;
-  font-size: 14px;
-}
-
-.creator-delete-confirm span {
-  color: rgba(124, 29, 41, 0.78);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .creator-delete-actions {
   display: flex;
   flex-wrap: wrap;
@@ -4926,6 +4905,59 @@ textarea:focus {
   min-height: 0;
 }
 
+.creator-delete-modal-backdrop {
+  z-index: 1750;
+  padding: 24px;
+}
+
+.creator-delete-confirm-modal {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 14px;
+  padding: 20px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid rgba(220, 38, 38, 0.16);
+  border-radius: var(--r);
+  box-shadow: var(--sh-lg);
+}
+
+.creator-delete-confirm-modal header {
+  display: grid;
+  gap: 6px;
+}
+
+.creator-delete-confirm-modal header span {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.creator-delete-confirm-modal h3 {
+  margin: 0;
+  color: #7c1222;
+  font-size: 19px;
+  font-weight: 750;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.creator-delete-confirm-modal p {
+  margin: 0;
+  color: rgba(44, 55, 74, 0.74);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.creator-delete-confirm-modal .creator-delete-actions {
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.creator-delete-confirm-modal .creator-delete-actions button {
+  min-width: 104px;
+}
+
 .creator-dev-test-modal {
   width: min(1280px, 100%);
 }
@@ -5222,22 +5254,6 @@ textarea:focus {
   font-size: 20px;
 }
 
-.creator-delete-confirm {
-  padding: 12px 13px;
-  color: #7c1222;
-  background: var(--surface);
-  border-color: rgba(220, 38, 38, 0.18);
-  box-shadow: inset 3px 0 0 var(--danger);
-}
-
-.creator-delete-confirm strong {
-  color: #7c1222;
-}
-
-.creator-delete-confirm span {
-  color: rgba(124, 18, 34, 0.68);
-}
-
 .creator-task-list {
   max-height: 500px;
   gap: var(--s2);
@@ -5367,11 +5383,8 @@ textarea:focus {
   }
 
   .creator-start-actions {
+    justify-content: flex-start;
     min-width: 0;
-  }
-
-  .creator-start-actions button {
-    width: 100%;
   }
 
   .creator-task-rail,
@@ -6027,15 +6040,17 @@ body {
   --creator-text: #1d1d1f;
   --creator-accent: var(--bili-blue, #0071e3);
   --creator-surface-sub: rgba(23, 32, 51, 0.04);
-  padding: 12px 18px 24px;
+  padding: 12px 24px 24px;
   background: transparent;
 }
 
 .creator-header {
   position: relative;
   gap: var(--s3);
-  margin-bottom: var(--s3);
-  padding: 14px 16px;
+  width: min(1540px, calc(100vw - 96px));
+  max-width: none;
+  margin: 0 auto var(--s4);
+  padding: 16px 18px;
   border-color: rgba(0, 174, 236, 0.18);
   box-shadow: 0 10px 26px rgba(23, 32, 51, 0.08);
 }
@@ -6431,9 +6446,12 @@ body {
 .creator-start-screen {
   grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
-  max-width: 1180px;
-  gap: var(--s4);
-  padding: var(--s5);
+  width: min(1540px, calc(100vw - 96px));
+  max-width: none;
+  min-height: min(620px, calc(100vh - 246px));
+  gap: var(--s2);
+  margin: 0 auto;
+  padding: 0;
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -6446,8 +6464,57 @@ body {
 
 .ai-creation-console {
   display: grid;
-  gap: var(--s4);
+  align-content: start;
+  gap: var(--s5);
   width: 100%;
+  min-height: 500px;
+  padding: 28px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(23, 32, 51, 0.08);
+  border-radius: var(--r);
+  box-shadow:
+    0 1px 2px rgba(23, 32, 51, 0.04),
+    0 18px 42px rgba(23, 32, 51, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.creator-start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 14px;
+  min-width: 0;
+  padding-top: 10px;
+}
+
+.creator-start-link-action {
+  min-height: 34px;
+  padding: 0;
+  color: rgba(44, 55, 74, 0.72);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+  text-decoration: underline;
+  text-decoration-color: rgba(44, 55, 74, 0.18);
+  text-underline-offset: 4px;
+  transition:
+    color 160ms ease,
+    text-decoration-color 160ms ease;
+}
+
+.creator-start-link-action:hover {
+  color: var(--accent);
+  text-decoration-color: rgba(0, 174, 236, 0.42);
+}
+
+.creator-start-link-action:focus-visible {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
 .ai-creation-header {
@@ -6482,10 +6549,35 @@ body {
   font-weight: 800;
 }
 
-.ai-creation-composer,
+.ai-creation-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 288px);
+  grid-template-areas:
+    "idea type"
+    "idea submit";
+  gap: var(--s4);
+  align-items: stretch;
+}
+
+.ai-creation-composer > .ai-creation-field-main {
+  grid-area: idea;
+}
+
+.ai-creation-composer > .ai-creation-field:not(.ai-creation-field-main) {
+  grid-area: type;
+  align-self: end;
+}
+
+.ai-creation-composer > .creator-primary-button {
+  grid-area: submit;
+  width: 100%;
+  min-height: 48px;
+  align-self: start;
+}
+
 .ai-creation-regenerate {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 200px) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--s3);
   align-items: end;
 }
@@ -6519,7 +6611,7 @@ body {
 }
 
 .ai-creation-field textarea {
-  min-height: 128px;
+  min-height: 286px;
 }
 
 .ai-creation-field textarea:focus,
@@ -7595,6 +7687,11 @@ body {
     padding: 14px 10px 16px;
   }
 
+  .creator-header,
+  .creator-start-screen {
+    width: 100%;
+  }
+
   .creator-layout {
     grid-template-columns: 1fr;
     gap: var(--s3);
@@ -7660,6 +7757,22 @@ body {
   .ai-creation-composer,
   .ai-creation-regenerate {
     grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+
+  .ai-creation-composer > .ai-creation-field-main,
+  .ai-creation-composer > .ai-creation-field:not(.ai-creation-field-main),
+  .ai-creation-composer > .creator-primary-button {
+    grid-area: auto;
+  }
+
+  .ai-creation-console {
+    min-height: auto;
+    padding: 16px;
+  }
+
+  .ai-creation-field textarea {
+    min-height: 180px;
   }
 
   .ai-creation-options {
@@ -7972,8 +8085,7 @@ body {
   }
 
   .creator-panel-actions > button,
-  .creator-action-row > button,
-  .creator-start-actions > button {
+  .creator-action-row > button {
     flex: 1 1 150px;
   }
 }
@@ -8010,5 +8122,9 @@ body {
   .creator-ghost-button,
   .creator-mini-button {
     width: 100%;
+  }
+
+  .creator-start-link-action {
+    width: auto;
   }
 }
