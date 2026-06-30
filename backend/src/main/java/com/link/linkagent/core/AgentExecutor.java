@@ -19,7 +19,9 @@ import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -775,5 +777,293 @@ public class AgentExecutor {
     private String buildStructuredSystemPrompt(Collection<Tool> tools) {
         String toolDescriptions = AgentToolPromptFormatter.format(tools);
         return promptService.render("agent_executor_structured.system", Map.of("toolList", toolDescriptions));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SSE 流式输出（阶段 P0-4）：在 ReAct 迭代过程中实时推送步骤事件与最终答案
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * SSE 流式 ReAct 循环入口。
+     * <p>
+     * 与 {@link #run(String, String, String, AgentExecutionMode)} 的区别：
+     * 不等待全部步骤完成再返回，而是在每个 ReAct 步骤完成时通过 {@link SseEmitter} 实时推送事件，
+     * 最终答案以 token 粒度逐字符流式发送，让前端实现"打字机"效果的 AI 回复。
+     * <p>
+     * 此方法由 Controller 通过 {@code CompletableFuture.runAsync} 异步调用，
+     * Controller 在提交任务后立即返回 SseEmitter，让 HTTP 连接保持为 SSE 长连接。
+     *
+     * @param sessionId 会话标识，为空时自动生成 UUID
+     * @param userId 用户标识，为空时使用 "default"
+     * @param userMessage 用户原始输入
+     * @param requestedMode 调用方期望的执行模式
+     * @param emitter SSE 发射器，用于向客户端推送事件
+     */
+    public void runStreaming(String sessionId, String userId, String userMessage,
+                             AgentExecutionMode requestedMode, SseEmitter emitter) {
+        try {
+            String resolvedSessionId = resolveSessionId(sessionId);
+            String resolvedUserId = resolveUserId(userId);
+
+            // 首先发送 session 事件，让前端知道当前会话 ID
+            sendSseEvent(emitter, "session", Map.of("sessionId", resolvedSessionId));
+
+            // 拼接记忆 + 用户输入作为对话起点（与 run() 完全一致）
+            StringBuilder conversation = new StringBuilder();
+            appendLongTermMemory(conversation, longTermMemory.listByUser(resolvedUserId, 10));
+            appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
+            List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
+            appendMemory(conversation, recentMessages);
+            conversation.append("Human:").append(userMessage).append("\n\n");
+
+            // 路由到正确的执行模式
+            AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
+            AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
+            if (plannedResult != null) {
+                if (TextUtil.hasText(plannedResult.finalAnswer())) {
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer());
+                    // 先发送步骤追踪，让前端看到规划模式的步骤详情
+                    sendPlannedSteps(emitter, plannedResult);
+                    // 流式发送最终答案
+                    streamTokens(emitter, plannedResult.finalAnswer());
+                }
+                sendSseEvent(emitter, "done", Map.of("sessionId", resolvedSessionId));
+                emitter.complete();
+                return;
+            }
+
+            // === 结构化内核路径（阶段 5.4+） ===
+            // 走结构化 schema 约束的 JSON ReAct，每步通过 chatStructured 产出 ReActStep
+            if (isStructuredKernelEnabled()) {
+                String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
+                String structuredAnswer = runStructuredLoopStreaming(structuredSystemPrompt, conversation, emitter);
+                if (structuredAnswer != null) {
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer);
+                    streamTokens(emitter, structuredAnswer);
+                } else {
+                    // 迭代次数超限：不持久化，直接发送错误
+                    sendSseEvent(emitter, "error", Map.of("message", "迭代次数超过上限"));
+                }
+            } else {
+                // === 文本路径（原 ReAct 文本解析循环） ===
+                String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
+                String textAnswer = runTextLoopStreaming(systemPrompt, conversation, userMessage, emitter);
+                if (textAnswer != null) {
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, textAnswer);
+                    streamTokens(emitter, textAnswer);
+                } else {
+                    sendSseEvent(emitter, "error", Map.of("message", "迭代次数超过上限"));
+                }
+            }
+
+            sendSseEvent(emitter, "done", Map.of("sessionId", resolvedSessionId));
+            emitter.complete();
+        } catch (IOException e) {
+            // 客户端断开连接或 SSE 发送失败，静默处理——不需要额外操作
+            log.debug("SSE 连接已断开，sessionId={}", sessionId);
+            try { emitter.complete(); } catch (Exception ignored) {}
+        } catch (Exception e) {
+            log.error("流式 Agent 执行失败", e);
+            // 尝试向客户端发送错误事件
+            try {
+                sendSseEvent(emitter, "error", Map.of("message", e.getMessage() != null ? e.getMessage() : "未知错误"));
+            } catch (IOException ignored) {}
+            emitter.completeWithError(e);
+        }
+    }
+
+    /**
+     * 结构化 ReAct 流式循环：mirror {@link #runStructuredLoop}，但每完成一个步骤就通过 SSE 推送事件。
+     * <p>
+     * 与 runStructuredLoop 的逻辑完全一致，唯一的区别是在工具执行后立即发送 {@code step} SSE 事件，
+     * 而不是只记录下来等全部结束后再返回。
+     *
+     * @param systemPrompt 结构化内核的系统提示词
+     * @param conversation 对话上下文字符串（原地修改）
+     * @param emitter SSE 发射器
+     * @return 最终答案文本；超出迭代上限返回 null
+     */
+    private String runStructuredLoopStreaming(String systemPrompt, StringBuilder conversation, SseEmitter emitter)
+            throws IOException {
+        int iteration = 0;
+        while (true) {
+            iteration++;
+            if (iteration > MAX_ITERATIONS) {
+                return null;
+            }
+            log.info("流式-结构化 ReAct 第{}轮迭代...", iteration);
+
+            ReActStep step = llmService.chatStructured(systemPrompt, conversation.toString(), ReActStep.class);
+
+            // 优先终止：拿到非空 finalAnswer 即结束（最终答案在外面流式发送）
+            if (step.isFinal()) {
+                return step.finalAnswer();
+            }
+
+            // 合法 JSON 但既无 finalAnswer 也无 action：回喂错误让模型补齐
+            if (!step.hasAction()) {
+                sendSseEvent(emitter, "step", new AgentStep(iteration, step.thought(), null, null, null));
+                conversation.append("ERROR：既未给出 finalAnswer 也未给出 action，请重试！\n\n");
+                continue;
+            }
+
+            // 执行工具
+            ToolCall action = new ToolCall(step.action(), step.actionInput() == null ? "" : step.actionInput());
+            Observation observation = toolExecutor.execute(action);
+            // 立即推送步骤事件给前端
+            sendSseEvent(emitter, "step", new AgentStep(iteration, step.thought(), action.name(), action.arguments(), observation.result()));
+
+            // 对话历史回灌
+            conversation.append("AI:\n").append("Thought:").append(TextUtil.trimToDefault(step.thought(), "")).append("\n")
+                    .append("Action:").append(action.name()).append("\n")
+                    .append("Action Input:").append(action.arguments()).append("\n")
+                    .append("Observation:").append(observation.toolName()).append(":")
+                    .append(observation.result()).append("\n\n");
+        }
+    }
+
+    /**
+     * 文本路 ReAct 流式循环：mirror run() 中的文本 while 循环，但每完成一个步骤就通过 SSE 推送事件。
+     *
+     * @param systemPrompt 文本路 ReAct 系统提示词
+     * @param conversation 对话上下文字符串（原地修改）
+     * @param userMessage 用户原始输入（用于持久化）
+     * @param emitter SSE 发射器
+     * @return 最终答案文本；超出迭代上限或格式持续异常时返回 null
+     */
+    private String runTextLoopStreaming(String systemPrompt, StringBuilder conversation, String userMessage,
+                                        SseEmitter emitter) throws IOException {
+        int iteration = 0;
+        while (true) {
+            iteration++;
+            if (iteration > MAX_ITERATIONS) {
+                return null;
+            }
+            log.info("流式-文本 ReAct 第{}轮迭代...", iteration);
+
+            // 1. 调用 LLM，获得完整响应
+            String llmAnswer = llmService.chat(systemPrompt, conversation.toString());
+            log.info("流式-第{}轮LLM原始响应:\n{}", iteration, llmAnswer);
+
+            // 2. 优先检测 Final Answer
+            String finalAnswer = parseFinalAnswer(llmAnswer);
+            if (TextUtil.hasText(finalAnswer)) {
+                log.info("流式-第{}轮解析到 finalAnswer", iteration);
+                return finalAnswer;
+            }
+
+            // 3. 提取 Thought
+            String thought = parseThought(llmAnswer);
+            if (TextUtil.isBlank(thought)) {
+                // 格式错误：回喂错误让 LLM 重试，同时推送错误步骤
+                AgentStep errorStep = new AgentStep(iteration, "未解析到 Thought，模型可能没有按提示词要求输出。",
+                        null, null, FORMAT_ERROR_OBSERVATION);
+                sendSseEvent(emitter, "step", errorStep);
+                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                continue;
+            }
+
+            // 4. 尝试解析 Action + Action Input
+            ToolCall action = parseAction(llmAnswer);
+            if (action == null) {
+                // 无合法 Action：回喂格式错误
+                sendSseEvent(emitter, "step", new AgentStep(iteration, thought, null, null, null));
+                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                continue;
+            }
+
+            // 5. 执行工具，得到 Observation
+            Observation observation = toolExecutor.execute(action);
+            // 立即推送步骤事件给前端
+            sendSseEvent(emitter, "step", new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
+
+            // 6. 将本轮的 Thought/Action/Observation 拼回对话
+            conversation.append("AI:\n").append("Thought:").append(thought).append("\n")
+                    .append("Action:").append(action.name()).append("\n")
+                    .append("Action Input:").append(action.arguments()).append("\n")
+                    .append("Observation:").append(observation.toolName()).append(":")
+                    .append(observation.result()).append("\n\n");
+        }
+    }
+
+    /**
+     * 将规划模式的步骤推送给前端。
+     * <p>
+     * 规划模式（Plan & Execute / Multi-Agent）产生的 AgentRunResult 包含 steps 字段，
+     * 这里遍历这些步骤通过 SSE 逐一推送，让前端在拿到最终答案前就能看到规划链路的执行细节。
+     */
+    private void sendPlannedSteps(SseEmitter emitter, AgentRunResult result) throws IOException {
+        if (result.steps() == null || result.steps().isEmpty()) {
+            return;
+        }
+        for (AgentStep step : result.steps()) {
+            sendSseEvent(emitter, "step", step);
+        }
+    }
+
+    /**
+     * 将最终答案以 token 粒度逐字符通过 SSE 流式发送，模拟打字效果。
+     * <p>
+     * 对中文文本（CJK 统一表意文字）按单字符切分，因为每个汉字本身就是语义单元；
+     * 对英文/数字按 2-4 个字符一组切分，在视觉上形成流畅的"逐字打印"效果。
+     * <p>
+     * 设计权衡：这里对已生成的完整文本做"伪流式"切分，而非真正从 LLM token 级别流式输出，
+     * 原因是 ReAct 循环需要完整解析 LLM 响应后才能判断是工具调用还是最终答案——
+     * 无法在流式过程中提前知道当前响应是否包含 Final Answer。等后续 Spring AI 成熟度提升后，
+     * 可以改为直接流式转发 LLM 的原始 token。
+     *
+     * @param emitter SSE 发射器
+     * @param text 要流式发送的文本
+     */
+    private void streamTokens(SseEmitter emitter, String text) throws IOException {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            // 对 CJK 字符（中文/日文/韩文）单字符发送；对英文/数字等每次发送 2-4 个字符一组
+            if (isCjkCharacter(c)) {
+                sendSseEvent(emitter, "token", String.valueOf(c));
+            } else {
+                // 累积连续的非 CJK 字符（如英文单词、数字、标点），按小段发送
+                int end = i;
+                while (end < text.length() && !isCjkCharacter(text.charAt(end)) && (end - i) < 3) {
+                    end++;
+                }
+                sendSseEvent(emitter, "token", text.substring(i, end));
+                i = end - 1; // for 循环会再 +1
+            }
+        }
+    }
+
+    /**
+     * 判断字符是否为 CJK 统一表意文字（包括中文汉字、日文汉字、韩文汉字）。
+     * <p>
+     * Unicode 范围：
+     * <ul>
+     *   <li>CJK 统一表意文字：U+4E00–U+9FFF</li>
+     *   <li>CJK 扩展 A：U+3400–U+4DBF（罕用汉字）</li>
+     *   <li>CJK 兼容表意文字：U+F900–U+FAFF</li>
+     * </ul>
+     */
+    private boolean isCjkCharacter(char c) {
+        return (c >= '一' && c <= '鿿')
+                || (c >= '㐀' && c <= '䶿')
+                || (c >= '豈' && c <= '﫿');
+    }
+
+    /**
+     * 向 SseEmitter 发送一个命名事件。
+     * <p>
+     * 数据对象会被 Spring 自动序列化为 JSON（通过 Jackson）。
+     * 如果发送失败（客户端断开连接），抛出 IOException 让上层统一处理。
+     *
+     * @param emitter SSE 发射器
+     * @param name 事件名称（前端通过 addEventListener 监听）
+     * @param data 事件数据，会被序列化为 JSON
+     * @throws IOException 当前端连接断开或 SSE 写入失败时抛出
+     */
+    private static void sendSseEvent(SseEmitter emitter, String name, Object data) throws IOException {
+        emitter.send(SseEmitter.event().name(name).data(data));
     }
 }

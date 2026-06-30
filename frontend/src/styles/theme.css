@@ -426,6 +426,68 @@ textarea:focus-visible {
   animation-delay: 0.3s;
 }
 
+/* ── 流式输出（SSE 实时推送） ── */
+.agent-streaming-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-streaming-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  font-size: 0.82rem;
+  animation: step-appear 0.25s ease-out;
+}
+
+@keyframes step-appear {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.streaming-step-number {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.streaming-step-action {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.streaming-content {
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.streaming-cursor {
+  display: inline;
+  color: var(--accent);
+  animation: cursor-blink 0.8s step-end infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+.streaming-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .steps {
   margin-top: 14px;
   padding-top: 14px;
@@ -1343,6 +1405,24 @@ textarea:focus {
 .agent-floating-window .composer button:hover:not(:disabled) {
   box-shadow: none;
   transform: none;
+}
+
+/* 流式输出停止按钮：醒目但不过分强烈的红色提示 */
+.agent-floating-window .composer .stop-btn {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+  animation: stop-pulse 1.6s ease-in-out infinite;
+}
+
+.agent-floating-window .composer .stop-btn:hover {
+  background: var(--danger-hover, #dc2626);
+  border-color: var(--danger-hover, #dc2626);
+}
+
+@keyframes stop-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.75; }
 }
 
 .agent-floating-resize,

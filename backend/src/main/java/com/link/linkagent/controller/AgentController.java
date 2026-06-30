@@ -8,13 +8,16 @@ import com.link.linkagent.core.AgentExecutor;
 import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Agent 对话接口，驱动 ReAct 循环并管理会话记忆。
@@ -87,6 +90,47 @@ public class AgentController {
     @PostMapping("/chat")
     public AgentChatResponse chat(@Valid @RequestBody AgentChatRequest request) {
         return agentExecutor.run(request.sessionId(), request.userId(), request.message(), request.executionMode());
+    }
+
+    /**
+     * 发起流式 Agent 对话（SSE），走完整 ReAct 循环并以事件流形式实时推送。
+     * <p>
+     * <b>端点：</b>{@code POST /api/agent/chat/stream}
+     * <p>
+     * 与 {@link #chat(AgentChatRequest)} 的最大区别：本端点返回 SSE（Server-Sent Events）流，
+     * 在每个 ReAct 步骤完成时实时推送 {@code step} 事件，最终答案以 {@code token} 事件逐字符流式发送，
+     * 最后以 {@code done} 事件结束。
+     * <p>
+     * <b>SSE 事件类型：</b>
+     * <ul>
+     *   <li>{@code session} — 连接建立后立即发送，携带 sessionId</li>
+     *   <li>{@code step} — 每个 ReAct 步骤完成后推送，包含 thought/action/actionInput/observation</li>
+     *   <li>{@code token} — 最终答案的单个字符或小片段，用于前端打字机效果</li>
+     *   <li>{@code error} — 错误发生时推送，携带 message 字段</li>
+     *   <li>{@code done} — 流结束信号，携带 sessionId</li>
+     * </ul>
+     * <p>
+     * <b>超时设置：</b>SSE 连接最长保持 5 分钟（300000ms），超过此时间未完成则自动断开。
+     * 这是为了在 Agent 陷入长循环或 LLM 响应极慢时，保护前端不无限等待。
+     * <p>
+     * <b>异步执行：</b>Agent 推理在独立线程中异步执行，Controller 立即返回 SseEmitter，
+     * 让 HTTP 连接升级为 SSE 长连接。
+     *
+     * @param request Agent 聊天请求
+     * @return SseEmitter 实例，由 Spring 管理其生命周期
+     */
+    @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter chatStream(@Valid @RequestBody AgentChatRequest request) {
+        // 5 分钟超时：覆盖大多数 ReAct 推理场景（通常 30s-2min），也保护前端不无限等待
+        SseEmitter emitter = new SseEmitter(300_000L);
+        // 异步执行 Agent 推理：让 Controller 立即返回 emitter 建立 SSE 连接，
+        // Agent 推理在独立线程中逐步推送事件；不阻塞 HTTP 响应发送
+        CompletableFuture.runAsync(() -> {
+            agentExecutor.runStreaming(
+                    request.sessionId(), request.userId(), request.message(),
+                    request.executionMode(), emitter);
+        });
+        return emitter;
     }
 
     /**

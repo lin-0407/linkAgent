@@ -345,7 +345,9 @@ const activeCreatorStepIndex = computed(() => {
   }
   return matchedIndex >= 0 ? matchedIndex : 0
 })
-const activeCreatorStepMeta = computed(() => creatorStepMetas[activeCreatorStepIndex.value])
+// 使用 ?? 兜底第一个步骤元信息，满足 TypeScript 对数组索引可能返回 undefined 的严格检查
+// creatorStepMetas 是常量数组，始终有 4 个元素，所以 [0] 安全非空
+const activeCreatorStepMeta = computed(() => creatorStepMetas[activeCreatorStepIndex.value] ?? creatorStepMetas[0]!)
 const creatorProgressPercent = computed(() => `${((activeCreatorStepIndex.value + 1) / creatorStepMetas.length) * 100}%`)
 // 当前任务详情默认折叠，让发布前优化和复盘区域成为页面第一视觉重点。
 const isCurrentTaskExpanded = ref(false)
