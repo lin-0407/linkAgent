@@ -1,6 +1,6 @@
 # [linkAgent] — AGENTS.md
 
-请优先载入`/skills/role/SKILL.md`。再仔细阅读本文件，了解项目的整体情况、技术选型、协作约定等关键信息后，
+请优先载入项目根目录下的 `skills/role/SKILL.md`。再仔细阅读本文件，了解项目的整体情况、技术选型、协作约定等关键信息后，
 
 ## 项目本质
 基于 Spring AI 的面向 B 站内容创作者的 AI 创作与复盘工作台，底层保留 ReAct Agent 编排、工具调用、会话记忆、可观测与可扩展工具生态能力。
@@ -25,12 +25,12 @@
 - 表设计必须把对应字段注释以中文形式说明清楚
 - 所有引入的第三方方法必须是真实可用的，不能是过时的或者不兼容当前技术栈的，如果当前没有此方法，必须联网搜索对应解决方案。
 - 所有对外 API 必须使用 Spring Boot 自带的 Jakarta Validation / Hibernate Validator 做入参校验，不额外引入第三方 validation 库。
-- 数据库 Schema 统一维护在 `sql/` 目录下，直接修改脚本文件，暂不引入迁移框架 。
+- 数据库 Schema 统一维护在 `backend/src/main/resources/sql/` 目录下，直接修改脚本文件，暂不引入迁移框架 。
 - **硬性禁止：开发者不得执行任何编译、测试、构建、运行或启动命令**，包括但不限于 `mvn test`、`mvn compile`、`mvn spring-boot:run`、`npm run build`、`npm run type-check`、`npm run dev`。开发者只能把需要执行的命令、预期结果和排错建议告诉作者，由作者执行后反馈结果。
 - 前端相关变更不得修改 `package.json` 里的 node 版本。
 
 ## 协作约定（请严格遵守）
-开发流程: 必须严格按照开发流程文档的步骤进行：`/skills/develop_process/SKILL.md`
+开发流程: 必须严格按照开发流程文档的步骤进行：`skills/develop-process/SKILL.md`
 - 必须始终保持质疑精神：作者的判断不一定正确，开发者自己的判断也不一定正确。遇到需求、方案、实现或验证结果存在疑点时，要先说明疑点、依据和可能影响，再和作者一起确认，而不是盲从任何一方。
 
 ## 代码风格

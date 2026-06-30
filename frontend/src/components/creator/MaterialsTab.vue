@@ -13,6 +13,7 @@ const {
   taskFormHint,
   taskForm,
   videoTypeOptions,
+  isActiveStepReadOnly,
 } = useCreatorWorkspaceShell()
 </script>
 
@@ -33,6 +34,7 @@ const {
           取消编辑
         </button>
         <button
+          v-if="!isActiveStepReadOnly"
           type="button"
           class="creator-primary-button"
           :disabled="!hasTaskMaterialInput || isCreatingTask || isUpdatingTask"
@@ -40,6 +42,7 @@ const {
         >
           {{ taskSubmitLabel }}
         </button>
+        <span v-else class="creator-parse-status">只读</span>
       </div>
     </div>
 
@@ -52,12 +55,13 @@ const {
           v-model="taskForm.taskName"
           type="text"
           maxlength="128"
+          :disabled="isActiveStepReadOnly"
           placeholder="例如：第一次做个人知识库踩了哪些坑"
         />
       </label>
       <label>
         <span>内容类型</span>
-        <select v-model="taskForm.videoType">
+        <select v-model="taskForm.videoType" :disabled="isActiveStepReadOnly">
           <option v-for="option in videoTypeOptions" :key="option" :value="option">
             {{ option === 'GLOBAL' ? '全局通用' : option }}
           </option>
@@ -69,6 +73,7 @@ const {
           v-model="taskForm.titleDraft"
           type="text"
           maxlength="200"
+          :disabled="isActiveStepReadOnly"
           placeholder="先写一个粗标题，后面再优化"
         />
       </label>
@@ -77,6 +82,7 @@ const {
         <textarea
           v-model="taskForm.descriptionDraft"
           maxlength="2000"
+          :disabled="isActiveStepReadOnly"
           placeholder="可以先粘贴简介初稿、链接说明或补充信息"
         ></textarea>
       </label>
@@ -85,6 +91,7 @@ const {
         <textarea
           v-model="taskForm.manuscript"
           maxlength="20000"
+          :disabled="isActiveStepReadOnly"
           placeholder="粘贴脚本、口播稿或整理后的文稿"
         ></textarea>
       </label>
@@ -93,6 +100,7 @@ const {
         <textarea
           v-model="taskForm.subtitle"
           maxlength="20000"
+          :disabled="isActiveStepReadOnly"
           placeholder="可选：粘贴字幕文本"
         ></textarea>
       </label>

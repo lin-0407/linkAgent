@@ -141,6 +141,8 @@ import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
 type TaskManageMode = 'create' | 'edit'
+type CreatorWorkStep = 'prePublish' | 'feedback' | 'report'
+type CreatorStepKey = 'task' | CreatorWorkStep
 type FeedbackChatTurn = {
   id: string
   question: string
@@ -265,6 +267,8 @@ const successMessage = ref('')
 
 const isTaskManagerOpen = ref(false)
 const isTaskComposerOpen = ref(false)
+// 任务编辑会临时进入资料页，记录编辑前阶段，避免取消或保存后把用户困在第一阶段。
+const editReturnStep = ref<CreatorWorkStep>('prePublish')
 // 评测域状态迁移至 useCreatorEvaluation
 const evaluationModule = useCreatorEvaluation(errorMessage)
 const {
@@ -331,7 +335,12 @@ const selectedWorkflowMessageId = ref('')
 // activeStep / restoredTaskId 从 Pinia creatorStore 读取，替代原来的 localStorage + persistWorkspaceState 模式
 const creatorStore = useCreatorStore()
 const { activeStep, restoredTaskId } = storeToRefs(creatorStore)
-const creatorStepMetas = [
+const creatorStepMetas: Array<{
+  key: CreatorStepKey
+  label: string
+  shortLabel: string
+  description: string
+}> = [
   { key: 'task', label: '视频资料', shortLabel: '资料', description: '填写视频基础信息' },
   { key: 'prePublish', label: '发布方案', shortLabel: '发布', description: '生成发布计划与方案' },
   { key: 'feedback', label: '观众反馈', shortLabel: '反馈', description: '收集观众意见与反馈' },
@@ -345,8 +354,16 @@ const activeCreatorStepIndex = computed(() => {
   }
   return matchedIndex >= 0 ? matchedIndex : 0
 })
-const activeCreatorStepMeta = computed(() => creatorStepMetas[activeCreatorStepIndex.value])
+const activeCreatorStepMeta = computed(
+  () => creatorStepMetas[activeCreatorStepIndex.value] ?? creatorStepMetas[0]!,
+)
 const creatorProgressPercent = computed(() => `${((activeCreatorStepIndex.value + 1) / creatorStepMetas.length) * 100}%`)
+const currentTaskProgressIndex = computed(() => {
+  if (!selectedTask.value) {
+    return 0
+  }
+  return creatorStepMetas.findIndex((step) => step.key === resolveTaskEntryStep(selectedTask.value!))
+})
 // 当前任务详情默认折叠，让发布前优化和复盘区域成为页面第一视觉重点。
 const isCurrentTaskExpanded = ref(false)
 const isLoadingTasks = ref(false)
@@ -543,6 +560,13 @@ const canAskFeedbackChat = computed(() =>
       !isAskingFeedbackChat.value,
   ),
 )
+const isActiveStepReadOnly = computed(() => {
+  if (taskManageMode.value === 'edit') {
+    return false
+  }
+  const matchedIndex = creatorStepMetas.findIndex((step) => step.key === activeStep.value)
+  return matchedIndex >= 0 && matchedIndex < currentTaskProgressIndex.value
+})
 const hasFeedbackChatTurns = computed(() => feedbackChatTurns.value.length > 0)
 const feedbackDashboardWarnings = computed(() => {
   const warnings = [...feedbackImportWarnings.value, ...(feedbackDashboard.value?.warnings ?? [])]
@@ -1077,6 +1101,7 @@ async function submitTask() {
 async function updateTask() {
   if (!selectedTask.value) return
   const materialChanged = hasTaskMaterialChanged(selectedTask.value)
+  const returnStep = editReturnStep.value
   // 委托 taskModule 执行更新（内部已处理 loading / store / selectedTask）
   const task = await taskModule.submitUpdateTask()
   if (!task) return
@@ -1092,6 +1117,8 @@ async function updateTask() {
   } else {
     await loadPrePublishWorkflow(task.taskId)
   }
+  taskManageMode.value = 'create'
+  activeStep.value = materialChanged ? 'prePublish' : normalizeReturnStepForTask(task, returnStep)
   await refreshTasks()
   successMessage.value = materialChanged
     ? '任务内容已更新，旧建议已清空，请重新生成。'
@@ -1100,6 +1127,7 @@ async function updateTask() {
 
 function startCreateTask() {
   taskModule.startCreateTask()
+  taskManageMode.value = 'create'
   isTaskComposerOpen.value = true
   pendingDeleteTask.value = null
   errorMessage.value = ''
@@ -1111,6 +1139,7 @@ function startCreateTask() {
 async function startEditTask(taskId: string) {
   errorMessage.value = ''
   successMessage.value = ''
+  editReturnStep.value = resolveCurrentEditReturnStep()
   const alreadyLoaded = selectedTask.value?.taskId === taskId
   if (alreadyLoaded) {
     taskManageMode.value = 'edit'
@@ -1131,7 +1160,53 @@ async function startEditTask(taskId: string) {
   closeTaskManager()
 }
 
-function cancelEditTask() { taskModule.cancelEditTask() }
+function cancelEditTask() {
+  taskModule.cancelEditTask()
+  taskManageMode.value = 'create'
+  if (!selectedTask.value) {
+    activeStep.value = 'task'
+    return
+  }
+  taskModule.fillTaskForm(selectedTask.value)
+  activeStep.value = normalizeReturnStepForTask(selectedTask.value, editReturnStep.value)
+}
+
+function creatorStepIndex(stepKey: CreatorStepKey) {
+  return creatorStepMetas.findIndex((step) => step.key === stepKey)
+}
+
+function isCreatorStepCompleted(stepKey: CreatorStepKey) {
+  const index = creatorStepIndex(stepKey)
+  return index >= 0 && index < currentTaskProgressIndex.value
+}
+
+function canNavigateCreatorStep(stepKey: CreatorStepKey) {
+  if (stepKey === 'task') {
+    return Boolean(selectedTask.value || isTaskComposerOpen.value)
+  }
+  if (stepKey === 'prePublish') {
+    return hasSelectedTask.value
+  }
+  if (stepKey === 'feedback') {
+    return canEnterFeedback.value
+  }
+  return Boolean(feedbackReport.value)
+}
+
+function navigateCreatorStep(stepKey: CreatorStepKey) {
+  if (!canNavigateCreatorStep(stepKey)) {
+    return
+  }
+  if (taskManageMode.value === 'edit') {
+    taskModule.cancelEditTask()
+    if (selectedTask.value) {
+      taskModule.fillTaskForm(selectedTask.value)
+    }
+    taskManageMode.value = 'create'
+  }
+  isTaskComposerOpen.value = true
+  activeStep.value = stepKey
+}
 
 function askDeleteTask(task: CreatorTaskSummary) { taskModule.askDeleteTask(task) }
 
@@ -1179,7 +1254,7 @@ async function selectTask(taskId: string) {
   if (!task) return
   // 编排层：跨域操作
   isTaskComposerOpen.value = true
-  activeStep.value = 'prePublish'
+  activeStep.value = resolveTaskEntryStep(task)
   resetPrePublishPreferenceMode()
   restoredTaskId.value = task.taskId
   await Promise.all([
@@ -1780,6 +1855,44 @@ async function optionalRequest<T>(request: () => Promise<T>) {
   }
 }
 
+function resolveTaskEntryStep(task: Pick<CreatorTask, 'status'>): CreatorWorkStep {
+  if (hasFeedbackResult(task.status)) {
+    return 'report'
+  }
+  if (hasPrePublishResult(task.status)) {
+    return 'feedback'
+  }
+  return 'prePublish'
+}
+
+function normalizeReturnStepForTask(
+  task: Pick<CreatorTask, 'status'>,
+  targetStep: CreatorWorkStep,
+): CreatorWorkStep {
+  // 下游阶段必须由任务状态支撑，避免旧的本地阶段把用户带到不可用页面。
+  if (targetStep === 'report' && !hasFeedbackResult(task.status)) {
+    return resolveTaskEntryStep(task)
+  }
+  if (targetStep === 'feedback' && !hasPrePublishResult(task.status)) {
+    return resolveTaskEntryStep(task)
+  }
+  return targetStep
+}
+
+function resolveCurrentEditReturnStep(): CreatorWorkStep {
+  if (
+    activeStep.value === 'prePublish' ||
+    activeStep.value === 'feedback' ||
+    activeStep.value === 'report'
+  ) {
+    return activeStep.value
+  }
+  if (selectedTask.value) {
+    return resolveTaskEntryStep(selectedTask.value)
+  }
+  return 'prePublish'
+}
+
 function resolveRefreshTargetTask() {
   const currentTaskId = selectedTask.value?.taskId
   const targetTaskId = currentTaskId || restoredTaskId.value
@@ -2104,6 +2217,7 @@ provideCreatorWorkspace({
     isLoadingCreatorPreferences,
     isLoadingUsageStats,
     isConfirmingPrePublish,
+    isActiveStepReadOnly,
     isSendingWorkflowMessage,
     isSavingFeedback,
     isUpdatingTask,
@@ -2394,13 +2508,13 @@ provideCreatorWorkspace({
             <p>{{ activeCreatorStepMeta.description }}</p>
           </div>
 
-          <nav class="creator-tabs creator-tabs-vertical creator-tabs-readonly" aria-label="创作步骤">
+          <nav class="creator-tabs creator-tabs-vertical" aria-label="创作步骤">
             <button
               type="button"
-              :class="{ active: activeStep === 'task' }"
+              :disabled="!canNavigateCreatorStep('task')"
+              :class="{ active: activeStep === 'task', completed: isCreatorStepCompleted('task') }"
               :aria-current="activeStep === 'task' ? 'step' : undefined"
-              aria-disabled="true"
-              tabindex="-1"
+              @click="navigateCreatorStep('task')"
             >
               <span class="creator-step-count">1</span>
               <span class="creator-step-icon" aria-hidden="true">
@@ -2417,11 +2531,13 @@ provideCreatorWorkspace({
             </button>
             <button
               type="button"
-              :disabled="!hasSelectedTask"
-              :class="{ active: activeStep === 'prePublish' }"
+              :disabled="!canNavigateCreatorStep('prePublish')"
+              :class="{
+                active: activeStep === 'prePublish',
+                completed: isCreatorStepCompleted('prePublish'),
+              }"
               :aria-current="activeStep === 'prePublish' ? 'step' : undefined"
-              aria-disabled="true"
-              tabindex="-1"
+              @click="navigateCreatorStep('prePublish')"
             >
               <span class="creator-step-count">2</span>
               <span class="creator-step-icon" aria-hidden="true">
@@ -2438,11 +2554,13 @@ provideCreatorWorkspace({
             </button>
             <button
               type="button"
-              :disabled="!canEnterFeedback"
-              :class="{ active: activeStep === 'feedback' }"
+              :disabled="!canNavigateCreatorStep('feedback')"
+              :class="{
+                active: activeStep === 'feedback',
+                completed: isCreatorStepCompleted('feedback'),
+              }"
               :aria-current="activeStep === 'feedback' ? 'step' : undefined"
-              aria-disabled="true"
-              tabindex="-1"
+              @click="navigateCreatorStep('feedback')"
             >
               <span class="creator-step-count">3</span>
               <span class="creator-step-icon" aria-hidden="true">
@@ -2458,11 +2576,10 @@ provideCreatorWorkspace({
             </button>
             <button
               type="button"
-              :disabled="!feedbackReport"
-              :class="{ active: activeStep === 'report' }"
+              :disabled="!canNavigateCreatorStep('report')"
+              :class="{ active: activeStep === 'report', completed: isCreatorStepCompleted('report') }"
               :aria-current="activeStep === 'report' ? 'step' : undefined"
-              aria-disabled="true"
-              tabindex="-1"
+              @click="navigateCreatorStep('report')"
             >
               <span class="creator-step-count">4</span>
               <span class="creator-step-icon" aria-hidden="true">

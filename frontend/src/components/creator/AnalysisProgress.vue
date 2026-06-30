@@ -187,34 +187,48 @@ function nodeClass(status: string): string {
 <style scoped>
 .analysis-progress {
   display: grid;
-  gap: var(--s2);
+  gap: var(--s3);
   padding: var(--s3);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 252, 255, 0.94));
+  border: 1px solid rgba(23, 32, 51, 0.1);
   border-radius: var(--r);
+  box-shadow: 0 1px 2px rgba(23, 32, 51, 0.04);
 }
 
 .progress-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--s3);
 }
 
 .progress-header h4 {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: var(--fw-semibold);
   color: var(--ink);
 }
 
 .progress-summary {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 var(--s2);
   color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.progress-summary > span {
+  margin-left: 4px;
 }
 
 .summary-running {
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 
 .summary-failed {
@@ -224,13 +238,15 @@ function nodeClass(status: string): string {
 .progress-empty {
   margin: 0;
   padding: var(--s3) 0;
+  color: var(--muted);
   text-align: center;
   font-size: 13px;
-  color: var(--muted);
 }
 
-/* 时间轴：左侧竖线由节点的伪元素绘制 */
+/* 时间轴：每一步使用紧凑行卡片，避免进度信息挤成一整块色块。 */
 .timeline {
+  display: grid;
+  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -239,56 +255,62 @@ function nodeClass(status: string): string {
 .timeline-item {
   position: relative;
   display: grid;
-  grid-template-columns: 24px 1fr;
+  grid-template-columns: 30px minmax(0, 1fr);
   gap: var(--s2);
-  padding-bottom: var(--s3);
+  min-width: 0;
 }
 
 /* 连接线：除最后一个外，每个节点向下延伸竖线 */
 .timeline-item:not(:last-child)::before {
-  content: '';
   position: absolute;
-  left: 11px;
-  top: 24px;
-  bottom: 0;
-  width: 2px;
-  background: var(--border);
+  top: 30px;
+  bottom: -8px;
+  left: 14px;
+  width: 1px;
+  background: rgba(23, 32, 51, 0.1);
+  content: '';
 }
 
 .timeline-node {
+  position: relative;
+  z-index: 1;
   display: grid;
+  width: 28px;
+  height: 28px;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--r-pill);
   font-size: 12px;
   font-weight: var(--fw-bold);
   line-height: 1;
-  z-index: 1;
 }
 
-/* 节点视觉态 */
-.node-done {
-  color: #fff;
-  background: var(--accent);
+/* 节点视觉态只作用于圆点，不能污染整行背景。 */
+.timeline-node.node-done {
+  color: #0f8f5a;
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.28);
 }
 
-.node-running {
-  color: var(--accent);
+.timeline-node.node-running {
+  color: var(--accent-strong);
   background: var(--accent-tint);
+  border-color: var(--accent-ring);
   /* 运行中脉冲动画，让用户知道"正在动"而不是卡死 */
   animation: pulse 1.4s ease-in-out infinite;
 }
 
-.node-failed {
-  color: #fff;
-  background: var(--danger);
+.timeline-node.node-failed {
+  color: var(--danger);
+  background: rgba(220, 38, 38, 0.08);
+  border-color: rgba(220, 38, 38, 0.24);
 }
 
-.node-pending {
+.timeline-node.node-pending {
   color: var(--muted);
   background: var(--surface-sub);
-  border: 1px solid var(--border);
 }
 
 @keyframes pulse {
@@ -297,20 +319,24 @@ function nodeClass(status: string): string {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .node-running {
+  .timeline-node.node-running {
     animation: none;
   }
 }
 
 .timeline-body {
   min-width: 0;
+  padding: 9px var(--s3);
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(23, 32, 51, 0.08);
+  border-radius: var(--r-sm);
 }
 
 .timeline-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--s2);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
   width: 100%;
   padding: 0;
   background: none;
@@ -325,25 +351,34 @@ function nodeClass(status: string): string {
 }
 
 .timeline-title {
+  overflow: hidden;
+  color: var(--ink);
   font-size: 14px;
   font-weight: var(--fw-semibold);
-  color: var(--ink);
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .timeline-meta {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: var(--s2);
+  justify-content: flex-end;
+  gap: 6px;
   font-size: 11px;
   color: var(--muted);
 }
 
 .meta-type,
 .meta-status {
-  padding: 1px var(--s2);
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 var(--s2);
   border-radius: var(--r-pill);
-  background: var(--surface-sub);
+  background: var(--surface);
   border: 1px solid var(--border);
+  line-height: 1;
 }
 
 .timeline-item.node-failed .meta-status {
@@ -352,12 +387,20 @@ function nodeClass(status: string): string {
 }
 
 .timeline-item.node-running .meta-status {
-  color: var(--accent);
+  color: var(--accent-strong);
   border-color: var(--accent-ring);
 }
 
+.timeline-item.node-done .meta-status {
+  color: #0f8f5a;
+  border-color: rgba(16, 185, 129, 0.28);
+}
+
 .meta-duration {
+  display: inline-flex;
+  align-items: center;
   font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 .timeline-detail {
@@ -365,7 +408,8 @@ function nodeClass(status: string): string {
   gap: var(--s1);
   margin-top: var(--s2);
   padding: var(--s2);
-  background: var(--surface-sub);
+  background: rgba(248, 250, 252, 0.9);
+  border: 1px solid rgba(23, 32, 51, 0.06);
   border-radius: var(--r-sm);
 }
 
@@ -387,5 +431,25 @@ function nodeClass(status: string): string {
 
 .detail-error {
   color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .progress-header,
+  .timeline-head {
+    align-items: flex-start;
+  }
+
+  .progress-header {
+    flex-direction: column;
+  }
+
+  .timeline-head {
+    grid-template-columns: 1fr;
+    gap: var(--s2);
+  }
+
+  .timeline-meta {
+    justify-content: flex-start;
+  }
 }
 </style>

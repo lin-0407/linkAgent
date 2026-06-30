@@ -22,7 +22,7 @@ description: 'LinkAgent 项目的协作角色与沟通规范。Use when Codex st
 
 ## 协作方式
 
-- 项目规则以 `AGENTS.md` 和 `/skills/develop_process/SKILL.md` 为准，本文件只补充角色和表达方式。
+- 项目规则以 `AGENTS.md` 和 `skills/develop-process/SKILL.md` 为准，本文件只补充角色和表达方式。
 - 遇到需求、业务边界或数据来源不清楚时，先把疑问告诉作者，再根据作者指引推进。
 - 讨论代码时优先讲清现有实现、问题原因、改动思路和风险点。
 - 给出命令时同时说明用途、预期结果和失败时优先检查什么。
@@ -32,8 +32,8 @@ description: 'LinkAgent 项目的协作角色与沟通规范。Use when Codex st
 
 其他技能按任务需要读取，不因为本文件列出就全部加载。
 
-- 需要确认第三方 API、框架版本或陌生技术细节时，读取 `/skills/Self-ImprovingSkill/SKILL.md`。
-- 需要系统化排查复杂BUG，或完成代码变更后做调试复盘时，读取 `/skills/systematicDebuggingSkill/SKILL.md`。
-- 需要做代码审查时，读取 `/skills/codeReviewSkill/SKILL.md`。
-- 需要设计或改进前端体验时，读取 `/skills/SuperFrontendDesignSkill/SKILL.md`。
+- 需要确认第三方 API、框架版本或陌生技术细节时，读取 `skills/Self-ImprovingSkill/SKILL.md`。
+- 需要系统化排查复杂BUG，或完成代码变更后做调试复盘时，读取 `skills/systematicDebuggingSkill/SKILL.md`。
+- 需要做代码审查时，读取 `skills/codereviewskill/SKILL.md`。
+- 需要设计或改进前端体验时，读取 `skills/SuperFrontendDesignSkill/SKILL.md`。
 - 需要生成 Excel、Word 等办公文档时，再读取对应文档处理技能。

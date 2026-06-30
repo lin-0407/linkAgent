@@ -53,7 +53,7 @@ description: 'LinkAgent 项目的功能开发流程和阶段门禁。Use when Co
 - 不引入未使用的抽象。
 - 所有对外 API 使用 Jakarta Validation 做入参校验。
 - 注释使用中文，并解释为什么这么做，而不是只描述做了什么。
-- 数据库 Schema 统一维护在 `sql/` 目录。
+- 数据库 Schema 统一维护在 `backend/src/main/resources/sql/` 目录。
 
 变更中断规则：
 - 如果实现中发现原设计不可行，先说明原因、影响和调整方案。

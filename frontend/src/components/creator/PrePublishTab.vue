@@ -46,6 +46,7 @@ const {
   isConfirmingPrePublish,
   confirmPrePublishResult,
   selectedTask,
+  isActiveStepReadOnly,
 } = useCreatorWorkspaceShell()
 
 const composerRef = ref<HTMLTextAreaElement | null>(null)
@@ -116,10 +117,12 @@ function focusComposer() {
 }
 
 async function submitSupplement() {
+  if (isActiveStepReadOnly.value) return
   await sendWorkflowSupplement()
 }
 
 async function generateDraft() {
+  if (isActiveStepReadOnly.value) return
   await generatePrePublishManuscriptDraftForCurrentTask(draftRequirement.value)
   draftRequirement.value = ''
 }
@@ -135,6 +138,7 @@ async function generateDraft() {
         <button
           type="button"
           class="creator-secondary-action"
+          :disabled="isActiveStepReadOnly"
           @click="openGuidanceEditor('prePublish')"
         >
           调整偏好
@@ -159,7 +163,7 @@ async function generateDraft() {
         <button
           type="button"
           class="creator-primary-button"
-          :disabled="!canRunPrePublishAnalyze || isAnalyzingPrePublish"
+          :disabled="isActiveStepReadOnly || !canRunPrePublishAnalyze || isAnalyzingPrePublish"
           @click="runPrePublishAnalyze"
         >
           {{ isAnalyzingPrePublish ? '生成中...' : '生成发布方案' }}
@@ -208,18 +212,28 @@ async function generateDraft() {
             ref="composerRef"
             v-model="workflowMessageDraft"
             maxlength="1000"
-            :disabled="!canSendWorkflowMessage || isSendingWorkflowMessage"
+            :disabled="isActiveStepReadOnly || !canSendWorkflowMessage || isSendingWorkflowMessage"
             placeholder="补充你的完整需求、口播风格、标题禁忌或必须出现的信息"
             @keydown.ctrl.enter.prevent="submitSupplement"
           ></textarea>
           <div class="creator-ai-composer-actions">
-            <button type="button" class="creator-ghost-button" @click="focusComposer">
+            <button
+              type="button"
+              class="creator-ghost-button"
+              :disabled="isActiveStepReadOnly"
+              @click="focusComposer"
+            >
               补充素材
             </button>
             <button
               type="submit"
               class="creator-primary-button"
-              :disabled="!canSendWorkflowMessage || !workflowMessageDraft.trim() || isSendingWorkflowMessage"
+              :disabled="
+                isActiveStepReadOnly ||
+                !canSendWorkflowMessage ||
+                !workflowMessageDraft.trim() ||
+                isSendingWorkflowMessage
+              "
             >
               {{ isSendingWorkflowMessage ? '发送中...' : '发送给 AI' }}
             </button>
@@ -238,31 +252,46 @@ async function generateDraft() {
           v-if="!hasFullScriptMaterial"
           v-model="draftRequirement"
           maxlength="1000"
+          :disabled="isActiveStepReadOnly"
           placeholder="让 AI 补稿时的额外要求，例如节奏、口播语气、必须保留的观点"
         ></textarea>
 
         <div class="creator-ai-next-actions">
           <template v-if="!hasFullScriptMaterial">
-            <button type="button" class="creator-secondary-action" @click="focusComposer">
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="isActiveStepReadOnly"
+              @click="focusComposer"
+            >
               我来补充
             </button>
             <button
               type="button"
               class="creator-primary-button"
-              :disabled="!canGeneratePrePublishDraft || isGeneratingPrePublishDraft"
+              :disabled="
+                isActiveStepReadOnly ||
+                !canGeneratePrePublishDraft ||
+                isGeneratingPrePublishDraft
+              "
               @click="generateDraft"
             >
               {{ isGeneratingPrePublishDraft ? '补稿中...' : '让 AI 补一版' }}
             </button>
           </template>
           <template v-else-if="suggestion && !hasConfirmedPrePublish">
-            <button type="button" class="creator-secondary-action" @click="focusComposer">
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="isActiveStepReadOnly"
+              @click="focusComposer"
+            >
               继续修改
             </button>
             <button
               type="button"
               class="creator-primary-button"
-              :disabled="!canConfirmPrePublish || isConfirmingPrePublish"
+              :disabled="isActiveStepReadOnly || !canConfirmPrePublish || isConfirmingPrePublish"
               @click="confirmPrePublishResult"
             >
               {{ isConfirmingPrePublish ? '确认中...' : '采用这个方案' }}
@@ -272,7 +301,7 @@ async function generateDraft() {
             <button
               type="button"
               class="creator-primary-button"
-              :disabled="!canRunPrePublishAnalyze || isAnalyzingPrePublish"
+              :disabled="isActiveStepReadOnly || !canRunPrePublishAnalyze || isAnalyzingPrePublish"
               @click="runPrePublishAnalyze"
             >
               {{ isAnalyzingPrePublish ? '生成中...' : '生成发布方案' }}
@@ -343,6 +372,7 @@ async function generateDraft() {
               :key="option.value"
               type="button"
               :class="{ active: prePublishForm.preferenceMode === option.value }"
+              :disabled="isActiveStepReadOnly"
               @click="prePublishForm.preferenceMode = option.value"
             >
               <span>{{ option.label }}</span>
@@ -374,6 +404,7 @@ async function generateDraft() {
             <button
               type="button"
               class="creator-secondary-action creator-mini-button"
+              :disabled="isActiveStepReadOnly"
               @click="openContextLibrary"
             >
               管理语境
@@ -398,6 +429,7 @@ async function generateDraft() {
           <textarea
             v-model="prePublishForm.creatorPreference"
             maxlength="500"
+            :disabled="isActiveStepReadOnly"
             placeholder="这期最想让观众记住什么？也可以补充表达偏好"
           ></textarea>
         </label>
@@ -407,6 +439,7 @@ async function generateDraft() {
             v-model="prePublishForm.titleStyle"
             type="text"
             maxlength="100"
+            :disabled="isActiveStepReadOnly"
             placeholder="更稳重 / 更有网感 / 更像教程 / 更像故事"
           />
         </label>
@@ -415,6 +448,7 @@ async function generateDraft() {
           <textarea
             v-model="prePublishForm.extraRequirement"
             maxlength="500"
+            :disabled="isActiveStepReadOnly"
             placeholder="补充标题、简介或标签要求"
           ></textarea>
         </label>

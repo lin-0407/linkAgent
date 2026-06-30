@@ -27,6 +27,7 @@ const {
   feedbackAnalyzeForm,
   feedback,
   formatDate,
+  isActiveStepReadOnly,
 } = useCreatorWorkspaceShell()
 </script>
 
@@ -40,6 +41,7 @@ const {
         <button
           type="button"
           class="creator-secondary-action"
+          :disabled="isActiveStepReadOnly"
           @click="openGuidanceEditor('feedback')"
         >
           分析偏好
@@ -63,7 +65,13 @@ const {
         <button
           type="button"
           class="creator-secondary-action"
-          :disabled="!canEnterFeedback || !feedbackImportFile || isImportingFeedback || isFetchingFeedback"
+          :disabled="
+            isActiveStepReadOnly ||
+            !canEnterFeedback ||
+            !feedbackImportFile ||
+            isImportingFeedback ||
+            isFetchingFeedback
+          "
           @click="importFeedbackFile"
         >
           {{ isImportingFeedback ? '导入中...' : '导入文件' }}
@@ -71,7 +79,13 @@ const {
         <button
           type="button"
           class="creator-secondary-action"
-          :disabled="!canEnterFeedback || !hasFeedbackSampleInput || isSavingFeedback || isFetchingFeedback"
+          :disabled="
+            isActiveStepReadOnly ||
+            !canEnterFeedback ||
+            !hasFeedbackSampleInput ||
+            isSavingFeedback ||
+            isFetchingFeedback
+          "
           @click="submitFeedback"
         >
           {{ isSavingFeedback ? '保存中...' : '保存手动粘贴' }}
@@ -79,7 +93,7 @@ const {
         <button
           type="button"
           class="creator-primary-button"
-          :disabled="!canRunFeedbackAnalyze"
+          :disabled="isActiveStepReadOnly || !canRunFeedbackAnalyze"
           @click="runFeedbackAnalyze"
         >
           {{ isAnalyzingFeedback ? '分析中...' : '读懂反馈' }}
@@ -97,7 +111,12 @@ const {
           <button
             type="button"
             class="creator-primary-button"
-            :disabled="!canEnterFeedback || !feedbackScriptBv || isFetchingFeedback"
+            :disabled="
+              isActiveStepReadOnly ||
+              !canEnterFeedback ||
+              !feedbackScriptBv ||
+              isFetchingFeedback
+            "
             @click="fetchFeedbackByBv"
           >
             {{ isFetchingFeedback ? '读取中...' : '自动读取反馈' }}
@@ -109,6 +128,7 @@ const {
             v-model="feedbackScriptForm.bvInput"
             type="text"
             maxlength="200"
+            :disabled="isActiveStepReadOnly"
             placeholder="BVxxxx 或 https://www.bilibili.com/video/BVxxxx"
           />
         </label>
@@ -122,6 +142,7 @@ const {
                 type="number"
                 min="0"
                 max="500"
+                :disabled="isActiveStepReadOnly"
               />
             </label>
             <label>
@@ -131,6 +152,7 @@ const {
                 type="number"
                 min="0"
                 max="100"
+                :disabled="isActiveStepReadOnly"
               />
             </label>
             <label>
@@ -140,11 +162,12 @@ const {
                 type="number"
                 min="0"
                 max="2000"
+                :disabled="isActiveStepReadOnly"
               />
             </label>
             <label>
               <span>输出格式</span>
-              <select v-model="feedbackScriptForm.format">
+              <select v-model="feedbackScriptForm.format" :disabled="isActiveStepReadOnly">
                 <option value="both">JSON + TXT</option>
                 <option value="json">只输出 JSON</option>
               </select>
@@ -160,7 +183,7 @@ const {
           :key="selectedTaskId"
           type="file"
           accept=".json,.txt,application/json,text/plain"
-          :disabled="!canEnterFeedback || isImportingFeedback || isFetchingFeedback"
+          :disabled="isActiveStepReadOnly || !canEnterFeedback || isImportingFeedback || isFetchingFeedback"
           @change="handleFeedbackFileChange"
         />
         <small>
@@ -172,6 +195,7 @@ const {
         <textarea
           v-model="feedbackForm.commentSamples"
           maxlength="20000"
+          :disabled="isActiveStepReadOnly"
           placeholder="粘贴已整理的评论样例"
         ></textarea>
       </label>
@@ -180,6 +204,7 @@ const {
         <textarea
           v-model="feedbackForm.danmakuSamples"
           maxlength="20000"
+          :disabled="isActiveStepReadOnly"
           placeholder="粘贴弹幕样例，可换行分隔"
         ></textarea>
       </label>
@@ -188,6 +213,7 @@ const {
         <textarea
           v-model="feedbackForm.extraContext"
           maxlength="500"
+          :disabled="isActiveStepReadOnly"
           placeholder="说明样例来源、时间段或反馈场景"
         ></textarea>
       </label>
@@ -196,6 +222,7 @@ const {
         <textarea
           v-model="feedbackAnalyzeForm.analysisFocus"
           maxlength="500"
+          :disabled="isActiveStepReadOnly"
           placeholder="如：判断观众是否理解项目价值"
         ></textarea>
       </label>
@@ -204,6 +231,7 @@ const {
         <textarea
           v-model="feedbackAnalyzeForm.extraRequirement"
           maxlength="500"
+          :disabled="isActiveStepReadOnly"
           placeholder="补充报告输出偏好"
         ></textarea>
       </label>

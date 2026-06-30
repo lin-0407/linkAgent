@@ -6324,6 +6324,16 @@ body {
   opacity: 0.5;
 }
 
+.creator-tabs-vertical button.completed:not(.active) .creator-step-count {
+  color: var(--accent-strong);
+  background: rgba(0, 174, 236, 0.08);
+  border-color: rgba(0, 174, 236, 0.24);
+}
+
+.creator-tabs-vertical button.completed:not(.active) .creator-step-text strong {
+  color: var(--text);
+}
+
 .creator-step-count {
   position: relative;
   z-index: 1;
