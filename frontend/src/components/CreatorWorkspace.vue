@@ -40,6 +40,7 @@ import {
   updateCreatorTask,
 } from '@/api/creator'
 import MessageBubble from '@/components/MessageBubble.vue'
+import NotificationToast from '@/components/NotificationToast.vue'
 import AiCreationConsole from '@/components/creator/AiCreationConsole.vue'
 import GuidanceEditorModal from '@/components/creator/GuidanceEditorModal.vue'
 import FeedbackTab from '@/components/creator/FeedbackTab.vue'
@@ -280,7 +281,6 @@ const {
   selectEvalCase, submitEvalResult,
 } = evaluationModule
 const isDeveloperTestOpen = ref(false)
-const pendingDeleteTask = ref<CreatorTaskSummary | null>(null)
 const isResultModalBackdropPointerDown = ref(false)
 const isGuidanceBackdropPointerDown = ref(false)
 const suggestion = ref<CreatorSuggestion | null>(null)
@@ -357,6 +357,9 @@ const activeCreatorStepIndex = computed(() => {
 const activeCreatorStepMeta = computed(
   () => creatorStepMetas[activeCreatorStepIndex.value] ?? creatorStepMetas[0]!,
 )
+// 使用 ?? 兜底第一个步骤元信息，满足 TypeScript 对数组索引可能返回 undefined 的严格检查
+// creatorStepMetas 是常量数组，始终有 4 个元素，所以 [0] 安全非空
+const activeCreatorStepMeta = computed(() => creatorStepMetas[activeCreatorStepIndex.value] ?? creatorStepMetas[0]!)
 const creatorProgressPercent = computed(() => `${((activeCreatorStepIndex.value + 1) / creatorStepMetas.length) * 100}%`)
 const currentTaskProgressIndex = computed(() => {
   if (!selectedTask.value) {
@@ -387,7 +390,7 @@ const isContextLibraryOpen = ref(false)
 const resultModalTarget = ref<ResultModalTarget | null>(null)
 const isFeedbackChatDrawerOpen = ref(false)
 const isDeveloperTestBackdropPointerDown = ref(false)
-let successMessageTimer: number | undefined
+
 
 // ═══════════════════════════════════════════
 // Phase 5.8 Adapter Layer — 桥接模式
@@ -411,6 +414,8 @@ const feedbackModule = useCreatorFeedback(
 
 // taskForm 统一来源：模块持有真实 reactive，组件通过此引用读写
 const taskForm = taskModule.taskForm
+const pendingDeleteTask = taskModule.pendingDeleteTask
+const pendingDeleteTaskName = taskModule.pendingDeleteTaskName
 // feedback 表单统一来源：feedbackModule 持有真实 reactive
 const feedbackForm = feedbackModule.feedbackForm
 const feedbackChatForm = feedbackModule.feedbackChatForm
@@ -423,6 +428,7 @@ const feedbackEvent = useCreatorFeedbackEvent(successMessage, errorMessage)
 
 const selectedTaskId = computed(() => selectedTask.value?.taskId ?? '')
 const hasSelectedTask = computed(() => selectedTaskId.value.length > 0)
+const hasTaskHistory = computed(() => tasks.value.length > 0)
 const hasSelectedTaskMaterials = computed(() => (selectedTask.value?.materials.length ?? 0) > 0)
 const showDeveloperTools = computed(() => props.developerMode)
 const hasTaskMaterialInput = computed(
@@ -482,7 +488,6 @@ const taskFormHint = computed(() =>
     ? '编辑当前任务后，旧材料会被覆盖，后续分析请重新生成。'
     : '先放入这期视频已有的标题、简介和文稿，后续会基于这些资料生成发布方案。',
 )
-const pendingDeleteTaskName = computed(() => pendingDeleteTask.value?.taskName ?? '')
 const hasFeedbackSampleInput = computed(
   () => hasText(feedbackForm.commentSamples) || hasText(feedbackForm.danmakuSamples),
 )
@@ -860,20 +865,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   closeWorkflowEventSource()
-  clearSuccessMessageTimer()
   window.removeEventListener('keydown', handleWorkspaceKeydown)
-})
-
-watch(successMessage, (message) => {
-  clearSuccessMessageTimer()
-  if (!message) {
-    return
-  }
-
-  successMessageTimer = window.setTimeout(() => {
-    successMessage.value = ''
-    successMessageTimer = undefined
-  }, 2800)
 })
 
 watch(
@@ -907,14 +899,6 @@ watch(() => taskModule.isLoadingTasks.value, (val) => { isLoadingTasks.value = v
 watch(() => taskModule.isCreatingTask.value, (val) => { isCreatingTask.value = val })
 watch(() => taskModule.isUpdatingTask.value, (val) => { isUpdatingTask.value = val })
 watch(() => taskModule.isDeletingTask.value, (val) => { isDeletingTask.value = val })
-
-function clearSuccessMessageTimer() {
-  if (successMessageTimer === undefined) {
-    return
-  }
-  window.clearTimeout(successMessageTimer)
-  successMessageTimer = undefined
-}
 
 function openTaskManager() {
   pendingDeleteTask.value = null
@@ -1006,8 +990,8 @@ function updateFeedbackChatTurn(turnId: string, patch: Partial<FeedbackChatTurn>
   )
 }
 
+/** 关闭成功通知（NotificationToast 组件通过 @close 事件触发，定时器由组件内部管理） */
 function closeSuccessToast() {
-  clearSuccessMessageTimer()
   successMessage.value = ''
 }
 
@@ -1214,7 +1198,7 @@ function askDeleteSelectedTask() {
   if (!selectedTask.value) {
     return
   }
-  pendingDeleteTask.value = {
+  taskModule.askDeleteTask({
     id: selectedTask.value.id,
     taskId: selectedTask.value.taskId,
     userId: selectedTask.value.userId,
@@ -1224,7 +1208,7 @@ function askDeleteSelectedTask() {
     materialCount: selectedTask.value.materials.length,
     createTime: selectedTask.value.createTime,
     updateTime: selectedTask.value.updateTime,
-  }
+  })
   errorMessage.value = ''
   successMessage.value = ''
   isTaskManagerOpen.value = true
@@ -1235,9 +1219,15 @@ function cancelDeleteTask() {
 }
 
 async function confirmDeleteTask() {
+  const targetTaskId = pendingDeleteTask.value?.taskId
+  if (!targetTaskId) {
+    return
+  }
   await taskModule.confirmDeleteTask()
-  // 编排：模块版 confirmDeleteTask 已清空 pendingDeleteTask 和 selectedTask，
-  // 这里补充 successMessage + 刷新后检查恢复任务
+  if (pendingDeleteTask.value?.taskId === targetTaskId) {
+    return
+  }
+  // 编排：删除成功后补充 toast，并刷新一次主壳状态，确保选中任务和历史列表保持一致。
   successMessage.value = '任务已删除，列表会自动刷新。'
   await refreshTasks()
 }
@@ -2277,27 +2267,11 @@ provideCreatorWorkspace({
 
 <template>
   <section class="creator-shell creator-workbench-shell">
-    <Transition name="creator-toast">
-      <div
-        v-if="successMessage"
-        class="creator-toast success-toast"
-        role="status"
-        aria-live="polite"
-      >
-        <div>
-          <strong>操作完成</strong>
-          <span>{{ successMessage }}</span>
-        </div>
-        <button
-          type="button"
-          class="creator-toast-close"
-          aria-label="关闭成功提示"
-          @click="closeSuccessToast"
-        >
-          ×
-        </button>
-      </div>
-    </Transition>
+    <NotificationToast
+      type="success"
+      :message="successMessage"
+      @close="closeSuccessToast"
+    />
 
     <header v-if="!selectedTask && !isTaskComposerOpen" class="creator-header">
       <div>
@@ -2355,8 +2329,9 @@ provideCreatorWorkspace({
               <div>
                 <span>项目列表</span>
                 <h3 id="creator-task-manager-title">
-                  {{ filteredTasks.length }} / {{ taskSummaryStats.total }}
+                  历史视频项目
                 </h3>
+                <p>{{ filteredTasks.length }} 个匹配项目，共 {{ taskSummaryStats.total }} 个项目</p>
               </div>
               <div class="creator-panel-actions">
                 <button type="button" class="creator-ghost-button" @click="startCreateTask">
@@ -2397,29 +2372,6 @@ provideCreatorWorkspace({
                 <span><b>{{ taskSummaryStats.done }}</b> 已复盘</span>
               </div>
 
-              <div v-if="pendingDeleteTask" class="creator-delete-confirm">
-                <strong>删除「{{ pendingDeleteTaskName }}」？</strong>
-                <span>项目会从列表隐藏，历史分析产物保留在后端。</span>
-                <div class="creator-delete-actions">
-                  <button
-                    type="button"
-                    class="creator-danger-action creator-mini-button"
-                    :disabled="isDeletingTask"
-                    @click="confirmDeleteTask"
-                  >
-                    {{ isDeletingTask ? '删除中' : '确认删除' }}
-                  </button>
-                  <button
-                    type="button"
-                    class="creator-ghost-button creator-mini-button"
-                    :disabled="isDeletingTask"
-                    @click="cancelDeleteTask"
-                  >
-                    取消
-                  </button>
-                </div>
-              </div>
-
               <div class="creator-task-list creator-task-manager-list">
                 <article
                   v-for="task in filteredTasks"
@@ -2456,13 +2408,65 @@ provideCreatorWorkspace({
                     </button>
                   </div>
                 </article>
-                <p v-if="!isLoadingTasks && tasks.length === 0" class="creator-muted">
-                  还没有视频项目，先新建一个。
-                </p>
-                <p v-else-if="!isLoadingTasks && filteredTasks.length === 0" class="creator-muted">
-                  没有匹配当前筛选条件的视频项目。
-                </p>
+                <div v-if="!isLoadingTasks && tasks.length === 0" class="creator-task-empty-state">
+                  <strong>还没有视频项目</strong>
+                  <span>先新建一条视频资料，后续发布方案和复盘报告都会沉淀在这里。</span>
+                  <button type="button" class="creator-primary-button creator-mini-button" @click="startCreateTask">
+                    新建项目
+                  </button>
+                </div>
+                <div
+                  v-else-if="!isLoadingTasks && filteredTasks.length === 0"
+                  class="creator-task-empty-state"
+                >
+                  <strong>没有匹配的项目</strong>
+                  <span>换一个关键词，或把状态筛选切回全部状态。</span>
+                </div>
               </div>
+            </div>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <Teleport to="body">
+      <Transition name="creator-modal">
+        <div
+          v-if="pendingDeleteTask"
+          class="creator-modal-backdrop creator-delete-modal-backdrop"
+          @click.self="!isDeletingTask && cancelDeleteTask()"
+        >
+          <section
+            class="creator-delete-confirm-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="creator-delete-confirm-title"
+            aria-describedby="creator-delete-confirm-desc"
+          >
+            <header>
+              <span>删除项目</span>
+              <h3 id="creator-delete-confirm-title">删除「{{ pendingDeleteTaskName }}」？</h3>
+            </header>
+            <p id="creator-delete-confirm-desc">
+              项目会从列表隐藏，历史分析产物保留在后端。这个操作完成后，当前列表会自动刷新。
+            </p>
+            <div class="creator-delete-actions">
+              <button
+                type="button"
+                class="creator-ghost-button"
+                :disabled="isDeletingTask"
+                @click="cancelDeleteTask"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                class="creator-danger-action"
+                :disabled="isDeletingTask"
+                @click="confirmDeleteTask"
+              >
+                {{ isDeletingTask ? '删除中...' : '确认删除' }}
+              </button>
             </div>
           </section>
         </div>
@@ -2475,11 +2479,16 @@ provideCreatorWorkspace({
       aria-label="创作台入口"
     >
       <AiCreationConsole @confirmed="handleCreativeOptionConfirmed" />
-      <div class="creator-start-actions">
-        <button type="button" class="creator-secondary-action" @click="openTaskManager">
+      <div class="creator-start-actions" aria-label="其他创建方式">
+        <button
+          v-if="hasTaskHistory"
+          type="button"
+          class="creator-start-link-action"
+          @click="openTaskManager"
+        >
           继续上次复盘
         </button>
-        <button type="button" class="creator-ghost-button" @click="startCreateTask">
+        <button type="button" class="creator-start-link-action" @click="startCreateTask">
           手动填写资料
         </button>
       </div>
@@ -2601,10 +2610,11 @@ provideCreatorWorkspace({
       </aside>
 
       <section class="creator-main">
-        <div v-if="errorMessage" class="creator-alert error-alert">
-          <strong>请求失败</strong>
-          <span>{{ errorMessage }}</span>
-        </div>
+        <NotificationToast
+          type="error"
+          :message="errorMessage"
+          @close="errorMessage = ''"
+        />
 
         <MaterialsTab v-if="activeStep === 'task'" />
 

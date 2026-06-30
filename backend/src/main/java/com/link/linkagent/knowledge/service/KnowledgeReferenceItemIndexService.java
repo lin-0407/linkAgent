@@ -25,18 +25,24 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 案例库<b>子条目</b>向量索引服务（阶段 5.2c-1：子表向量化）。
+ * 案例库<b>子条目</b>向量索引服务 — Pipeline 中「small-to-big」检索架构的 small 端索引器。
  * <p>
+ * <b>Pipeline 角色</b>：
+ * 位于「清洗（{@link KnowledgeReferenceCleaningService}）→ 子表落库 → 子条目检索」之间。
  * 把子表 {@code creator_reference_video_item}（清洗后优质评论 / 弹幕）的原文写入知识库专用的<b>子集合</b>
- * （与父集合物理隔离），并把索引状态回写到子表 {@code embedding_*}。子条目是 small-to-big 召回的 small 端：
- * 小而精的子文档命中更准，命中后由 5.2c-2 检索侧按 {@code videoId} 扩展回父表案例卡片（big）。
+ * （与父集合物理隔离），并把索引状态回写到子表的 {@code embedding_*} 字段。
+ * <p>
+ * <b>small-to-big 检索架构</b>：
+ * 子条目是 small 端——评论弹幕短文每条约 20~200 字，语义精确聚焦；
+ * 检索时 small 端先命中相关子条目，然后按 {@code videoId} 扩展回父表案例卡片（big 端），
+ * 最终返回「证据原文 + 父案例完整上下文」的双层结果。小而精的子文档命中更准。
  * <p>
  * <b>与父索引服务（{@link KnowledgeReferenceIndexService}）的关系</b>：结构平行但<b>有意分开</b>——
- * 二者表 / 集合 / 文本构造各不相同（父是「卡片」、子是「评论弹幕原文」），分开保持各自单一职责、父服务零改动；
- * 仅两个索引器、暂不抽公共骨架（简单优先，真出现第三个再上提）。
+ * 二者表/集合/文本构造各不相同（父是「卡片富文本」、子是「评论弹幕原文」），
+ * 分开保持各自单一职责、父服务零改动；仅两个索引器、暂不抽公共骨架（简单优先，真出现第三个再上提）。
  * <p>
- * 成熟范式照搬父侧：MySQL 是事实源、Milvus 只是可被语义检索的副本；<b>不加 {@code @Transactional}</b>
- * （Milvus 写入不归 DB 事务）；部分批次失败不报错，而是写入 failedCount 与 warnings；增量只索引 PENDING / FAILED。
+ * <b>成熟范式照搬父侧</b>：MySQL 是事实源、Milvus 是副本；不加 {@code @Transactional}；
+ * 部分批次失败不报错写 failedCount/warnings；增量只索引 PENDING / FAILED。
  */
 @Service
 public class KnowledgeReferenceItemIndexService {
@@ -52,7 +58,11 @@ public class KnowledgeReferenceItemIndexService {
     /** embedding_error 列是 VARCHAR(512)，失败原因摘要截断到 480，留出省略号余量。 */
     private static final int ERROR_MESSAGE_MAX_LENGTH = 480;
 
-    /** 单条子文档文本上限：子条目是评论 / 弹幕短文，上限远小于父卡片的 4000，防个别超长评论撑爆单条 Embedding。 */
+    /**
+     * 单条子文档文本上限（字符数）。
+     * 子条目是评论/弹幕短文（通常 20~200 字），取 1000 字上限远小于父卡片的 4000，
+     * 但足以覆盖 B 站允许的评论最大长度（约 1000 字）。
+     */
     private static final int ITEM_DOC_TEXT_MAX_CHARS = 1000;
 
     /** 检索模式预测值，与检索链路保持同一套字面量。 */
@@ -75,8 +85,22 @@ public class KnowledgeReferenceItemIndexService {
     /**
      * 重建（增量）子条目向量索引。
      * <p>
-     * 异常约定：RAG 业务开关未启用 / 子向量库未就绪 / 没有待索引子条目 → 400；
-     * Embedding 或 Milvus 部分失败不报错，而是写入 failedCount 与 warnings。
+     * <b>执行流程</b>：
+     * <ol>
+     *   <li>门控检查：RAG 开关 + <b>子向量库就绪</b>（isChildReady，与父库就绪独立）</li>
+     *   <li>取待索引子条目列表（status = PENDING / FAILED，JOIN 父表确保父案例未被删除）</li>
+     *   <li>按批构造 Document 并写入 Milvus 子集合</li>
+     *   <li>逐批回写 INDEXED（成功）或 FAILED（失败）状态</li>
+     * </ol>
+     * <p>
+     * <b>注意</b>：这里查的是子向量库就绪位（isChildReady），与父向量库（isReady）独立——
+     * 子集合没建好不连累父检索，各自独立降级。
+     * <p>
+     * <b>异常约定</b>：RAG 业务开关未启用 / 子向量库未就绪 / 没有待索引子条目 → 400；
+     * Embedding 或 Milvus 部分失败不报错，写入 failedCount + warnings。
+     *
+     * @param request 索引请求，含可选的 maxItems 上限
+     * @return 索引结果，含 indexed/failed 计数 + warnings
      */
     public ReferenceVideoIndexResponse rebuildItems(ReferenceVideoIndexRequest request) {
         if (!knowledgeRagProperties.isEnabled()) {
@@ -148,6 +172,9 @@ public class KnowledgeReferenceItemIndexService {
     /**
      * 查询子条目向量索引状态：各状态计数 + 最近成功索引时间 + 检索模式预测。
      * RAG 关闭时照常返回（ragEnabled=false、vectorStoreReady=false），用于前端确认子向量索引的优雅降级是否生效。
+     * 注意：vectorStoreReady 字段在子状态语义下映射「子向量库是否就绪」（而非父库）。
+     *
+     * @return 索引状态，含 total/indexed/pending/failed 计数和检索模式预测（VECTOR / SQL）
      */
     public ReferenceVideoIndexStatusResponse itemStatus() {
         boolean ragEnabled = knowledgeRagProperties.isEnabled();
@@ -199,7 +226,14 @@ public class KnowledgeReferenceItemIndexService {
     }
 
     /**
-     * 把一条子条目组装成向量文档：文本是评论 / 弹幕原文（small 端要精确语义），metadata 存 small-to-big 扩展键与过滤键。
+     * 把一条子条目组装成向量文档。
+     * <p>
+     * 文本是评论/弹幕原文本身（small 端要精确语义），不堆叠父级字段。
+     * metadata 存两套键：
+     * <ol>
+     *   <li><b>扩展键</b>：videoId（small-to-big 回查父案例卡片）、itemId（回查子表原文）</li>
+     *   <li><b>过滤键</b>：sentiment（正/负向）、sourceType（COMMENT/DANMAKU）、category/tier（从父表反范式带入，供检索过滤）</li>
+     * </ol>
      */
     private Document toItemDocument(ReferenceVideoItemIndexRow row) {
         Map<String, Object> metadata = new LinkedHashMap<>();

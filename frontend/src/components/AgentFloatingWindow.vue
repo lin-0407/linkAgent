@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChatComposer from '@/components/ChatComposer.vue'
-import ErrorNotice from '@/components/ErrorNotice.vue'
+import NotificationToast from '@/components/NotificationToast.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import { useAgentChat } from '@/composables/useAgentChat'
 import type { SessionListItem } from '@/types/agent'
@@ -102,6 +102,9 @@ const {
   executionMode,
   inputMessage,
   isLoading,
+  isStreaming,
+  streamingContent,
+  streamingSteps,
   isSessionsLoading,
   isSessionsOpen,
   latestStepCount,
@@ -109,6 +112,7 @@ const {
   messages,
   openSession,
   sendMessage,
+  stopStreaming,
   sessionId,
   sessions,
   sessionsError,
@@ -126,6 +130,10 @@ const floatingWindowSubtitle = computed(() => {
   const title = knowledgeContext.value?.video.title
   if (title) {
     return clipText(title, 26)
+  }
+  if (isStreaming.value) {
+    const stepCount = streamingSteps.value.length
+    return stepCount > 0 ? `AI 正在思考...（已执行 ${stepCount} 步）` : 'AI 正在生成回复...'
   }
   if (isLoading.value) {
     return 'AI 正在整理建议'
@@ -618,7 +626,11 @@ function clipText(value: string, maxLength: number) {
             </button>
             <p v-if="sessions.length === 0" class="agent-floating-session-empty">还没有保存的会话</p>
           </template>
-          <p v-if="sessionsError" class="agent-floating-session-error">{{ sessionsError }}</p>
+          <NotificationToast
+            type="warning"
+            :message="sessionsError"
+            @close="sessionsError = ''"
+          />
         </section>
 
         <section v-if="knowledgeContext" class="agent-floating-context-panel" aria-label="已加载的视频上下文">
@@ -677,7 +689,41 @@ function clipText(value: string, maxLength: number) {
             :show-diagnostics="props.developerMode"
           />
 
-          <div v-if="isLoading" class="message assistant">
+          <!-- 流式输出区域：显示正在生成的内容，替代原来的静态 loading 提示 -->
+          <div v-if="isStreaming" class="agent-streaming-block" aria-label="AI 正在生成回复">
+            <!-- 实时显示的 ReAct 步骤 -->
+            <div
+              v-for="(step, index) in streamingSteps"
+              :key="index"
+              class="agent-streaming-step"
+            >
+              <span class="streaming-step-number">步骤 {{ step.stepNumber }}</span>
+              <span v-if="step.action" class="streaming-step-action">
+                {{ step.action }}{{ step.actionInput ? `(${step.actionInput.slice(0, 40)}${step.actionInput.length > 40 ? '...' : ''})` : '' }}
+              </span>
+            </div>
+            <!-- 流式文本内容（打字机效果） -->
+            <div class="message assistant">
+              <div class="avatar">A</div>
+              <div class="bubble">
+                <div class="streaming-content">
+                  {{ streamingContent }}
+                  <span class="streaming-cursor" aria-hidden="true">▍</span>
+                </div>
+                <div v-if="streamingSteps.length > 0 && !streamingContent" class="streaming-thinking">
+                  AI 正在整理建议
+                  <span class="thinking-dots" aria-hidden="true">
+                    <i></i>
+                    <i></i>
+                    <i></i>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 非流式加载（兜底：当 isLoading 为 true 但 isStreaming 为 false 时显示） -->
+          <div v-else-if="isLoading" class="message assistant">
             <div class="avatar">A</div>
             <div class="bubble loading animated" aria-label="AI 正在整理建议">
               <span class="thinking-text">AI 正在整理建议</span>
@@ -710,14 +756,20 @@ function clipText(value: string, maxLength: number) {
           </button>
         </div>
 
-        <ErrorNotice :error-message="errorMessage" />
+        <NotificationToast
+          type="error"
+          :message="errorMessage"
+          @close="errorMessage = ''"
+        />
 
         <ChatComposer
           ref="composerRef"
           v-model="inputMessage"
           :can-send="canSend"
           :is-loading="isLoading"
+          :is-streaming="isStreaming"
           @send-message="sendFloatingMessage"
+          @stop-streaming="stopStreaming"
         />
       </div>
 

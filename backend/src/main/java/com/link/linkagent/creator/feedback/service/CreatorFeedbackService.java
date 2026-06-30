@@ -62,40 +62,89 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * 评论弹幕反馈服务。
- * 本阶段同时支持粘贴、文件导入和用户填写 BV 后的本地脚本采集，统一落到任务维度做复盘。
+ * 评论弹幕反馈服务（创作复盘核心模块）。
+ * <p>
+ * 本服务是创作者反馈分析的中央编排器，统一承载：
+ * <ol>
+ *   <li><b>反馈录入</b>：支持手动粘贴、文件上传（JSON/TXT）和 BV 号驱动脚本采集三种数据来源</li>
+ *   <li><b>LLM 分析</b>：调用 LLM 对评论弹幕做结构化分析，产出多维度复盘报告</li>
+ *   <li><b>反馈追问</b>：基于分析报告和已导入明细，支持用户向 AI 追问反馈细节</li>
+ *   <li><b>仪表盘</b>：从已落库明细恢复统计数据、分类分布、关键词热度、弹幕时间线</li>
+ *   <li><b>批量分类</b>：LLM 批量分类评论/弹幕（分批次 + 失败降级关键词规则）</li>
+ * </ol>
+ * <p>
+ * 架构位置：位于 creator.feedback.service 层，向下依赖 Mapper 层读写数据、LLMService 调用模型、
+ * PromptService 管理提示词模板、CreatorFeedbackEvidenceRetrievalService 做证据检索；
+ * 向上被 Controller 层直接调用。不依赖 CreatorBilibiliService 等兄弟服务。
+ * <p>
+ * 设计决策：
+ * <ul>
+ *   <li>证据检索拆成独立服务（CreatorFeedbackEvidenceRetrievalService）——本类已同时承担
+ *       导入、分析、仪表盘、追问和脚本采集，把"选证据"交出去让追问链路只负责编排。</li>
+ *   <li>LLM 分类优先但容忍降级——LLM 失败时自动切换关键词规则，保证导入流程不中断。</li>
+ *   <li>明细存储以"新批次覆盖旧批次"的方式，每次导入都会软删除旧明细再写入新数据，
+ *       保证仪表盘和旧分析入口看到同一批样例。</li>
+ * </ul>
  */
 @Service
 public class CreatorFeedbackService {
 
+    /** 反馈/报告文本最大长度，超长截断防止 prompt 过大 */
     private static final int FEEDBACK_MAX_LENGTH = 12000;
+    /** 用户上传文件大小上限(5MB)，防止超大文件消耗内存 */
     private static final int IMPORT_FILE_MAX_SIZE = 5 * 1024 * 1024;
+    /** 脚本生成 JSON 文件大小上限(20MB)，B站热门视频的评论弹幕量可能很大 */
     private static final int GENERATED_FILE_MAX_SIZE = 20 * 1024 * 1024;
+    /** 单次导入明细条数上限，超出截断 */
     private static final int IMPORT_ITEM_MAX_COUNT = 2000;
+    /** 旧分析入口拼接样例文本的最大长度 */
     private static final int LEGACY_SAMPLE_MAX_LENGTH = 20000;
+    /** 仪表盘读取明细上限，防止前端一次性渲染过多 DOM 卡顿 */
     private static final int DASHBOARD_ITEM_LIMIT = 2000;
+    /** 仪表盘"最近明细"展示条数 */
     private static final int DASHBOARD_RECENT_LIMIT = 12;
+    /** 仪表盘"热门评论"展示条数 */
     private static final int DASHBOARD_TOP_COMMENT_LIMIT = 8;
+    /** 追问回答最大长度，防止模型生成过长影响前端展示 */
     private static final int FEEDBACK_CHAT_ANSWER_MAX_LENGTH = 4000;
+    /** Python 脚本执行超时秒数(3分钟)，防止接口卡死时阻塞工作线程 */
     private static final long SCRIPT_TIMEOUT_SECONDS = 180;
-    // LLM 批量分类：单次最多提交 200 条，避免 prompt 过长或返回 JSON 超过模型输出限制
+    /**
+     * LLM 批量分类单次最多提交条数。
+     * 为什么是 200：batch=200 条时 prompt 约 15K token，DeepSeek 输出约 8K token，
+     * 总成本可控；超过 200 可能超过部分模型的输出长度限制，导致 JSON 截断。
+     */
     private static final int LLM_CLASSIFY_BATCH_SIZE = 200;
+    /** B站 BV 号正则：10 位字母数字组合，用于从用户输入中提取有效 BV 号 */
     private static final Pattern BVID_PATTERN = Pattern.compile("BV[0-9A-Za-z]{10}");
+    /** B站评论弹幕采集脚本路径（相对于项目根目录） */
     private static final Path FEEDBACK_SCRIPT_PATH = Path.of("scripts", "bilibili_feedback_fetcher.py");
+    /** 脚本采集结果输出目录（相对于项目根目录），后端固定写入，防止页面参数影响服务端写入位置 */
     private static final Path FEEDBACK_EXPORT_PATH = Path.of("export", "bilibili_feedback");
+    /**
+     * 关键词词典，用于仪表盘关键词热度统计。
+     * 不引入第三方分词库（jieba等），只用项目相关词汇做 MVP 统计，
+     * 避免为了一个图表统计新增依赖。
+     */
     private static final List<String> KEYWORD_DICTIONARY = List.of(
             "AI", "Agent", "Spring", "Spring AI", "LLM", "Java", "后端", "项目", "工具调用",
             "标题", "简介", "标签", "字幕", "文稿", "教程", "代码", "流程", "复盘",
             "评论", "弹幕", "节奏", "清楚", "看不懂", "干货", "实用", "下次", "资料"
     );
 
+    /** 创作任务数据访问层，用于校验任务存在性 */
     private final CreatorTaskMapper creatorTaskMapper;
+    /** 反馈数据访问层，负责评论弹幕明细、报告、指标的 CRUD */
     private final CreatorFeedbackMapper creatorFeedbackMapper;
+    /** LLM 调用入口，统一通过本服务内的 chat/chatStructured 方法调用模型 */
     private final LLMService llmService;
+    /** JSON 解析工具，用于解析脚本输出的 JSON 和 LLM 返回的 JSON */
     private final ObjectMapper objectMapper;
+    /** 事务模板，用于脚本采集场景的手动事务控制（脚本采集在事务外执行，但后续落库需要事务） */
     private final TransactionTemplate transactionTemplate;
-    // 证据检索拆成独立服务：本类已同时承担导入、分析、仪表盘、追问和脚本采集，把"选证据"交出去能让追问链路只负责编排。
+    /** 证据检索服务（独立拆分），负责从已导入明细中选出与追问相关的证据条目 */
     private final CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService;
+    /** 提示词模板服务，管理 feedback_analyze 和 feedback_chat 的 system/user 提示词 */
     private final PromptService promptService;
 
     public CreatorFeedbackService(CreatorTaskMapper creatorTaskMapper,
@@ -114,6 +163,17 @@ public class CreatorFeedbackService {
         this.promptService = promptService;
     }
 
+    /**
+     * 手动保存/粘贴评论弹幕样例。
+     * <p>
+     * 手动粘贴代表用户切换了数据来源，旧导入明细不能继续驱动仪表盘，
+     * 否则前端会展示过期分类结果。因此保存后将旧明细和指标软删除，清空重来。
+     *
+     * @param taskId 创作任务 ID
+     * @param request 含评论样例和弹幕样例的原始文本
+     * @return 保存后的完整反馈记录
+     * @throws ResponseStatusException 404 任务不存在
+     */
     @Transactional
     public CreatorFeedbackResponse saveFeedback(String taskId, CreatorFeedbackSaveRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
@@ -130,6 +190,13 @@ public class CreatorFeedbackService {
         return getFeedback(taskRecord.getTaskId());
     }
 
+    /**
+     * 查询任务的评论弹幕样例记录。
+     *
+     * @param taskId 创作任务 ID
+     * @return 反馈记录（含评论样例、弹幕样例、补充上下文）
+     * @throws ResponseStatusException 404 任务不存在或反馈样例未录入
+     */
     public CreatorFeedbackResponse getFeedback(String taskId) {
         getTaskRecord(taskId);
         CreatorFeedbackRecord record = creatorFeedbackMapper.findFeedbackByTaskId(taskId.trim())
@@ -137,6 +204,25 @@ public class CreatorFeedbackService {
         return toFeedbackResponse(record);
     }
 
+    /**
+     * AI 驱动的评论弹幕分析（LLM 分析入口）。
+     * <p>
+     * 核心流程：
+     * <ol>
+     *   <li>校验任务存在 + 评论弹幕样例已提交</li>
+     *   <li>构建 system + user prompt（含任务信息、自定义指导、分析焦点、额外要求）</li>
+     *   <li>调用 LLM 产出结构化 JSON 分析报告</li>
+     *   <li>解析并落库报告（含 feedbackSummary、hotTopics、sentimentSummary 等字段）</li>
+     *   <li>更新任务状态为 FEEDBACK_ANALYZED</li>
+     * </ol>
+     * <p>
+     * LLM 调用包裹在 LlmUsageContext 中，用于 Langfuse 追踪和 Token 用量统计。
+     *
+     * @param taskId 创作任务 ID
+     * @param request 分析请求，含自定义指导、分析焦点、额外要求等可选项
+     * @return 结构化分析报告
+     * @throws ResponseStatusException 404 任务不存在，400 反馈样例未提交
+     */
     @Transactional
     public CreatorFeedbackReportResponse analyze(String taskId, CreatorFeedbackAnalyzeRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
@@ -153,6 +239,13 @@ public class CreatorFeedbackService {
         return getReport(taskRecord.getTaskId());
     }
 
+    /**
+     * 查询任务的分析报告。
+     *
+     * @param taskId 创作任务 ID
+     * @return 结构化分析报告响应
+     * @throws ResponseStatusException 404 任务不存在或报告未生成
+     */
     public CreatorFeedbackReportResponse getReport(String taskId) {
         getTaskRecord(taskId);
         CreatorFeedbackReportRecord record = creatorFeedbackMapper.findReportByTaskId(taskId.trim())
@@ -160,6 +253,17 @@ public class CreatorFeedbackService {
         return toReportResponse(record);
     }
 
+    /**
+     * 从用户上传文件导入评论弹幕。
+     * <p>
+     * 支持 JSON 和 TXT 两种格式；JSON 是脚本输出的标准格式（含结构化字段和指标），
+     * TXT 是兼容入口（只能按区块做基础解析）。导入后自动触发 LLM 批量分类。
+     *
+     * @param taskId 创作任务 ID
+     * @param file 上传文件（MultipartFile），支持 .json 和 .txt
+     * @return 导入结果（含评论数、弹幕数、指标是否存在、警告信息）
+     * @throws ResponseStatusException 400 文件不符合要求，404 任务不存在
+     */
     @Transactional
     public CreatorFeedbackImportResponse importFeedback(String taskId, MultipartFile file) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
@@ -170,6 +274,18 @@ public class CreatorFeedbackService {
         return importFeedbackText(taskRecord, fileName, text, "从用户上传文件 " + fileName + " 导入", List.of());
     }
 
+    /**
+     * 从 B 站采集评论弹幕（BV 号驱动脚本采集）。
+     * <p>
+     * 执行流程：提取 BV 号 → 定位项目根目录和脚本路径 → 运行 Python 脚本
+     * → 读取脚本生成的 JSON → 在事务中导入明细。脚本执行不在事务内（脚本涉及网络 IO），
+     * 但后续落库通过 TransactionTemplate 手动控制事务边界。
+     *
+     * @param taskId 创作任务 ID
+     * @param request 采集请求，含 BV 输入、最大评论数、最大弹幕数等参数
+     * @return 采集结果（含生成文件列表、导入统计）
+     * @throws ResponseStatusException 400 BV号无效，502 脚本执行失败，504 脚本超时
+     */
     public CreatorFeedbackFetchResponse fetchFeedback(String taskId, CreatorFeedbackFetchRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         String bvid = extractBvid(request.bvInput());
@@ -205,6 +321,17 @@ public class CreatorFeedbackService {
         );
     }
 
+    /**
+     * 获取反馈仪表盘数据（复盘页核心数据源）。
+     * <p>
+     * 仪表盘从已落库明细恢复，不依赖上传请求的临时状态——这样页面刷新后也能稳定展示。
+     * 返回数据含：评论/弹幕计数、噪声统计、视频指标、分类分布、情绪分布、关键词热度、
+     * 弹幕时间线、热门评论列表、最近明细列表。
+     *
+     * @param taskId 创作任务 ID
+     * @return 仪表盘聚合数据
+     * @throws ResponseStatusException 404 任务不存在或明细未导入
+     */
     public CreatorFeedbackDashboardResponse getDashboard(String taskId) {
         getTaskRecord(taskId);
         // 仪表盘从已落库明细恢复，不依赖上传请求的临时状态，页面刷新后也能稳定展示。
@@ -251,6 +378,23 @@ public class CreatorFeedbackService {
         );
     }
 
+    /**
+     * 反馈追问对话（用户基于分析报告和明细向 AI 提问）。
+     * <p>
+     * 核心流程分为两个阶段，各自包裹在独立的 LlmUsageContext 中便于追踪：
+     * <ol>
+     *   <li><b>证据检索</b>：委托 CreatorFeedbackEvidenceRetrievalService 选出与问题相关的证据条目</li>
+     *   <li><b>LLM 回答</b>：将报告上下文 + 证据条目 + 用户问题拼接为 prompt，调用 LLM 生成回答</li>
+     * </ol>
+     * <p>
+     * 响应中携带检索模式（VECTOR/SQL/VECTOR_WITH_SQL_FALLBACK）、Token 用量、模型名称等，
+     * 用于前端展示和 Langfuse 可观测。
+     *
+     * @param taskId 创作任务 ID
+     * @param request 追问请求，含用户问题
+     * @return 追问回答 + 证据来源 + 用量统计
+     * @throws ResponseStatusException 400 报告未生成且无明细，404 任务不存在
+     */
     public CreatorFeedbackChatResponse chat(String taskId, CreatorFeedbackChatRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         CreatorFeedbackReportRecord reportRecord = creatorFeedbackMapper.findReportByTaskId(taskRecord.getTaskId())
@@ -294,6 +438,28 @@ public class CreatorFeedbackService {
         );
     }
 
+    /**
+     * 导入反馈文本的核心编排方法（上传文件和脚本采集共用）。
+     * <p>
+     * 处理流程：
+     * <ol>
+     *   <li>解析文本（JSON 或 TXT 格式）为明细列表</li>
+     *   <li>截断超出限制的明细条数</li>
+     *   <li>应用任务 ID 并触发 LLM 批量分类（失败自动降级关键词规则）</li>
+     *   <li>覆盖式导入：软删除旧明细 → 批量插入新明细 → 更新指标（如有）</li>
+     *   <li>回填旧分析入口的样例文本（兼容旧接口）</li>
+     * </ol>
+     * <p>
+     * 为什么每次导入都覆盖旧明细：为了让仪表盘、分析报告和手动粘贴入口看到同一批样例，
+     * 避免数据来源不一致导致的"仪表盘显示 200 条新明细，但旧分析入口仍用旧样例"这种断层。
+     *
+     * @param taskRecord 创作任务记录
+     * @param fileName 导入文件名（用于判断 JSON 还是 TXT 解析路径）
+     * @param text 原始文本内容
+     * @param sourceDescription 来源描述（用于旧分析入口的补充上下文）
+     * @param initialWarnings 初始警告（如文件截断提示）
+     * @return 导入结果统计
+     */
     private CreatorFeedbackImportResponse importFeedbackText(CreatorTaskRecord taskRecord,
                                                              String fileName,
                                                              String text,
@@ -331,6 +497,16 @@ public class CreatorFeedbackService {
         );
     }
 
+    /**
+     * 从用户输入中提取有效 BV 号。
+     * <p>
+     * 使用正则 Pattern 而非 startsWith 匹配——因为用户可能粘贴完整的视频链接
+     * 或在其前后带空格/描述性文字。
+     *
+     * @param value 用户原始输入（纯 BV 号或含 BV 号的文本）
+     * @return 提取到的 BV 号
+     * @throws ResponseStatusException 400 未识别到有效 BV 号
+     */
     private String extractBvid(String value) {
         if (TextUtil.isBlank(value)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "没有识别到有效 BV 号");
@@ -342,6 +518,20 @@ public class CreatorFeedbackService {
         return matcher.group();
     }
 
+    /**
+     * 定位项目根目录（用于找到 Python 采集脚本）。
+     * <p>
+     * 候选路径来源：
+     * <ol>
+     *   <li>user.dir（当前工作目录）</li>
+     *   <li>classpath 位置（从 JAR/WAR 部署路径反推）</li>
+     * </ol>
+     * 对每个候选路径向上遍历父目录，找到包含 scripts/bilibili_feedback_fetcher.py 的那一级作为项目根目录。
+     * 这种向上查找策略兼容 IDE 内部运行（working directory 在子模块）和 JAR 部署两种场景。
+     *
+     * @return 项目根目录 Path
+     * @throws ResponseStatusException 500 找不到脚本
+     */
     private Path resolveProjectRoot() {
         for (Path candidate : collectProjectRootCandidates()) {
             Path cursor = candidate;
@@ -390,6 +580,22 @@ public class CreatorFeedbackService {
         }
     }
 
+    /**
+     * 执行 B 站评论弹幕采集 Python 脚本。
+     * <p>
+     * 脚本执行设置总超时 180 秒——B 站 API 限速和网络波动可能导致单个 BV 采集耗时数分钟。
+     * 超时后强制销毁进程，防止僵尸进程占用后端线程。
+     * 退出码非 0 时读取 stderr 拼接的错误信息返回给前端，便于定位脚本层问题。
+     * <p>
+     * ProcessBuilder.directory 设为项目根目录，保证脚本内部的相对路径引用（如配置文件）正确解析。
+     *
+     * @param projectRoot 项目根目录
+     * @param scriptPath 脚本路径
+     * @param outputDir 输出目录
+     * @param bvid BV 号
+     * @param request 采集请求参数（最大评论数、弹幕数、格式）
+     * @throws ResponseStatusException 500 脚本不存在或 Python 不可用，502 脚本执行失败，504 超时
+     */
     private void runFeedbackScript(Path projectRoot,
                                    Path scriptPath,
                                    Path outputDir,
@@ -515,6 +721,18 @@ public class CreatorFeedbackService {
         }
     }
 
+    /**
+     * 解析导入的反馈文本，根据文件名和内容判断解析路径。
+     * <p>
+     * 判断逻辑：JSON 是脚本输出的稳定契约（含结构化字段和指标），TXT 是人工可读格式，
+     * 所以以文件扩展名和内容首字符作为分流依据——.json 结尾或以 "{" 开头走 JSON 解析，
+     * 否则走 TXT 兼容解析。
+     *
+     * @param fileName 文件名（用于判断扩展名）
+     * @param text 文件原始文本内容
+     * @param warnings 警告收集列表（原地追加）
+     * @return 解析后的反馈（含明细列表和可能的指标记录）
+     */
     private ImportedFeedback parseImportedFeedback(String fileName, String text, List<String> warnings) {
         // JSON 是脚本输出的稳定契约；TXT 只是人工可读格式，所以只能作为兼容入口处理。
         if (fileName.endsWith(".json") || text.trim().startsWith("{")) {
@@ -759,6 +977,19 @@ public class CreatorFeedbackService {
         return record;
     }
 
+    /**
+     * 为导入明细应用任务 ID 并执行分类（两阶段流水线）。
+     * <p>
+     * 第一阶段（规则前置）：过滤空语义和重复内容——这两个判断不需要 LLM，
+     * 规则即可 100% 准确判断。先过滤可以降低 LLM 待分类条数，节省 Token 成本。
+     * <p>
+     * 第二阶段（LLM 分类）：使用 LLM 批量分类剩余的"有效内容"，分批次提交避免
+     * prompt 过长。LLM 失败时自动降级为关键词规则分类，保证导入流程不中断——
+     * 宁可分类精度降低，也不让用户因为一次 LLM 故障就无法导入数据。
+     *
+     * @param taskId 创作任务 ID
+     * @param items 待分类明细列表（原地修改，每个 item 会被设置 taskId / noise / category / sentiment / reason）
+     */
     private void applyTaskIdAndClassification(String taskId, List<CreatorFeedbackItemRecord> items) {
         Map<String, Integer> seenContent = new LinkedHashMap<>();
         // 第一步：过滤空语义和重复内容（不需要 LLM，规则即可准确判断）
@@ -800,6 +1031,16 @@ public class CreatorFeedbackService {
         }
     }
 
+    /**
+     * 标准化文本用于去重比较。
+     * <p>
+     * 统一转小写并删去所有空白字符——"你好世界" 和 "你好 世界" 应被视为重复。
+     * 不考虑语义去重（如"真棒"和"太棒了"），因为去语义去重需要 Embedding 相似度计算，
+     * 开销大且容易误杀；留给 LLM 分类阶段的 reason 字段说明近似即可。
+     *
+     * @param content 原始内容文本
+     * @return 标准化后的去重键
+     */
     private String normalizeForDuplicate(String content) {
         if (content == null) {
             return "";
@@ -807,6 +1048,19 @@ public class CreatorFeedbackService {
         return content.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
     }
 
+    /**
+     * 判断内容是否为空语义（过短、纯标点、纯刷屏词）。
+     * <p>
+     * 空语义的判断规则基于 B 站评论的常见模式：
+     * <ul>
+     *   <li>去除标点和空白后长度小于 2（如单独的"。"、"6"、"哈"）</li>
+     *   <li>纯刷屏词/数字梗（ha/haha/hhh/233/666/www/哈啊等）</li>
+     * </ul>
+     * 这些内容对复盘分析无价值，标记为 EMPTY_MEANING 从仪表盘的有效统计中排除。
+     *
+     * @param content 原始内容文本
+     * @return true 表示为空语义内容
+     */
     private boolean isEmptyMeaning(String content) {
         String normalized = content.replaceAll("[\\p{P}\\s]+", "");
         if (normalized.length() < 2) {
@@ -935,7 +1189,13 @@ public class CreatorFeedbackService {
 
     /**
      * 关键词规则分类 —— LLM 分类失败时的降级方案。
+     * <p>
      * 保留原有关键词匹配逻辑，确保导入流程不会因为 LLM 不可用而中断。
+     * 为什么不做更复杂的规则（如正则嵌套、词典优先级）：规则越复杂越容易误判，
+     * B站评论区语义多变（反讽、玩梗、缩写），关键词匹配的精度天花板约 60%，
+     * 追加规则对精度提升有限，保留简单透明实现即可。真正的精度提升交给 LLM。
+     *
+     * @param item 待分类的明细记录（原地修改 category / sentiment / reason）
      */
     private void classifyItemByRules(CreatorFeedbackItemRecord item) {
         if ("DANMAKU".equals(item.getSourceType())) {
@@ -1081,6 +1341,16 @@ public class CreatorFeedbackService {
                 .toList();
     }
 
+    /**
+     * 构建关键词热度统计（仪表盘用）。
+     * <p>
+     * 基于 KEYWORD_DICTIONARY 词典做精确匹配计数，不引入第三方分词库（如 jieba）。
+     * 设计权衡：词典匹配的召回率低于分词 + TF-IDF，但实现简单、依赖少、结果可解释。
+     * 对 B站 技术教学视频的场景，词典中的 AI/LLM/Java/Spring 等词已经覆盖核心关注点。
+     *
+     * @param items 已分类的明细列表
+     * @return Top 12 关键词热度响应列表（按出现次数降序）
+     */
     private List<CreatorFeedbackKeywordResponse> buildKeywordStats(List<CreatorFeedbackItemRecord> items) {
         Map<String, Long> counts = new LinkedHashMap<>();
         for (CreatorFeedbackItemRecord item : items) {
@@ -1199,6 +1469,17 @@ public class CreatorFeedbackService {
         return record;
     }
 
+    /**
+     * 解析 LLM 返回的 JSON 并填充报告结构化字段。
+     * <p>
+     * 每个字段独立解析——某个字段缺失时不影响其他字段的解析。
+     * 阶段 4.12 新增字段（creatorFeedbackDilemma、audienceCoreConcern、misunderstandingSourceAnalysis、
+     * feedbackActionPlan）在旧版本 JSON 中不存在，LlmJsonUtil 会返回 null，不会把整份报告打成 RAW_ONLY。
+     * 只有顶层 JSON 解析失败（如 LLM 返回了纯文本而非 JSON）时，整个报告标记为 RAW_ONLY。
+     *
+     * @param record 报告记录（原地修改 parseStatus 和各业务字段）
+     * @param rawOutput LLM 原始输出文本
+     */
     private void fillParsedFields(CreatorFeedbackReportRecord record, String rawOutput) {
         try {
             JsonNode rootNode = objectMapper.readTree(LlmJsonUtil.extractJsonObject(rawOutput));
@@ -1220,10 +1501,28 @@ public class CreatorFeedbackService {
         }
     }
 
+    /**
+     * 构建反馈分析 System Prompt。
+     * <p>
+     * 从 PromptService 获取预定义的模板文本，模板内容定义了 LLM 的输出格式（JSON schema）
+     * 和分析维度（整体反馈、热点议题、情绪倾向、争议点、误解点、下期建议、互动建议等）。
+     */
     private String buildSystemPrompt() {
         return promptService.get("feedback_analyze.system");
     }
 
+    /**
+     * 构建反馈分析 User Prompt。
+     * <p>
+     * 模板变量包括：任务名称、任务 ID、自定义指导、分析焦点、额外要求、补充上下文、
+     * 评论样例、弹幕样例。所有可选字段统一用"未提供"占位，避免模板中存在 null 字符串。
+     * 评论弹幕样例在传参前已截断至 FEEDBACK_MAX_LENGTH，防止超长文本撑爆 prompt 窗口。
+     *
+     * @param taskRecord 创作任务记录
+     * @param feedbackRecord 反馈记录（含评论和弹幕样例）
+     * @param request 分析请求（含可选的指导字段）
+     * @return 渲染后的 User Prompt 文本
+     */
     private String buildUserPrompt(CreatorTaskRecord taskRecord,
                                    CreatorFeedbackRecord feedbackRecord,
                                    CreatorFeedbackAnalyzeRequest request) {
@@ -1239,10 +1538,28 @@ public class CreatorFeedbackService {
         ));
     }
 
+    /**
+     * 构建反馈追问 System Prompt。
+     * <p>
+     * 与反馈分析的 System Prompt 独立管理——追问需要对证据引用的格式要求
+     * 和对"基于证据回答"的行为约束，和分析的"产出结构化 JSON"是不同的指令集。
+     */
     private String buildChatSystemPrompt() {
         return promptService.get("feedback_chat.system");
     }
 
+    /**
+     * 构建反馈追问 User Prompt。
+     * <p>
+     * 将报告上下文 + 证据列表 + 用户问题拼接为一个 prompt。
+     * 报告和证据都可能较长，各自独立截断后再拼接，避免联合长度超出模型上下文窗口。
+     *
+     * @param taskRecord 创作任务记录
+     * @param reportRecord 分析报告（可能为 null，此时标注"仅有明细"）
+     * @param evidenceRecords 检索命中的证据条目
+     * @param question 用户追问
+     * @return 渲染后的 User Prompt 文本
+     */
     private String buildChatUserPrompt(CreatorTaskRecord taskRecord,
                                        CreatorFeedbackReportRecord reportRecord,
                                        List<CreatorFeedbackItemRecord> evidenceRecords,
@@ -1256,12 +1573,23 @@ public class CreatorFeedbackService {
         ));
     }
 
+    /**
+     * 构建反馈追问的报告上下文文本。
+     * <p>
+     * 将报告的所有解析字段拼接为一段包含"整体反馈、情绪倾向、创作者复盘困境、观众核心关注、
+     * 高频观点、争议点、误解点、误解来源分析、下一期建议、互动建议、反馈行动计划"的上下文。
+     * <p>
+     * 阶段 4.12 新增字段（如 creatorFeedbackDilemma、audienceCoreConcern 等）也一并喂给模型——
+     * 如果追问只读旧总结字段，"为什么这样反馈、下一步怎么改"这层升级就停留在报告展示层，
+     * 无法真正进入交互问答。
+     *
+     * @param reportRecord 分析报告记录，可能为 null
+     * @return 报告上下文文本（null 时返回提示文字）
+     */
     private String buildChatReportContext(CreatorFeedbackReportRecord reportRecord) {
         if (reportRecord == null) {
             return "当前任务还没有 LLM 反馈报告，只能基于已导入明细回答。";
         }
-        // 接入阶段 4.12 新增的高信号字段：如果追问继续只读旧总结字段，会让"为什么这样反馈、下一步怎么改"
-        // 这层升级停留在报告展示层，无法真正进入交互问答，所以把它们一并喂给追问模型。
         String reportText = """
                 整体反馈：%s
                 情绪倾向：%s
@@ -1290,6 +1618,15 @@ public class CreatorFeedbackService {
         return TextUtil.abbreviateWithSuffix(reportText, FEEDBACK_MAX_LENGTH, "\n[报告内容过长，已截断用于追问]");
     }
 
+    /**
+     * 构建反馈追问的证据上下文文本。
+     * <p>
+     * 每条证据格式化为"证据N（来源类型，分类，情绪，时间，点赞）：内容 / 分类原因"，
+     * 给 LLM 足够的元数据做引用和判断。内容截断至 500 字防止单条过长。
+     *
+     * @param evidenceRecords 检索命中的证据条目
+     * @return 格式化的证据列表文本
+     */
     private String buildChatEvidenceContext(List<CreatorFeedbackItemRecord> evidenceRecords) {
         if (evidenceRecords.isEmpty()) {
             return "没有命中可引用的评论或弹幕明细。";

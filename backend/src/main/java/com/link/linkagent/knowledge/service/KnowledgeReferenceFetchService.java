@@ -25,13 +25,21 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 「输入 BV → 调离线脚本采集 → 自动清洗导入」一键服务（阶段 5.1b 前端 BV 路径的后端实现）。
+ * 「输入 BV → 调离线脚本采集 → 自动清洗导入」一键服务 — Pipeline 的入口触发器。
  * <p>
- * 为什么不在后端用 Java 直连 B 站、而是 ProcessBuilder 调脚本：
- * - 项目约束禁止后端内置爬虫 / 后台采集，只允许「用户显式触发的单 BV 限量采集」；
- * - 让 {@code scripts/bilibili_reference_fetcher.py} 当唯一抓取内核，榜单（cron）与单 BV（本服务）共用同一份采集逻辑，
- *   既守住合规边界，又能在前端一键完成。
+ * <b>Pipeline 角色</b>：
+ * 这是案例库导入链路的<b>前端 BV 路径入口</b>——用户在页面上输入一个 BV 号，后端调 Python 脚本完成
+ * 「采集 → 生成导入 JSON → 清洗 → 落库 → 生成中块 → 质量打分」全流程。
  * 本服务只负责「跑脚本 + 读产物 + 转交」，清洗 / 去重 / 落库仍复用 {@link KnowledgeReferenceVideoService}，保持单一职责。
+ * <p>
+ * <b>为什么不在后端用 Java 直连 B 站、而是 ProcessBuilder 调脚本</b>：
+ * <ol>
+ *   <li>项目约束禁止后端内置爬虫 / 后台采集，只允许「用户显式触发的单 BV 限量采集」</li>
+ *   <li>让 {@code scripts/bilibili_reference_fetcher.py} 当唯一抓取内核，榜单（cron）与单 BV（本服务）共用同一份采集逻辑，
+ *       既守住合规边界，又能在前端一键完成</li>
+ *   <li>Python 生态有成熟的 B 站 API 库（bilibili-api），用脚本比 Java 重新实现更高效、更易维护</li>
+ * </ol>
+ * <p>
  * 实现刻意对齐反馈侧 CreatorFeedbackService 的脚本调用套路（同款超时、项目根探测、错误处理），降低理解成本。
  */
 @Service
@@ -39,18 +47,28 @@ public class KnowledgeReferenceFetchService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeReferenceFetchService.class);
 
-    /** 脚本总超时：B 站接口卡住时及时放手，避免长期占用后端工作线程。 */
+    /**
+     * 脚本总超时（秒）。180 秒 = 3 分钟：B 站单 BV API 通常 5~15 秒完成，3 分钟已是 generous 的上限。
+     * 超时后 destroyForcibly 强杀进程，避免长期占用后端工作线程。
+     */
     private static final long SCRIPT_TIMEOUT_SECONDS = 180;
 
-    /** 脚本产物大小上限，防止异常超大文件读爆内存。 */
+    /** 脚本产物大小上限（20MB），防止异常超大 JSON（如脚本出错输出日志而非 JSON）读爆内存。 */
     private static final long GENERATED_FILE_MAX_SIZE = 20L * 1024 * 1024;
 
-    /** 单 BV 采集的评论 / 弹幕条数上限，限量采集、对平台礼貌。 */
+    /**
+     * 单 BV 采集的评论 / 弹幕条数上限。
+     * 限量采集是对平台礼貌：50 条评论 + 300 条弹幕对案例分析足够，
+     * 更多数据应走离线脚本批量采集路径而非实时 API。
+     */
     private static final int FETCH_MAX_COMMENTS = 50;
     private static final int FETCH_MAX_DANMAKU = 300;
 
+    /** BV 号正则：BV 开头 + 10 位字母数字 */
     private static final Pattern BVID_PATTERN = Pattern.compile("BV[0-9A-Za-z]{10}");
+    /** 采集脚本相对路径 */
     private static final Path REFERENCE_SCRIPT_PATH = Path.of("scripts", "bilibili_reference_fetcher.py");
+    /** 脚本产物输出目录 */
     private static final Path REFERENCE_EXPORT_PATH = Path.of("export", "bilibili_reference");
 
     private final KnowledgeReferenceVideoService knowledgeReferenceVideoService;
@@ -64,7 +82,13 @@ public class KnowledgeReferenceFetchService {
 
     /**
      * 采集单个 BV 并导入案例库：调脚本 bv 模式生成导入 JSON，读出后转交给现有导入链路。
-     * 脚本运行不放进数据库事务（外部进程、耗时长），真正的落库事务在 importReferenceVideos 内部。
+     * <p>
+     * <b>执行流程</b>：提取 BV → 定位项目根和脚本 → 跑 Python 脚本（3 分钟超时）→ 读产物 JSON → 解析 → 转交导入。
+     * 脚本运行不放进数据库事务（外部进程、耗时长，事务跨进程无意义），真正的落库事务在
+     * {@link KnowledgeReferenceVideoService#importReferenceVideos} 内部管理。
+     *
+     * @param request 采集导入请求，含 bvInput（可能是纯 BV 号或含 BV 的 URL）和可选的 tier/category
+     * @return 导入结果，含导入/跳过计数
      */
     public ReferenceVideoImportResponse fetchAndImport(ReferenceVideoFetchImportRequest request) {
         String bvid = extractBvid(request.bvInput());
@@ -92,7 +116,16 @@ public class KnowledgeReferenceFetchService {
     }
 
     /**
-     * 向上逐级探测，找到包含采集脚本的项目根；兼容从不同工作目录或打包后启动的情况。
+     * 向上逐级探测，找到包含采集脚本的项目根目录。
+     * <p>
+     * <b>探测策略</b>：
+     * 从两个候选起点（user.dir 和 classpath 位置）分别向上遍历，直到找到包含
+     * {@code scripts/bilibili_reference_fetcher.py} 的目录。
+     * 这样做兼容从不同工作目录启动（IDE、jar 包、Docker）的情况——Python 脚本不在 classpath 内，
+     * 必须通过文件系统路径找到。
+     *
+     * @return 包含采集脚本的项目根目录
+     * @throws ResponseStatusException 如果任何路径都找不到采集脚本
      */
     private Path resolveProjectRoot() {
         for (Path candidate : collectProjectRootCandidates()) {
@@ -142,6 +175,16 @@ public class KnowledgeReferenceFetchService {
         }
     }
 
+    /**
+     * 执行 Python 采集脚本。
+     * <p>
+     * <b>命令行构造</b>：使用 {@code python scripts/bilibili_reference_fetcher.py bv <BV号>}
+     * 子命令模式，传递 max-comments/max-danmaku/source 等参数，tier/category 按需追加。
+     * 工作目录设为项目根，方便脚本内部引用相对路径资源。
+     * <p>
+     * <b>错误处理</b>：超时强杀、非 0 退出取 stderr、IOException 提示 python 命令不可用、
+     * InterruptedException 恢复中断标志后返回 503。
+     */
     private void runReferenceScript(Path projectRoot,
                                     Path scriptPath,
                                     Path outputDir,

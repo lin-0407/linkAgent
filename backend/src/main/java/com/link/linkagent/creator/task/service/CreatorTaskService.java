@@ -29,28 +29,67 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 创作任务业务入口。
- * 当前只处理任务和材料输入，让后续 Agent 分析阶段拥有稳定的数据来源。
+ * 创作任务业务入口 —— 管理创作任务的完整生命周期（创建/编辑/材料导入/删除/查询）。
+ * <p>
+ * 核心职责：为后续 Agent 分析阶段（发布前优化、评论分析等）提供稳定的任务和材料数据来源。
+ * 任务的状态推进由工作流服务（{@link com.link.linkagent.creator.workflow.service.CreatorWorkflowService}）
+ * 在确认环节驱动，本类只负责基础 CRUD 和输入校验。
+ * <p>
+ * 架构定位：位于领域服务层，只依赖 {@link CreatorTaskMapper} 做数据访问，
+ * 不调用 LLM/Agent 或记忆层——保证任务管理的纯粹性和低耦合。
+ * <p>
+ * 材料变更的回退策略（updateTask / importMaterial）：当任务材料或视频类型发生变化时，
+ * 自动将任务状态回退为 DRAFT。这样做是因为旧的分析建议（如发布前优化建议）是基于变更前的
+ * 材料输入生成的，材料变化后这些建议已经失效，用户应该重新走分析流程。
  */
 @Service
 public class CreatorTaskService {
 
+    // —— 业务常量：不可变配置，集中管理便于统一调整 ——
+
+    /** 匿名用户默认标识，与其他服务保持一致的 "default" */
     private static final String DEFAULT_USER_ID = "default";
+    /** 视频类型未指定时的默认值 */
     private static final String DEFAULT_VIDEO_TYPE = "未分类";
+    /** 任务列表默认返回条数，覆盖大多数场景的需求 */
     private static final int DEFAULT_LIMIT = 20;
+    /** 任务列表最大返回条数，防止前端一次性拉取过多数据导致性能问题 */
     private static final int MAX_LIMIT = 100;
+    /** 材料文件导入的最大体积：5MB。B 站字幕/文稿通常不会超过此大小 */
     private static final long MATERIAL_IMPORT_FILE_MAX_SIZE = 5 * 1024 * 1024L;
+    /** 标题草稿最大字符数（B 站标题长度上限 80 字，留足余量） */
     private static final int TITLE_DRAFT_MAX_LENGTH = 200;
+    /** 简介草稿最大字符数（B 站简介推荐 200-500 字，留足长文本空间） */
     private static final int DESCRIPTION_DRAFT_MAX_LENGTH = 2000;
+    /** 长材料（文稿/字幕）最大字符数，超过则截断拒绝 */
     private static final int LONG_MATERIAL_MAX_LENGTH = 20000;
+    /** 支持的材料文件导入格式：纯文本 / Markdown / SRT 字幕 / ASS 字幕 */
     private static final List<String> SUPPORTED_MATERIAL_FILE_SUFFIXES = List.of(".txt", ".md", ".srt", ".ass");
 
+    /** 创作任务数据访问，唯一的持久化依赖 */
     private final CreatorTaskMapper creatorTaskMapper;
 
     public CreatorTaskService(CreatorTaskMapper creatorTaskMapper) {
         this.creatorTaskMapper = creatorTaskMapper;
     }
 
+    /**
+     * 创建创作任务并初始化材料记录。
+     * <p>
+     * 创建流程：
+     * <ol>
+     *   <li>生成 taskId（UUID），规范化 userId/taskName/videoType</li>
+     *   <li>插入任务记录，初始状态为 DRAFT</li>
+     *   <li>将请求中的四类材料（标题草稿/简介草稿/文稿/字幕）分别 upsert 到材料表</li>
+     *   <li>返回完整的任务详情（含全部材料）</li>
+     * </ol>
+     * <p>
+     * 为什么 taskName 可以从 titleDraft 回退：创建任务时用户可能只提供了标题草稿，
+     * 自动截取前 40 字作为任务名，降低用户操作负担。
+     *
+     * @param request 创建请求，含任务名称、视频类型和可选的四类材料内容
+     * @return 创建后的完整任务响应
+     */
     @Transactional
     public CreatorTaskResponse createTask(CreatorTaskCreateRequest request) {
         String taskId = UUID.randomUUID().toString();
@@ -73,6 +112,20 @@ public class CreatorTaskService {
         return getTask(taskId);
     }
 
+    /**
+     * 更新创作任务的基本信息和材料内容。
+     * <p>
+     * 关键行为：当检测到材料内容发生变化或视频类型变更时，自动将任务状态回退为 DRAFT。
+     * 这样做是因为旧的分析建议（如发布前优化建议）基于变更前的输入生成，
+     * 继续保留 PRE_PUBLISH_ANALYZED 状态会误导用户认为建议仍然有效。
+     * <p>
+     * 为什么材料为空时做软删除而非报错：覆盖式编辑允许用户清空某类材料，
+     * 不想填的内容置空是合理操作，不应阻止。
+     *
+     * @param taskId  任务ID
+     * @param request 更新请求，含任务名称、视频类型和可选的四类材料
+     * @return 更新后的完整任务响应
+     */
     @Transactional
     public CreatorTaskResponse updateTask(String taskId, CreatorTaskUpdateRequest request) {
         String safeTaskId = normalizeTaskId(taskId);
@@ -93,6 +146,23 @@ public class CreatorTaskService {
         return getTask(taskRecord.getTaskId());
     }
 
+    /**
+     * 从文件导入材料内容（支持 TXT/MD/SRT/ASS 格式）。
+     * <p>
+     * 校验链：文件非空 → 大小不超过 5MB → 后缀名在支持列表中 → 内容非空（去 BOM 后）→
+     * 内容长度在类型对应的上限内。
+     * <p>
+     * 导入后自动修剪首尾空白并去除 UTF-8 BOM 头（部分编辑器会在文件开头写入 ﻿）。
+     * 与 updateTask 一致：若导入内容与当前内容不同，任务状态回退为 DRAFT。
+     * <p>
+     * 为什么用文件导入而非文本框粘贴：B 站创作者的实际素材通常以文件形式存在
+     * （SRT 字幕、Markdown 文稿），文件导入减少手动复制粘贴的格式丢失风险。
+     *
+     * @param taskId       任务ID
+     * @param materialType 材料类型（TITLE_DRAFT / DESCRIPTION_DRAFT / MANUSCRIPT / SUBTITLE）
+     * @param file         上传的文件
+     * @return 更新后的完整任务响应
+     */
     @Transactional
     public CreatorTaskResponse importMaterial(String taskId, String materialType, MultipartFile file) {
         String safeTaskId = normalizeTaskId(taskId);
@@ -116,6 +186,15 @@ public class CreatorTaskService {
         return getTask(taskRecord.getTaskId());
     }
 
+    /**
+     * 删除创作任务（逻辑删除：标记为 ARCHIVED，同时物理删除关联材料）。
+     * <p>
+     * 为什么用逻辑删除 + 物理删材料：任务本身保留为 ARCHIVED（方便后续恢复或排障追溯），
+     * 但材料内容可能很大（文稿/字幕文件），物理删除以释放存储空间。
+     * 任务删除后仍可通过 admin 接口查询归档任务，材料不可恢复。
+     *
+     * @param taskId 任务ID
+     */
     @Transactional
     public void deleteTask(String taskId) {
         String safeTaskId = normalizeTaskId(taskId);
@@ -128,6 +207,16 @@ public class CreatorTaskService {
         creatorTaskMapper.deleteMaterialsByTaskId(taskRecord.getTaskId());
     }
 
+    /**
+     * 查询任务列表（摘要视图），按更新时间倒序。
+     * <p>
+     * userId 参数作为未来多人隔离的兼容能力预留；当前单人工作台模式尽量不因
+     * userId 过滤导致查询结果为空。userId 为空或未提供时使用全局最近任务列表。
+     *
+     * @param userId 用户标识（可选，为多人支持预留）
+     * @param limit  返回条数上限，最大 {@link #MAX_LIMIT} 条
+     * @return 任务摘要列表（不含材料详情）
+     */
     public List<CreatorTaskSummaryResponse> listTasks(String userId, Integer limit) {
         int safeLimit = NumberUtil.limitOrDefault(limit, DEFAULT_LIMIT, MAX_LIMIT);
         List<CreatorTaskSummaryRecord> records = TextUtil.hasText(userId)
@@ -140,6 +229,12 @@ public class CreatorTaskService {
                 .toList();
     }
 
+    /**
+     * 查询单个任务的完整详情（含全部材料内容）。
+     *
+     * @param taskId 任务ID
+     * @return 完整的任务响应，含基本信息 + 四类材料
+     */
     public CreatorTaskResponse getTask(String taskId) {
         CreatorTaskRecord taskRecord = getTaskRecord(normalizeTaskId(taskId));
         List<CreatorMaterialResponse> materials = creatorTaskMapper
@@ -166,6 +261,10 @@ public class CreatorTaskService {
         refreshMaterial(taskId, CreatorMaterialType.SUBTITLE, request.subtitle());
     }
 
+    /**
+     * 刷新单类材料：内容为空时软删除（避免旧内容被 Agent 误读），
+     * 有内容时 upsert（同类型只保留最新一条，因为材料是任务维度的单值属性而非历史集合）。
+     */
     private void refreshMaterial(String taskId, CreatorMaterialType materialType, String content) {
         if (TextUtil.isBlank(content)) {
             // 覆盖式编辑允许用户清空某类材料，软删除能避免旧内容继续被 Agent 读取。
@@ -236,6 +335,10 @@ public class CreatorTaskService {
         return TextUtil.trimToDefault(userId, DEFAULT_USER_ID);
     }
 
+    /**
+     * 规范化任务名称：优先使用显式 taskName，其次从标题草稿截取前 40 字，
+     * 都为空时回退 "未命名创作任务"。
+     */
     private String normalizeTaskName(String taskName, String titleDraft) {
         if (TextUtil.hasText(taskName)) {
             return taskName.trim();
@@ -344,6 +447,12 @@ public class CreatorTaskService {
                 .orElse("");
     }
 
+    /**
+     * 逐类对比当前材料与请求材料，只要任一类内容发生变化即返回 true。
+     * <p>
+     * 使用 {@link EnumMap} 做当前材料的索引，将 O(N*M) 的嵌套循环降为 O(N+M)。
+     * normalizeMaterialContent 保证对比时忽略前后空白差异（trim 后对比）。
+     */
     private boolean isMaterialChanged(List<CreatorMaterialRecord> currentMaterials,
                                       CreatorTaskUpdateRequest request) {
         Map<CreatorMaterialType, String> currentMaterialMap = new EnumMap<>(CreatorMaterialType.class);

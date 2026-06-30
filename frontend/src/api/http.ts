@@ -131,15 +131,50 @@ export function del<T = void>(url: string, options?: RequestOptions): Promise<T>
 }
 
 /**
- * 文件上传。axios 检测 body 为 FormData 时自动设置
- * Content-Type: multipart/form-data; boundary=...，无需手动指定。
+ * 文件上传。使用原生 fetch API 而非 axios，因为 axios 的 AxiosHeaders 继承机制会使
+ * delete headers['Content-Type'] 仅删除本地覆盖值，axios.defaults.headers.post 的默认
+ * application/json 仍会透传出来，导致 FormData 被错误序列化为 JSON，后端无法解析。
+ * <p>
+ * fetch 对 FormData 无此问题：不设 Content-Type 时浏览器会自动附加
+ * multipart/form-data; boundary=...
+ * <p>
  * 超时默认 120s，适应大文件上传场景。
  */
-export function upload<T>(url: string, formData: FormData, options?: RequestOptions): Promise<T> {
-  return http.post(url, formData, {
-    ...options,
-    timeout: options?.timeout ?? 120_000,
-  }) as Promise<T>
+export async function upload<T>(url: string, formData: FormData, options?: RequestOptions): Promise<T> {
+  const baseUrl = http.defaults.baseURL || ''
+  const fullUrl = `${baseUrl}${url}`
+  const timeoutMs = options?.timeout ?? 120_000
+
+  // 用 fetch 而非 axios：fetch 对 FormData 天然友好，浏览器自动设置正确的 Content-Type
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetch(fullUrl, {
+      method: 'POST',
+      body: formData,
+      // 不设 Content-Type —— 浏览器自动设为 multipart/form-data; boundary=...
+      signal: controller.signal,
+    })
+
+    // 204 No Content → 返回 undefined
+    if (response.status === 204) return undefined as T
+
+    // 非 2xx → 抛统一 ApiError，保持与 axios 拦截器一致的错误处理
+    if (!response.ok) {
+      let detail: string | undefined
+      try {
+        const errorBody = await response.json()
+        detail = errorBody.message || errorBody.detail || errorBody.error
+      } catch { /* 错误体非 JSON 时忽略 */ }
+      throw new ApiError(response.status, detail || `HTTP ${response.status}`, detail)
+    }
+
+    // 成功 → 解析 JSON 响应
+    return (await response.json()) as T
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 /**

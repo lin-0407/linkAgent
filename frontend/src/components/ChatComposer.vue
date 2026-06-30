@@ -6,10 +6,12 @@ const inputMessage = defineModel<string>({ required: true })
 defineProps<{
   canSend: boolean
   isLoading: boolean
+  isStreaming?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   sendMessage: []
+  stopStreaming: []
 }>()
 
 const inputRef = ref<HTMLTextAreaElement | null>(null)
@@ -49,7 +51,15 @@ defineExpose({
       />
       <span>{{ inputMessage.trim().length }} 字 · Enter 发送，Shift + Enter 换行</span>
     </div>
-    <button type="submit" :disabled="!canSend">
+    <button
+      v-if="isStreaming"
+      type="button"
+      class="stop-btn"
+      @click="emit('stopStreaming')"
+    >
+      停止生成
+    </button>
+    <button v-else type="submit" :disabled="!canSend">
       {{ isLoading ? '思考中' : '发送' }}
     </button>
   </form>

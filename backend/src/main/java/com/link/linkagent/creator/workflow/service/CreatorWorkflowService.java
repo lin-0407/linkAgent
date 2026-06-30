@@ -54,32 +54,86 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 创作者工作流服务。
- * 这里把“业务消息流、步骤回放、发布前建议确认”放在创作任务上下文中，避免把通用 Agent 控制台直接暴露给 UP 主。
+ * 创作者工作流服务 —— 驱动「发布前优化」阶段的业务流程编排。
+ * <p>
+ * 核心职责：以工作流会话（Session）为单位，管理发布前优化阶段的状态机
+ * （上下文加载 → 等待用户输入 → 运行中 → 等待确认 → 已确认 / 失败 / 取消），
+ * 协调消息流、步骤回放、建议生成与确认、文稿草稿生成等子流程。
+ * <p>
+ * 架构定位：位于业务编排层，向上暴露给 Controller，向下编排多个领域服务
+ * （{@link PrePublishSuggestionService} 做 LLM/Agent 推理、
+ * {@link CreatorPreferenceService} 记录偏好反馈、
+ * {@link CreatorProfileService} 维护创作者画像）。
+ * 不直接暴露通用 Agent 控制台的 ReAct 循环给 UP 主，而是通过结构化的工作流阶段
+ * 引导用户逐步完成发布前优化。
+ * <p>
+ * 状态机设计：工作流会话的 {@link CreatorWorkflowStatus} 是单向推进的有限状态机，
+ * 每个状态只允许特定操作（如在 WAITING_CONFIRMATION 才能确认建议），
+ * 操作前通过 ensureXxx 方法做状态前置校验，拒绝状态不合法的调用。
  */
 @Service
 public class CreatorWorkflowService {
 
     private static final Logger log = LoggerFactory.getLogger(CreatorWorkflowService.class);
 
+    // —— 业务常量：不可变配置，集中管理便于统一调整 ——
+
+    /** 匿名用户默认标识，与 AgentExecutor 的 “default” 保持一致 */
     private static final String DEFAULT_USER_ID = "default";
+    /** 消息详情引用类型 —— 材料，前端通过(detailRefType, detailRefId)查询材料详情 */
     private static final String DETAIL_REF_TYPE_MATERIAL = "MATERIAL";
+
+    /** 消息详情引用类型 —— 建议，前端通过(detailRefType, detailRefId)查询建议卡片 */
     private static final String DETAIL_REF_TYPE_SUGGESTION = "SUGGESTION";
+    /**
+     * 工作流补充指导的最大字符数。
+     * 合并用户在消息流中的补充要求到 LLM 提示词时，截断上限防止提示词过长导致成本激增。
+     */
     private static final int WORKFLOW_GUIDANCE_MAX_LENGTH = 2000;
+    /**
+     * 错误消息展示的最大字符数。
+     * 截断后端异常堆栈中的长错误信息，防止前端展示过长文本影响体验。
+     */
     private static final int ERROR_MESSAGE_MAX_LENGTH = 480;
+    /**
+     * 完整文稿/字幕的最小字符数阈值。
+     * 当任务已有材料中 MANUSCRIPT 或 SUBTITLE 类型内容超过此长度时，
+     * 视为已有较完整文稿，拒绝重复生成文稿草稿（避免覆盖用户真实内容）。
+     */
     private static final int FULL_SCRIPT_MIN_LENGTH = 800;
+    /**
+     * 文稿草稿保存时的最大字符数。
+     * LLM 生成的长文稿截断到此上限后写入 material 表，
+     * 防止单条材料过大（MySQL 字段长度约束 + Token 成本考虑）。
+     */
     private static final int DRAFT_MATERIAL_MAX_LENGTH = 20000;
+    /**
+     * 文稿草稿生成时每条任务材料的最大字符数。
+     * 为控制 LLM 上下文窗口内的 Token 用量，每条材料截断到此长度后再拼入提示词。
+     */
     private static final int DRAFT_CONTEXT_MATERIAL_MAX_LENGTH = 4000;
 
+    // —— 注入依赖：每个依赖的业务含义 ——
+
+    /** 创作任务数据访问，用于读取任务和材料信息 */
     private final CreatorTaskMapper creatorTaskMapper;
+    /** 发布前优化建议数据访问，用于查询/确认建议记录 */
     private final CreatorSuggestionMapper creatorSuggestionMapper;
+    /** 工作流会话/消息/步骤数据访问 */
     private final CreatorWorkflowMapper creatorWorkflowMapper;
+    /** 发布前优化建议生成服务，封装 LLM/Agent 推理逻辑 */
     private final PrePublishSuggestionService prePublishSuggestionService;
+    /** 工作流事件发布器，通过 SSE 向前端实时推送状态变更 */
     private final CreatorWorkflowEventPublisher workflowEventPublisher;
+    /** LLM API 用量统计服务，用于按工作流步骤核算 Token 消耗 */
     private final LlmApiUsageService llmApiUsageService;
+    /** LLM 调用服务，文稿草稿生成等非 Agent 路径直接调用 */
     private final LLMService llmService;
+    /** 运行期设置服务，控制 Agent 模式开关等动态配置 */
     private final RuntimeSettingService runtimeSettingService;
+    /** 创作者偏好服务，记录用户采纳/拒绝建议的行为偏好 */
     private final CreatorPreferenceService creatorPreferenceService;
+    /** 创作者画像服务，维护和更新创作者个性化画像 */
     private final CreatorProfileService creatorProfileService;
 
     public CreatorWorkflowService(CreatorTaskMapper creatorTaskMapper,
@@ -104,6 +158,24 @@ public class CreatorWorkflowService {
         this.creatorProfileService = creatorProfileService;
     }
 
+    // ============================================================
+    // 公开 API：工作流会话生命周期管理
+    // ============================================================
+
+    /**
+     * 启动或恢复「发布前优化」工作流会话。
+     * <p>
+     * 状态机入口：根据请求参数决定新建会话还是恢复最近会话（shouldResumeLatest）。
+     * 创建新会话时，自动加载任务的所有材料到消息流中（上下文消息），
+     * 并将状态从 CONTEXT_LOADING 推进到 WAITING_USER_INPUT。
+     * <p>
+     * 为什么需要恢复机制：UNI-App 页面切换或断网重连场景下，用户期望回到上次的会话上下文，
+     * 而不是每次进入都从头开始——恢复最近会话可以保留消息历史和已生成的建议。
+     *
+     * @param taskId  创作任务ID，用于关联任务和加载材料
+     * @param request 启动请求，含 userId 和是否恢复最近会话的标志
+     * @return 工作流会话响应，含 sessionId、当前状态和全部消息
+     */
     @Transactional
     public CreatorWorkflowSessionResponse startPrePublishWorkflow(String taskId,
                                                                   CreatorWorkflowStartRequest request) {
@@ -113,6 +185,8 @@ public class CreatorWorkflowService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "创作任务缺少可加载材料");
         }
 
+        // 恢复逻辑：优先尝试复用最近一次发布前优化会话（页面刷新/重连场景），
+        // 找不到时才新建。这样用户回到页面后能继续之前的分析和消息流。
         if (shouldResumeLatest(request)) {
             return creatorWorkflowMapper.findLatestSession(
                             taskRecord.getTaskId(),
@@ -125,6 +199,15 @@ public class CreatorWorkflowService {
         return createPrePublishSession(taskRecord, materials, request);
     }
 
+    /**
+     * 查询工作流会话的完整消息流（按时间序）。
+     * <p>
+     * 先校验 taskId + sessionId 的关联性（防止跨任务访问），再按 sessionId 拉取消息列表。
+     *
+     * @param taskId    创作任务ID，用于权限校验
+     * @param sessionId 工作流会话ID
+     * @return 消息列表，按时间序排列
+     */
     public List<CreatorWorkflowMessageResponse> listMessages(String taskId, String sessionId) {
         CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
         return creatorWorkflowMapper.listMessages(sessionRecord.getSessionId())
@@ -133,6 +216,13 @@ public class CreatorWorkflowService {
                 .toList();
     }
 
+    /**
+     * 查询工作流会话的步骤执行记录（用于前端渲染进度时间轴）。
+     *
+     * @param taskId    创作任务ID，用于权限校验
+     * @param sessionId 工作流会话ID
+     * @return 步骤记录列表，按执行时间排序
+     */
     public List<CreatorWorkflowStepResponse> listSteps(String taskId, String sessionId) {
         CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
         return creatorWorkflowMapper.listSteps(sessionRecord.getSessionId())
@@ -141,11 +231,29 @@ public class CreatorWorkflowService {
                 .toList();
     }
 
+    /**
+     * 查询工作流会话的 LLM Token 用量统计（按模型、按步骤维度汇总）。
+     *
+     * @param taskId    创作任务ID，用于权限校验
+     * @param sessionId 工作流会话ID
+     * @return 用量统计响应，含各步骤的输入/输出 Token 明细
+     */
     public WorkflowUsageResponse getWorkflowUsage(String taskId, String sessionId) {
         CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
         return llmApiUsageService.summarizeWorkflowSession(sessionRecord.getTaskId(), sessionRecord.getSessionId());
     }
 
+    /**
+     * 订阅工作流会话的 SSE 事件流，用于前端实时接收消息/步骤/状态变更推送。
+     * <p>
+     * 订阅时先回放历史消息（MESSAGE_CREATED 事件）、当前会话状态（SESSION_STATUS 事件）
+     * 和心跳（HEARTBEAT 事件），确保前端在建立连接后立即获得完整上下文。
+     * 后续的状态变更由 {@link CreatorWorkflowEventPublisher} 通过 SSE 通道实时推动。
+     *
+     * @param taskId    创作任务ID，用于权限校验
+     * @param sessionId 工作流会话ID
+     * @return SSE 发射器，前端通过 EventSource API 消费事件流
+     */
     public SseEmitter subscribeEvents(String taskId, String sessionId) {
         CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
         SseEmitter emitter = workflowEventPublisher.register(sessionRecord.getSessionId());
@@ -185,6 +293,18 @@ public class CreatorWorkflowService {
         return emitter;
     }
 
+    /**
+     * 用户在交互台中发送文本消息。
+     * <p>
+     * 状态约束：只有 WAITING_USER_INPUT 和 FAILED 状态下才能追加消息
+     * （RUNNING/CONFIRMED/CANCELLED 状态拒绝追加，防止并发干扰）。
+     * 消息写入后自动将状态推进为 WAITING_USER_INPUT，等待用户下一轮操作。
+     *
+     * @param taskId    创作任务ID
+     * @param sessionId 工作流会话ID
+     * @param request   消息请求，含文本内容
+     * @return 创建的消息记录
+     */
     @Transactional
     public CreatorWorkflowMessageResponse sendMessage(String taskId,
                                                       String sessionId,
@@ -210,6 +330,32 @@ public class CreatorWorkflowService {
         return toMessageResponse(messageRecord);
     }
 
+    /**
+     * 执行发布前优化分析——工作流的核心编排方法。
+     * <p>
+     * 执行流程分为 5 个步骤（每个步骤都有前端可观测的 {@link CreatorWorkflowStepRecord}）：
+     * <ol>
+     *   <li><b>LOAD_CONTEXT</b>：读取任务材料，统计数量</li>
+     *   <li><b>AGENT_REASONING 或 LLM_CALL</b>：根据运行期开关选择 Agent 模式或直连 LLM 模式生成建议。
+     *        Agent 模式失败时自动回退到直连 LLM 模式（保证可用性优先）</li>
+     *   <li><b>SAVE_RESULT</b>：将结构化建议挂到消息流中（RESULT_CARD 类型消息）</li>
+     *   <li>状态推进：RUNNING → WAITING_CONFIRMATION，等待用户确认或修改</li>
+     *   <li>推送 RESULT_READY 事件，通知前端展示建议卡片</li>
+     * </ol>
+     * <p>
+     * 异常处理策略：任何步骤失败都会记录 FAILED 状态、向消息流注入错误消息、
+     * 将 session 状态设为 FAILED，然后重新抛出异常让上层统一处理。
+     * 这样做保证失败现场完整可追踪（步骤 + 消息 + 状态三者一致），同时不吞掉异常。
+     * <p>
+     * Agent 回退策略（步骤 2 内）：Agent 模式异常时先记录步骤失败，再新建一个
+     * LLM_CALL 步骤走直连 LLM 链路。回退的语义是"Agent 增强能力不可用时，
+     * 退化为基础 LLM 能力，保证用户至少能拿到可用的发布前建议"。
+     *
+     * @param taskId    创作任务ID
+     * @param sessionId 工作流会话ID
+     * @param request   分析请求，含创作指导、偏好、标题风格等参数
+     * @return 发布前优化建议响应，含结构化建议字段和解析状态
+     */
     public CreatorSuggestionResponse analyzePrePublishWorkflow(String taskId,
                                                                String sessionId,
                                                                PrePublishAnalyzeRequest request) {
@@ -225,6 +371,8 @@ public class CreatorWorkflowService {
         try {
             // 确保创作者画像存在（不存在时从历史偏好中 LLM 初始化）
             // 放在分析开始前，是为了让首次使用的用户也能体验到个性化建议
+            // 虽然 ensureProfile 可能触发 LLM 调用，但未将其包装为步骤——
+            // 因为画像初始化是一次性动作，不是每轮分析都需要展示给用户的操作
             creatorProfileService.ensureProfile(sessionRecord.getUserId());
 
             updateSessionStatus(
@@ -265,8 +413,12 @@ public class CreatorWorkflowService {
                     null
             );
 
+            // 合并工作流消息流中的用户补充要求到分析请求中，
+            // 让 Agent/LLM 能综合考虑"任务材料 + 用户后续补充"生成建议
             PrePublishAnalyzeRequest mergedRequest = mergeWorkflowGuidance(sessionRecord.getSessionId(), request);
             CreatorSuggestionResponse suggestionResponse;
+            // Agent 模式与直连 LLM 模式的切换由运行期设置控制，无需重启服务。
+            // 当 Agent 模式生产环境出现不稳定时，可快速关闭开关回退到直连 LLM。
             if (runtimeSettingService.isPrePublishAgentEnabled()) {
                 currentStep = startStep(
                         sessionRecord,
@@ -380,6 +532,32 @@ public class CreatorWorkflowService {
         }
     }
 
+    /**
+     * 根据已确认的创意方向生成可编辑的文稿草稿。
+     * <p>
+     * 前置校验：
+     * <ul>
+     *   <li>阶段必须是 PRE_PUBLISH</li>
+     *   <li>任务已有材料不为空</li>
+     *   <li>任务中尚未存在较完整文稿/字幕（内容长度 >= {@link #FULL_SCRIPT_MIN_LENGTH}）——
+     *       防止覆盖用户已有真实文稿</li>
+     * </ul>
+     * <p>
+     * 生成流程：
+     * <ol>
+     *   <li>LLM_CALL 步骤：拼接任务材料 + 用户消息流补充要求 + 额外要求，生成文稿草稿</li>
+     *   <li>SAVE_RESULT 步骤：将 AI 补全内容以 MANUSCRIPT 类型写入任务材料表</li>
+     *   <li>状态推进为 WAITING_USER_INPUT，用户可以继续补充修改要求或进入下一步</li>
+     * </ol>
+     * <p>
+     * 为什么先检查是否有完整文稿：文稿草稿是"从大纲/创意点子扩写口播稿"，如果用户已经上传
+     * 了完整的口播脚本或字幕，扩写不仅多余而且可能覆盖用户的真实创作内容。
+     *
+     * @param taskId    创作任务ID
+     * @param sessionId 工作流会话ID
+     * @param request   文稿草稿请求，含额外要求
+     * @return 文稿草稿响应，含生成的文稿全文和关联消息
+     */
     @Transactional
     public PrePublishDraftResponse generatePrePublishManuscriptDraft(String taskId,
                                                                      String sessionId,
@@ -504,6 +682,32 @@ public class CreatorWorkflowService {
         }
     }
 
+    /**
+     * 用户确认采用某条发布前优化建议。
+     * <p>
+     * 状态约束：
+     * <ul>
+     *   <li>仅 WAITING_CONFIRMATION 状态可确认（其他状态拒绝并返回 400）</li>
+     *   <li>若已确认过（CONFIRMED 状态）且 suggestionId 相同 → 幂等返回已有会话</li>
+     *   <li>若已确认过但 suggestionId 不同 → 拒绝，防止一个会话多次确认不同建议</li>
+     * </ul>
+     * <p>
+     * 确认后的副作用链：
+     * <ol>
+     *   <li>更新 session 状态为 CONFIRMED + 记录 confirmedResultId</li>
+     *   <li>推进任务状态为 PRE_PUBLISH_ANALYZED</li>
+     *   <li>记录用户采纳偏好到 {@link CreatorPreferenceService}（提取标题风格特征）</li>
+     *   <li>写入创作者画像事件流水（{@link CreatorProfileService}），触发画像更新检查</li>
+     * </ol>
+     * <p>
+     * 为什么偏好记录和画像事件的异常被吞掉：用户已明确采纳建议，偏好持久化是辅助功能，
+     * 不应因为画像/偏好服务异常就让主流程的确认操作失败返回错误。
+     *
+     * @param taskId    创作任务ID
+     * @param sessionId 工作流会话ID
+     * @param request   确认请求，含 suggestionId
+     * @return 更新后的工作流会话响应
+     */
     @Transactional
     public CreatorWorkflowSessionResponse confirmPrePublishSuggestion(String taskId,
                                                                       String sessionId,
@@ -589,6 +793,12 @@ public class CreatorWorkflowService {
         return toSessionResponse(updatedSession);
     }
 
+    /**
+     * 创建新的发布前工作流会话并加载上下文消息。
+     * <p>
+     * 初始化流程：新建 session（状态=CONTEXT_LOADING）→ 注入任务材料的上下文消息 →
+     * 状态推进为 WAITING_USER_INPUT。返回数据库中最新的 session 快照（含自增 ID）。
+     */
     private CreatorWorkflowSessionResponse createPrePublishSession(CreatorTaskRecord taskRecord,
                                                                    List<CreatorMaterialRecord> materials,
                                                                    CreatorWorkflowStartRequest request) {
@@ -612,6 +822,21 @@ public class CreatorWorkflowService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "工作流会话创建后读取失败"));
     }
 
+    /**
+     * 向新创建的发布前工作流会话注入上下文消息。
+     * <p>
+     * 消息注入顺序和角色设计：
+     * <ol>
+     *   <li>SYSTEM 消息："已进入发布前优化阶段"——阶段标识</li>
+     *   <li>SYSTEM 消息：显示任务名称</li>
+     *   <li>SYSTEM 消息 × N：每条材料生成一条 MATERIAL_SUMMARY 类型的摘要消息，
+     *       前端通过(detailRefType=MATERIAL, detailRefId=材料ID)查询原始内容</li>
+     *   <li>AGENT 消息：首句引导语，告知用户接下来的步骤</li>
+     * </ol>
+     * 为什么用 SYSTEM 角色传递材料摘要而不是直接嵌入原始内容：
+     * 消息流是面向用户的，原始材料可能很长（如字幕文件），直接展示会撑坏前端。
+     * 摘要消息（长度 + 类型）让用户知道加载了什么，需要时点击查看详情。
+     */
     private void appendPrePublishContextMessages(String sessionId,
                                                  CreatorTaskRecord taskRecord,
                                                  List<CreatorMaterialRecord> materials) {
@@ -654,6 +879,15 @@ public class CreatorWorkflowService {
         );
     }
 
+    /**
+     * 合并用户在消息流中主动输入的内容到分析请求的创作指导中。
+     * <p>
+     * 为什么需要合并而不是直接使用 request.customGuidance：用户在发送消息后触发分析时，
+     * 其追加要求已经存在于消息流中（通过 sendMessage API 写入），但这些消息不在分析请求体里。
+     * 此方法将它们提取出来合并到 customGuidance 中，保证 Agent/LLM 能看到用户的实时补充。
+     * <p>
+     * 合并后的指导内容截断到 {@link #WORKFLOW_GUIDANCE_MAX_LENGTH}，防止提示词过长。
+     */
     private PrePublishAnalyzeRequest mergeWorkflowGuidance(String sessionId, PrePublishAnalyzeRequest request) {
         PrePublishAnalyzeRequest safeRequest = request == null
                 ? new PrePublishAnalyzeRequest(null, null, null, null, null, null)
@@ -692,6 +926,14 @@ public class CreatorWorkflowService {
         );
     }
 
+    /**
+     * 在 LLM Token 用量追踪上下文中生成发布前优化建议。
+     * <p>
+     * 使用 try-with-resources 自动管理 {@link LlmUsageContext.UsageScope}，
+     * 确保无论成功/失败/异常，本步骤的 Token 消耗都会被正确归入工作流用量统计。
+     * agentMode=true 走 Agent 推理路径（结构化的多步 ReAct），
+     * agentMode=false 走直连 LLM 路径（一次 chat 调用返回建议 JSON）。
+     */
     private CreatorSuggestionResponse generateSuggestionInWorkflowStep(CreatorWorkflowSessionRecord sessionRecord,
                                                                        CreatorWorkflowStepRecord stepRecord,
                                                                        PrePublishAnalyzeRequest request,
@@ -712,6 +954,14 @@ public class CreatorWorkflowService {
         }
     }
 
+    /**
+     * 在 Token 用量追踪上下文中生成文稿草稿。
+     * <p>
+     * 通过 {@link LLMService#chat} 直连 LLM 生成文稿，不使用 Agent 路径——
+     * 文稿生成是单轮文本生成任务，不需要工具调用或多步推理。
+     * 生成后自动添加"【AI 可编辑文稿草稿】"前缀并截断到 {@link #DRAFT_MATERIAL_MAX_LENGTH}，
+     * 确保写入 materials 表的内容不会因过长导致存储或后续 Token 成本问题。
+     */
     private String generateManuscriptDraftInWorkflowStep(CreatorWorkflowSessionRecord sessionRecord,
                                                          CreatorWorkflowStepRecord stepRecord,
                                                          CreatorTaskRecord taskRecord,
@@ -829,6 +1079,12 @@ public class CreatorWorkflowService {
         return builder.toString();
     }
 
+    /**
+     * 追加消息到数据库并立即通过 SSE 发布给前端。
+     * <p>
+     * 合并写入+发布为一步是为了减少样板代码：所有需要让前端实时看到消息的地方
+     * （AGENT 进度提示、RESULT 建议卡片、ERROR 错误信息）都需要这两个动作绑定。
+     */
     private CreatorWorkflowMessageRecord appendAndPublishMessage(String taskId,
                                                                  String sessionId,
                                                                  CreatorWorkflowMessageRole role,
@@ -862,6 +1118,18 @@ public class CreatorWorkflowService {
                 .orElse(messageRecord);
     }
 
+    /**
+     * 在工作流中开始一个新步骤，写入数据库并向前端推送 STEP_STARTED 事件。
+     * <p>
+     * 步骤状态初始为 RUNNING，后续通过 {@link #completeStepSuccess} 或
+     * {@link #completeStepFailure} 更新为 SUCCESS / FAILED。
+     *
+     * @param sessionRecord 当前会话记录
+     * @param stepType      步骤类型（LOAD_CONTEXT / AGENT_REASONING / LLM_CALL / SAVE_RESULT / CONFIRM_RESULT）
+     * @param stepName      步骤名称，用于前端时间轴展示
+     * @param inputSummary  步骤输入摘要，描述本轮要做什么
+     * @return 步骤记录（含生成的 stepId），供后续完成/失败时引用
+     */
     private CreatorWorkflowStepRecord startStep(CreatorWorkflowSessionRecord sessionRecord,
                                                 CreatorWorkflowStepType stepType,
                                                 String stepName,
@@ -874,6 +1142,7 @@ public class CreatorWorkflowService {
         stepRecord.setStatus(CreatorWorkflowStepStatus.RUNNING.name());
         stepRecord.setInputSummary(inputSummary);
         creatorWorkflowMapper.insertStep(stepRecord);
+        // 步骤开始即推送——让前端立即看到时间轴上新增了一个正在执行的步骤节点
         publishEvent(
                 sessionRecord.getTaskId(),
                 sessionRecord.getSessionId(),
@@ -1011,7 +1280,9 @@ public class CreatorWorkflowService {
                 "outputSummary", stepRecord.getOutputSummary(),
                 "errorMessage", stepRecord.getErrorMessage()
         );
-        // 方案二：面向用户展示的字段，让前端不需要理解业务逻辑就能渲染时间轴
+        // 方案二：面向用户展示的字段，让前端不需要理解业务逻辑就能渲染时间轴。
+        // 前端直接取 userLabel 做节点标题、userDetail 做展开详情，无需判断 stepType
+        // 来映射业务含义。这样新增步骤类型时前端不需要改代码。
         // userLabel 用于时间轴节点标题，userDetail 用于节点展开后的详情
         stepPayload.put("userLabel", stepRecord.getStepName());
         if (TextUtil.hasText(stepRecord.getOutputSummary())) {
@@ -1049,6 +1320,11 @@ public class CreatorWorkflowService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "工作流会话不存在"));
     }
 
+    /**
+     * 状态前置校验：只有 WAITING_USER_INPUT 和 FAILED 状态允许用户追加消息。
+     * RUNNING 时追加会干扰正在执行的 Agent/LLM 流程；
+     * CONFIRMED/CANCELLED 时追加没有业务意义（会话已终结）。
+     */
     private void ensureCanAppendMessage(CreatorWorkflowSessionRecord sessionRecord) {
         if (CreatorWorkflowStatus.RUNNING.name().equals(sessionRecord.getStatus())
                 || CreatorWorkflowStatus.CONFIRMED.name().equals(sessionRecord.getStatus())
@@ -1057,6 +1333,15 @@ public class CreatorWorkflowService {
         }
     }
 
+    /**
+     * 状态前置校验：分析操作的状态守卫。
+     * <ul>
+     *   <li>非 PRE_PUBLISH 阶段 → 拒绝（其他阶段有自己的分析入口）</li>
+     *   <li>RUNNING → 拒绝（避免并发分析造成 LLM 调用和消息流混乱）</li>
+     *   <li>CONFIRMED → 拒绝（已确认的建议不应被新分析覆盖；这是用户已做出的决策）</li>
+     *   <li>CANCELLED → 拒绝（已取消的会话不可恢复）</li>
+     * </ul>
+     */
     private void ensureCanAnalyze(CreatorWorkflowSessionRecord sessionRecord) {
         if (!CreatorWorkflowStage.PRE_PUBLISH.name().equals(sessionRecord.getStage())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前工作流会话不是发布前优化阶段");
@@ -1072,6 +1357,11 @@ public class CreatorWorkflowService {
         }
     }
 
+    /**
+     * 状态前置校验：文稿生成操作的状态守卫。
+     * CONFIRMED 拒绝的语义：用户已确认建议后不应自动覆盖文稿，避免 AI 生成的草稿
+     * 覆盖用户手动修改的版本。如需重新生成，应先回到 DRAFT 态。
+     */
     private void ensureCanGeneratePrePublishDraft(CreatorWorkflowSessionRecord sessionRecord) {
         if (!CreatorWorkflowStage.PRE_PUBLISH.name().equals(sessionRecord.getStage())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前工作流会话不是发布前优化阶段");
@@ -1087,6 +1377,12 @@ public class CreatorWorkflowService {
         }
     }
 
+    /**
+     * 判断任务是否已有完整文稿/字幕。
+     * MANUSCRIPT 或 SUBTITLE 类型材料中，只要有一条内容长度 >=
+     * {@link #FULL_SCRIPT_MIN_LENGTH}（800 字），即视为已有较完整内容，
+     * 拒绝重复生成文稿草稿。
+     */
     private boolean hasFullScriptMaterial(List<CreatorMaterialRecord> materials) {
         return materials.stream()
                 .filter(material -> CreatorMaterialType.MANUSCRIPT.name().equals(material.getMaterialType())
