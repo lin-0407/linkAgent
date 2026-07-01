@@ -1,6 +1,8 @@
 package com.link.linkagent.llm;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.llm.usage.LlmApiUsageService;
+import com.link.linkagent.util.LlmJsonUtil;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,6 +10,7 @@ import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.ResponseFormat;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -63,6 +66,9 @@ public class LLMService {
     /** LLM API 用量统计服务：记录每次调用的耗时、Token 消耗、成功/失败状态，供成本分析和告警。 */
     private final LlmApiUsageService llmApiUsageService;
 
+    /** Jackson 反序列化器：结构化调用改为手动解析后，需要复用 Spring Boot 的全局 JSON 配置。 */
+    private final ObjectMapper objectMapper;
+
     /**
      * 多 Provider 回退链管理器：当主 ChatClient 调用失败时，按配置顺序依次尝试备用 Provider。
      * 允许为 null——单测或不需要回退链的场景不注入此依赖。
@@ -71,13 +77,14 @@ public class LLMService {
 
     /**
      * 无参构造器：供 Spring 框架代理（CGLIB）使用，不用于生产环境的实际注入。
-     * 所有字段置为 null/默认值，防止误用——真正的初始化由 {@link #LLMService(ChatClient.Builder, LlmCallGuardProperties, RuntimeSettingService, LlmApiUsageService, LlmProviderManager)} 完成。
+     * 所有字段置为 null/默认值，防止误用——真正的初始化由主构造器完成。
      */
     protected LLMService() {
         this.chatClient = null;
         this.guardProperties = new LlmCallGuardProperties();
         this.runtimeSettingService = null;
         this.llmApiUsageService = null;
+        this.objectMapper = new ObjectMapper();
         this.llmProviderManager = null;
     }
 
@@ -88,6 +95,7 @@ public class LLMService {
      * @param guardProperties Prompt 长度限制等成本保护配置
      * @param runtimeSettingService 运行期设置服务（成本保护开关可在线启停）
      * @param llmApiUsageService API 用量统计服务
+     * @param objectMapper Spring Boot 共享 JSON 解析器
      * @param llmProviderManager 多 Provider 回退链管理器，可为 null
      */
     @Autowired
@@ -95,11 +103,13 @@ public class LLMService {
                       LlmCallGuardProperties guardProperties,
                       RuntimeSettingService runtimeSettingService,
                       LlmApiUsageService llmApiUsageService,
+                      ObjectMapper objectMapper,
                       LlmProviderManager llmProviderManager) {
         this.chatClient = builder.build();
         this.guardProperties = guardProperties;
         this.runtimeSettingService = runtimeSettingService;
         this.llmApiUsageService = llmApiUsageService;
+        this.objectMapper = objectMapper;
         this.llmProviderManager = llmProviderManager;
     }
 
@@ -114,6 +124,7 @@ public class LLMService {
         this.guardProperties = guardProperties;
         this.runtimeSettingService = null;
         this.llmApiUsageService = null;
+        this.objectMapper = new ObjectMapper();
         this.llmProviderManager = null;
     }
 
@@ -295,10 +306,9 @@ public class LLMService {
      * 的选项细节，保持关注点分离。泛型设计使 ReAct 步（{@link com.link.linkagent.core.ReActStep}）
      * 与业务 JSON（如建议 record）共用同一出口，无需维护两套结构化调用逻辑。
      * <p>
-     * <b>Token 用量缺失说明</b>
-     * 当前 Spring AI 的 {@code .entity(type)} 调用不暴露 {@code ChatResponse} 的 usage 信息，
-     * 因此只能记录耗时，Token 消耗保持为 null——比伪造 0 更利于准确的成本核算（见
-     * {@link #recordStructuredTextSuccess} 的调用方式）。
+     * <b>Token 用量说明</b>
+     * 当前实现不再直接调用 {@code .entity(type)}，而是显式注入 schema 格式要求后拿完整的
+     * {@link ChatResponse}。这样既保留结构化解析的稳定性，也能从 metadata 中提取 usage。
      *
      * @param systemPrompt 系统提示词（由调用方构建，不含 schema 描述——schema 由 BeanOutputConverter 自动追加）
      * @param userMessage 用户输入文本
@@ -309,26 +319,53 @@ public class LLMService {
      *                          调用方应按场景兜底（如切文本 ReAct 或返回错误给用户）
      */
     public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> type) {
+        return chatStructuredWithUsage(systemPrompt, userMessage, type).entity();
+    }
+
+    /**
+     * 带用量统计的结构化对话。
+     * <p>
+     * 为什么不用 Spring AI 的 {@code .entity(type)}：它会把响应转换成目标对象后只返回 entity，
+     * 调用方拿不到 {@link ChatResponse} metadata，导致结构化 ReAct 的 token 用量无法追踪。
+     * 本方法显式使用 {@link BeanOutputConverter#getFormat()} 注入格式要求，再通过
+     * {@code .chatResponse()} 获取完整响应，最后由 Jackson 反序列化为目标类型。
+     *
+     * @param systemPrompt 系统提示词
+     * @param userMessage 用户输入文本
+     * @param type 目标结构化类型
+     * @param <T> 目标结构化类型泛型
+     * @return 结构化实体和本次调用 usage
+     */
+    public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, String userMessage, Class<T> type) {
         validatePromptLength(systemPrompt, userMessage);
         // 仅设 responseFormat；model 等默认项由 Spring AI 在模型层合并保留（见 5.4 文档 §9 运行期待确认）
         OpenAiChatOptions options = OpenAiChatOptions.builder()
                 .responseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null))
                 .build();
+        BeanOutputConverter<T> outputConverter = new BeanOutputConverter<>(type);
+        String structuredUserMessage = appendStructuredFormat(userMessage, outputConverter.getFormat());
         RuntimeException lastError = null;
         for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
             long startNanos = System.nanoTime();
             try {
-                T result = chatClient
+                ChatResponse chatResponse = chatClient
                         .prompt()
                         .system(systemPrompt)
-                        .user(userMessage)
+                        .user(structuredUserMessage)
                         .options(options)
                         .call()
-                        .entity(type);
+                        .chatResponse();
                 long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-                // entity(...) 不暴露 ChatResponse usage；这里仍记录一次真实调用和耗时，token 保持未知，避免伪造成本数据。
-                recordStructuredTextSuccess(elapsedMs);
-                return result;
+                LlmCallResult callResult = toCallResult(chatResponse, elapsedMs);
+                T entity = parseStructuredEntity(callResult.content(), type);
+                recordTextSuccess(callResult);
+                return new StructuredCallResult<>(
+                        entity,
+                        callResult.promptTokens(),
+                        callResult.completionTokens(),
+                        callResult.totalTokens(),
+                        elapsedMs
+                );
             } catch (RuntimeException ex) {
                 long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
                 recordTextFailure(elapsedMs, ex);
@@ -338,6 +375,31 @@ public class LLMService {
             }
         }
         throw lastError;
+    }
+
+    /**
+     * 给结构化调用追加 schema 格式约束。
+     * <p>
+     * 这里把格式约束拼到 user message 末尾，是为了保持调用方已有 system prompt 不变，同时确保 DeepSeek
+     * 明确看到 JSON 输出要求；如果用户消息为空，也会单独发送格式要求，避免缺少 json 关键字导致兼容接口拒绝。
+     */
+    private String appendStructuredFormat(String userMessage, String format) {
+        String normalizedUserMessage = userMessage == null ? "" : userMessage;
+        return normalizedUserMessage + "\n\n请严格按照以下 JSON schema 返回，不要输出 Markdown 或额外解释：\n" + format;
+    }
+
+    /**
+     * 将模型返回文本解析为目标结构化对象。
+     * <p>
+     * 解析失败统一转为 IllegalArgumentException，是为了复用结构化调用已有的重试机制；
+     * 对上层来说，字段不匹配和非 JSON 输出都属于“本次结构化响应不可用”。
+     */
+    private <T> T parseStructuredEntity(String content, Class<T> type) {
+        try {
+            return objectMapper.readValue(LlmJsonUtil.extractJsonObject(content), type);
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("结构化输出解析失败：" + exception.getMessage(), exception);
+        }
     }
 
     /**
@@ -524,20 +586,6 @@ public class LLMService {
                 result.totalTokens(),
                 result.elapsedMs()
         );
-    }
-
-    /**
-     * 记录结构化输出的成功调用（仅含耗时，Token 缺失）。
-     * <p>
-     * 当前 Spring AI 的 .entity(type) 不暴露 ChatResponse 对象，无法获取 Token 用量，
-     * 因此 Token 相关字段全部传 null——比伪造 0 更利于准确的成本核算。
-     * 待 Spring AI 后续版本完善结构化输出的 usage 暴露后，再补充 Token 记录。
-     */
-    private void recordStructuredTextSuccess(long elapsedMs) {
-        if (llmApiUsageService == null) {
-            return;
-        }
-        llmApiUsageService.recordTextSuccess(null, null, null, null, elapsedMs);
     }
 
     /**

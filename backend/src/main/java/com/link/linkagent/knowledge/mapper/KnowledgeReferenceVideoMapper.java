@@ -19,6 +19,7 @@ import org.apache.ibatis.annotations.Update;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 跨分区视频案例主表访问层。
@@ -335,6 +336,29 @@ public interface KnowledgeReferenceVideoMapper {
               AND is_deleted = 0
             """)
     long countByBvId(@Param("bvId") String bvId);
+
+    /**
+     * 按 video_id 查询单个参考案例（P1-1 竞品分析：通过参考案例触发竞品对比）。
+     * 复用 {@link #listReferenceVideos} 的 ReferenceVideoRecordMap，故 SELECT 列须与之保持一致。
+     * 与 {@link #listByVideoIds} 的区别：本方法只查一条并返回 Optional，
+     * 语义更清晰地表达"单条查找"的意图，且调用方不需要构造单元素列表。
+     *
+     * @param videoId 视频案例的唯一标识（UUID）
+     * @return 匹配的参考案例记录，不存在时返回 Optional.empty()
+     */
+    @Select("""
+            SELECT id, video_id, bv_id, tier, category, title, description, tags,
+                   view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
+                   highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
+                   source, publish_time_text,
+                   embedding_status, create_time, update_time
+            FROM creator_reference_video
+            WHERE video_id = #{videoId}
+              AND is_deleted = 0
+            LIMIT 1
+            """)
+    @ResultMap("ReferenceVideoRecordMap")
+    Optional<ReferenceVideoRecord> findByVideoId(@Param("videoId") String videoId);
 
     /**
      * 取出某分区下全部未删除视频的打分输入：父表 6 项热度 + 子表正/负向条数（5.1c 质量打分）。

@@ -19,6 +19,9 @@ import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.creator.task.model.CreatorMaterialType;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
+import com.link.linkagent.knowledge.mapper.KnowledgeReferenceVideoMapper;
+import com.link.linkagent.knowledge.model.ReferenceVideoItemRecord;
+import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
@@ -91,6 +94,8 @@ public class CreatorCompetitorService {
     private final CreatorFeedbackMapper creatorFeedbackMapper;
     /** 竞品数据的持久化映射器 */
     private final CreatorCompetitorMapper creatorCompetitorMapper;
+    /** 参考案例知识库映射器（P1-1：让竞品分析能读取 BV 导入管道采集的参考案例数据） */
+    private final KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper;
     /** LLM 调用服务（发起竞品分析的 AI 请求） */
     private final LLMService llmService;
     /** JSON 解析器（解析 LLM 结构化输出为 Java 对象） */
@@ -102,6 +107,7 @@ public class CreatorCompetitorService {
                                     CreatorSuggestionMapper creatorSuggestionMapper,
                                     CreatorFeedbackMapper creatorFeedbackMapper,
                                     CreatorCompetitorMapper creatorCompetitorMapper,
+                                    KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper,
                                     LLMService llmService,
                                     ObjectMapper objectMapper,
                                     PromptService promptService) {
@@ -109,6 +115,7 @@ public class CreatorCompetitorService {
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.creatorCompetitorMapper = creatorCompetitorMapper;
+        this.knowledgeReferenceVideoMapper = knowledgeReferenceVideoMapper;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
         this.promptService = promptService;
@@ -195,12 +202,85 @@ public class CreatorCompetitorService {
     @Transactional
     public CreatorCompetitorReportResponse analyze(String taskId, CreatorCompetitorAnalyzeRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        // 手动竞品分析要求先登记竞品视频（BV + 文稿），与参考案例路径不同
         CreatorCompetitorSampleRecord sampleRecord = creatorCompetitorMapper.findCompetitorVideoByTaskId(taskRecord.getTaskId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先提交同类型竞品视频"));
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
         CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId()).orElse(null);
         CreatorFeedbackReportRecord feedbackReportRecord = creatorFeedbackMapper.findReportByTaskId(taskRecord.getTaskId()).orElse(null);
+        return executeAnalyze(taskRecord, materials, suggestionRecord, feedbackReportRecord, sampleRecord, request);
+    }
 
+    /**
+     * 基于参考案例触发竞品分析（P1-1：参考案例体系融入竞品分析）。
+     * <p>
+     * 与 {@link #analyze} 的核心差异：
+     * <ul>
+     *   <li><b>数据来源不同</b>：本方法从参考案例知识库（creator_reference_video +
+     *       creator_reference_video_item）读取竞品数据，而非要求用户手动填写竞品文稿。</li>
+     *   <li><b>零录入体验</b>：参考案例已通过 BV 导入管道自动采集了标题、描述、
+     *       互动数据、亮点摘要和清洗后的优质评论/弹幕，用户只需在知识库页面点击
+     *       「对比我的创作」即可触发分析。</li>
+     *   <li><b>复用分析引擎</b>：将参考案例数据组装为虚拟的 {@link CreatorCompetitorSampleRecord}，
+     *       然后调用 {@link #executeAnalyze} 复用已有的 prompt 拼装、LLM 调用、
+     *       结果解析和持久化逻辑。</li>
+     * </ul>
+     * <p>
+     * 为什么参考案例的评论弹幕能充当"竞品样本"？
+     * 竞品分析的本质是回答"观众为什么喜欢这个视频"——评论和弹幕正是观众真实反应的直接证据。
+     * 将清洗后的优质评论弹幕拼入 prompt，AI 可以从观众视角分析竞品的吸引力和自身可改进点。
+     *
+     * @param taskId           关联的创作任务标识
+     * @param referenceVideoId 参考案例的视频唯一标识（UUID，非 BV 号）
+     * @param request          分析请求，含可选的 customGuidance、analysisFocus、extraRequirement
+     * @return 完整的竞品分析报告响应
+     */
+    @Transactional
+    public CreatorCompetitorReportResponse analyzeByReferenceVideo(
+            String taskId, String referenceVideoId, CreatorCompetitorAnalyzeRequest request) {
+        // 1. 校验任务存在
+        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        // 2. 从知识库读取参考案例视频数据
+        ReferenceVideoRecord refVideo = knowledgeReferenceVideoMapper.findByVideoId(referenceVideoId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "参考案例不存在"));
+        // 3. 读取优质评论/弹幕作为"竞品反馈/样本"（取 50 条高价值证据，避免上下文溢出）
+        List<ReferenceVideoItemRecord> refItems = knowledgeReferenceVideoMapper.listEvidenceItemsByVideoId(referenceVideoId, 50);
+        // 4. 加载任务的其他上下文数据（素材、选题建议、数据反馈）
+        List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
+        CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId()).orElse(null);
+        CreatorFeedbackReportRecord feedbackReportRecord = creatorFeedbackMapper.findReportByTaskId(taskRecord.getTaskId()).orElse(null);
+        // 5. 将参考案例数据组装为虚拟竞品样本记录，复用已有 prompt 拼装逻辑
+        CreatorCompetitorSampleRecord virtualSample = buildVirtualSampleFromReference(refVideo, refItems);
+        // 6. 执行分析（复用核心引擎）
+        return executeAnalyze(taskRecord, materials, suggestionRecord, feedbackReportRecord, virtualSample, request);
+    }
+
+    /**
+     * 核心分析执行引擎：组装 prompt → LLM 调用 → 解析 → 持久化 → 更新任务状态。
+     * <p>
+     * 抽取为独立方法供 {@link #analyze} 和 {@link #analyzeByReferenceVideo} 共用，
+     * 避免 LLM 调用、结果解析、报告持久化三块逻辑在两处重复维护。
+     * <p>
+     * 设计约束：本方法不关心 {@code sampleRecord} 的来源——它可以是用户手动登记的
+     * 竞品视频记录，也可以是从参考案例知识库组装出的虚拟记录。
+     * 只要字段（competitorBvId、competitorVideoName、competitorSamples 等）被正确填充，
+     * 下游的 {@link #buildUserPrompt} 就能无差别处理。
+     *
+     * @param taskRecord           已校验存在的创作任务
+     * @param materials            任务的创作素材列表
+     * @param suggestionRecord     选题建议（可为 null）
+     * @param feedbackReportRecord 数据反馈报告（可为 null）
+     * @param sampleRecord         竞品样本记录（实体或虚拟）
+     * @param request              分析请求参数
+     * @return 完整的竞品分析报告响应
+     */
+    private CreatorCompetitorReportResponse executeAnalyze(
+            CreatorTaskRecord taskRecord,
+            List<CreatorMaterialRecord> materials,
+            CreatorSuggestionRecord suggestionRecord,
+            CreatorFeedbackReportRecord feedbackReportRecord,
+            CreatorCompetitorSampleRecord sampleRecord,
+            CreatorCompetitorAnalyzeRequest request) {
         String rawOutput;
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "同类型视频竞品分析")) {
             rawOutput = llmService.chat(
@@ -578,5 +658,133 @@ public class CreatorCompetitorService {
                 record.getCreateTime(),
                 record.getUpdateTime()
         );
+    }
+
+    // ==================== P1-1：参考案例数据组装为竞品样本 ====================
+
+    /**
+     * 将参考案例数据组装为虚拟的竞品样本记录。
+     * <p>
+     * 参考案例已通过 BV 导入管道采集了标题、描述、互动数据、亮点摘要和清洗后的优质评论弹幕。
+     * 这里把它们映射为竞品分析所需的 {@link CreatorCompetitorSampleRecord} 字段，
+     * 让基于参考案例的竞品分析能复用与手动竞品完全相同的 prompt 拼装逻辑。
+     * <p>
+     * 为什么 comparatorBvId 用参考案例的 bvId？prompt 模板中 {competitorBvId} 变量
+     * 用于向 LLM 标识"正在分析哪个视频"，填写真实 BV 号能让 AI 的输出更具体。
+     *
+     * @param refVideo 参考案例父表记录
+     * @param refItems 参考案例的优质评论/弹幕列表
+     * @return 填充了竞品信息的虚拟样本记录（不持久化到 creator_competitor_sample 表）
+     */
+    private CreatorCompetitorSampleRecord buildVirtualSampleFromReference(
+            ReferenceVideoRecord refVideo, List<ReferenceVideoItemRecord> refItems) {
+        CreatorCompetitorSampleRecord sample = new CreatorCompetitorSampleRecord();
+        // BV 号作为竞品标识，未采集到时兜底为"未知"
+        sample.setCompetitorBvId(TextUtil.trimToDefault(refVideo.getBvId(), "未知"));
+        // 视频标题作为竞品名称，让 AI 能结合标题分析选题策略
+        sample.setCompetitorVideoName(TextUtil.trimToDefault(refVideo.getTitle(), "未知视频"));
+        // 参考案例的分区作为竞品分类，帮助 AI 理解赛道上下文
+        sample.setCategory(TextUtil.trimToNull(refVideo.getCategory()));
+        // 参考案例分析不预设对比维度，由 AI 根据视频内容和观众反馈自行判断
+        sample.setCompareDimension(null);
+        // 热度数据 + 质量分作为额外上下文，帮助 AI 判断竞品的市场表现
+        sample.setExtraContext(buildReferenceExtraContext(refVideo));
+        // 描述 + 亮点摘要 + 评论弹幕组装为"竞品样本"文本
+        sample.setCompetitorSamples(buildReferenceSamples(refVideo, refItems));
+        return sample;
+    }
+
+    /**
+     * 从参考案例的父表字段和子表条目组装竞品样本文本。
+     * <p>
+     * 组装策略按信息来源分三块：
+     * <ol>
+     *   <li><b>视频简介</b>：参考案例的 description 字段，帮助 AI 理解视频的内容定位</li>
+     *   <li><b>观众反馈亮点摘要</b>：导入管道在 5.1b 阶段通过 LLM 从评论弹幕中提取的
+     *       结构化摘要（highlight_summary），比原始评论更精炼</li>
+     *   <li><b>观众评论与弹幕精选</b>：清洗后的优质评论/弹幕原文，标注来源类型
+     *       （评论/弹幕）和情感倾向（👍正面/👎负面），让 AI 能从观众视角
+     *       理解竞品的吸引力和改进空间</li>
+     * </ol>
+     * <p>
+     * 样本文本最终会通过 {@link #buildUserPrompt} 注入到模板变量 {competitorSamples}，
+     * 并经过 {@link #SAMPLE_MAX_LENGTH} 截断（12000 字符），保证不溢出 LLM 上下文窗口。
+     *
+     * @param refVideo 参考案例父表记录
+     * @param refItems 参考案例的优质评论/弹幕列表
+     * @return 拼接后的竞品样本文本
+     */
+    private String buildReferenceSamples(ReferenceVideoRecord refVideo, List<ReferenceVideoItemRecord> refItems) {
+        StringBuilder sb = new StringBuilder();
+        // 第一块：视频简介 —— 帮助 AI 理解视频讲了什么
+        if (TextUtil.hasText(refVideo.getDescription())) {
+            sb.append("【视频简介】\n").append(refVideo.getDescription()).append("\n\n");
+        }
+        // 第二块：亮点摘要 —— LLM 已从评论弹幕中提取的结构化洞察
+        if (TextUtil.hasText(refVideo.getHighlightSummary())) {
+            sb.append("【观众反馈亮点摘要】\n").append(refVideo.getHighlightSummary()).append("\n\n");
+        }
+        // 第三块：原始评论/弹幕精选 —— 标注来源和情感，让 AI 能逐条理解观众反应
+        if (!refItems.isEmpty()) {
+            sb.append("【观众评论与弹幕精选】\n");
+            for (ReferenceVideoItemRecord item : refItems) {
+                // 标注来源类型（评论 vs 弹幕）和情感（👍 vs 👎），帮助 AI 区分不同渠道的观众反馈
+                String typeLabel = "COMMENT".equals(item.getSourceType()) ? "评论" : "弹幕";
+                String sentimentLabel = "POSITIVE".equals(item.getSentiment()) ? "👍" : "👎";
+                sb.append("[").append(typeLabel).append(" ").append(sentimentLabel).append("] ")
+                        .append(item.getContent()).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 从参考案例的热度数据和质量分构建额外上下文文本。
+     * <p>
+     * 这些数据帮助 AI 判断竞品的市场表现——播放量、点赞数、弹幕数等热度指标
+     * 直接反映视频的传播效果，质量分则综合了热度和互动质量。
+     * <p>
+     * 数值使用中文单位格式化（如"12.5万"而非"125000"），
+     * 因为 LLM 对中文数字的理解优于长数字串。
+     *
+     * @param refVideo 参考案例父表记录
+     * @return 格式化的额外上下文文本
+     */
+    private String buildReferenceExtraContext(ReferenceVideoRecord refVideo) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("来源：参考案例库（层级=").append(TextUtil.trimToDefault(refVideo.getTier(), "未知")).append("）");
+        if (refVideo.getViewCount() != null && refVideo.getViewCount() > 0) {
+            sb.append("，播放量=").append(formatLargeNumber(refVideo.getViewCount()));
+        }
+        if (refVideo.getLikeCount() != null && refVideo.getLikeCount() > 0) {
+            sb.append("，点赞=").append(formatLargeNumber(refVideo.getLikeCount()));
+        }
+        if (refVideo.getDanmakuCount() != null && refVideo.getDanmakuCount() > 0) {
+            sb.append("，弹幕=").append(formatLargeNumber(refVideo.getDanmakuCount()));
+        }
+        if (refVideo.getReplyCount() != null && refVideo.getReplyCount() > 0) {
+            sb.append("，评论=").append(formatLargeNumber(refVideo.getReplyCount()));
+        }
+        if (refVideo.getQualityScore() != null) {
+            sb.append("，质量分=").append(refVideo.getQualityScore());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 将大数值格式化为中文友好的展示形式。
+     * <p>
+     * 为什么用"万"而非纯数字：LLM 对"12.5万"的理解比对"125000"的理解更准确，
+     * 因为训练语料中中文数字带单位的表达更常见。且热度数据本身是估算值，
+     * 精确到个位反而误导 AI 以为这是精确统计。
+     *
+     * @param count 原始数值
+     * @return 格式化后的字符串（如 "12.5万"、"8900"）
+     */
+    private String formatLargeNumber(long count) {
+        if (count >= 10000) {
+            return String.format("%.1f万", count / 10000.0);
+        }
+        return String.valueOf(count);
     }
 }

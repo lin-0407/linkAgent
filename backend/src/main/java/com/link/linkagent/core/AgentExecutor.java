@@ -2,6 +2,10 @@ package com.link.linkagent.core;
 
 import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.llm.LlmCallResult;
+import com.link.linkagent.llm.StructuredCallResult;
+import com.link.linkagent.memory.AgentTraceMapper;
+import com.link.linkagent.memory.ConversationSessionMapper;
 import com.link.linkagent.memory.LongTermMemory;
 import com.link.linkagent.core.multi.MultiAgentOrchestrator;
 import com.link.linkagent.core.plan.PlanAndExecuteAgent;
@@ -12,6 +16,10 @@ import com.link.linkagent.memory.LongTermMemoryRecord;
 import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.memory.SummaryMemory;
+import com.link.linkagent.memory.model.AgentStepRecord;
+import com.link.linkagent.memory.model.AgentTraceRecord;
+import com.link.linkagent.memory.model.ConversationMessageRecord;
+import com.link.linkagent.memory.model.ConversationSessionRecord;
 import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
@@ -32,6 +40,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.time.LocalDateTime;
 
 /**
  * ReAct 主循环 —— 驱动 Thought → Action → Observation 迭代。
@@ -55,6 +65,8 @@ public class AgentExecutor {
     private final AgentExecutionModeRouter executionModeRouter;
     private final PlanAndExecuteAgent planAndExecuteAgent;
     private final MultiAgentOrchestrator multiAgentOrchestrator;
+    private final AgentTraceMapper agentTraceMapper;
+    private final ConversationSessionMapper conversationSessionMapper;
     /** 生产环境从运行期设置读取结构化开关；单测不注入设置服务时回退到构造器默认值。 */
     private final boolean structuredKernelDefaultEnabled;
 
@@ -106,10 +118,13 @@ public class AgentExecutor {
                          RuntimeSettingService runtimeSettingService,
                          AgentExecutionModeRouter executionModeRouter,
                          PlanAndExecuteAgent planAndExecuteAgent,
-                         MultiAgentOrchestrator multiAgentOrchestrator) {
+                         MultiAgentOrchestrator multiAgentOrchestrator,
+                         AgentTraceMapper agentTraceMapper,
+                         ConversationSessionMapper conversationSessionMapper) {
         this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
                 longTermMemoryExtractor, promptService, runtimeSettingService, true,
-                executionModeRouter, planAndExecuteAgent, multiAgentOrchestrator);
+                executionModeRouter, planAndExecuteAgent, multiAgentOrchestrator,
+                agentTraceMapper, conversationSessionMapper);
     }
 
     public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
@@ -119,7 +134,7 @@ public class AgentExecutor {
                          PromptService promptService) {
         this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
                 longTermMemoryExtractor, promptService, null, false,
-                new AgentExecutionModeRouter(), null, null);
+                new AgentExecutionModeRouter(), null, null, null, null);
     }
 
     AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
@@ -130,7 +145,7 @@ public class AgentExecutor {
                   boolean structuredKernelDefaultEnabled) {
         this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
                 longTermMemoryExtractor, promptService, null, structuredKernelDefaultEnabled,
-                new AgentExecutionModeRouter(), null, null);
+                new AgentExecutionModeRouter(), null, null, null, null);
     }
 
     private AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
@@ -142,7 +157,9 @@ public class AgentExecutor {
                           boolean structuredKernelDefaultEnabled,
                           AgentExecutionModeRouter executionModeRouter,
                           PlanAndExecuteAgent planAndExecuteAgent,
-                          MultiAgentOrchestrator multiAgentOrchestrator) {
+                          MultiAgentOrchestrator multiAgentOrchestrator,
+                          AgentTraceMapper agentTraceMapper,
+                          ConversationSessionMapper conversationSessionMapper) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
@@ -156,6 +173,8 @@ public class AgentExecutor {
         this.executionModeRouter = executionModeRouter == null ? new AgentExecutionModeRouter() : executionModeRouter;
         this.planAndExecuteAgent = planAndExecuteAgent;
         this.multiAgentOrchestrator = multiAgentOrchestrator;
+        this.agentTraceMapper = agentTraceMapper;
+        this.conversationSessionMapper = conversationSessionMapper;
     }
 
     /**
@@ -208,119 +227,142 @@ public class AgentExecutor {
     public AgentChatResponse run(String sessionId, String userId, String userMessage, AgentExecutionMode requestedMode) {
         String resolvedSessionId = resolveSessionId(sessionId);
         String resolvedUserId = resolveUserId(userId);
+        AgentPersistenceContext persistenceContext = startAgentTrace(resolvedSessionId, resolvedUserId, userMessage);
 
-        // 拼接记忆 + 用户输入作为对话起点，格式与系统提示词约定一致
-        StringBuilder conversation = new StringBuilder();
-        appendLongTermMemory(conversation, longTermMemory.listByUser(resolvedUserId, 10));
-        appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
-        List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
-        appendMemory(conversation, recentMessages);
-        conversation.append("Human:").append(userMessage).append("\n\n");
+        try {
+            // 拼接记忆 + 用户输入作为对话起点，格式与系统提示词约定一致
+            StringBuilder conversation = new StringBuilder();
+            appendLongTermMemory(conversation, longTermMemory.listByUser(resolvedUserId, 10));
+            appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
+            List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
+            appendMemory(conversation, recentMessages);
+            conversation.append("Human:").append(userMessage).append("\n\n");
 
-        AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
-        AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
-        if (plannedResult != null) {
-            if (TextUtil.hasText(plannedResult.finalAnswer())) {
-                persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer());
-            }
-            return toChatResponse(resolvedSessionId, plannedResult);
-        }
-
-        // === 结构化内核路径（阶段 5.4+） ===
-        // 每步通过 chatStructured 产出受 JSON Schema 约束的 ReActStep，省去正则解析，降低格式错误率。
-        // 开关由 RuntimeSettingService 控制，方便生产环境出现结构化输出异常时快速切回文本路兜底。
-        if (isStructuredKernelEnabled()) {
-            String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
-            List<AgentStep> structuredSteps = new ArrayList<>();
-            String structuredAnswer = runStructuredLoop(structuredSystemPrompt, conversation, structuredSteps);
-            if (structuredAnswer == null) {
-                // 迭代次数超限：不持久化任何记忆，因为未拿到有效答案，避免脏数据污染记忆层
-                return new AgentChatResponse(resolvedSessionId, null, "迭代次数超过上限", structuredSteps.size(), structuredSteps);
-            }
-            persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer);
-            return new AgentChatResponse(resolvedSessionId, structuredAnswer, null, structuredSteps.size(), structuredSteps);
-        }
-
-        // === 文本路径（原 ReAct 文本解析循环，逻辑保持不变） ===
-        // 走"自由文本 LLM 输出 → 正则提取 Thought/Action/Final Answer"的传统 ReAct 路径。
-        // 兜底保障：即使结构化内核关闭或异常，核心 Agent 循环仍可正常工作。
-        String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
-        String finalAnswer = null;
-        int iteration = 0;
-        List<AgentStep> steps = new ArrayList<>();
-        while(true){
-            iteration++;
-
-            // 迭代上限兜底：防止无限循环耗尽资源 (Token 费用 + CPU 时间 + 连接池)
-            // 超过 MAX_ITERATIONS 说明 LLM 无法在给定轮次内完成推理，可能是任务本身不可解或提示词有缺陷
-            if(iteration > MAX_ITERATIONS){
-                return new AgentChatResponse(resolvedSessionId, finalAnswer, "迭代次数超过上限", steps.size(), steps);
+            AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
+            AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
+            if (plannedResult != null) {
+                if (TextUtil.hasText(plannedResult.finalAnswer())) {
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer(), persistenceContext.totalTokens);
+                }
+                completeAgentTrace(persistenceContext, 1, plannedResult.finalAnswer(), plannedResult.totalSteps(), null);
+                return toChatResponse(resolvedSessionId, plannedResult);
             }
 
-            log.info("正在进行第{}轮ReAct迭代...", iteration);
-
-            // 1. 调用 LLM，传入完整对话历史（含之前所有轮次的 Thought/Action/Observation）
-            String llmAnswer = llmService.chat(systemPrompt, conversation.toString());
-            log.info("第{}轮LLM原始响应:\n{}", iteration, llmAnswer);
-
-            // 2. 优先检测 Final Answer（即使同时存在 Action 也以 Final Answer 为准）
-            // 设计权衡：Final Answer 优先级最高，因为它是推理链的最终产物。
-            // 如果 LLM 同时输出了 Action 和 Final Answer，取 Final Answer 直接终止——宁可损失一步工具调用，
-            // 也不让用户在答案已经生成的情况下继续等待多余的推理轮次。
-            finalAnswer = parseFinalAnswer(llmAnswer);
-            if (TextUtil.hasText(finalAnswer)) {
-                log.info("第{}轮解析结果: thought={}, finalAnswer={}", iteration, parseThought(llmAnswer), finalAnswer);
-                // Final Answer 拿到即持久化：短期记忆写 Human + AI 对、按需触发摘要、抽取长期记忆
-                persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, finalAnswer);
-                return new AgentChatResponse(resolvedSessionId, finalAnswer, null, steps.size(), steps);
+            // === 结构化内核路径（阶段 5.4+） ===
+            // 每步通过 chatStructured 产出受 JSON Schema 约束的 ReActStep，省去正则解析，降低格式错误率。
+            // 开关由 RuntimeSettingService 控制，方便生产环境出现结构化输出异常时快速切回文本路兜底。
+            if (isStructuredKernelEnabled()) {
+                String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
+                List<AgentStep> structuredSteps = new ArrayList<>();
+                String structuredAnswer = runStructuredLoop(structuredSystemPrompt, conversation, structuredSteps, persistenceContext);
+                if (structuredAnswer == null) {
+                    // 迭代次数超限：不持久化任何记忆，因为未拿到有效答案，避免脏数据污染记忆层
+                    completeAgentTrace(persistenceContext, 2, null, structuredSteps.size(), "迭代次数超过上限");
+                    return new AgentChatResponse(resolvedSessionId, null, "迭代次数超过上限", structuredSteps.size(), structuredSteps);
+                }
+                persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer, persistenceContext.totalTokens);
+                completeAgentTrace(persistenceContext, 1, structuredAnswer, structuredSteps.size(), null);
+                return new AgentChatResponse(resolvedSessionId, structuredAnswer, null, structuredSteps.size(), structuredSteps);
             }
 
-            // 3. 提取 Thought — 必须存在，否则说明 LLM 未按提示词格式输出，需要回喂错误让 LLM 重试
-            String thought = parseThought(llmAnswer);
-            if (TextUtil.isBlank(thought)) {
-                // LLM 既未给出 Final Answer 也未给出合法 Thought：本轮输出完全不可用
-                log.warn("第{}轮未解析到合法 Thought，rawResponse={}", iteration, llmAnswer);
-                // 记录本轮为格式错误步骤：Thought 设为错误描述，Observation 设为标准格式错误提示
-                // 这样在步骤追踪中可以看到 LLM 在哪一轮输出了不合法内容
-                steps.add(new AgentStep(iteration, "未解析到 Thought，模型可能没有按提示词要求输出。", null, null,
-                        FORMAT_ERROR_OBSERVATION));
-                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
-                continue;
+            // === 文本路径（原 ReAct 文本解析循环，逻辑保持不变） ===
+            // 走"自由文本 LLM 输出 → 正则提取 Thought/Action/Final Answer"的传统 ReAct 路径。
+            // 兜底保障：即使结构化内核关闭或异常，核心 Agent 循环仍可正常工作。
+            String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
+            String finalAnswer = null;
+            int iteration = 0;
+            List<AgentStep> steps = new ArrayList<>();
+            while(true){
+                iteration++;
+
+                // 迭代上限兜底：防止无限循环耗尽资源 (Token 费用 + CPU 时间 + 连接池)
+                // 超过 MAX_ITERATIONS 说明 LLM 无法在给定轮次内完成推理，可能是任务本身不可解或提示词有缺陷
+                if(iteration > MAX_ITERATIONS){
+                    completeAgentTrace(persistenceContext, 2, finalAnswer, steps.size(), "迭代次数超过上限");
+                    return new AgentChatResponse(resolvedSessionId, finalAnswer, "迭代次数超过上限", steps.size(), steps);
+                }
+
+                log.info("正在进行第{}轮ReAct迭代...", iteration);
+
+                // 1. 调用 LLM，传入完整对话历史（含之前所有轮次的 Thought/Action/Observation）
+                LlmCallResult llmResult = llmService.chatWithUsage(systemPrompt, conversation.toString());
+                String llmAnswer = llmResult.content();
+                int stepTokenCount = calculateTokenCount(llmResult.promptTokens(), llmResult.completionTokens(), llmResult.totalTokens());
+                persistenceContext.totalTokens += stepTokenCount;
+                log.info("第{}轮LLM原始响应:\n{}", iteration, llmAnswer);
+
+                // 2. 优先检测 Final Answer（即使同时存在 Action 也以 Final Answer 为准）
+                // 设计权衡：Final Answer 优先级最高，因为它是推理链的最终产物。
+                // 如果 LLM 同时输出了 Action 和 Final Answer，取 Final Answer 直接终止——宁可损失一步工具调用，
+                // 也不让用户在答案已经生成的情况下继续等待多余的推理轮次。
+                finalAnswer = parseFinalAnswer(llmAnswer);
+                if (TextUtil.hasText(finalAnswer)) {
+                    log.info("第{}轮解析结果: thought={}, finalAnswer={}", iteration, parseThought(llmAnswer), finalAnswer);
+                    // Final Answer 拿到即持久化：短期记忆写 Human + AI 对、按需触发摘要、抽取长期记忆
+                    persistAgentStep(persistenceContext, iteration, "final", finalAnswer, null, null, null, stepTokenCount);
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, finalAnswer, persistenceContext.totalTokens);
+                    completeAgentTrace(persistenceContext, 1, finalAnswer, steps.size(), null);
+                    return new AgentChatResponse(resolvedSessionId, finalAnswer, null, steps.size(), steps);
+                }
+
+                // 3. 提取 Thought — 必须存在，否则说明 LLM 未按提示词格式输出，需要回喂错误让 LLM 重试
+                String thought = parseThought(llmAnswer);
+                if (TextUtil.isBlank(thought)) {
+                    // LLM 既未给出 Final Answer 也未给出合法 Thought：本轮输出完全不可用
+                    log.warn("第{}轮未解析到合法 Thought，rawResponse={}", iteration, llmAnswer);
+                    // 记录本轮为格式错误步骤：Thought 设为错误描述，Observation 设为标准格式错误提示
+                    // 这样在步骤追踪中可以看到 LLM 在哪一轮输出了不合法内容
+                    steps.add(new AgentStep(iteration, "未解析到 Thought，模型可能没有按提示词要求输出。", null, null,
+                            FORMAT_ERROR_OBSERVATION));
+                    persistAgentStep(persistenceContext, iteration, "observation",
+                            "未解析到 Thought，模型可能没有按提示词要求输出。",
+                            null, null, FORMAT_ERROR_OBSERVATION, stepTokenCount);
+                    conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                    continue;
+                }
+                log.info("第{}轮解析到 Thought: {}", iteration, thought);
+
+                // 4. 尝试解析 Action + Action Input（两者必须同时存在才构成有效工具调用）
+                // 设计权衡：Action 和 Action Input 分开提取但要求同时非空。
+                // 若仅 Action 存在而 Action Input 缺失，说明 LLM 输出不完整——不应猜测参数默认值，
+                // 因为给工具的默认值很可能不是 LLM 的意图，执行后产生错误 Observation 会误导后续推理。
+                ToolCall action = parseAction(llmAnswer);
+                if(action == null){
+                    // LLM 既未给出 Final Answer 也未给出合法 Action：本轮输出不完整，回喂错误让 LLM 重试
+                    log.warn("第{}轮未解析到合法 Action，rawResponse={}", iteration, llmAnswer);
+                    steps.add(new AgentStep(iteration, thought, null, null, null));
+                    persistAgentStep(persistenceContext, iteration, "thought", thought, null, null, null, stepTokenCount);
+                    conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                    continue;
+                }
+                log.info("第{}轮解析到 Action: {}, Action Input: {}", iteration, action.name(), action.arguments());
+
+                // 5. 执行工具，得到 Observation
+                // ToolExecutor 内部负责校验工具是否存在、参数是否合法，并捕获工具执行异常返回错误 Observation
+                Observation observation = toolExecutor.execute(action);
+                log.info("第{}轮工具执行结果: tool={}, observation={}", iteration, observation.toolName(), observation.result());
+                steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
+                persistAgentStep(persistenceContext, iteration, "action", thought,
+                        action.name(), action.arguments(), observation.result(), stepTokenCount);
+
+                // 6. 将本轮的 Thought/Action/Observation 拼回对话，供下一轮 LLM 参考
+                // 拼接格式与系统提示词约定的输出模板一致，形成完整的 ReAct 对话轨迹。
+                // 注意：这里用原始 LLM 输出的 thought（而非正则提取后的），保留模型的完整思考语义。
+                conversation.append("AI:\n").append("Thought:")
+                        .append(thought).append("\n")
+                        .append("Action:").append(action.name()).append("\n")
+                        .append("Action Input:").append(action.arguments()).append("\n")
+                        .append("Observation:")
+                        .append(observation.toolName())
+                        .append(":")
+                        .append(observation.result())
+                        .append("\n\n");
             }
-            log.info("第{}轮解析到 Thought: {}", iteration, thought);
-
-            // 4. 尝试解析 Action + Action Input（两者必须同时存在才构成有效工具调用）
-            // 设计权衡：Action 和 Action Input 分开提取但要求同时非空。
-            // 若仅 Action 存在而 Action Input 缺失，说明 LLM 输出不完整——不应猜测参数默认值，
-            // 因为给工具的默认值很可能不是 LLM 的意图，执行后产生错误 Observation 会误导后续推理。
-            ToolCall action = parseAction(llmAnswer);
-            if(action == null){
-                // LLM 既未给出 Final Answer 也未给出合法 Action：本轮输出不完整，回喂错误让 LLM 重试
-                log.warn("第{}轮未解析到合法 Action，rawResponse={}", iteration, llmAnswer);
-                steps.add(new AgentStep(iteration, thought, null, null, null));
-                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
-                continue;
-            }
-            log.info("第{}轮解析到 Action: {}, Action Input: {}", iteration, action.name(), action.arguments());
-
-            // 5. 执行工具，得到 Observation
-            // ToolExecutor 内部负责校验工具是否存在、参数是否合法，并捕获工具执行异常返回错误 Observation
-            Observation observation = toolExecutor.execute(action);
-            log.info("第{}轮工具执行结果: tool={}, observation={}", iteration, observation.toolName(), observation.result());
-            steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
-
-            // 6. 将本轮的 Thought/Action/Observation 拼回对话，供下一轮 LLM 参考
-            // 拼接格式与系统提示词约定的输出模板一致，形成完整的 ReAct 对话轨迹。
-            // 注意：这里用原始 LLM 输出的 thought（而非正则提取后的），保留模型的完整思考语义。
-            conversation.append("AI:\n").append("Thought:")
-                    .append(thought).append("\n")
-                    .append("Action:").append(action.name()).append("\n")
-                    .append("Action Input:").append(action.arguments()).append("\n")
-                    .append("Observation:")
-                    .append(observation.toolName())
-                    .append(":")
-                    .append(observation.result())
-                    .append("\n\n");
+        } catch (RuntimeException exception) {
+            // 主流程异常仍交给上层统一处理；这里先回填失败终态，避免 trace 长期停留在运行中。
+            completeAgentTrace(persistenceContext, 2, null, persistenceContext.totalSteps,
+                    exception.getMessage() != null ? exception.getMessage() : "未知错误");
+            throw exception;
         }
     }
 
@@ -612,13 +654,184 @@ public class AgentExecutor {
      * 抽成方法是因为文本路与结构化路（5.4）在拿到 finalAnswer 后都要做同一件事，避免两处重复。
      */
     private void persistChatTurn(String sessionId, String userId, String userMessage, String finalAnswer) {
+        persistChatTurn(sessionId, userId, userMessage, finalAnswer, 0);
+    }
+
+    /**
+     * 持久化一次「面向用户的聊天回合」：写短期记忆、MySQL 消息表、按需摘要和长期记忆。
+     * <p>
+     * MySQL 消息表写入放在短期记忆之后，是因为短期记忆直接影响下一轮对话上下文；MySQL 是历史回放副本，
+     * 即使失败也不能阻断用户已经拿到的答案。
+     */
+    private void persistChatTurn(String sessionId, String userId, String userMessage, String finalAnswer, int assistantTokenCount) {
         shortTermMemory.append(sessionId, "Human", userMessage);
         shortTermMemory.append(sessionId, "AI", finalAnswer);
+        persistConversationMessages(sessionId, userMessage, finalAnswer, assistantTokenCount);
         if (summaryMemory.trySummarize(sessionId, shortTermMemory.getRecentMessages(sessionId))) {
             shortTermMemory.keepRecentMessages(sessionId, summaryMemory.getRetainedMessageCount());
             log.info("摘要记忆已达到触发条件，sessionId={}", sessionId);
         }
         tryExtractAndSaveLongTermMemory(userId, sessionId, userMessage, finalAnswer);
+    }
+
+    /**
+     * 创建 Agent 持久化上下文。
+     * <p>
+     * 这里同时 upsert 会话和插入 trace，是为了把“用户发起一次 Agent 请求”作为可回放的顶层事实记录下来。
+     * 所有异常只记录 warn，确保数据库短暂不可用时不影响主回答链路。
+     */
+    private AgentPersistenceContext startAgentTrace(String sessionId, String userId, String userMessage) {
+        String traceId = UUID.randomUUID().toString();
+        AgentPersistenceContext context = new AgentPersistenceContext(traceId, sessionId);
+        LocalDateTime now = LocalDateTime.now();
+        try {
+            if (conversationSessionMapper != null) {
+                ConversationSessionRecord sessionRecord = new ConversationSessionRecord();
+                sessionRecord.setSessionId(sessionId);
+                sessionRecord.setUserId(userId);
+                sessionRecord.setTitle(buildSessionTitle(userMessage));
+                sessionRecord.setStatus(0);
+                sessionRecord.setCreateTime(now);
+                sessionRecord.setUpdateTime(now);
+                conversationSessionMapper.upsertSession(sessionRecord);
+            }
+            if (agentTraceMapper != null) {
+                AgentTraceRecord traceRecord = new AgentTraceRecord();
+                traceRecord.setTraceId(traceId);
+                traceRecord.setSessionId(sessionId);
+                traceRecord.setUserInput(TextUtil.trimToDefault(userMessage, ""));
+                traceRecord.setStatus(0);
+                traceRecord.setTotalTokens(0);
+                traceRecord.setTotalSteps(0);
+                traceRecord.setStartTime(now);
+                traceRecord.setCreateTime(now);
+                agentTraceMapper.insertTrace(traceRecord);
+                context.enabled = true;
+            }
+        } catch (Exception exception) {
+            log.warn("Agent 执行链路初始化持久化失败，sessionId={}, traceId={}, error={}",
+                    sessionId, traceId, exception.getMessage());
+        }
+        return context;
+    }
+
+    /**
+     * 记录 Agent 单步执行快照。
+     * <p>
+     * 单步写入失败不会影响 ReAct 主循环，因为步骤表属于可观测旁路；主答案的正确性不依赖该表。
+     */
+    private void persistAgentStep(AgentPersistenceContext context, int stepIndex, String stepType, String content,
+                                  String toolName, String toolInput, String toolOutput, int tokenCount) {
+        if (context == null || !context.enabled || agentTraceMapper == null) {
+            return;
+        }
+        try {
+            AgentStepRecord stepRecord = new AgentStepRecord();
+            stepRecord.setTraceId(context.traceId);
+            stepRecord.setStepIndex(stepIndex);
+            stepRecord.setStepType(stepType);
+            stepRecord.setContent(TextUtil.trimToDefault(content, ""));
+            stepRecord.setToolName(TextUtil.trimToNull(toolName));
+            stepRecord.setToolInput(TextUtil.trimToNull(toolInput));
+            stepRecord.setToolOutput(TextUtil.trimToNull(toolOutput));
+            stepRecord.setTokenCount(tokenCount);
+            stepRecord.setCreateTime(LocalDateTime.now());
+            agentTraceMapper.insertStep(stepRecord);
+            context.totalSteps = Math.max(context.totalSteps, stepIndex);
+        } catch (Exception exception) {
+            log.warn("Agent 执行步骤持久化失败，traceId={}, stepIndex={}, error={}",
+                    context.traceId, stepIndex, exception.getMessage());
+        }
+    }
+
+    /**
+     * 回填 Agent trace 终态。
+     * <p>
+     * trace 以 status 表达结果，成功和失败都落在同一张表，后续排障可以按 sessionId 找完整执行历史。
+     */
+    private void completeAgentTrace(AgentPersistenceContext context, int status, String finalOutput,
+                                    int totalSteps, String errorMsg) {
+        if (context == null || !context.enabled || agentTraceMapper == null) {
+            return;
+        }
+        try {
+            AgentTraceRecord traceRecord = new AgentTraceRecord();
+            traceRecord.setTraceId(context.traceId);
+            traceRecord.setFinalOutput(finalOutput);
+            traceRecord.setStatus(status);
+            traceRecord.setTotalTokens(context.totalTokens);
+            traceRecord.setTotalSteps(Math.max(totalSteps, context.totalSteps));
+            traceRecord.setEndTime(LocalDateTime.now());
+            traceRecord.setErrorMsg(TextUtil.abbreviate(TextUtil.trimToNull(errorMsg), 512));
+            agentTraceMapper.completeTrace(traceRecord);
+        } catch (Exception exception) {
+            log.warn("Agent 执行链路终态持久化失败，traceId={}, error={}", context.traceId, exception.getMessage());
+        }
+    }
+
+    /**
+     * 将完整用户问答写入 MySQL 消息表。
+     * <p>
+     * 用户消息不记录 token，是因为当前 token 是模型调用级别数据，无法可靠拆分到用户消息本身。
+     */
+    private void persistConversationMessages(String sessionId, String userMessage, String finalAnswer, int assistantTokenCount) {
+        if (conversationSessionMapper == null) {
+            return;
+        }
+        try {
+            conversationSessionMapper.insertMessage(buildConversationMessage(sessionId, "user", userMessage, null, 0));
+            conversationSessionMapper.insertMessage(buildConversationMessage(sessionId, "assistant", finalAnswer, null, assistantTokenCount));
+        } catch (Exception exception) {
+            log.warn("会话消息持久化失败，sessionId={}, error={}", sessionId, exception.getMessage());
+        }
+    }
+
+    private ConversationMessageRecord buildConversationMessage(String sessionId, String role, String content,
+                                                               String toolName, int tokenCount) {
+        ConversationMessageRecord record = new ConversationMessageRecord();
+        record.setSessionId(sessionId);
+        record.setRole(role);
+        record.setContent(TextUtil.trimToDefault(content, ""));
+        record.setToolName(TextUtil.trimToNull(toolName));
+        record.setTokenCount(tokenCount);
+        record.setCreateTime(LocalDateTime.now());
+        return record;
+    }
+
+    private String buildSessionTitle(String userMessage) {
+        return TextUtil.preview(userMessage, 60, "新会话");
+    }
+
+    /**
+     * 计算本步 token。
+     * <p>
+     * 优先使用 totalTokens；供应商只返回 prompt/completion 时再相加，所有字段缺失时返回 0，避免空值写入整型列。
+     */
+    private int calculateTokenCount(Integer promptTokens, Integer completionTokens, Integer totalTokens) {
+        if (totalTokens != null && totalTokens > 0) {
+            return totalTokens;
+        }
+        int prompt = promptTokens == null ? 0 : Math.max(0, promptTokens);
+        int completion = completionTokens == null ? 0 : Math.max(0, completionTokens);
+        return prompt + completion;
+    }
+
+    /**
+     * Agent 持久化上下文。
+     * <p>
+     * 用小对象承载 traceId 和累计值，避免主循环中散落多个可变局部变量，让成功、失败和超限分支都能统一回填。
+     */
+    private static class AgentPersistenceContext {
+        private final String traceId;
+        private final String sessionId;
+        private boolean enabled;
+        private int totalTokens;
+        private int totalSteps;
+
+        private AgentPersistenceContext(String traceId, String sessionId) {
+            this.traceId = traceId;
+            this.sessionId = sessionId;
+        }
     }
 
     /**
@@ -634,6 +847,11 @@ public class AgentExecutor {
      * @return 最终答案；超出迭代上限返回 null（由调用方转成「迭代次数超过上限」错误）
      */
     private String runStructuredLoop(String systemPrompt, StringBuilder conversation, List<AgentStep> steps) {
+        return runStructuredLoop(systemPrompt, conversation, steps, null);
+    }
+
+    private String runStructuredLoop(String systemPrompt, StringBuilder conversation, List<AgentStep> steps,
+                                     AgentPersistenceContext persistenceContext) {
         int iteration = 0;
         while (true) {
             iteration++;
@@ -644,16 +862,28 @@ public class AgentExecutor {
             log.info("结构化 ReAct 第{}轮迭代...", iteration);
 
             // chatStructured 内部已对解析失败重试；仍失败则抛出（含成本 guard 的 400），交上层按错误返回，不在此吞掉
-            ReActStep step = llmService.chatStructured(systemPrompt, conversation.toString(), ReActStep.class);
+            StructuredCallResult<ReActStep> callResult =
+                    llmService.chatStructuredWithUsage(systemPrompt, conversation.toString(), ReActStep.class);
+            ReActStep step = callResult.entity();
+            int stepTokenCount = calculateTokenCount(
+                    callResult.promptTokens(),
+                    callResult.completionTokens(),
+                    callResult.totalTokens()
+            );
+            if (persistenceContext != null) {
+                persistenceContext.totalTokens += stepTokenCount;
+            }
 
             // 优先终止：拿到非空 finalAnswer 即结束
             if (step.isFinal()) {
+                persistAgentStep(persistenceContext, iteration, "final", step.finalAnswer(), null, null, null, stepTokenCount);
                 return step.finalAnswer();
             }
 
             // 合法 JSON 但既无 finalAnswer 也无 action：回喂错误让模型补齐（与文本路格式错误同构）
             if (!step.hasAction()) {
                 steps.add(new AgentStep(iteration, step.thought(), null, null, null));
+                persistAgentStep(persistenceContext, iteration, "thought", step.thought(), null, null, null, stepTokenCount);
                 conversation.append("ERROR：既未给出 finalAnswer 也未给出 action，请重试！\n\n");
                 continue;
             }
@@ -664,6 +894,8 @@ public class AgentExecutor {
             ToolCall action = new ToolCall(step.action(), step.actionInput() == null ? "" : step.actionInput());
             Observation observation = toolExecutor.execute(action);
             steps.add(new AgentStep(iteration, step.thought(), action.name(), action.arguments(), observation.result()));
+            persistAgentStep(persistenceContext, iteration, "action", step.thought(),
+                    action.name(), action.arguments(), observation.result(), stepTokenCount);
 
             // 对话历史用文本回灌即可（模型读历史无需结构化、省 token）；下一步仍按 schema 产出
             conversation.append("AI:\n").append("Thought:").append(TextUtil.trimToDefault(step.thought(), "")).append("\n")
@@ -801,9 +1033,11 @@ public class AgentExecutor {
      */
     public void runStreaming(String sessionId, String userId, String userMessage,
                              AgentExecutionMode requestedMode, SseEmitter emitter) {
+        AgentPersistenceContext persistenceContext = null;
         try {
             String resolvedSessionId = resolveSessionId(sessionId);
             String resolvedUserId = resolveUserId(userId);
+            persistenceContext = startAgentTrace(resolvedSessionId, resolvedUserId, userMessage);
 
             // 首先发送 session 事件，让前端知道当前会话 ID
             sendSseEvent(emitter, "session", Map.of("sessionId", resolvedSessionId));
@@ -821,12 +1055,13 @@ public class AgentExecutor {
             AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
             if (plannedResult != null) {
                 if (TextUtil.hasText(plannedResult.finalAnswer())) {
-                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer());
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer(), persistenceContext.totalTokens);
                     // 先发送步骤追踪，让前端看到规划模式的步骤详情
                     sendPlannedSteps(emitter, plannedResult);
                     // 流式发送最终答案
                     streamTokens(emitter, plannedResult.finalAnswer());
                 }
+                completeAgentTrace(persistenceContext, 1, plannedResult.finalAnswer(), plannedResult.totalSteps(), null);
                 sendSseEvent(emitter, "done", Map.of("sessionId", resolvedSessionId));
                 emitter.complete();
                 return;
@@ -836,22 +1071,26 @@ public class AgentExecutor {
             // 走结构化 schema 约束的 JSON ReAct，每步通过 chatStructured 产出 ReActStep
             if (isStructuredKernelEnabled()) {
                 String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
-                String structuredAnswer = runStructuredLoopStreaming(structuredSystemPrompt, conversation, emitter);
+                String structuredAnswer = runStructuredLoopStreaming(structuredSystemPrompt, conversation, emitter, persistenceContext);
                 if (structuredAnswer != null) {
-                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer);
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer, persistenceContext.totalTokens);
+                    completeAgentTrace(persistenceContext, 1, structuredAnswer, persistenceContext.totalSteps, null);
                     streamTokens(emitter, structuredAnswer);
                 } else {
                     // 迭代次数超限：不持久化，直接发送错误
+                    completeAgentTrace(persistenceContext, 2, null, persistenceContext.totalSteps, "迭代次数超过上限");
                     sendSseEvent(emitter, "error", Map.of("message", "迭代次数超过上限"));
                 }
             } else {
                 // === 文本路径（原 ReAct 文本解析循环） ===
                 String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
-                String textAnswer = runTextLoopStreaming(systemPrompt, conversation, userMessage, emitter);
+                String textAnswer = runTextLoopStreaming(systemPrompt, conversation, userMessage, emitter, persistenceContext);
                 if (textAnswer != null) {
-                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, textAnswer);
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, textAnswer, persistenceContext.totalTokens);
+                    completeAgentTrace(persistenceContext, 1, textAnswer, persistenceContext.totalSteps, null);
                     streamTokens(emitter, textAnswer);
                 } else {
+                    completeAgentTrace(persistenceContext, 2, null, persistenceContext.totalSteps, "迭代次数超过上限");
                     sendSseEvent(emitter, "error", Map.of("message", "迭代次数超过上限"));
                 }
             }
@@ -864,6 +1103,9 @@ public class AgentExecutor {
             try { emitter.complete(); } catch (Exception ignored) {}
         } catch (Exception e) {
             log.error("流式 Agent 执行失败", e);
+            completeAgentTrace(persistenceContext, 2, null,
+                    persistenceContext == null ? 0 : persistenceContext.totalSteps,
+                    e.getMessage() != null ? e.getMessage() : "未知错误");
             // 尝试向客户端发送错误事件
             try {
                 sendSseEvent(emitter, "error", Map.of("message", e.getMessage() != null ? e.getMessage() : "未知错误"));
@@ -883,7 +1125,8 @@ public class AgentExecutor {
      * @param emitter SSE 发射器
      * @return 最终答案文本；超出迭代上限返回 null
      */
-    private String runStructuredLoopStreaming(String systemPrompt, StringBuilder conversation, SseEmitter emitter)
+    private String runStructuredLoopStreaming(String systemPrompt, StringBuilder conversation, SseEmitter emitter,
+                                              AgentPersistenceContext persistenceContext)
             throws IOException {
         int iteration = 0;
         while (true) {
@@ -893,16 +1136,26 @@ public class AgentExecutor {
             }
             log.info("流式-结构化 ReAct 第{}轮迭代...", iteration);
 
-            ReActStep step = llmService.chatStructured(systemPrompt, conversation.toString(), ReActStep.class);
+            StructuredCallResult<ReActStep> callResult =
+                    llmService.chatStructuredWithUsage(systemPrompt, conversation.toString(), ReActStep.class);
+            ReActStep step = callResult.entity();
+            int stepTokenCount = calculateTokenCount(
+                    callResult.promptTokens(),
+                    callResult.completionTokens(),
+                    callResult.totalTokens()
+            );
+            persistenceContext.totalTokens += stepTokenCount;
 
             // 优先终止：拿到非空 finalAnswer 即结束（最终答案在外面流式发送）
             if (step.isFinal()) {
+                persistAgentStep(persistenceContext, iteration, "final", step.finalAnswer(), null, null, null, stepTokenCount);
                 return step.finalAnswer();
             }
 
             // 合法 JSON 但既无 finalAnswer 也无 action：回喂错误让模型补齐
             if (!step.hasAction()) {
                 sendSseEvent(emitter, "step", new AgentStep(iteration, step.thought(), null, null, null));
+                persistAgentStep(persistenceContext, iteration, "thought", step.thought(), null, null, null, stepTokenCount);
                 conversation.append("ERROR：既未给出 finalAnswer 也未给出 action，请重试！\n\n");
                 continue;
             }
@@ -912,6 +1165,8 @@ public class AgentExecutor {
             Observation observation = toolExecutor.execute(action);
             // 立即推送步骤事件给前端
             sendSseEvent(emitter, "step", new AgentStep(iteration, step.thought(), action.name(), action.arguments(), observation.result()));
+            persistAgentStep(persistenceContext, iteration, "action", step.thought(),
+                    action.name(), action.arguments(), observation.result(), stepTokenCount);
 
             // 对话历史回灌
             conversation.append("AI:\n").append("Thought:").append(TextUtil.trimToDefault(step.thought(), "")).append("\n")
@@ -932,7 +1187,7 @@ public class AgentExecutor {
      * @return 最终答案文本；超出迭代上限或格式持续异常时返回 null
      */
     private String runTextLoopStreaming(String systemPrompt, StringBuilder conversation, String userMessage,
-                                        SseEmitter emitter) throws IOException {
+                                        SseEmitter emitter, AgentPersistenceContext persistenceContext) throws IOException {
         int iteration = 0;
         while (true) {
             iteration++;
@@ -942,13 +1197,17 @@ public class AgentExecutor {
             log.info("流式-文本 ReAct 第{}轮迭代...", iteration);
 
             // 1. 调用 LLM，获得完整响应
-            String llmAnswer = llmService.chat(systemPrompt, conversation.toString());
+            LlmCallResult llmResult = llmService.chatWithUsage(systemPrompt, conversation.toString());
+            String llmAnswer = llmResult.content();
+            int stepTokenCount = calculateTokenCount(llmResult.promptTokens(), llmResult.completionTokens(), llmResult.totalTokens());
+            persistenceContext.totalTokens += stepTokenCount;
             log.info("流式-第{}轮LLM原始响应:\n{}", iteration, llmAnswer);
 
             // 2. 优先检测 Final Answer
             String finalAnswer = parseFinalAnswer(llmAnswer);
             if (TextUtil.hasText(finalAnswer)) {
                 log.info("流式-第{}轮解析到 finalAnswer", iteration);
+                persistAgentStep(persistenceContext, iteration, "final", finalAnswer, null, null, null, stepTokenCount);
                 return finalAnswer;
             }
 
@@ -959,6 +1218,9 @@ public class AgentExecutor {
                 AgentStep errorStep = new AgentStep(iteration, "未解析到 Thought，模型可能没有按提示词要求输出。",
                         null, null, FORMAT_ERROR_OBSERVATION);
                 sendSseEvent(emitter, "step", errorStep);
+                persistAgentStep(persistenceContext, iteration, "observation",
+                        "未解析到 Thought，模型可能没有按提示词要求输出。",
+                        null, null, FORMAT_ERROR_OBSERVATION, stepTokenCount);
                 conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
                 continue;
             }
@@ -968,6 +1230,7 @@ public class AgentExecutor {
             if (action == null) {
                 // 无合法 Action：回喂格式错误
                 sendSseEvent(emitter, "step", new AgentStep(iteration, thought, null, null, null));
+                persistAgentStep(persistenceContext, iteration, "thought", thought, null, null, null, stepTokenCount);
                 conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
                 continue;
             }
@@ -976,6 +1239,8 @@ public class AgentExecutor {
             Observation observation = toolExecutor.execute(action);
             // 立即推送步骤事件给前端
             sendSseEvent(emitter, "step", new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
+            persistAgentStep(persistenceContext, iteration, "action", thought,
+                    action.name(), action.arguments(), observation.result(), stepTokenCount);
 
             // 6. 将本轮的 Thought/Action/Observation 拼回对话
             conversation.append("AI:\n").append("Thought:").append(thought).append("\n")

@@ -919,6 +919,14 @@ export type CreatorCompetitorAnalyzePayload = {
   extraRequirement?: string
 }
 
+/** 基于参考案例的竞品分析请求（P1-1），对应后端 CompetitorAnalyzeByReferenceRequest */
+export type CompetitorAnalyzeByReferencePayload = {
+  referenceVideoId: string
+  customGuidance?: string
+  analysisFocus?: string
+  extraRequirement?: string
+}
+
 // ═══════════════════════════════════════════
 // 字段自动补全
 // ═══════════════════════════════════════════

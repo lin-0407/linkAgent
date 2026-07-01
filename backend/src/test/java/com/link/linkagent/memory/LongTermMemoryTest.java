@@ -38,6 +38,28 @@ class LongTermMemoryTest {
     }
 
     @Test
+    void shouldNormalizeMemoryKeyWhenFindingByKey() {
+        FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
+        LongTermMemory memory = new LongTermMemory(mapper);
+
+        memory.findByKey(" user-1 ", " user.preference.language ");
+
+        assertThat(mapper.findUserId).isEqualTo("user-1");
+        assertThat(mapper.findMemoryKey).isEqualTo("user.preference.example_language");
+    }
+
+    @Test
+    void shouldNormalizeMemoryKeyWhenDeleting() {
+        FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
+        LongTermMemory memory = new LongTermMemory(mapper);
+
+        memory.delete(" user-1 ", " user.preference.language ");
+
+        assertThat(mapper.deletedUserId).isEqualTo("user-1");
+        assertThat(mapper.deletedMemoryKey).isEqualTo("user.preference.example_language");
+    }
+
+    @Test
     void shouldNormalizeEmptySourceSessionId() {
         FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
         LongTermMemory memory = new LongTermMemory(mapper);
@@ -73,6 +95,10 @@ class LongTermMemoryTest {
         private LongTermMemoryRecord savedRecord;
         private String listUserId;
         private int listLimit;
+        private String findUserId;
+        private String findMemoryKey;
+        private String deletedUserId;
+        private String deletedMemoryKey;
 
         @Override
         public int upsert(LongTermMemoryRecord record) {
@@ -82,6 +108,8 @@ class LongTermMemoryTest {
 
         @Override
         public Optional<LongTermMemoryRecord> findByKey(String userId, String memoryKey) {
+            this.findUserId = userId;
+            this.findMemoryKey = memoryKey;
             return Optional.empty();
         }
 
@@ -90,6 +118,13 @@ class LongTermMemoryTest {
             this.listUserId = userId;
             this.listLimit = limit;
             return new ArrayList<>();
+        }
+
+        @Override
+        public int softDelete(String userId, String memoryKey) {
+            this.deletedUserId = userId;
+            this.deletedMemoryKey = memoryKey;
+            return 1;
         }
     }
 }

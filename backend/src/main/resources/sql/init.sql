@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS t_agent_step
 (
     id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     trace_id    VARCHAR(64) NOT NULL COMMENT '关联 t_agent_trace.trace_id',
-    step_index  INT         NOT NULL COMMENT '步骤序号，从 0 开始',
+    step_index  INT         NOT NULL COMMENT '步骤序号，从 1 开始',
     step_type   VARCHAR(16) NOT NULL COMMENT '步骤类型：thought / action / observation / final',
     content     LONGTEXT    NOT NULL COMMENT '步骤内容',
     tool_name   VARCHAR(64)          DEFAULT NULL COMMENT '调用的工具名（step_type=action 时有值）',

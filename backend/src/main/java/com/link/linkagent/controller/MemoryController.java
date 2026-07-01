@@ -12,6 +12,7 @@ import jakarta.validation.constraints.Size;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -49,6 +50,7 @@ import java.util.List;
  *   <li>{@code POST /api/memory/long-term} — 保存长期记忆</li>
  *   <li>{@code GET  /api/memory/long-term/users/{userId}} — 列出用户的长期记忆</li>
  *   <li>{@code GET  /api/memory/long-term/users/{userId}/keys/{memoryKey}} — 按 key 精确查询</li>
+ *   <li>{@code DELETE /api/memory/long-term/users/{userId}/keys/{memoryKey}} — 软删除长期记忆</li>
  * </ul>
  *
  * @see LongTermMemory MySQL 长期记忆存储服务
@@ -165,6 +167,26 @@ public class MemoryController {
         return longTermMemory.findByKey(userId, memoryKey)
                 .map(this::toResponse)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "长期记忆不存在"));
+    }
+
+    /**
+     * 删除一条长期记忆。
+     * <p>
+     * 这里使用软删除而不是物理删除，是为了保留后续问题排查和记忆误抽取复盘的可能性；
+     * 查询端统一按 is_deleted=0 过滤，用户视角仍表现为已删除。
+     */
+    @DeleteMapping("/long-term/users/{userId}/keys/{memoryKey}")
+    public void deleteLongTermMemory(
+            @PathVariable
+            @NotBlank(message = "用户ID不能为空")
+            @Size(max = 64, message = "用户ID长度不能超过64个字符")
+            String userId,
+
+            @PathVariable
+            @NotBlank(message = "记忆键不能为空")
+            @Size(max = 128, message = "记忆键长度不能超过128个字符")
+            String memoryKey) {
+        longTermMemory.delete(userId, memoryKey);
     }
 
     /**

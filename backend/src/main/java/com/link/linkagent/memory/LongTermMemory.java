@@ -38,12 +38,16 @@ public class LongTermMemory {
     }
 
     public Optional<LongTermMemoryRecord> findByKey(String userId, String memoryKey) {
-        return longTermMemoryMapper.findByKey(userId.trim(), memoryKey.trim());
+        return longTermMemoryMapper.findByKey(userId.trim(), normalizeMemoryKey(memoryKey));
     }
 
     public List<LongTermMemoryRecord> listByUser(String userId, Integer limit) {
         int safeLimit = NumberUtil.limitOrDefault(limit, DEFAULT_LIMIT, MAX_LIMIT);
         return longTermMemoryMapper.listByUser(userId.trim(), safeLimit);
+    }
+
+    public void delete(String userId, String memoryKey) {
+        longTermMemoryMapper.softDelete(userId.trim(), normalizeMemoryKey(memoryKey));
     }
 
     private String normalizeMemoryKey(String memoryKey) {

@@ -6,6 +6,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 import java.util.Optional;
@@ -68,4 +69,14 @@ public interface LongTermMemoryMapper {
             @Result(column = "update_time", property = "updateTime")
     })
     List<LongTermMemoryRecord> listByUser(@Param("userId") String userId, @Param("limit") int limit);
+
+    @Update("""
+            UPDATE t_long_term_memory
+            SET is_deleted = 1,
+                update_time = CURRENT_TIMESTAMP
+            WHERE user_id = #{userId}
+              AND memory_key = #{memoryKey}
+              AND is_deleted = 0
+            """)
+    int softDelete(@Param("userId") String userId, @Param("memoryKey") String memoryKey);
 }

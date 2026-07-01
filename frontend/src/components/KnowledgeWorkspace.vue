@@ -17,6 +17,7 @@ import {
   KNOWLEDGE_VIDEO_CONTEXT_EVENT,
   type KnowledgeVideoContextEventDetail,
 } from '@/utils/agentContext'
+import CompetitorAnalysisModal from '@/components/creator/CompetitorAnalysisModal.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -75,6 +76,14 @@ const searchError = ref('')
 const searchResult = ref<ReferenceVideoTopicSearchResult | null>(null)
 const analysisLoadingVideoId = ref('')
 const analysisError = ref('')
+
+// P1-1 竞品分析弹窗状态：记录用户点击了哪个竞品卡片，传给 CompetitorAnalysisModal
+const competitorTarget = ref<ReferenceVideo | null>(null)
+
+/** 打开竞品分析弹窗 */
+function openCompetitorAnalysis(video: ReferenceVideo) {
+  competitorTarget.value = video
+}
 
 // 当前批次主题命中按 videoId 分组。卡片只展示和自己有关的主题，避免把未展示候选的主题解释混进来。
 const matchedTopicsByVideoId = computed(() => {
@@ -536,6 +545,14 @@ onMounted(() => {
             <span class="knowledge-card-action">
               {{ analysisLoadingVideoId === hit.videoId ? '加载案例内容...' : '用这个案例帮我改当前视频' }}
             </span>
+            <!-- P1-1：竞品卡片上的「对比我的创作」入口，用 @click.stop 防止触发外层按钮的 openVideoAnalysis -->
+            <span
+              v-if="hit.tier === 'COMPETITOR'"
+              class="knowledge-card-action knowledge-card-competitor-action"
+              @click.stop="openCompetitorAnalysis(hit)"
+            >
+              对比我的创作
+            </span>
           </button>
         </div>
         <div v-if="searchResult.cards.length" class="knowledge-pager">
@@ -605,6 +622,15 @@ onMounted(() => {
             <span>弹幕 {{ formatCount(item.danmakuCount) }}</span>
             <span>评论 {{ formatCount(item.replyCount) }}</span>
           </div>
+          <!-- P1-1：竞品卡片上的「对比我的创作」按钮 -->
+          <button
+            v-if="item.tier === 'COMPETITOR'"
+            type="button"
+            class="creator-secondary-action knowledge-card-competitor-btn"
+            @click="openCompetitorAnalysis(item)"
+          >
+            对比我的创作
+          </button>
         </article>
       </div>
 
@@ -628,6 +654,12 @@ onMounted(() => {
         </button>
       </div>
     </section>
+
+    <!-- P1-1 竞品分析弹窗 -->
+    <CompetitorAnalysisModal
+      :target="competitorTarget"
+      @close="competitorTarget = null"
+    />
   </div>
 </template>
 
@@ -856,6 +888,19 @@ onMounted(() => {
   border-radius: var(--r-sm);
   font-size: 13px;
   font-weight: var(--fw-semibold);
+}
+
+/* P1-1 竞品卡片上的「对比我的创作」按钮/操作条，与「用这个案例帮我改」并列但用不同底色区分语义 */
+.knowledge-card-competitor-action {
+  color: var(--success, #1e8e3e);
+  background: var(--success-tint, #e6f4ea);
+  border-color: var(--success-ring, #ceead6);
+  cursor: pointer;
+}
+
+/* 列表卡片（article）中的竞品按钮，留出上边距与统计数据隔开 */
+.knowledge-card-competitor-btn {
+  margin-top: var(--s2);
 }
 
 /* 召回证据（5.2c-2）：small-to-big 命中的观众原话，以「引用条」形式展示，正/负向用左色条区分。

@@ -13,6 +13,7 @@
 
 | 文档 | 路径 |
 |---|---|
+| P0+P1 修复技术方案 | `/docs/develop/P0+P1修复技术方案.md` |
 | 阶段 5.4 - Agent 内核结构化输出升级 | `/docs/develop/阶段5.4-Agent内核结构化输出升级.md` |
 | Agent 内核结构化输出升级说明 | `/docs/reference/Agent内核结构化输出升级说明.md` |
 | 阶段 5.4 - Agent 内核结构化输出升级踩坑记录 | `/docs/error/阶段5.4-Agent内核结构化输出升级踩坑记录.md` |

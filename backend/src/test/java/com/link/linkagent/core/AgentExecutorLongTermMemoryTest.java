@@ -1,6 +1,8 @@
 package com.link.linkagent.core;
 
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.llm.LlmCallResult;
+import com.link.linkagent.llm.StructuredCallResult;
 import com.link.linkagent.memory.InMemoryShortTermMemoryStore;
 import com.link.linkagent.memory.LongTermMemory;
 import com.link.linkagent.memory.LongTermMemoryCandidate;
@@ -15,9 +17,7 @@ import com.link.linkagent.tool.ToolExecutionProperties;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
 
 import java.util.List;
 import java.util.Optional;
@@ -170,6 +170,11 @@ class AgentExecutorLongTermMemoryTest {
                     Final Answer:好的
                     """;
         }
+
+        @Override
+        public LlmCallResult chatWithUsage(String systemPrompt, String userMessage) {
+            return new LlmCallResult(chat(systemPrompt, userMessage), "test-model", 3, 5, 8, 1L);
+        }
     }
 
     private static class SequencedLlmService extends LLMService {
@@ -187,6 +192,11 @@ class AgentExecutorLongTermMemoryTest {
             String response = responses.get(Math.min(callCount, responses.size() - 1));
             callCount++;
             return response;
+        }
+
+        @Override
+        public LlmCallResult chatWithUsage(String systemPrompt, String userMessage) {
+            return new LlmCallResult(chat(systemPrompt, userMessage), "test-model", 2, 4, 6, 1L);
         }
     }
 
@@ -211,9 +221,14 @@ class AgentExecutorLongTermMemoryTest {
         }
 
         @Override
-        public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> type) {
+        public LlmCallResult chatWithUsage(String systemPrompt, String userMessage) {
+            return new LlmCallResult(chat(systemPrompt, userMessage), "test-model", 3, 5, 8, 1L);
+        }
+
+        @Override
+        public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, String userMessage, Class<T> type) {
             structuredCallCount++;
-            return type.cast(response);
+            return new StructuredCallResult<>(type.cast(response), 7, 11, 18, 1L);
         }
     }
 
@@ -245,6 +260,11 @@ class AgentExecutorLongTermMemoryTest {
             record.setMemoryKey("user.preference.language");
             record.setContent("用户偏好使用 Java");
             return List.of(record);
+        }
+
+        @Override
+        public int softDelete(String userId, String memoryKey) {
+            return 1;
         }
     }
 

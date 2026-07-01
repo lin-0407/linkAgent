@@ -59,6 +59,7 @@ import type {
   CreatorCompetitorReport,
   CreatorCompetitorSavePayload,
   CreatorCompetitorAnalyzePayload,
+  CompetitorAnalyzeByReferencePayload,
   // 字段自动补全
   FieldAutofillPayload,
   FieldAutofillResult,
@@ -501,6 +502,14 @@ export function analyzeCompetitor(taskId: string, payload: CreatorCompetitorAnal
 export function getCompetitorReport(taskId: string) {
   return get<CreatorCompetitorReport>(
     `/creator/tasks/${encodeURIComponent(taskId)}/competitors/report`,
+  )
+}
+
+/** 基于参考案例触发竞品分析（P1-1：无需手动填写竞品文稿，直接从知识库读取） */
+export function analyzeCompetitorByReference(taskId: string, payload: CompetitorAnalyzeByReferencePayload) {
+  return post<CreatorCompetitorReport>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/competitors/analyze-by-reference`,
+    cleanPayload(payload),
   )
 }
 
