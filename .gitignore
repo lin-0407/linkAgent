@@ -49,6 +49,8 @@ __pycache__/
 *.pyc
 
 ###claude###
+.learnings
+.idea
 .claude
 .agents
 CLAUDE.md
