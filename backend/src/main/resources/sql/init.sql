@@ -1155,6 +1155,32 @@ CREATE TABLE IF NOT EXISTS creator_video_analysis_report
   DEFAULT CHARSET = utf8mb4
   COMMENT = '视频分析报告表';
 
+-- ------------------------------------------------------------
+-- 31. 用户 LLM/Embedding 配置表（P1-4）
+--     允许用户配置自己的 API Key、Base URL 和模型名称，
+--     所有 Key 以 AES-256-GCM 密文存储，前端只读脱敏值。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_llm_config
+(
+    id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    config_id             VARCHAR(64)   NOT NULL COMMENT '配置唯一标识（UUID）',
+    user_id               VARCHAR(64)   NOT NULL DEFAULT 'default' COMMENT '用户标识',
+    provider              VARCHAR(32)   NOT NULL COMMENT '供应商：DEEPSEEK / OPENAI / SILICONFLOW / CUSTOM',
+    llm_base_url          VARCHAR(512)           DEFAULT NULL COMMENT 'LLM API 地址，为空时使用系统默认',
+    llm_api_key_enc       VARCHAR(1024)          DEFAULT NULL COMMENT 'LLM API Key（AES-256-GCM 加密后的 Base64）',
+    llm_model_name        VARCHAR(128)           DEFAULT NULL COMMENT 'LLM 模型名称，为空时使用系统默认',
+    embedding_base_url    VARCHAR(512)           DEFAULT NULL COMMENT 'Embedding API 地址',
+    embedding_api_key_enc VARCHAR(1024)          DEFAULT NULL COMMENT 'Embedding API Key（加密）',
+    embedding_model_name  VARCHAR(128)           DEFAULT NULL COMMENT 'Embedding 模型名称',
+    create_time           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted            TINYINT       NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_llm_config_id (config_id),
+    UNIQUE KEY uk_llm_user_provider (user_id, provider)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '用户LLM配置表';
+
 -- ============================================================
 -- 幂等迁移：为已存在的表补充新列
 -- 用 INFORMATION_SCHEMA 判断列是否存在，兼容所有 MySQL 8.x 版本

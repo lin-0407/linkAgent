@@ -3,7 +3,7 @@
  * 提供长期记忆的写入和查询，用于在 Agent 对话中持久化重要上下文片段。
  */
 import type { LongTermMemoryRecord, LongTermMemorySavePayload } from '@/types/memory'
-import { get, post } from './http'
+import { del, get, post } from './http'
 
 /** 保存一条长期记忆，返回保存后的完整记录 */
 export function saveLongTermMemory(payload: LongTermMemorySavePayload) {
@@ -22,4 +22,9 @@ export function getLongTermMemory(userId: string, memoryKey: string) {
   return get<LongTermMemoryRecord>(
     `/memory/long-term/users/${encodeURIComponent(userId)}/keys/${encodeURIComponent(memoryKey)}`,
   )
+}
+
+/** 软删除一条长期记忆 */
+export function deleteLongTermMemory(userId: string, memoryKey: string) {
+  return del(`/memory/long-term/users/${encodeURIComponent(userId)}/keys/${encodeURIComponent(memoryKey)}`)
 }

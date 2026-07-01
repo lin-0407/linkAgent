@@ -31,6 +31,12 @@ const router = createRouter({
       name: 'videoAnalysis',
       component: () => import('@/views/VideoAnalysisPage.vue'),
     },
+    {
+      // P1-2: 长期记忆管理页 — 查看/搜索/删除系统自动提取的长期记忆
+      path: '/memory',
+      name: 'memory',
+      component: () => import('@/views/MemoryManagementPage.vue'),
+    },
   ],
 })
 
