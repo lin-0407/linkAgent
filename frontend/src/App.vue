@@ -29,7 +29,7 @@ const guideOpen = ref(false)
   />
 
   <div class="surface-root">
-    <header class="surface-topbar">
+    <header class="surface-topbar" :class="{ 'surface-topbar-creator': isCreatorRoute }">
       <div class="surface-topbar-left">
         <RouterLink to="/" class="surface-brand" aria-label="返回首页">
           <span class="surface-brand-mark" aria-hidden="true"></span>
@@ -43,7 +43,7 @@ const guideOpen = ref(false)
         </nav>
       </div>
 
-      <nav v-if="!isCreatorRoute" class="surface-switch" aria-label="导航">
+      <nav class="surface-switch" aria-label="导航">
         <RouterLink to="/" custom v-slot="{ navigate, isExactActive }">
           <button type="button" :class="{ active: isExactActive }" @click="navigate">
             首页
