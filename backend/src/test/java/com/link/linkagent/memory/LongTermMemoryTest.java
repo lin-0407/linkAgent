@@ -70,24 +70,24 @@ class LongTermMemoryTest {
     }
 
     @Test
-    void shouldUseDefaultLimitWhenLimitIsInvalid() {
+    void shouldListAllMemoriesByUser() {
         FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
         LongTermMemory memory = new LongTermMemory(mapper);
 
-        memory.listByUser(" user-1 ", 0);
+        memory.listByUser(" user-1 ");
 
         assertThat(mapper.listUserId).isEqualTo("user-1");
-        assertThat(mapper.listLimit).isEqualTo(20);
     }
 
     @Test
-    void shouldCapLimitAtMaxValue() {
+    void shouldListRecentMemoriesWithInternalLimit() {
         FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
         LongTermMemory memory = new LongTermMemory(mapper);
 
-        memory.listByUser("user-1", 101);
+        memory.listRecentByUser("user-1", 10);
 
-        assertThat(mapper.listLimit).isEqualTo(100);
+        assertThat(mapper.listUserId).isEqualTo("user-1");
+        assertThat(mapper.listLimit).isEqualTo(10);
     }
 
     private static class FakeLongTermMemoryMapper implements LongTermMemoryMapper {
@@ -114,7 +114,13 @@ class LongTermMemoryTest {
         }
 
         @Override
-        public List<LongTermMemoryRecord> listByUser(String userId, int limit) {
+        public List<LongTermMemoryRecord> listByUser(String userId) {
+            this.listUserId = userId;
+            return new ArrayList<>();
+        }
+
+        @Override
+        public List<LongTermMemoryRecord> listRecentByUser(String userId, int limit) {
             this.listUserId = userId;
             this.listLimit = limit;
             return new ArrayList<>();

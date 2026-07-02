@@ -253,7 +253,13 @@ class AgentExecutorLongTermMemoryTest {
         }
 
         @Override
-        public List<LongTermMemoryRecord> listByUser(String userId, int limit) {
+        public List<LongTermMemoryRecord> listByUser(String userId) {
+            this.listUserId = userId;
+            return List.of();
+        }
+
+        @Override
+        public List<LongTermMemoryRecord> listRecentByUser(String userId, int limit) {
             this.listUserId = userId;
             LongTermMemoryRecord record = new LongTermMemoryRecord();
             record.setUserId(userId);

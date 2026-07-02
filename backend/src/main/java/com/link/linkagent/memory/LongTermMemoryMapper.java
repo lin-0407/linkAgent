@@ -56,6 +56,25 @@ public interface LongTermMemoryMapper {
             WHERE user_id = #{userId}
               AND is_deleted = 0
             ORDER BY update_time DESC, id DESC
+            """)
+    @Results(value = {
+            @Result(column = "id", property = "id"),
+            @Result(column = "user_id", property = "userId"),
+            @Result(column = "memory_key", property = "memoryKey"),
+            @Result(column = "content", property = "content"),
+            @Result(column = "source_session_id", property = "sourceSessionId"),
+            @Result(column = "embedding_id", property = "embeddingId"),
+            @Result(column = "create_time", property = "createTime"),
+            @Result(column = "update_time", property = "updateTime")
+    })
+    List<LongTermMemoryRecord> listByUser(@Param("userId") String userId);
+
+    @Select("""
+            SELECT id, user_id, memory_key, content, source_session_id, embedding_id, create_time, update_time
+            FROM t_long_term_memory
+            WHERE user_id = #{userId}
+              AND is_deleted = 0
+            ORDER BY update_time DESC, id DESC
             LIMIT #{limit}
             """)
     @Results(value = {
@@ -68,7 +87,7 @@ public interface LongTermMemoryMapper {
             @Result(column = "create_time", property = "createTime"),
             @Result(column = "update_time", property = "updateTime")
     })
-    List<LongTermMemoryRecord> listByUser(@Param("userId") String userId, @Param("limit") int limit);
+    List<LongTermMemoryRecord> listRecentByUser(@Param("userId") String userId, @Param("limit") int limit);
 
     @Update("""
             UPDATE t_long_term_memory

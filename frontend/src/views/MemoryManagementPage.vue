@@ -19,8 +19,6 @@ import type { LongTermMemoryRecord } from '@/types/memory'
 
 /** 默认用户标识（后续接入多用户时为动态值） */
 const DEFAULT_USER_ID = 'default'
-/** 一次性加载的记忆条数上限（记忆总数通常不会超过此值，无需分页） */
-const LOAD_LIMIT = 200
 
 const memories = ref<LongTermMemoryRecord[]>([])
 const loading = ref(false)
@@ -30,7 +28,7 @@ async function loadMemories() {
   loading.value = true
   loadError.value = ''
   try {
-    memories.value = await listLongTermMemories(DEFAULT_USER_ID, LOAD_LIMIT)
+    memories.value = await listLongTermMemories(DEFAULT_USER_ID)
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : String(err)
   } finally {

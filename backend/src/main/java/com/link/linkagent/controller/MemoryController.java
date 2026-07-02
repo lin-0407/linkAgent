@@ -5,8 +5,6 @@ import com.link.linkagent.dto.LongTermMemorySaveRequest;
 import com.link.linkagent.memory.LongTermMemory;
 import com.link.linkagent.memory.LongTermMemoryRecord;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.springframework.validation.annotation.Validated;
@@ -18,7 +16,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -38,7 +35,7 @@ import java.util.List;
  * <b>路由前缀：</b>{@code /api/memory}
  * <p>
  * <b>方法级校验说明：</b>
- * 类级 {@code @Validated} 注解激活了方法参数的校验（@NotBlank/@Size/@Min/@Max），
+ * 类级 {@code @Validated} 注解激活了方法参数的校验（@NotBlank/@Size），
  * 与请求体 DTO 中 {@code @Valid} 的职责不同：
  * <ul>
  *   <li>DTO 的 @Valid → 校验嵌套对象的字段</li>
@@ -102,21 +99,16 @@ public class MemoryController {
     /**
      * 列出指定用户的所有长期记忆。
      * <p>
-     * <b>端点：</b>{@code GET /api/memory/long-term/users/{userId}?limit=20}
+     * <b>端点：</b>{@code GET /api/memory/long-term/users/{userId}}
      * <p>
      * <b>路径参数：</b>
      * <ul>
      *   <li>{@code userId} — 用户唯一标识，必填，最大 64 字符</li>
      * </ul>
-     * <b>查询参数：</b>
-     * <ul>
-     *   <li>{@code limit} — 返回条数上限，可选，范围 [1, 100]</li>
-     * </ul>
-     * <p>
-     * <b>用途：</b>前端"我的记忆"面板，展示用户已存储的全部长期记忆。
+     * <b>用途：</b>前端"我的记忆"面板，展示用户已存储的全部长期记忆。当前项目是单用户创作工作台，
+     * 管理页需要完整浏览、搜索和删除记忆，因此这里不再做 limit 限制。
      *
      * @param userId 用户唯一标识
-     * @param limit  返回数量上限（可选，默认由服务层控制）
      * @return 长期记忆列表
      */
     @GetMapping("/long-term/users/{userId}")
@@ -124,13 +116,8 @@ public class MemoryController {
             @PathVariable
             @NotBlank(message = "用户ID不能为空")
             @Size(max = 64, message = "用户ID长度不能超过64个字符")
-            String userId,
-
-            @RequestParam(required = false)
-            @Min(value = 1, message = "查询数量不能小于1")
-            @Max(value = 100, message = "查询数量不能超过100")
-            Integer limit) {
-        return longTermMemory.listByUser(userId, limit).stream()
+            String userId) {
+        return longTermMemory.listByUser(userId).stream()
                 .map(this::toResponse)
                 .toList();
     }

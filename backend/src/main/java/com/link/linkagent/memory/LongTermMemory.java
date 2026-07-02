@@ -1,6 +1,5 @@
 package com.link.linkagent.memory;
 
-import com.link.linkagent.util.NumberUtil;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.stereotype.Component;
 
@@ -14,8 +13,6 @@ import java.util.Optional;
 @Component
 public class LongTermMemory {
 
-    private static final int DEFAULT_LIMIT = 20;
-    private static final int MAX_LIMIT = 100;
     private static final String EXAMPLE_LANGUAGE_KEY = "user.preference.example_language";
     private static final String EXPLANATION_STYLE_KEY = "user.preference.explanation_style";
     private static final String USER_PROFILE_KEY = "user.profile.summary";
@@ -41,9 +38,14 @@ public class LongTermMemory {
         return longTermMemoryMapper.findByKey(userId.trim(), normalizeMemoryKey(memoryKey));
     }
 
-    public List<LongTermMemoryRecord> listByUser(String userId, Integer limit) {
-        int safeLimit = NumberUtil.limitOrDefault(limit, DEFAULT_LIMIT, MAX_LIMIT);
-        return longTermMemoryMapper.listByUser(userId.trim(), safeLimit);
+    public List<LongTermMemoryRecord> listByUser(String userId) {
+        return longTermMemoryMapper.listByUser(userId.trim());
+    }
+
+    public List<LongTermMemoryRecord> listRecentByUser(String userId, int limit) {
+        // Agent 上下文只需要少量近期记忆，避免把管理页的全量查询语义带进 Prompt 拼接。
+        int safeLimit = Math.max(limit, 1);
+        return longTermMemoryMapper.listRecentByUser(userId.trim(), safeLimit);
     }
 
     public void delete(String userId, String memoryKey) {

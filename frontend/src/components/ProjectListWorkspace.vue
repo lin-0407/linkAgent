@@ -64,6 +64,13 @@ const taskStats = computed(() => {
   return stats
 })
 
+const statCards = computed(() => [
+  { key: 'total', label: '全部项目', value: taskStats.value.total, tone: 'total' },
+  { key: 'draft', label: '草稿', value: taskStats.value.draft, tone: 'draft' },
+  { key: 'inProgress', label: '推进中', value: taskStats.value.inProgress, tone: 'progress' },
+  { key: 'done', label: '已复盘', value: taskStats.value.done, tone: 'done' },
+])
+
 onMounted(() => {
   void loadTasks()
 })
@@ -109,6 +116,17 @@ function statusLabel(status: string) {
   }
 }
 
+function statusTone(status: string) {
+  switch (status) {
+    case 'DRAFT':
+      return 'is-draft'
+    case 'ANALYZED':
+      return 'is-done'
+    default:
+      return 'is-progress'
+  }
+}
+
 function shortId(value: string) {
   return value.length <= 12 ? value : `${value.slice(0, 6)}...${value.slice(-4)}`
 }
@@ -123,107 +141,175 @@ function formatDate(value: string) {
 
 <template>
   <section class="creator-shell project-list-shell">
-    <header class="creator-header">
-      <div>
-        <p class="creator-kicker">项目列表</p>
-        <h2>历史视频项目</h2>
-        <p>从这里继续上次的发布方案或复盘，不需要回到技术调试入口。</p>
-      </div>
-      <div class="creator-header-actions">
-        <button type="button" class="creator-primary-button creator-mini-button" @click="createNewTask">
-          开始优化一条视频
-        </button>
-        <button
-          type="button"
-          class="creator-secondary-action creator-mini-button"
-          :disabled="isLoading"
-          @click="loadTasks"
-        >
-          {{ isLoading ? '刷新中...' : '刷新列表' }}
-        </button>
-      </div>
-    </header>
-
-    <section class="creator-section project-list-section">
-      <div class="project-list-toolbar">
-        <label>
-          <span>搜索项目</span>
-          <input v-model="searchKeyword" type="search" placeholder="按标题、类型或项目 ID 搜索" />
-        </label>
-        <label>
-          <span>状态</span>
-          <select v-model="statusFilter">
-            <option v-for="option in taskStatusOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-      </div>
-
-      <div class="creator-task-overview" aria-label="项目概览">
-        <span><b>{{ taskStats.total }}</b> 全部</span>
-        <span><b>{{ taskStats.draft }}</b> 草稿</span>
-        <span><b>{{ taskStats.inProgress }}</b> 推进中</span>
-        <span><b>{{ taskStats.done }}</b> 已复盘</span>
-      </div>
-
-      <div v-if="errorMessage" class="creator-alert error-alert">
-        <strong>项目列表加载失败</strong>
-        <span>{{ errorMessage }}</span>
-      </div>
-
-      <div v-else-if="filteredTasks.length > 0" class="project-list">
-        <article v-for="task in filteredTasks" :key="task.taskId" class="project-list-item">
-          <div>
-            <strong>{{ task.taskName }}</strong>
-            <span>{{ task.videoType || '未分类' }} · {{ statusLabel(task.status) }}</span>
-            <small>{{ shortId(task.taskId) }} · 更新于 {{ formatDate(task.updateTime) }}</small>
-          </div>
-          <button type="button" class="creator-primary-button creator-mini-button" @click="continueTask(task)">
-            继续复盘
+    <div class="project-list-page">
+      <header class="creator-header project-list-header">
+        <div>
+          <p class="creator-kicker">项目列表</p>
+          <h2>历史视频项目</h2>
+          <p>从这里继续上次的发布方案或复盘，不需要回到技术调试入口。</p>
+        </div>
+        <div class="creator-header-actions project-list-actions">
+          <button type="button" class="creator-primary-button creator-mini-button" @click="createNewTask">
+            开始优化一条视频
           </button>
-        </article>
-      </div>
+          <button
+            type="button"
+            class="creator-secondary-action creator-mini-button"
+            :disabled="isLoading"
+            @click="loadTasks"
+          >
+            {{ isLoading ? '刷新中...' : '刷新列表' }}
+          </button>
+        </div>
+      </header>
 
-      <article v-else class="creator-empty-result">
-        <strong>{{ isLoading ? '正在读取项目...' : '还没有匹配的项目' }}</strong>
-        <span>可以新建一条视频项目，先把标题、简介和文稿放进去。</span>
-      </article>
-    </section>
+      <section class="creator-section project-list-section" :aria-busy="isLoading">
+        <div class="project-list-controls">
+          <div class="project-list-toolbar">
+            <label class="project-filter-field">
+              <span>搜索项目</span>
+              <input v-model="searchKeyword" type="search" placeholder="按标题、类型或项目 ID 搜索" />
+            </label>
+            <label class="project-filter-field">
+              <span>状态</span>
+              <select v-model="statusFilter">
+                <option v-for="option in taskStatusOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="project-list-summary" aria-label="项目概览">
+            <article
+              v-for="stat in statCards"
+              :key="stat.key"
+              class="project-stat-card"
+              :class="`tone-${stat.tone}`"
+            >
+              <b>{{ stat.value }}</b>
+              <span>{{ stat.label }}</span>
+            </article>
+          </div>
+        </div>
+
+        <div v-if="errorMessage" class="creator-alert error-alert project-message project-message-error">
+          <div>
+            <strong>项目列表加载失败</strong>
+            <span>当前请求没有成功返回，确认服务恢复后可以重新刷新列表。</span>
+          </div>
+          <code>{{ errorMessage }}</code>
+        </div>
+
+        <div v-else-if="filteredTasks.length > 0" class="project-list">
+          <article v-for="task in filteredTasks" :key="task.taskId" class="project-list-item">
+            <div class="project-list-item-main">
+              <div class="project-list-item-head">
+                <strong>{{ task.taskName }}</strong>
+                <span class="project-status-badge" :class="statusTone(task.status)">
+                  {{ statusLabel(task.status) }}
+                </span>
+              </div>
+              <div class="project-list-item-meta">
+                <span>{{ task.videoType || '未分类' }}</span>
+                <span>{{ task.materialCount }} 份素材</span>
+                <span>{{ shortId(task.taskId) }}</span>
+                <span>更新于 {{ formatDate(task.updateTime) }}</span>
+              </div>
+            </div>
+            <button type="button" class="creator-primary-button creator-mini-button" @click="continueTask(task)">
+              继续复盘
+            </button>
+          </article>
+        </div>
+
+        <article v-else class="creator-empty-result project-empty-result">
+          <strong>{{ isLoading ? '正在读取项目...' : '还没有匹配的项目' }}</strong>
+          <span>可以调整搜索条件，或新建一条视频项目，把标题、简介和文稿先放进去。</span>
+          <div class="project-empty-actions">
+            <button type="button" class="creator-primary-button creator-mini-button" @click="createNewTask">
+              新建视频项目
+            </button>
+            <button
+              type="button"
+              class="creator-secondary-action creator-mini-button"
+              :disabled="isLoading"
+              @click="loadTasks"
+            >
+              重新读取
+            </button>
+          </div>
+        </article>
+      </section>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .project-list-shell {
-  min-height: auto;
+  min-height: calc(100vh - 72px);
+  padding-bottom: 96px;
+}
+
+.project-list-page {
+  display: grid;
+  width: min(1540px, calc(100vw - 96px));
+  gap: var(--s4);
+  margin: 0 auto;
+}
+
+.project-list-header,
+.project-list-section {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.project-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .project-list-section {
-  max-width: 1120px;
-  margin: 0 auto;
+  display: grid;
+  align-content: start;
+  gap: var(--s4);
+  padding: var(--s4);
+  overflow: hidden;
+}
+
+.project-list-controls {
+  display: grid;
+  gap: var(--s3);
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
 }
 
 .project-list-toolbar {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(180px, 260px);
+  grid-template-columns: minmax(360px, 1fr) minmax(200px, 280px);
+  align-items: end;
   gap: var(--s3);
 }
 
-.project-list-toolbar label {
+.project-filter-field {
   display: grid;
+  min-width: 0;
   gap: var(--s2);
 }
 
-.project-list-toolbar span {
+.project-filter-field span {
   color: var(--text);
   font-size: 13px;
   font-weight: var(--fw-semibold);
 }
 
-.project-list-toolbar input,
-.project-list-toolbar select {
+.project-filter-field input,
+.project-filter-field select {
   width: 100%;
-  min-height: 38px;
+  min-height: 42px;
   padding: 0 var(--s3);
   color: var(--ink);
   background: var(--surface);
@@ -232,33 +318,121 @@ function formatDate(value: string) {
   outline: none;
 }
 
-.project-list-toolbar input:focus,
-.project-list-toolbar select:focus {
+.project-filter-field input:focus,
+.project-filter-field select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
-.project-list {
+.project-list-summary {
   display: grid;
-  gap: var(--s2);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s3);
 }
 
-.project-list-item {
+.project-stat-card {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
-  gap: var(--s3);
-  padding: var(--s3);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  min-height: 74px;
+  align-content: center;
+  gap: 3px;
+  padding: 12px 14px 12px 16px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 252, 255, 0.86));
+  border: 1px solid rgba(23, 32, 51, 0.08);
   border-radius: var(--r);
   box-shadow: var(--sh-sm);
 }
 
-.project-list-item div {
+.project-stat-card::before {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 0;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 0 3px 3px 0;
+  content: '';
+}
+
+.project-stat-card.tone-draft::before {
+  background: var(--warn);
+}
+
+.project-stat-card.tone-progress::before {
+  background: var(--bili-pink);
+}
+
+.project-stat-card.tone-done::before {
+  background: var(--ok);
+}
+
+.project-stat-card b {
+  color: var(--ink);
+  font-size: 26px;
+  font-weight: var(--fw-bold);
+  line-height: 1;
+}
+
+.project-stat-card span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.project-list {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid rgba(23, 32, 51, 0.08);
+}
+
+.project-list-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  min-height: 76px;
+  gap: var(--s4);
+  padding: var(--s3) 0 var(--s3) var(--s4);
+  background: transparent;
+  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
+  transition:
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.project-list-item::before {
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  left: 0;
+  width: 3px;
+  background: rgba(23, 32, 51, 0.12);
+  border-radius: 3px;
+  content: '';
+}
+
+.project-list-item:last-child {
+  border-bottom: 0;
+}
+
+.project-list-item:hover {
+  background: rgba(0, 174, 236, 0.045);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.project-list-item-main {
   display: grid;
   min-width: 0;
-  gap: 5px;
+  gap: 8px;
+}
+
+.project-list-item-head {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
 }
 
 .project-list-item strong {
@@ -268,11 +442,110 @@ function formatDate(value: string) {
   line-height: 1.45;
 }
 
-.project-list-item span,
-.project-list-item small {
+.project-status-badge {
+  flex: none;
+  min-height: 24px;
+  padding: 3px 8px;
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  border: 1px solid rgba(0, 174, 236, 0.18);
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+  line-height: 1.3;
+}
+
+.project-status-badge.is-draft {
+  color: var(--warn);
+  background: rgba(217, 119, 6, 0.08);
+  border-color: rgba(217, 119, 6, 0.2);
+}
+
+.project-status-badge.is-done {
+  color: var(--ok);
+  background: rgba(22, 163, 74, 0.08);
+  border-color: rgba(22, 163, 74, 0.2);
+}
+
+.project-list-item-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.project-list-item-meta span {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.project-list-item-meta span:not(:last-child)::after {
+  margin-left: 10px;
+  color: rgba(104, 117, 136, 0.55);
+  content: '/';
+}
+
+.project-message {
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+}
+
+.project-message div {
+  display: grid;
+  gap: 4px;
+}
+
+.project-message code {
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 8px;
+  overflow-wrap: anywhere;
+  color: var(--danger);
+  background: rgba(220, 38, 38, 0.07);
+  border: 1px solid rgba(220, 38, 38, 0.12);
+  border-radius: var(--r-sm);
+  font-family: var(--font-code);
+  font-size: 12px;
+}
+
+.project-empty-result {
+  align-items: center;
+  min-height: 220px;
+  text-align: center;
+}
+
+.project-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+
+@media (max-width: 1180px) {
+  .project-list-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .project-list-shell {
+    padding-bottom: 80px;
+  }
+
+  .project-list-page {
+    width: min(100%, calc(100vw - 24px));
+  }
+
+  .project-list-header {
+    grid-template-columns: 1fr;
+  }
+
+  .project-list-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 720px) {
@@ -281,7 +554,32 @@ function formatDate(value: string) {
     grid-template-columns: 1fr;
   }
 
+  .project-list-toolbar {
+    gap: var(--s4);
+  }
+
+  .project-list-summary {
+    grid-template-columns: 1fr;
+  }
+
   .project-list-item button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .project-list-page {
+    width: 100%;
+  }
+
+  .project-list-section {
+    padding: var(--s3);
+  }
+
+  .project-list-actions,
+  .project-empty-actions {
+    display: grid;
+    grid-template-columns: 1fr;
     width: 100%;
   }
 }

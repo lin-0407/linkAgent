@@ -10,11 +10,9 @@ export function saveLongTermMemory(payload: LongTermMemorySavePayload) {
   return post<LongTermMemoryRecord>('/memory/long-term', payload)
 }
 
-/** 列出某用户的全部长期记忆，limit 不传则走后端默认值 */
-export function listLongTermMemories(userId: string, limit?: number) {
-  return get<LongTermMemoryRecord[]>(`/memory/long-term/users/${encodeURIComponent(userId)}`, {
-    params: limit ? { limit } : undefined,
-  })
+/** 列出某用户的全部长期记忆，管理页需要完整数据用于本地搜索和删除 */
+export function listLongTermMemories(userId: string) {
+  return get<LongTermMemoryRecord[]>(`/memory/long-term/users/${encodeURIComponent(userId)}`)
 }
 
 /** 按用户 + 记忆键获取单条长期记忆 */

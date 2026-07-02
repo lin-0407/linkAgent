@@ -743,3 +743,11 @@ Windows仓库owner是Administrator，沙箱用户执行git操作会被拒绝。
 原因：Git安全机制检测到仓库所有者与执行用户不一致。
 
 解决：使用单次命令参数`git -c safe.directory=...`，不写全局Git配置避免影响作者本机环境。
+
+### 6. 单用户记忆管理页不应限制为100条
+
+长期记忆管理页用于完整浏览、搜索和删除系统自动提取的记忆，前端曾传`limit=200`，后端又用`@Max(100)`拦截，导致页面直接报“查询数量不能超过100”。
+
+原因：把列表接口的通用防御性limit误套到了单用户管理页。当前项目不是多租户后台，管理页需要完整数据；真正需要限制的是Agent拼接Prompt时的最近记忆条数。
+
+解决：管理接口`GET /api/memory/long-term/users/{userId}`改为不接收`limit`并查询全部；Agent上下文读取改为独立的`listRecentByUser(userId, 10)`，只控制Token成本，不影响管理页全量浏览。

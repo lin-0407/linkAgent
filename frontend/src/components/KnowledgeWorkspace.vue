@@ -363,295 +363,297 @@ onMounted(() => {
       </div>
     </header>
 
-    <section class="creator-section">
-      <div class="creator-section-head"><h3>添加参考案例</h3></div>
-      <p class="creator-inline-note">
-        输入单个 BV 号或视频链接，系统会整理视频信息、评论和弹幕，沉淀成可参考的案例。采集约需 10-60 秒，请耐心等待。
-      </p>
-      <div class="knowledge-form">
-        <label>
-          <span>BV 号 / 视频链接</span>
-          <input
-            v-model="form.bvInput"
-            type="text"
-            placeholder="BV1xxxxxxxxx 或 https://www.bilibili.com/video/BV..."
-            :disabled="importing"
-            @keyup.enter="submitFetchImport"
-          />
-        </label>
-        <label>
-          <span>案例层级</span>
-          <select v-model="form.tier" :disabled="importing">
-            <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <label>
-          <span>分区（可选）</span>
-          <input
-            v-model="form.category"
-            type="text"
-            placeholder="留空则用视频自身分区"
-            :disabled="importing"
-          />
-        </label>
-      </div>
-      <div class="creator-action-row">
-        <button
-          type="button"
-          class="creator-primary-button"
-          :disabled="importing || !form.bvInput.trim()"
-          @click="submitFetchImport"
-        >
-          {{ importing ? '采集中…（约 10–60 秒）' : '采集并导入' }}
-        </button>
-      </div>
-      <div v-if="importResult" class="creator-alert success-alert">
-        <strong>采集完成</strong>
-        <span>{{ importSummary }}</span>
-      </div>
-      <div v-if="importError" class="creator-alert error-alert">
-        <strong>采集失败</strong>
-        <span>{{ importError }}</span>
-      </div>
-    </section>
-
-    <section class="creator-section">
-      <div class="creator-section-head"><h3>找灵感</h3></div>
-      <p class="creator-inline-note">
-        可以输入“开场如何留住观众”“标题怎么更像教程”等问题，系统会找出更接近的案例和观众原话。
-      </p>
-      <div class="knowledge-toolbar">
-        <input
-          v-model="searchQuery"
-          type="text"
-          class="knowledge-search-input"
-          placeholder="想参考什么？例如：美食视频封面怎么做更吸引人"
-          :disabled="searching"
-          @keyup.enter="submitSearch()"
-        />
-        <select v-model="searchTier" :disabled="searching">
-          <option value="">全部层级</option>
-          <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-        <input
-          v-model="searchCategory"
-          type="text"
-          placeholder="按分区筛选（可选）"
-          :disabled="searching"
-          @keyup.enter="submitSearch()"
-        />
-        <select
-          v-if="developerMode"
-          v-model="searchStrategy"
-          :disabled="searching"
-          title="查询增强策略"
-        >
-          <option v-for="option in STRATEGY_OPTIONS" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
-        <button
-          type="button"
-          class="creator-primary-button"
-          :disabled="searching || !searchQuery.trim()"
-          @click="submitSearch()"
-        >
-          {{ searching ? '检索中…' : '检索' }}
-        </button>
-      </div>
-
-      <div v-if="searchError" class="creator-alert error-alert">
-        <strong>检索失败</strong>
-        <span>{{ searchError }}</span>
-      </div>
-      <div v-if="analysisError" class="creator-alert error-alert">
-        <strong>上下文加载失败</strong>
-        <span>{{ analysisError }}</span>
-      </div>
-      <template v-if="!searchError && searchResult">
-        <div class="creator-chip-list">
-          <b v-if="developerMode">检索模式 {{ searchModeLabel(searchResult.mode) }}</b>
-          <b v-if="developerMode">增强策略 {{ strategyLabel(searchResult.strategy) }}</b>
-          <b v-if="developerMode && searchResult.reranked">已精排 · qwen3-rerank</b>
-          <b>第 {{ searchResult.page }} / {{ searchResult.maxPage }} 批</b>
-          <b>展示 {{ searchResult.cards.length }} 张</b>
-        </div>
-        <p v-if="developerMode && searchResult.enhancedQueries.length" class="knowledge-enhanced">
-          <span class="knowledge-enhanced-label">扩展查询</span>
-          <span v-for="(q, i) in searchResult.enhancedQueries" :key="i" class="knowledge-enhanced-item">{{ q }}</span>
+    <section class="creator-section knowledge-workspace-section">
+      <div class="knowledge-block">
+        <div class="creator-section-head"><h3>添加参考案例</h3></div>
+        <p class="creator-inline-note">
+          输入单个 BV 号或视频链接，系统会整理视频信息、评论和弹幕，沉淀成可参考的案例。采集约需 10-60 秒，请耐心等待。
         </p>
-        <p v-if="!searchResult.cards.length" class="creator-muted">
-          没有匹配的案例，换个说法，或先在上方添加更多参考案例。
-        </p>
-        <div v-else class="knowledge-card-list">
-          <button
-            v-for="hit in searchResult.cards"
-            :key="hit.id"
-            type="button"
-            class="knowledge-card knowledge-card-button"
-            :disabled="!!analysisLoadingVideoId"
-            @click="openVideoAnalysis(hit)"
-          >
-            <span class="knowledge-card-title">{{ hit.title }}</span>
-            <span class="creator-chip-list">
-              <b>{{ tierLabel(hit.tier) }}</b>
-              <b v-if="hit.category">{{ hit.category }}</b>
-              <b v-if="qualityScoreLabel(hit)" :title="qualityScoreTitle(hit)">{{ qualityScoreLabel(hit) }}</b>
-              <b v-if="developerMode">{{ embeddingLabel(hit.embeddingStatus) }}</b>
-            </span>
-            <small>
-              {{ hit.bvId || '无 BV' }} · {{ hit.source }}
-              <template v-if="hit.publishTimeText"> · {{ hit.publishTimeText }}</template>
-            </small>
-            <span v-if="hit.highlightSummary" class="knowledge-card-summary">
-              {{ hit.highlightSummary }}
-            </span>
-            <span v-else class="knowledge-card-summary creator-muted">（暂无亮点摘要）</span>
-            <span class="knowledge-stats">
-              <span>播放 {{ formatCount(hit.viewCount) }}</span>
-              <span>点赞 {{ formatCount(hit.likeCount) }}</span>
-              <span>投币 {{ formatCount(hit.coinCount) }}</span>
-              <span>收藏 {{ formatCount(hit.favoriteCount) }}</span>
-              <span>弹幕 {{ formatCount(hit.danmakuCount) }}</span>
-              <span>评论 {{ formatCount(hit.replyCount) }}</span>
-            </span>
-            <span v-if="matchedTopicsByVideoId[hit.videoId]?.length" class="knowledge-topic-hits">
-              <span class="knowledge-topic-hits-label">为什么推荐它</span>
-              <span
-                v-for="topic in matchedTopicsByVideoId[hit.videoId]"
-                :key="topic.chunkId"
-                class="knowledge-topic-hit"
-              >
-                <b>{{ chunkTypeLabel(topic.chunkType) }} · {{ topic.chunkTitle }}</b>
-                {{ topic.preview }}
-              </span>
-            </span>
-            <span v-if="evidenceByVideoId[hit.videoId]?.length" class="knowledge-evidence">
-              <span class="knowledge-evidence-label">观众怎么说</span>
-              <span
-                v-for="ev in evidenceByVideoId[hit.videoId]"
-                :key="ev.itemId"
-                class="knowledge-evidence-item"
-                :class="ev.sentiment === 'NEGATIVE' ? 'is-negative' : 'is-positive'"
-              >
-                <b>{{ sourceTypeLabel(ev.sourceType) }} · {{ sentimentLabel(ev.sentiment) }}</b>
-                {{ ev.content }}
-              </span>
-            </span>
-            <span class="knowledge-card-action">
-              {{ analysisLoadingVideoId === hit.videoId ? '加载案例内容...' : '用这个案例帮我改当前视频' }}
-            </span>
-            <!-- P1-1：竞品卡片上的「对比我的创作」入口，用 @click.stop 防止触发外层按钮的 openVideoAnalysis -->
-            <span
-              v-if="hit.tier === 'COMPETITOR'"
-              class="knowledge-card-action knowledge-card-competitor-action"
-              @click.stop="openCompetitorAnalysis(hit)"
-            >
-              对比我的创作
-            </span>
-          </button>
+        <div class="knowledge-form">
+          <label>
+            <span>BV 号 / 视频链接</span>
+            <input
+              v-model="form.bvInput"
+              type="text"
+              placeholder="BV1xxxxxxxxx 或 https://www.bilibili.com/video/BV..."
+              :disabled="importing"
+              @keyup.enter="submitFetchImport"
+            />
+          </label>
+          <label>
+            <span>案例层级</span>
+            <select v-model="form.tier" :disabled="importing">
+              <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label>
+            <span>分区（可选）</span>
+            <input
+              v-model="form.category"
+              type="text"
+              placeholder="留空则用视频自身分区"
+              :disabled="importing"
+            />
+          </label>
         </div>
-        <div v-if="searchResult.cards.length" class="knowledge-pager">
+        <div class="creator-action-row">
           <button
             type="button"
-            class="creator-secondary-action"
-            :disabled="searching || !searchResult.hasMore"
-            @click="refreshSearchCards"
+            class="creator-primary-button"
+            :disabled="importing || !form.bvInput.trim()"
+            @click="submitFetchImport"
           >
-            {{ searchResult.hasMore ? '换一批' : '没有更多' }}
+            {{ importing ? '采集中…（约 10–60 秒）' : '采集并导入' }}
           </button>
-          <span>最多展示 4 批，共覆盖 top20 候选</span>
         </div>
-      </template>
-    </section>
+        <div v-if="importResult" class="creator-alert success-alert">
+          <strong>采集完成</strong>
+          <span>{{ importSummary }}</span>
+        </div>
+        <div v-if="importError" class="creator-alert error-alert">
+          <strong>采集失败</strong>
+          <span>{{ importError }}</span>
+        </div>
+      </div>
 
-    <section class="creator-section">
-      <div class="creator-section-head">
-        <h3>案例列表</h3>
+      <div class="knowledge-block">
+        <div class="creator-section-head"><h3>找灵感</h3></div>
+        <p class="creator-inline-note">
+          可以输入“开场如何留住观众”“标题怎么更像教程”等问题，系统会找出更接近的案例和观众原话。
+        </p>
         <div class="knowledge-toolbar">
-          <select v-model="filterTier" @change="applyFilters">
+          <input
+            v-model="searchQuery"
+            type="text"
+            class="knowledge-search-input"
+            placeholder="想参考什么？例如：美食视频封面怎么做更吸引人"
+            :disabled="searching"
+            @keyup.enter="submitSearch()"
+          />
+          <select v-model="searchTier" :disabled="searching">
             <option value="">全部层级</option>
             <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
               {{ option.label }}
             </option>
           </select>
           <input
-            v-model="filterCategory"
+            v-model="searchCategory"
             type="text"
-            placeholder="按分区筛选"
-            @keyup.enter="applyFilters"
+            placeholder="按分区筛选（可选）"
+            :disabled="searching"
+            @keyup.enter="submitSearch()"
           />
-          <button type="button" class="creator-secondary-action" @click="applyFilters">筛选</button>
-          <button type="button" class="creator-secondary-action" :disabled="listLoading" @click="loadList">
-            {{ listLoading ? '加载中…' : '刷新' }}
+          <select
+            v-if="developerMode"
+            v-model="searchStrategy"
+            :disabled="searching"
+            title="查询增强策略"
+          >
+            <option v-for="option in STRATEGY_OPTIONS" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+          <button
+            type="button"
+            class="creator-primary-button"
+            :disabled="searching || !searchQuery.trim()"
+            @click="submitSearch()"
+          >
+            {{ searching ? '检索中…' : '检索' }}
           </button>
         </div>
-      </div>
 
-      <div v-if="listError" class="creator-alert error-alert">
-        <strong>列表加载失败</strong>
-        <span>{{ listError }}</span>
-      </div>
-      <p v-else-if="!items.length && !listLoading" class="creator-muted">
-        还没有案例，先在上方输入一个 BV 采集试试。
-      </p>
-      <div v-else class="knowledge-card-list">
-        <article v-for="item in items" :key="item.id" class="knowledge-card">
-          <strong>{{ item.title }}</strong>
+        <div v-if="searchError" class="creator-alert error-alert">
+          <strong>检索失败</strong>
+          <span>{{ searchError }}</span>
+        </div>
+        <div v-if="analysisError" class="creator-alert error-alert">
+          <strong>上下文加载失败</strong>
+          <span>{{ analysisError }}</span>
+        </div>
+        <template v-if="!searchError && searchResult">
           <div class="creator-chip-list">
-            <b>{{ tierLabel(item.tier) }}</b>
-            <b v-if="item.category">{{ item.category }}</b>
-            <b v-if="qualityScoreLabel(item)" :title="qualityScoreTitle(item)">{{ qualityScoreLabel(item) }}</b>
-            <b v-if="developerMode">{{ embeddingLabel(item.embeddingStatus) }}</b>
+            <b v-if="developerMode">检索模式 {{ searchModeLabel(searchResult.mode) }}</b>
+            <b v-if="developerMode">增强策略 {{ strategyLabel(searchResult.strategy) }}</b>
+            <b v-if="developerMode && searchResult.reranked">已精排 · qwen3-rerank</b>
+            <b>第 {{ searchResult.page }} / {{ searchResult.maxPage }} 批</b>
+            <b>展示 {{ searchResult.cards.length }} 张</b>
           </div>
-          <small>
-            {{ item.bvId || '无 BV' }} · {{ item.source }}
-            <template v-if="item.publishTimeText"> · {{ item.publishTimeText }}</template>
-          </small>
-          <p v-if="item.highlightSummary">{{ item.highlightSummary }}</p>
-          <p v-else class="creator-muted">（暂无亮点摘要）</p>
-          <div class="knowledge-stats">
-            <span>播放 {{ formatCount(item.viewCount) }}</span>
-            <span>点赞 {{ formatCount(item.likeCount) }}</span>
-            <span>投币 {{ formatCount(item.coinCount) }}</span>
-            <span>收藏 {{ formatCount(item.favoriteCount) }}</span>
-            <span>弹幕 {{ formatCount(item.danmakuCount) }}</span>
-            <span>评论 {{ formatCount(item.replyCount) }}</span>
+          <p v-if="developerMode && searchResult.enhancedQueries.length" class="knowledge-enhanced">
+            <span class="knowledge-enhanced-label">扩展查询</span>
+            <span v-for="(q, i) in searchResult.enhancedQueries" :key="i" class="knowledge-enhanced-item">{{ q }}</span>
+          </p>
+          <p v-if="!searchResult.cards.length" class="creator-muted">
+            没有匹配的案例，换个说法，或先在上方添加更多参考案例。
+          </p>
+          <div v-else class="knowledge-card-list">
+            <button
+              v-for="hit in searchResult.cards"
+              :key="hit.id"
+              type="button"
+              class="knowledge-card knowledge-card-button"
+              :disabled="!!analysisLoadingVideoId"
+              @click="openVideoAnalysis(hit)"
+            >
+              <span class="knowledge-card-title">{{ hit.title }}</span>
+              <span class="creator-chip-list">
+                <b>{{ tierLabel(hit.tier) }}</b>
+                <b v-if="hit.category">{{ hit.category }}</b>
+                <b v-if="qualityScoreLabel(hit)" :title="qualityScoreTitle(hit)">{{ qualityScoreLabel(hit) }}</b>
+                <b v-if="developerMode">{{ embeddingLabel(hit.embeddingStatus) }}</b>
+              </span>
+              <small>
+                {{ hit.bvId || '无 BV' }} · {{ hit.source }}
+                <template v-if="hit.publishTimeText"> · {{ hit.publishTimeText }}</template>
+              </small>
+              <span v-if="hit.highlightSummary" class="knowledge-card-summary">
+                {{ hit.highlightSummary }}
+              </span>
+              <span v-else class="knowledge-card-summary creator-muted">（暂无亮点摘要）</span>
+              <span class="knowledge-stats">
+                <span>播放 {{ formatCount(hit.viewCount) }}</span>
+                <span>点赞 {{ formatCount(hit.likeCount) }}</span>
+                <span>投币 {{ formatCount(hit.coinCount) }}</span>
+                <span>收藏 {{ formatCount(hit.favoriteCount) }}</span>
+                <span>弹幕 {{ formatCount(hit.danmakuCount) }}</span>
+                <span>评论 {{ formatCount(hit.replyCount) }}</span>
+              </span>
+              <span v-if="matchedTopicsByVideoId[hit.videoId]?.length" class="knowledge-topic-hits">
+                <span class="knowledge-topic-hits-label">为什么推荐它</span>
+                <span
+                  v-for="topic in matchedTopicsByVideoId[hit.videoId]"
+                  :key="topic.chunkId"
+                  class="knowledge-topic-hit"
+                >
+                  <b>{{ chunkTypeLabel(topic.chunkType) }} · {{ topic.chunkTitle }}</b>
+                  {{ topic.preview }}
+                </span>
+              </span>
+              <span v-if="evidenceByVideoId[hit.videoId]?.length" class="knowledge-evidence">
+                <span class="knowledge-evidence-label">观众怎么说</span>
+                <span
+                  v-for="ev in evidenceByVideoId[hit.videoId]"
+                  :key="ev.itemId"
+                  class="knowledge-evidence-item"
+                  :class="ev.sentiment === 'NEGATIVE' ? 'is-negative' : 'is-positive'"
+                >
+                  <b>{{ sourceTypeLabel(ev.sourceType) }} · {{ sentimentLabel(ev.sentiment) }}</b>
+                  {{ ev.content }}
+                </span>
+              </span>
+              <span class="knowledge-card-action">
+                {{ analysisLoadingVideoId === hit.videoId ? '加载案例内容...' : '用这个案例帮我改当前视频' }}
+              </span>
+              <!-- P1-1：竞品卡片上的「对比我的创作」入口，用 @click.stop 防止触发外层按钮的 openVideoAnalysis -->
+              <span
+                v-if="hit.tier === 'COMPETITOR'"
+                class="knowledge-card-action knowledge-card-competitor-action"
+                @click.stop="openCompetitorAnalysis(hit)"
+              >
+                对比我的创作
+              </span>
+            </button>
           </div>
-          <!-- P1-1：竞品卡片上的「对比我的创作」按钮 -->
-          <button
-            v-if="item.tier === 'COMPETITOR'"
-            type="button"
-            class="creator-secondary-action knowledge-card-competitor-btn"
-            @click="openCompetitorAnalysis(item)"
-          >
-            对比我的创作
-          </button>
-        </article>
+          <div v-if="searchResult.cards.length" class="knowledge-pager">
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="searching || !searchResult.hasMore"
+              @click="refreshSearchCards"
+            >
+              {{ searchResult.hasMore ? '换一批' : '没有更多' }}
+            </button>
+            <span>最多展示 4 批，共覆盖 top20 候选</span>
+          </div>
+        </template>
       </div>
 
-      <div v-if="total > PAGE_SIZE" class="knowledge-pager">
-        <button
-          type="button"
-          class="creator-secondary-action"
-          :disabled="page <= 1 || listLoading"
-          @click="changePage(-1)"
-        >
-          上一页
-        </button>
-        <span>第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-        <button
-          type="button"
-          class="creator-secondary-action"
-          :disabled="page >= totalPages || listLoading"
-          @click="changePage(1)"
-        >
-          下一页
-        </button>
+      <div class="knowledge-block">
+        <div class="creator-section-head">
+          <h3>案例列表</h3>
+          <div class="knowledge-toolbar">
+            <select v-model="filterTier" @change="applyFilters">
+              <option value="">全部层级</option>
+              <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <input
+              v-model="filterCategory"
+              type="text"
+              placeholder="按分区筛选"
+              @keyup.enter="applyFilters"
+            />
+            <button type="button" class="creator-secondary-action" @click="applyFilters">筛选</button>
+            <button type="button" class="creator-secondary-action" :disabled="listLoading" @click="loadList">
+              {{ listLoading ? '加载中…' : '刷新' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="listError" class="creator-alert error-alert">
+          <strong>列表加载失败</strong>
+          <span>{{ listError }}</span>
+        </div>
+        <p v-else-if="!items.length && !listLoading" class="creator-muted">
+          还没有案例，先在上方输入一个 BV 采集试试。
+        </p>
+        <div v-else class="knowledge-card-list">
+          <article v-for="item in items" :key="item.id" class="knowledge-card">
+            <strong>{{ item.title }}</strong>
+            <div class="creator-chip-list">
+              <b>{{ tierLabel(item.tier) }}</b>
+              <b v-if="item.category">{{ item.category }}</b>
+              <b v-if="qualityScoreLabel(item)" :title="qualityScoreTitle(item)">{{ qualityScoreLabel(item) }}</b>
+              <b v-if="developerMode">{{ embeddingLabel(item.embeddingStatus) }}</b>
+            </div>
+            <small>
+              {{ item.bvId || '无 BV' }} · {{ item.source }}
+              <template v-if="item.publishTimeText"> · {{ item.publishTimeText }}</template>
+            </small>
+            <p v-if="item.highlightSummary">{{ item.highlightSummary }}</p>
+            <p v-else class="creator-muted">（暂无亮点摘要）</p>
+            <div class="knowledge-stats">
+              <span>播放 {{ formatCount(item.viewCount) }}</span>
+              <span>点赞 {{ formatCount(item.likeCount) }}</span>
+              <span>投币 {{ formatCount(item.coinCount) }}</span>
+              <span>收藏 {{ formatCount(item.favoriteCount) }}</span>
+              <span>弹幕 {{ formatCount(item.danmakuCount) }}</span>
+              <span>评论 {{ formatCount(item.replyCount) }}</span>
+            </div>
+            <!-- P1-1：竞品卡片上的「对比我的创作」按钮 -->
+            <button
+              v-if="item.tier === 'COMPETITOR'"
+              type="button"
+              class="creator-secondary-action knowledge-card-competitor-btn"
+              @click="openCompetitorAnalysis(item)"
+            >
+              对比我的创作
+            </button>
+          </article>
+        </div>
+
+        <div v-if="total > PAGE_SIZE" class="knowledge-pager">
+          <button
+            type="button"
+            class="creator-secondary-action"
+            :disabled="page <= 1 || listLoading"
+            @click="changePage(-1)"
+          >
+            上一页
+          </button>
+          <span>第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
+          <button
+            type="button"
+            class="creator-secondary-action"
+            :disabled="page >= totalPages || listLoading"
+            @click="changePage(1)"
+          >
+            下一页
+          </button>
+        </div>
       </div>
     </section>
 
@@ -664,24 +666,41 @@ onMounted(() => {
 </template>
 
 <!--
-  案例库专用排版。其余视觉（面板/按钮/标签/提示）直接复用全局 creator-* 设计系统，这里只补本组件独有的部分。
-  放 scoped 而非全局 theme.css：保持组件自包含；creator-shell 的 CSS 变量是运行时继承，scoped 内照常可用。
+  案例库专用排版。外层仍使用全局 creator-* 设计系统，这里只处理案例库内部的表单、工具栏和列表密度。
+  放 scoped 而非全局 theme.css：避免影响创作台其他模块，也避开全局主题文件的协作冲突。
 -->
 <style scoped>
-/* creator-shell 自身不带 gap：让两个区块与居中的页头（max-width 1540 居中）对齐，并补上区块间距 */
-.creator-section {
-  max-width: 1540px;
+/* 与全局 creator-header 使用同一宽度规则，让页头和主体在桌面端左边线对齐。 */
+.knowledge-workspace-section {
+  width: min(1540px, calc(100vw - 96px));
+  max-width: none;
   margin: 0 auto;
 }
 
-.creator-section + .creator-section {
-  margin-top: var(--s3);
+.knowledge-block {
+  display: grid;
+  gap: var(--s3);
+}
+
+.knowledge-block + .knowledge-block {
+  padding-top: var(--s4);
+  border-top: 1px solid var(--border);
+}
+
+.knowledge-block > .creator-section-head {
+  align-items: flex-start;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.creator-inline-note {
+  max-width: 880px;
 }
 
 .knowledge-form {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(140px, 0.34fr) minmax(220px, 0.66fr);
-  gap: var(--s3);
+  grid-template-columns: minmax(320px, 1fr) minmax(160px, 220px) minmax(220px, 0.55fr);
+  gap: var(--s4);
 }
 
 .knowledge-form label {
@@ -701,7 +720,7 @@ onMounted(() => {
 .knowledge-toolbar input,
 .knowledge-toolbar select {
   width: 100%;
-  min-height: 38px;
+  min-height: 40px;
   padding: 0 var(--s3);
   color: var(--ink);
   background: var(--surface);
@@ -723,8 +742,8 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: var(--s2);
   align-items: center;
-  padding-bottom: var(--s3);
-  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .knowledge-toolbar input,
@@ -766,36 +785,41 @@ onMounted(() => {
 
 .knowledge-card-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: var(--s3);
+  grid-template-columns: 1fr;
+  gap: 0;
+  border-top: 1px solid rgba(23, 32, 51, 0.1);
 }
 
 .knowledge-card {
   display: grid;
   align-content: start;
-  gap: var(--s2);
-  padding: var(--s3);
+  gap: 10px;
+  padding: var(--s4) 0;
   color: inherit;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
+  border-radius: 0;
+}
+
+.knowledge-card:last-child {
+  border-bottom: 0;
 }
 
 .knowledge-card-button {
   width: 100%;
+  margin: 0;
   text-align: left;
   cursor: pointer;
   transition:
-    border-color 180ms ease,
-    box-shadow 180ms ease,
-    background-color 180ms ease;
+    background-color 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .knowledge-card-button:hover:not(:disabled),
 .knowledge-card-button:focus-visible {
-  background: #fff;
-  border-color: var(--accent);
-  box-shadow: inset 3px 0 0 var(--accent), var(--sh-sm);
+  background: rgba(0, 174, 236, 0.05);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .knowledge-card-button:disabled {
@@ -805,13 +829,13 @@ onMounted(() => {
 
 .knowledge-card > strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.45;
 }
 
 .knowledge-card-title {
   color: var(--ink);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: var(--fw-semibold);
   line-height: 1.45;
 }
@@ -833,15 +857,15 @@ onMounted(() => {
 .knowledge-stats {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 6px 14px;
 }
 
 .knowledge-stats span {
-  padding: 2px 8px;
+  padding: 0;
   color: var(--muted);
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   font-size: 12px;
   font-weight: var(--fw-medium);
 }
@@ -862,12 +886,13 @@ onMounted(() => {
 .knowledge-topic-hit {
   display: grid;
   gap: 4px;
-  padding: 8px 10px;
+  padding: 2px 0 2px 10px;
   color: var(--text);
   overflow-wrap: anywhere;
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid var(--accent-ring);
+  border-radius: 0;
   font-size: 13px;
   line-height: 1.55;
 }
@@ -921,10 +946,10 @@ onMounted(() => {
 
 .knowledge-evidence .knowledge-evidence-item {
   margin: 0;
-  padding: 6px 10px;
-  border-left: 3px solid transparent;
-  border-radius: var(--r-sm);
-  background: var(--surface-sub);
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
   color: var(--text);
   font-size: 13px;
   line-height: 1.55;
@@ -963,8 +988,18 @@ onMounted(() => {
 }
 
 @media (max-width: 820px) {
+  .knowledge-workspace-section {
+    width: 100%;
+  }
+
   .knowledge-form {
     grid-template-columns: 1fr;
+  }
+
+  .knowledge-toolbar input,
+  .knowledge-toolbar select,
+  .knowledge-toolbar button {
+    width: 100%;
   }
 }
 </style>

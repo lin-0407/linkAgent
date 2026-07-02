@@ -232,7 +232,7 @@ public class AgentExecutor {
         try {
             // 拼接记忆 + 用户输入作为对话起点，格式与系统提示词约定一致
             StringBuilder conversation = new StringBuilder();
-            appendLongTermMemory(conversation, longTermMemory.listByUser(resolvedUserId, 10));
+            appendLongTermMemory(conversation, longTermMemory.listRecentByUser(resolvedUserId, 10));
             appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
             List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
             appendMemory(conversation, recentMessages);
@@ -583,7 +583,7 @@ public class AgentExecutor {
      * 将长期记忆拼接到对话上下文中，格式为 "Long-term memory:" + 多行 " - key: content"。
      * <p>
      * 长期记忆放在对话最前面，让 LLM 优先参考用户的历史偏好和知识积累，再结合当前对话做推理。
-     * listByUser 每次取最近 10 条，平衡了记忆覆盖面和 Token 成本。
+     * listRecentByUser 每次取最近 10 条，平衡了记忆覆盖面和 Token 成本。
      */
     private void appendLongTermMemory(StringBuilder conversation, List<LongTermMemoryRecord> memories) {
         if (memories.isEmpty()) {
@@ -1044,7 +1044,7 @@ public class AgentExecutor {
 
             // 拼接记忆 + 用户输入作为对话起点（与 run() 完全一致）
             StringBuilder conversation = new StringBuilder();
-            appendLongTermMemory(conversation, longTermMemory.listByUser(resolvedUserId, 10));
+            appendLongTermMemory(conversation, longTermMemory.listRecentByUser(resolvedUserId, 10));
             appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
             List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
             appendMemory(conversation, recentMessages);
