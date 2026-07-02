@@ -1,7 +1,8 @@
 # 项目文档索引
 
-本文件统一记录阶段文档、功能说明和踩坑记录。`AGENTS.md` 只保留项目协作规则，避免随着阶段增加变得过长。
+本文件统一记录阶段文档、功能说明和踩坑总结。`AGENTS.md` 只保留项目协作规则，避免随着阶段增加变得过长。
 
+---
 
 ## 项目访问入口
 
@@ -9,61 +10,69 @@
 |---|---|
 | 项目域名 | <https://www.linkagent.cloud> |
 
-## 阶段文档
+---
 
-| 文档 | 路径 |
+## 阶段开发文档（`docs/develop/`）
+
+按阶段组织，每个文档涵盖对应阶段的业务背景、架构决策与实施路径。
+
+| 文档 | 路径 | 说明 |
+|---|---|---|
+| 阶段 0-2 — 基础 Agent 与记忆系统 | `/docs/develop/阶段0-2-基础Agent与记忆系统.md` | 最简调用链路、ReAct 内核、短期/摘要/长期记忆系统、前端控制台与主题重构 |
+| 阶段 3 — 工具系统与 MCP | `/docs/develop/阶段3-工具系统与MCP.md` | 工具注册安全基线、执行超时/重试保护、并发调用、MCP 生态扩展 |
+| 阶段 4 — 创作工作台 | `/docs/develop/阶段4-创作工作台.md` | UP 主智能工作台全流程：MVC 架构、创作任务与稿件输入、发布前优化、评论弹幕分析、复盘报告、偏好记忆、评测闭环、成本保护、AI 交互台浮窗化等 |
+| 阶段 5 — RAG 与 Agent 一体化 | `/docs/develop/阶段5-RAG与Agent一体化.md` | 跨分区视频案例知识库、高级检索链路、Agent 内核结构化输出升级、提示词模板 DB 化与热更新、设置面板、创作者语境库、LLM 成本追溯 |
+| 阶段 6 — Multi-Agent 与前端体验优化 | `/docs/develop/阶段6-Multi-Agent与前端体验优化.md` | PaE/Multi-Agent 编排、并发审查、重规划、交互式创作与视频复盘工作流重构、证据化建议链路、建议审查器、P0 重构与前端体验优化 |
+
+---
+
+## 功能参考说明（`docs/reference/`）
+
+按模块汇总各项功能的设计定位、数据模型边界与关键配置。
+
+| 文档 | 路径 | 说明 |
+|---|---|---|
+| 基础架构与前端主题 | `/docs/reference/基础架构与前端主题说明.md` | MVC 分层约定、前端撞色艺术主题、P0 用户化重构与视觉响应式收口 |
+| 创作工作台核心功能 | `/docs/reference/创作工作台核心功能说明.md` | 创作任务与稿件输入、发布前优化、评论弹幕分析、创作指导编辑窗口、SSE 与消息流、结果弹窗展示、复盘报告 |
+| 创作工作台扩展功能 | `/docs/reference/创作工作台扩展功能说明.md` | 偏好记忆、创作任务管理体验优化、评测集与失败回放、上线演示与部署、演示环境成本保护、Prompt 版本评测闭环、LLM 用量统计、创作者语境与建议质量升级、反馈追问证据链与 RAG 最小闭环、Markdown 导出、AI 交互台浮窗 |
+| RAG 与 Agent 一体化 | `/docs/reference/RAG与Agent一体化说明.md` | 跨分区视频案例知识库、高级检索、Agent 内核结构化输出、提示词管理、LLM 成本统计、设置面板、创作者语境库、RAG 检索主题分块与前端接入 |
+| Multi-Agent 与交互式创作 | `/docs/reference/Multi-Agent与交互式创作说明.md` | Multi-Agent 执行模式、并发引用审查、PaE 重规划、AI 创意方案入口、发布前优化 AI 交互台、证据化建议链路、建议审查器 |
+
+---
+
+## 踩坑总结（`docs/error/`）
+
+按阶段汇总开发与上线过程中遇到的典型问题及其根因和解决方案。
+
+| 文档 | 路径 | 说明 |
+|---|---|---|
+| 阶段 0-3 — 基础架构踩坑总结 | `/docs/error/阶段0-3-基础架构踩坑总结.md` | 环境与版本兼容性、Agent 调用链路、记忆系统、工具注册/执行/MCP、前端主题重构相关问题 |
+| 阶段 4 — 创作工作台踩坑总结 | `/docs/error/阶段4-创作工作台踩坑总结.md` | 数据库与事务、MVC 重整、创作任务与稿件输入、发布前优化、评论弹幕分析、复盘报告、偏好记忆、评测闭环、部署与成本保护、前端接入相关问题 |
+| 阶段 5-6 — Agent 与 RAG 踩坑总结 | `/docs/error/阶段5-6-Agent与RAG踩坑总结.md` | RAG 知识库与检索、Agent 内核升级、提示词管理、设置面板、创作者语境库、成本追溯、Multi-Agent 编排、并发审查、重规划、证据化建议链路相关问题 |
+
+---
+
+## 辅助资料
+
+| 文档 | 路径 | 说明 |
+|---|---|---|
+| 发布前优化金标准集 V1 用例 | `/docs/develop/pre_publish_golden_v1_cases.jsonl` | 金标准集机器可读样例，供评测使用 |
+
+---
+
+## Agent 参考资料（`docs/Agent参考资料/`）
+
+底层 Agent 原理与 Spring AI 参考文档，供开发时查阅。
+
+| 序号 | 路径 |
 |---|---|
-| P0+P1 修复技术方案 | `/docs/develop/P0+P1修复技术方案.md` |
-| 阶段 5.4 - Agent 内核结构化输出升级 | `/docs/develop/阶段5.4-Agent内核结构化输出升级.md` |
-| Agent 内核结构化输出升级说明 | `/docs/reference/Agent内核结构化输出升级说明.md` |
-| 阶段 5.4 - Agent 内核结构化输出升级踩坑记录 | `/docs/error/阶段5.4-Agent内核结构化输出升级踩坑记录.md` |
-| 阶段 5.7 - 创作者视频类型语境库 | `/docs/develop/阶段5.7-创作者视频类型语境库.md` |
-| 创作者视频类型语境库说明 | `/docs/reference/创作者视频类型语境库说明.md` |
-| 阶段 5.7 - 创作者视频类型语境库踩坑记录 | `/docs/error/阶段5.7-创作者视频类型语境库踩坑记录.md` |
-| 阶段 5.9 - LLM API 开销统计与全链路追溯 | `/docs/develop/阶段5.9-LLM API开销统计与全链路追溯.md` |
-| LLM API 开销统计与全链路追溯说明 | `/docs/reference/LLM API开销统计与全链路追溯说明.md` |
-| 阶段 5.9 - LLM API 开销统计与全链路追溯踩坑记录 | `/docs/error/阶段5.9-LLM API开销统计与全链路追溯踩坑记录.md` |
-| 阶段 5.10 - 发布前优化 Agent 化与步骤级开销追溯 | `/docs/develop/阶段5.10-发布前优化Agent化与步骤级开销追溯.md` |
-| 发布前优化 Agent 化与步骤级开销追溯说明 | `/docs/reference/发布前优化Agent化与步骤级开销追溯说明.md` |
-| 阶段 5.10 - 发布前优化 Agent 化与步骤级开销追溯踩坑记录 | `/docs/error/阶段5.10-发布前优化Agent化与步骤级开销追溯踩坑记录.md` |
-| 阶段 6 - Agent PaE 与 Multi Agent 模式 | `/docs/develop/阶段6-Agent PAE与Multi Agent模式.md` |
-| Agent PaE 与 Multi Agent 模式说明 | `/docs/reference/Agent PAE与Multi Agent模式说明.md` |
-| 阶段 6 - Agent PaE 与 Multi Agent 模式踩坑记录 | `/docs/error/阶段6-Agent PAE与Multi Agent模式踩坑记录.md` |
-| 阶段 6.1 - Multi Agent 并发与引用审查 | `/docs/develop/阶段6.1-Multi Agent并发与引用审查.md` |
-| Multi Agent 并发与引用审查说明 | `/docs/reference/Multi Agent并发与引用审查说明.md` |
-| 阶段 6.1 - Multi Agent 并发与引用审查踩坑记录 | `/docs/error/阶段6.1-Multi Agent并发与引用审查踩坑记录.md` |
-| 阶段 6.2 - PaE 重规划 | `/docs/develop/阶段6.2-PaE重规划.md` |
-| PaE 重规划说明 | `/docs/reference/PaE重规划说明.md` |
-| 阶段 6.2 - PaE 重规划踩坑记录 | `/docs/error/阶段6.2-PaE重规划踩坑记录.md` |
-| 阶段 6.3 - AI 交互式创作与视频复盘工作流重构 | `/docs/develop/阶段6.3-AI交互式创作与视频复盘工作流重构.md` |
-| AI 交互式创意方案入口说明 | `/docs/reference/AI交互式创意方案入口说明.md` |
-| 阶段 6.3 P0-1 - AI 创意方案入口踩坑记录 | `/docs/error/阶段6.3-P0-1-AI创意方案入口踩坑记录.md` |
-| 发布前优化 AI 交互台说明 | `/docs/reference/发布前优化AI交互台说明.md` |
-| 阶段 6.3 P0-2 - 发布前优化 AI 交互台踩坑记录 | `/docs/error/阶段6.3-P0-2-发布前优化AI交互台踩坑记录.md` |
-| 阶段 6.3 P0-3 - BV 绑定与 UID 绑定（后端） | `/docs/reference/` — 参见阶段 6.3 总方案文档 §14-15 |
-| 阶段 6.3 P0-3 - B站账号、BV绑定与视频分析页（前端） | `/docs/reference/` — 参见阶段 6.3 总方案文档 §16 |
-| B站账号与视频绑定 API 接口 | `/backend/src/main/java/com/link/linkagent/creator/bilibili/`（Controller / Service / Mapper） |
-| B站账号与视频绑定前端组件 | `/frontend/src/components/creator/BvBindingPanel.vue`、`BilibiliAccountPanel.vue`、`LinkedVideoCard.vue`、`LinkedVideoGrid.vue` |
-| 视频分析页 | `/frontend/src/views/VideoAnalysisPage.vue` — 路由 `/video-analysis` |
-| LinkAgent 前端全链路用户化重构方案 | `/docs/develop/项目前端业务流程重构.md` |
-| 前端 P0 用户化重构落地记录 | `/docs/develop/前端P0用户化重构落地.md` |
-| 前端 P0 用户化重构说明 | `/docs/reference/前端P0用户化重构说明.md` |
-| 前端 P0 用户化重构阶段问题整理 | `/docs/error/前端P0用户化重构阶段问题整理.md` |
-| P0 主链路验收清单 | `/docs/develop/P0主链路验收清单.md` |
-| P0 重构前代码审计报告 | `/docs/develop/P0重构前代码审计报告.md` |
-| 后端体验提升方案（记忆系统/SSE/容错/反馈） | `/docs/develop/linkAgent-backend-improvement-plan.md` |
-| 前端体验提升方案（Tab工作台/时间轴/建议卡片/移动端） | `/docs/develop/linkAgent-frontend-improvement-plan.md` |
-| 前端体验优化落地（阶段一：P0+P1 四件套） | `/docs/develop/前端体验优化落地-阶段一.md` |
-| 前端体验优化落地（阶段二拆分方案） | `/docs/develop/前端体验优化落地-阶段二-拆分方案.md` |
-| 前端体验优化落地（阶段二：CreatorWorkspace 模板拆分） | `/docs/develop/前端体验优化落地-阶段二.md` |
-| 前端 P0-4 视觉和响应式收口 | `/docs/develop/前端P0-4视觉和响应式收口.md` |
-| 前端 P0-4 视觉和响应式收口问题整理 | `/docs/error/前端P0-4视觉和响应式收口问题整理.md` |
-| 前端 P0-4 视觉和响应式收口说明 | `/docs/reference/前端P0-4视觉和响应式收口说明.md` |
-| 发布前优化金标准集 V1 设计 | `/docs/develop/发布前优化金标准集V1设计.md` |
-| 发布前优化金标准集 V1 机器可读样例 | `/docs/develop/pre_publish_golden_v1_cases.jsonl` |
-| 阶段 6.4 - 发布前优化证据化建议链路 | `/docs/develop/阶段6.4-发布前优化证据化建议链路.md` |
-| 发布前优化证据化建议链路说明 | `/docs/reference/发布前优化证据化建议链路说明.md` |
-| 阶段 6.4 - 发布前优化证据化建议链路踩坑记录 | `/docs/error/阶段6.4-发布前优化证据化建议链路踩坑记录.md` |
-| 阶段 6.5 - 发布前优化建议审查器 | `/docs/develop/阶段6.5-发布前优化建议审查器.md` |
-| 发布前优化建议审查器说明 | `/docs/reference/发布前优化建议审查器说明.md` |
-| 阶段 6.5 - 发布前优化建议审查器踩坑记录 | `/docs/error/阶段6.5-发布前优化建议审查器踩坑记录.md` |
+| 0 | `/docs/Agent参考资料/00_总览与阅读指南.md` |
+| 1 | `/docs/Agent参考资料/01_第一章_最简Agent模型.md` |
+| 2 | `/docs/Agent参考资料/02_第二章_SpringAI入门.md` |
+| 3 | `/docs/Agent参考资料/03_第三章_工具调用ToolCalling.md` |
+| 4 | `/docs/Agent参考资料/04_第四章_记忆与多轮对话.md` |
+| 5 | `/docs/Agent参考资料/05_第五章_RAG.md` |
+| 6 | `/docs/Agent参考资料/06_第六章_规划Planning.md` |
+| 7 | `/docs/Agent参考资料/07_第七章_多Agent协作.md` |
+| 8 | `/docs/Agent参考资料/08_第八章_可观测性与成本控制.md` |
+| 9 | `/docs/Agent参考资料/09_第九章_生产级架构.md` |
