@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -50,13 +51,21 @@ public class UserLlmConfigService {
      */
     private final String defaultLlmBaseUrl;
 
+    /**
+     * 系统默认 LLM 模型名（来自 spring.ai.openai.chat.options.model），
+     * 用于用户未配置自定义模型名时回退，避免连通性测试误用 Spring AI 的内置 OpenAI 默认模型。
+     */
+    private final String defaultLlmModelName;
+
     public UserLlmConfigService(
             UserLlmConfigMapper mapper,
             @Value("${linkagent.secret.aes-key:}") String aesKey,
-            @Value("${spring.ai.openai.base-url:}") String defaultLlmBaseUrl) {
+            @Value("${spring.ai.openai.base-url:}") String defaultLlmBaseUrl,
+            @Value("${spring.ai.openai.chat.options.model:}") String defaultLlmModelName) {
         this.mapper = mapper;
         this.aesKey = aesKey;
         this.defaultLlmBaseUrl = defaultLlmBaseUrl;
+        this.defaultLlmModelName = defaultLlmModelName;
         if (aesKey == null || aesKey.isBlank()) {
             log.warn("linkagent.secret.aes-key 未配置——API Key 加密/解密功能不可用。" +
                     "生产环境必须通过 LINKAGENT_AES_KEY 环境变量注入 Base64 编码的 32 字节密钥。");
@@ -158,21 +167,33 @@ public class UserLlmConfigService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "此配置未设置 LLM API Key，无法测试连接。请先保存 LLM API Key 后再测试。");
         }
-        String baseUrl = config.getLlmBaseUrl() != null ? config.getLlmBaseUrl() : defaultLlmBaseUrl;
+        String baseUrl = config.getLlmBaseUrl() != null ? config.getLlmBaseUrl() : trimToNull(defaultLlmBaseUrl);
         if (baseUrl == null || baseUrl.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "LLM Base URL 未配置（既无用户自定义也无系统默认值），无法测试连接。");
+        }
+        String modelName = config.getLlmModelName() != null ? config.getLlmModelName() : trimToNull(defaultLlmModelName);
+        if (modelName == null || modelName.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "LLM 模型名称未配置（既无用户自定义也无系统默认值），无法测试连接。");
         }
 
         long startMs = System.currentTimeMillis();
         try {
             // 创建临时 API 客户端和 ChatClient——测试完成后立即释放
-            // 为什么用构造函数而非 builder？Spring AI 1.1.4 中 OpenAiApi / OpenAiChatModel 没有 builder 方法。
-            OpenAiApi tempApi = new OpenAiApi(baseUrl, llmKey);
-            OpenAiChatModel tempModel = new OpenAiChatModel(tempApi);
-            ChatClient tempClient = ChatClient.builder()
-                    .defaultChatModel(tempModel)
+            // Spring AI 1.1.4 移除了旧的短构造函数，必须通过 builder 补齐默认重试、观测和工具调用配置。
+            OpenAiApi tempApi = OpenAiApi.builder()
+                    .baseUrl(baseUrl)
+                    .apiKey(llmKey)
                     .build();
+            OpenAiChatOptions tempOptions = OpenAiChatOptions.builder()
+                    .model(modelName)
+                    .build();
+            OpenAiChatModel tempModel = OpenAiChatModel.builder()
+                    .openAiApi(tempApi)
+                    .defaultOptions(tempOptions)
+                    .build();
+            ChatClient tempClient = ChatClient.builder(tempModel).build();
 
             String response = tempClient.prompt()
                     .user("回复 OK")

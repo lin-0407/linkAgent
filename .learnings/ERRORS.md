@@ -4,6 +4,37 @@ Command failures and integration errors.
 
 ---
 
+## [ERR-20260702-001] maven_compile_with_jdk8
+
+**Logged**: 2026-07-02T10:00:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+作者执行后端 Maven 编译时出现大量 `需要class, interface或enum` 和文本块未闭合错误，根因是 Maven 实际运行在 JDK 1.8，而项目源码和 `backend/pom.xml` 要求 JDK 21。
+
+### Error
+```text
+ApiErrorResponse.java: public record ... -> 需要class, interface或enum
+DirectReasoningWorkerAgent.java: 文本块 """ -> 未结束的字符串文字
+java -version / javac -version / mvn -version 均显示 1.8.0_181
+```
+
+### Context
+- `backend/pom.xml` 已配置 `<java.version>21</java.version>` 和 `maven-compiler-plugin <release>21</release>`。
+- Java 8 不支持 `record` 和文本块语法，因此编译器在语法解析阶段就批量失败。
+- 这不是当前源码里缺少 class 或括号，而是本地 JDK 环境与项目要求不一致。
+
+### Suggested Fix
+将 `JAVA_HOME` 和 `PATH` 切换到 JDK 21，并确认 `mvn -version` 输出的 `Java version` 是 21 后再重新执行后端编译。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/pom.xml
+
+---
+
 ## [ERR-20260620-001] unauthorized_maven_compile
 
 **Logged**: 2026-06-20T01:33:17+08:00
