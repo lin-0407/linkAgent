@@ -46,6 +46,7 @@ class CreatorCompetitorServiceTest {
                 new FakeCreatorSuggestionMapper(),
                 new FakeCreatorFeedbackMapper(),
                 competitorMapper,
+                null,
                 new FixedLlmService("{}"),
                 new ObjectMapper(),
                 new StubPromptService());
@@ -84,6 +85,7 @@ class CreatorCompetitorServiceTest {
                 new FakeCreatorSuggestionMapper(),
                 new FakeCreatorFeedbackMapper(),
                 competitorMapper,
+                null,
                 new FixedLlmService("""
                         {"competitorSummary":"竞品更强调结果","competitorAdvantages":[{"advantage":"标题更直接","evidence":"样例标题都突出收益","lesson":"标题前置结果"}],"ownAdvantages":[{"advantage":"解释更细","evidence":"文稿结构完整"}],"ownDisadvantages":[{"disadvantage":"卖点不够前置","evidence":"标题偏平","risk":"点击弱"}],"gapAnalysis":[{"dimension":"标题","gap":"结果感弱","priority":"HIGH"}],"improvementSuggestions":[{"suggestion":"标题突出收益","reason":"竞品样例有效","action":"重写标题"}],"differentiationStrategy":"主打可复制步骤"}
                         """),
@@ -111,6 +113,7 @@ class CreatorCompetitorServiceTest {
                 new FakeCreatorSuggestionMapper(),
                 new FakeCreatorFeedbackMapper(),
                 new FakeCreatorCompetitorMapper(),
+                null,
                 new FixedLlmService("{}"),
                 new ObjectMapper(),
                 new StubPromptService());
