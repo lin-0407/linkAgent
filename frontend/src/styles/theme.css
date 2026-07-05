@@ -6061,52 +6061,6 @@ body {
   outline-offset: 2px;
 }
 
-.surface-notice-dot {
-  position: relative;
-  width: 36px;
-  height: 36px;
-  border: 1px solid rgba(23, 32, 51, 0.08);
-  border-radius: var(--r-pill);
-  background: #fff;
-  box-shadow: var(--sh-sm);
-  animation: surface-notice-breathe 2.4s ease-in-out infinite;
-}
-
-.surface-notice-dot::before {
-  position: absolute;
-  top: 9px;
-  left: 13px;
-  width: 10px;
-  height: 12px;
-  border: 2px solid var(--muted);
-  border-bottom: 0;
-  border-radius: 10px 10px 3px 3px;
-  content: '';
-}
-
-.surface-notice-dot::after {
-  position: absolute;
-  right: 9px;
-  top: 8px;
-  width: 7px;
-  height: 7px;
-  background: var(--bili-pink);
-  border: 2px solid #fff;
-  border-radius: 50%;
-  content: '';
-}
-
-@keyframes surface-notice-breathe {
-  0%,
-  100% {
-    box-shadow: 0 1px 2px rgba(23, 32, 51, 0.05);
-  }
-
-  50% {
-    box-shadow: 0 0 0 4px rgba(251, 114, 153, 0.08), 0 8px 18px rgba(251, 114, 153, 0.12);
-  }
-}
-
 .surface-guide-backdrop {
   position: fixed;
   inset: 0;
@@ -8095,7 +8049,6 @@ body {
 @media (prefers-reduced-motion: reduce) {
   body,
   .surface-root,
-  .surface-notice-dot,
   .creator-workbench-shell,
   .creator-workbench-shell .creator-task-rail,
   .creator-workbench-shell .creator-flow-card,

@@ -88,7 +88,6 @@ const guideOpen = ref(false)
         >
           使用指南
         </button>
-        <span v-if="isCreatorRoute" class="surface-notice-dot" aria-hidden="true"></span>
         <!-- P1-3: 创作者画像全局入口 — 所有路由下可见，点击弹出画像面板 -->
         <CreatorProfilePopover />
         <button
@@ -120,7 +119,7 @@ const guideOpen = ref(false)
             <header class="surface-guide-head">
               <div>
                 <span>使用指南</span>
-                <h2 id="surface-guide-title">视频发布与复盘助手</h2>
+                <h2 id="surface-guide-title">从创意到复盘的工作流</h2>
               </div>
               <button type="button" class="surface-guide-close" aria-label="关闭使用指南" @click="guideOpen = false">
                 ×
@@ -131,29 +130,43 @@ const guideOpen = ref(false)
               <li>
                 <b>1</b>
                 <div>
-                  <strong>填写视频资料</strong>
-                  <p>先录入视频主题、标题草稿、简介、文稿和字幕。资料越完整，后续建议越稳定。</p>
+                  <strong>输入创意或创建任务</strong>
+                  <p>从一个选题想法、视频类型或已有任务开始，让 AI 先理解目标受众、表达方向和缺失素材。</p>
                 </div>
               </li>
               <li>
                 <b>2</b>
                 <div>
-                  <strong>生成发布方案</strong>
-                  <p>让系统检查标题、简介、标签和潜在风险，挑选适合当前视频的发布建议。</p>
+                  <strong>确认创意方向</strong>
+                  <p>查看 AI 生成的创意卡片，选择最适合的一版；确认后会回写到任务材料，继续进入发布前优化。</p>
                 </div>
               </li>
               <li>
                 <b>3</b>
                 <div>
-                  <strong>导入观众反馈</strong>
-                  <p>发布后粘贴评论、弹幕或整理后的反馈文本，用来识别争议点、关注点和误解。</p>
+                  <strong>生成发布前优化</strong>
+                  <p>基于材料、历史偏好、视频语境和案例证据生成标题、简介、标签、风险点和发布检查清单。</p>
                 </div>
               </li>
               <li>
                 <b>4</b>
                 <div>
-                  <strong>生成复盘报告</strong>
-                  <p>根据发布方案和观众反馈沉淀结论，得到下一期选题、标题和内容调整方向。</p>
+                  <strong>确认方案并绑定视频</strong>
+                  <p>采用发布建议后，发布到 B 站，再填回 BV 号和 UID，让后续视频分析与同一个任务关联。</p>
+                </div>
+              </li>
+              <li>
+                <b>5</b>
+                <div>
+                  <strong>导入反馈并追问</strong>
+                  <p>通过 BV、链接、文件或粘贴导入评论弹幕，生成观众反馈报告，并围绕争议点、误解和选题价值继续追问。</p>
+                </div>
+              </li>
+              <li>
+                <b>6</b>
+                <div>
+                  <strong>复盘并沉淀偏好</strong>
+                  <p>综合发布建议、反馈分析和竞品/案例结论生成复盘报告，把有效偏好沉淀到下一次发布前优化中。</p>
                 </div>
               </li>
             </ol>
