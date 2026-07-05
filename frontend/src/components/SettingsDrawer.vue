@@ -351,7 +351,7 @@ function statusLabel(status: string) {
                 @click="toggleSection('prompts')"
               >
                 <span class="settings-section-chevron" :class="{ open: !collapsedSections.prompts }">▸</span>
-                <h3>提示词管理（Agent Prompt）</h3>
+                <h3>提示词模板管理</h3>
                 <span class="settings-section-hint" v-if="collapsedSections.prompts && promptTemplates.length">
                   {{ promptTemplates.length }} 条模板
                 </span>
@@ -372,7 +372,7 @@ function statusLabel(status: string) {
                 </div>
 
                 <div v-if="promptTemplates.length === 0 && !promptLoading && !promptError" class="creator-muted">
-                  点击"加载提示词"查看所有 Agent 提示词模板。
+                  点击"加载提示词"查看所有提示词模板。
                 </div>
 
                 <div v-for="group in promptGroups" :key="group.scene" class="prompt-group">

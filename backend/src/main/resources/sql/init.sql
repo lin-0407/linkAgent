@@ -1,7 +1,10 @@
 -- ============================================================
 -- link_agent 数据库初始化脚本
--- 执行方式：mysql -u root -p < init.sql
+-- 执行方式：mysql --default-character-set=utf8mb4 -u root -p < init.sql
 -- ============================================================
+
+-- 手工执行脚本时先声明客户端字符集，避免 SQL 文件是 UTF-8 但连接按 latin1 解析，导致中文种子数据入库即乱码。
+SET NAMES utf8mb4;
 
 CREATE DATABASE IF NOT EXISTS link_agent DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -814,6 +817,7 @@ VALUES
      '你是 LinkAgent 的最终答案审查器。你的任务是审查候选回答是否回答完用户问题、是否自相矛盾、是否存在没有证据 id 的事实性断言、是否把 Worker 推理当成外部事实。必须输出 JSON 对象，字段匹配 AnswerAuditReport：passed、overallComment、issues、rewriteInstructions。issues 中每项包含 issueType、description、relatedEvidenceIds。只有当回答完整、保守且每个事实性陈述都有有效证据时，passed 才能为 true。',
      'Agent 答案审查器：检查最终回答完整性、矛盾和引用缺失')
 ON DUPLICATE KEY UPDATE
+    content = IF(REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆'), VALUES(content), content),
     prompt_type = VALUES(prompt_type),
     scene = VALUES(scene),
     description = VALUES(description),
@@ -933,6 +937,7 @@ VALUES
      '当前画像：\n{currentProfile}\n\n最近创作事件（按时间倒序）：\n{recentEvents}\n\n请基于这些事件增量更新画像。只修改需要调整的部分，保留仍然适用的旧特征。',
      '创作者画像增量更新用户提示词，currentProfile 为当前画像文本，recentEvents 为最近事件列表')
 ON DUPLICATE KEY UPDATE
+    content = IF(REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆'), VALUES(content), content),
     prompt_type = VALUES(prompt_type),
     scene = VALUES(scene),
     description = VALUES(description),
@@ -948,6 +953,7 @@ VALUES
      '任务：{taskName}\n视频类型：{videoType}\n待补全字段：{fieldType}\n\n任务全局上下文：\n{globalContext}\n\n请为【{fieldType}】生成补全建议。',
      '字段自动补全用户提示词，fieldType=字段中文名，globalContext=任务上下文')
 ON DUPLICATE KEY UPDATE
+    content = IF(REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆'), VALUES(content), content),
     prompt_type = VALUES(prompt_type),
     scene = VALUES(scene),
     description = VALUES(description),
@@ -963,6 +969,7 @@ VALUES
      '你是 LinkAgent 的 Agent Executor（结构化输出模式）。你的任务是基于当前计划步骤和可用工具，逐步执行并返回结构化结果。每一步必须输出 JSON 对象：如果本步需要调用工具，返回 {"action": "工具名", "actionInput": {"参数名": "参数值"}}；如果本步不需要工具或已完成推理，返回 {"finalAnswer": "最终回答文本"}。不要在 JSON 之外输出额外解释文本。工具参数必须完整填写，不要使用占位符或缩略写法。可用工具：\n{toolList}',
      'Agent Executor 结构化输出模式（阶段5.4）：每步输出 JSON，由 BeanOutputConverter 自动校验')
 ON DUPLICATE KEY UPDATE
+    content = IF(REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆'), VALUES(content), content),
     prompt_type = VALUES(prompt_type),
     scene = VALUES(scene),
     description = VALUES(description),
@@ -1036,6 +1043,7 @@ VALUES
      '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n复盘重点：{reviewFocus}\n额外要求：{extraRequirement}\n\n创作素材：\n{materials}\n\n发布前建议结果：\n{suggestionResult}\n\n观众反馈结果：\n{feedbackResult}\n\n竞品分析结果：\n{competitorResult}\n\n跨期上下文：{crossPeriodContext}',
      '复盘报告用户提示词：包含全链路分析结果和跨期上下文')
 ON DUPLICATE KEY UPDATE
+    content = IF(REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆'), VALUES(content), content),
     prompt_type = VALUES(prompt_type),
     scene = VALUES(scene),
     description = VALUES(description),
