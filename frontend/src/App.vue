@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AgentFloatingWindow from '@/components/AgentFloatingWindow.vue'
+import CreatorProfilePopover from '@/components/CreatorProfilePopover.vue'
 import SettingsDrawer from '@/components/SettingsDrawer.vue'
 import ParticleBackground from '@/components/ParticleBackground.vue'
 import SystemStatusBar from '@/components/SystemStatusBar.vue'
@@ -28,7 +29,7 @@ const guideOpen = ref(false)
   />
 
   <div class="surface-root">
-    <header class="surface-topbar">
+    <header class="surface-topbar" :class="{ 'surface-topbar-creator': isCreatorRoute }">
       <div class="surface-topbar-left">
         <RouterLink to="/" class="surface-brand" aria-label="返回首页">
           <span class="surface-brand-mark" aria-hidden="true"></span>
@@ -42,7 +43,7 @@ const guideOpen = ref(false)
         </nav>
       </div>
 
-      <nav v-if="!isCreatorRoute" class="surface-switch" aria-label="导航">
+      <nav class="surface-switch" aria-label="导航">
         <RouterLink to="/" custom v-slot="{ navigate, isExactActive }">
           <button type="button" :class="{ active: isExactActive }" @click="navigate">
             首页
@@ -61,6 +62,12 @@ const guideOpen = ref(false)
         <RouterLink to="/projects" custom v-slot="{ navigate, isActive }">
           <button type="button" :class="{ active: isActive }" @click="navigate">
             项目列表
+          </button>
+        </RouterLink>
+        <!-- P1-2: 长期记忆管理页入口 — 查看和管理系统自动提取的长期记忆 -->
+        <RouterLink to="/memory" custom v-slot="{ navigate, isActive }">
+          <button type="button" :class="{ active: isActive }" @click="navigate">
+            记忆管理
           </button>
         </RouterLink>
         <!-- P0-3: 视频分析独立页面入口 — 展示已绑定任务的视频并支持复盘追问 -->
@@ -82,6 +89,8 @@ const guideOpen = ref(false)
           使用指南
         </button>
         <span v-if="isCreatorRoute" class="surface-notice-dot" aria-hidden="true"></span>
+        <!-- P1-3: 创作者画像全局入口 — 所有路由下可见，点击弹出画像面板 -->
+        <CreatorProfilePopover />
         <button
           type="button"
           class="surface-settings-button"

@@ -218,3 +218,11 @@ llm:
 # milvus:
 #   host: ${MILVUS_HOST:localhost}
 #   port: ${MILVUS_PORT:19530}
+
+# ========== 应用密钥（P1-4：API Key 加密存储） ==========
+linkagent:
+  secret:
+    # AES-256-GCM 加密密钥（Base64 编码的 32 字节密钥）。
+    # 生产环境必须通过 LINKAGENT_AES_KEY 环境变量注入，默认值为空表示未配置。
+    # 生成方式：openssl rand -base64 32
+    aes-key: ${LINKAGENT_AES_KEY:}
