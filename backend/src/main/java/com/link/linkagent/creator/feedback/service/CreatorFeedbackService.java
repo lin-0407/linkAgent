@@ -213,7 +213,7 @@ public class CreatorFeedbackService {
      *   <li>构建 system + user prompt（含任务信息、自定义指导、分析焦点、额外要求）</li>
      *   <li>调用 LLM 产出结构化 JSON 分析报告</li>
      *   <li>解析并落库报告（含 feedbackSummary、hotTopics、sentimentSummary 等字段）</li>
-     *   <li>更新任务状态为 FEEDBACK_ANALYZED</li>
+     *   <li>更新任务状态为 ANALYZED，表示评论弹幕复盘结果已经产出</li>
      * </ol>
      * <p>
      * LLM 调用包裹在 LlmUsageContext 中，用于 Langfuse 追踪和 Token 用量统计。
@@ -235,7 +235,8 @@ public class CreatorFeedbackService {
         }
         CreatorFeedbackReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
         creatorFeedbackMapper.upsertReport(reportRecord);
-        creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.FEEDBACK_ANALYZED.name());
+        // 评论弹幕分析产出的报告即是创作者工作流定义的复盘结果，因此在报告落库后直接进入完毕状态。
+        creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.ANALYZED.name());
         return getReport(taskRecord.getTaskId());
     }
 
