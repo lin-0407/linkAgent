@@ -118,9 +118,9 @@ public class CreatorFeedbackService {
     /** B站 BV 号正则：10 位字母数字组合，用于从用户输入中提取有效 BV 号 */
     private static final Pattern BVID_PATTERN = Pattern.compile("BV[0-9A-Za-z]{10}");
     /** B站评论弹幕采集脚本路径（相对于项目根目录） */
-    private static final Path FEEDBACK_SCRIPT_PATH = Path.of("scripts", "bilibili_feedback_fetcher.py");
+    private static final String FEEDBACK_SCRIPT_PATH = "scripts/bilibili_feedback_fetcher.py";
     /** 脚本采集结果输出目录（相对于项目根目录），后端固定写入，防止页面参数影响服务端写入位置 */
-    private static final Path FEEDBACK_EXPORT_PATH = Path.of("export", "bilibili_feedback");
+    private static final String FEEDBACK_EXPORT_PATH = "export/bilibili_feedback";
     /**
      * 关键词词典，用于仪表盘关键词热度统计。
      * 不引入第三方分词库（jieba等），只用项目相关词汇做 MVP 统计，
@@ -290,7 +290,7 @@ public class CreatorFeedbackService {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         String bvid = extractBvid(request.bvInput());
         Path projectRoot = resolveProjectRoot();
-        Path scriptPath = projectRoot.resolve(FEEDBACK_SCRIPT_PATH).normalize();
+        Path scriptPath = resolveRelativePath(projectRoot, FEEDBACK_SCRIPT_PATH);
         Path outputDir = resolveFeedbackOutputDir(projectRoot);
 
         runFeedbackScript(projectRoot, scriptPath, outputDir, bvid, request);
@@ -536,7 +536,7 @@ public class CreatorFeedbackService {
         for (Path candidate : collectProjectRootCandidates()) {
             Path cursor = candidate;
             while (cursor != null) {
-                if (Files.isRegularFile(cursor.resolve(FEEDBACK_SCRIPT_PATH))) {
+                if (Files.isRegularFile(resolveRelativePath(cursor, FEEDBACK_SCRIPT_PATH))) {
                     return cursor;
                 }
                 cursor = cursor.getParent();
@@ -567,7 +567,7 @@ public class CreatorFeedbackService {
     }
 
     private Path resolveFeedbackOutputDir(Path projectRoot) {
-        Path outputDir = projectRoot.resolve(FEEDBACK_EXPORT_PATH).normalize();
+        Path outputDir = resolveRelativePath(projectRoot, FEEDBACK_EXPORT_PATH);
         if (!outputDir.startsWith(projectRoot)) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "评论弹幕输出目录不在项目根目录下");
         }
@@ -578,6 +578,16 @@ public class CreatorFeedbackService {
         } catch (IOException exception) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "创建评论弹幕输出目录失败");
         }
+    }
+
+    /**
+     * 在基准路径所属的文件系统内解析相对路径。
+     *
+     * 可执行 JAR 的类加载位置可能来自 JAR 文件系统，旧实现不能直接与默认文件系统创建的 Path 组合；
+     * 固定相对路径字符串交给基准路径解析，避免项目根探测因 Provider 不一致提前中断。
+     */
+    private static Path resolveRelativePath(Path basePath, String relativePath) {
+        return basePath.resolve(relativePath).normalize();
     }
 
     /**

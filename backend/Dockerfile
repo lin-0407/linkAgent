@@ -4,8 +4,8 @@ FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
 
 # 先复制依赖描述文件，是为了让 Docker 利用缓存，减少后续只改业务代码时的重复下载。
-COPY pom.xml .
-COPY src ./src
+COPY backend/pom.xml .
+COPY backend/src ./src
 
 RUN mvn -DskipTests package
 
@@ -15,6 +15,13 @@ FROM eclipse-temurin:21-jre
 WORKDIR /app
 
 COPY --from=build /workspace/target/linkAgent-0.0.1-SNAPSHOT.jar /app/app.jar
+COPY scripts/ /app/scripts/
+
+# 采集脚本仅使用 Python 标准库；创建 python 别名以兼容 Java 侧既有固定命令。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && ln -sf /usr/bin/python3 /usr/local/bin/python \
+    && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8080
 

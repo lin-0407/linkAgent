@@ -91,8 +91,9 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      # 后端运行时需执行根目录 scripts 下的受控采集脚本，构建上下文必须覆盖该目录。
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       DB_URL: "jdbc:mysql://mysql:3306/link_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai"
       DB_USERNAME: ${MYSQL_USER:-link_agent}

@@ -67,9 +67,9 @@ public class KnowledgeReferenceFetchService {
     /** BV 号正则：BV 开头 + 10 位字母数字 */
     private static final Pattern BVID_PATTERN = Pattern.compile("BV[0-9A-Za-z]{10}");
     /** 采集脚本相对路径 */
-    private static final Path REFERENCE_SCRIPT_PATH = Path.of("scripts", "bilibili_reference_fetcher.py");
+    private static final String REFERENCE_SCRIPT_PATH = "scripts/bilibili_reference_fetcher.py";
     /** 脚本产物输出目录 */
-    private static final Path REFERENCE_EXPORT_PATH = Path.of("export", "bilibili_reference");
+    private static final String REFERENCE_EXPORT_PATH = "export/bilibili_reference";
 
     private final KnowledgeReferenceVideoService knowledgeReferenceVideoService;
     private final ObjectMapper objectMapper;
@@ -93,7 +93,7 @@ public class KnowledgeReferenceFetchService {
     public ReferenceVideoImportResponse fetchAndImport(ReferenceVideoFetchImportRequest request) {
         String bvid = extractBvid(request.bvInput());
         Path projectRoot = resolveProjectRoot();
-        Path scriptPath = projectRoot.resolve(REFERENCE_SCRIPT_PATH).normalize();
+        Path scriptPath = resolveRelativePath(projectRoot, REFERENCE_SCRIPT_PATH);
         Path outputDir = resolveOutputDir(projectRoot);
 
         runReferenceScript(projectRoot, scriptPath, outputDir, bvid, request);
@@ -131,7 +131,7 @@ public class KnowledgeReferenceFetchService {
         for (Path candidate : collectProjectRootCandidates()) {
             Path cursor = candidate;
             while (cursor != null) {
-                if (Files.isRegularFile(cursor.resolve(REFERENCE_SCRIPT_PATH))) {
+                if (Files.isRegularFile(resolveRelativePath(cursor, REFERENCE_SCRIPT_PATH))) {
                     return cursor;
                 }
                 cursor = cursor.getParent();
@@ -162,7 +162,7 @@ public class KnowledgeReferenceFetchService {
     }
 
     private Path resolveOutputDir(Path projectRoot) {
-        Path outputDir = projectRoot.resolve(REFERENCE_EXPORT_PATH).normalize();
+        Path outputDir = resolveRelativePath(projectRoot, REFERENCE_EXPORT_PATH);
         if (!outputDir.startsWith(projectRoot)) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "案例库采集输出目录不在项目根目录下");
         }
@@ -173,6 +173,17 @@ public class KnowledgeReferenceFetchService {
         } catch (IOException exception) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "创建案例库采集输出目录失败");
         }
+    }
+
+    /**
+     * 在基准路径所属的文件系统内解析相对路径。
+     *
+     * Spring Boot 可把类加载位置暴露为 JAR 文件系统路径，而旧实现会把默认文件系统的 Path 传入。
+     * 直接调用 {@code resolve(Path)} 会要求两者 Provider 相同；固定相对路径字符串由基准路径自行解析，
+     * 才能让项目根探测在找不到脚本时继续安全遍历并返回明确业务错误。
+     */
+    static Path resolveRelativePath(Path basePath, String relativePath) {
+        return basePath.resolve(relativePath).normalize();
     }
 
     /**
