@@ -792,6 +792,12 @@ CREATE TABLE IF NOT EXISTS llm_prompt_template
   DEFAULT CHARSET = utf8mb4
   COMMENT = 'LLM 提示词模板表';
 
+-- 历史库可能已将 UTF-8 字节按 latin1 写入，形成截图中的“ä½ ”类可逆乱码。
+-- 先还原这些正文，能保留用户在乱码基础上继续补充的有效内容；含替换字符等不可逆数据仍由后续种子兜底覆盖。
+UPDATE llm_prompt_template
+SET content = CONVERT(CAST(CONVERT(content USING latin1) AS BINARY) USING utf8mb4)
+WHERE REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆');
+
 -- 阶段 6：PaE / Multi Agent 新增提示词种子。重复执行时不覆盖 content，避免把设置面板中人工调优过的提示词重置掉
 INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
 VALUES
