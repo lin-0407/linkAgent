@@ -1195,6 +1195,134 @@ CREATE TABLE IF NOT EXISTS user_llm_config
   DEFAULT CHARSET = utf8mb4
   COMMENT = '用户LLM配置表';
 
+-- ------------------------------------------------------------
+-- 32. 发布前成片表（阶段 7 P0）
+--     保存单版本成片的归属、私有对象位置和媒体处理状态。
+--     P0 每个任务固定一个 V1（version_no=1），后续版本对比阶段再扩展多版本。
+--
+--     设计要点：
+--     1. object_key 由后端根据 {ownerId}/{taskId}/{versionId}/{uploadSessionId} 规则生成，
+--        前端不得传入，防止路径注入和越权访问
+--     2. file_size 和 content_type 在上传完成后以 HeadObject 结果为准更新，不信任客户端声明
+--     3. duration_ms / width / height 等媒体探测字段在 P0-1 阶段由 ffprobe 填充
+--     4. media_deleted_at 和 delete_reason 用于标记原片已删除但记录保留（审计追溯）
+--     5. 唯一键 uk_draft_video_task_version 保证同一任务同一版本号只有一条有效记录
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_draft_video
+(
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    version_id          VARCHAR(64)   NOT NULL COMMENT '成片版本唯一标识（UUID）',
+    task_id             VARCHAR(64)   NOT NULL COMMENT '关联 creator_task.task_id',
+    owner_id            VARCHAR(64)   NOT NULL DEFAULT 'default' COMMENT '可信媒体归属；P0 固定从服务端会话读取 default',
+    version_no          INT           NOT NULL DEFAULT 1 COMMENT '成片版本号；P0 固定为1，后续版本对比阶段再扩展',
+    version_name        VARCHAR(128)  NOT NULL COMMENT '用户填写的成片版本名称',
+    original_file_name  VARCHAR(255)  NOT NULL COMMENT '原文件展示名称；不参与对象路径生成，避免路径注入',
+    bucket_name         VARCHAR(255)  NOT NULL COMMENT '原片所在私有对象存储桶名称',
+    object_key          VARCHAR(1000) NOT NULL COMMENT '后端生成的原片私有对象键，前端不得传入',
+    content_type        VARCHAR(128)  NOT NULL COMMENT '对象存储记录的媒体类型，P0 仅允许 video/mp4',
+    file_size           BIGINT        NOT NULL COMMENT '成片文件字节数；上传完成后以 HeadObject 结果为准',
+    duration_ms         BIGINT                 DEFAULT NULL COMMENT 'ffprobe 探测的视频时长毫秒，P0-1 前为空',
+    width               INT                    DEFAULT NULL COMMENT 'ffprobe 探测的视频宽度，P0-1 前为空',
+    height              INT                    DEFAULT NULL COMMENT 'ffprobe 探测的视频高度，P0-1 前为空',
+    frame_rate          DECIMAL(12, 6)         DEFAULT NULL COMMENT 'ffprobe 探测的平均帧率，P0-1 前为空',
+    video_codec         VARCHAR(64)            DEFAULT NULL COMMENT '视频编码名称，P0-1 前为空',
+    audio_codec         VARCHAR(64)            DEFAULT NULL COMMENT '音频编码名称，无音轨时为空',
+    has_audio           TINYINT                DEFAULT NULL COMMENT '是否存在音轨：1=存在，0=不存在，未探测时为空',
+    status              VARCHAR(32)   NOT NULL DEFAULT 'UPLOADING' COMMENT '成片状态：UPLOADING=上传中，UPLOADED=已上传，UPLOAD_FAILED=上传失败，UPLOAD_ABORTED=已取消',
+    current_review_id   VARCHAR(64)            DEFAULT NULL COMMENT '当前发布前试映任务ID，P0-2 前为空',
+    published_flag      TINYINT       NOT NULL DEFAULT 0 COMMENT '用户是否确认已发布：1=已发布，0=未发布',
+    published_at        DATETIME               DEFAULT NULL COMMENT '用户确认发布时间',
+    media_deleted_at    DATETIME               DEFAULT NULL COMMENT '原片和派生媒体实际删除时间',
+    delete_reason       VARCHAR(64)            DEFAULT NULL COMMENT '删除原因：PUBLISHED、USER_REQUEST、RETENTION',
+    create_time         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted          TINYINT       NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_draft_video_version_id (version_id),
+    UNIQUE KEY uk_draft_video_task_version (task_id, version_no),
+    KEY idx_draft_video_owner_task (owner_id, task_id),
+    KEY idx_draft_video_status_update (status, update_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '发布前成片表';
+
+-- ------------------------------------------------------------
+-- 33. 媒体分片上传会话表（阶段 7 P0）
+--     MySQL 保存上传事实，浏览器刷新后按已登记分片继续，不依赖内存会话。
+--
+--     设计要点：
+--     1. 状态机：CREATED → UPLOADING → VERIFYING → COMPLETED（正常路径）
+--               CREATED / UPLOADING → ABORTED（用户取消）
+--               CREATED / UPLOADING → EXPIRED（超时过期）
+--               VERIFYING → FAILED（校验失败）
+--               FAILED → SUPERSEDED（被新尝试替代）
+--        VERIFYING 是关键中间态：CompleteMultipartUpload 请求已发出但响应尚未确认，
+--        用于处理 OSS 成功但网络丢包的容错场景
+--     2. uk_media_upload_idempotency 唯一键防止同一任务重复创建上传会话
+--     3. file_fingerprint 是文件名+大小+修改时间的 SHA-256，续传对账用
+--     4. storage_upload_id 是 OSS CreateMultipartUpload 返回的 Upload ID，
+--        与本地 upload_session_id 一一对应但分属不同系统
+--     5. expires_at 在 abandonedTtl（默认24h）后过期，超时由读取时被动检查并标记
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_media_upload
+(
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    upload_session_id   VARCHAR(64)   NOT NULL COMMENT '业务上传会话唯一标识（UUID）',
+    version_id          VARCHAR(64)   NOT NULL COMMENT '关联 creator_draft_video.version_id',
+    task_id             VARCHAR(64)   NOT NULL COMMENT '关联 creator_task.task_id',
+    owner_id            VARCHAR(64)   NOT NULL DEFAULT 'default' COMMENT '可信媒体归属，所有查询必须同时校验 task_id 和 owner_id',
+    storage_upload_id   VARCHAR(255)  NOT NULL COMMENT 'OSS/S3 CreateMultipartUpload 返回的 Upload ID',
+    object_key          VARCHAR(1000) NOT NULL COMMENT '后端生成的目标对象键，前端不得传入',
+    content_type        VARCHAR(128)  NOT NULL COMMENT '创建 Multipart Upload 时声明的媒体类型',
+    expected_size       BIGINT        NOT NULL COMMENT '客户端声明的文件总字节数，完成后与 HeadObject 对账',
+    file_fingerprint    VARCHAR(64)   NOT NULL COMMENT '文件名、大小和最后修改时间的 SHA-256 摘要，用于续传对账',
+    part_size           INT           NOT NULL COMMENT '单分片目标字节数；最后一片允许更小',
+    total_parts         INT           NOT NULL COMMENT '预期分片总数，范围1到10000',
+    status              VARCHAR(24)   NOT NULL DEFAULT 'CREATED' COMMENT '上传状态：CREATED、UPLOADING、VERIFYING、COMPLETED、ABORTED、EXPIRED、FAILED、SUPERSEDED',
+    idempotency_key     VARCHAR(128)  NOT NULL COMMENT '创建上传会话幂等键，同一任务重复请求返回原会话',
+    failure_message     VARCHAR(500)           DEFAULT NULL COMMENT '最近失败原因中文摘要，不保存 SDK 堆栈、对象签名或密钥',
+    expires_at          DATETIME      NOT NULL COMMENT '未完成上传会话过期时间，默认创建后24小时',
+    completed_at        DATETIME               DEFAULT NULL COMMENT '完整对象确认完成时间',
+    create_time         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted          TINYINT       NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_media_upload_session_id (upload_session_id),
+    UNIQUE KEY uk_media_upload_idempotency (owner_id, task_id, idempotency_key),
+    KEY idx_media_upload_version (version_id),
+    KEY idx_media_upload_owner_task (owner_id, task_id, update_time),
+    KEY idx_media_upload_status_expire (status, expires_at)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '媒体分片上传会话表';
+
+-- ------------------------------------------------------------
+-- 34. 媒体已完成分片表（阶段 7 P0）
+--     保存浏览器上传成功后读取到的 ETag 和实际大小，
+--     作为断点续传与 CompleteMultipartUpload 的事实来源。
+--
+--     设计要点：
+--     1. 唯一键 uk_media_upload_part 保证同一上传会话同一分片序号只有一条记录
+--     2. etag 按 OSS 返回的不透明值原样保存，不自行重算或修改大小写
+--        （OSS 的 ETag 算法与标准 S3 的 MD5 不同，不能做 MD5 校验）
+--     3. 分片写入使用 INSERT ... ON DUPLICATE KEY UPDATE，支持续传时重复登记
+--     4. 完成上传时校验所有分片是否齐全、序号是否连续、总大小是否匹配
+--     5. 取消上传时整个会话的分片记录被 DELETE（不保留，因无后续价值）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_media_upload_part
+(
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    upload_session_id   VARCHAR(64)  NOT NULL COMMENT '关联 creator_media_upload.upload_session_id',
+    part_number         INT          NOT NULL COMMENT 'S3 分片序号，范围1到10000',
+    etag                VARCHAR(255) NOT NULL COMMENT 'OSS/S3 返回的分片 ETag；按不透明值原样保存，不自行重算',
+    part_size           BIGINT       NOT NULL COMMENT '浏览器确认的分片实际字节数',
+    completed_at        DATETIME     NOT NULL COMMENT '浏览器确认该分片上传完成时间',
+    create_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uk_media_upload_part (upload_session_id, part_number),
+    KEY idx_media_upload_part_session (upload_session_id, part_number)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '媒体已完成分片表';
+
 -- ============================================================
 -- 幂等迁移：为已存在的表补充新列
 -- 用 INFORMATION_SCHEMA 判断列是否存在，兼容所有 MySQL 8.x 版本

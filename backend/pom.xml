@@ -18,6 +18,13 @@
     <properties>
         <java.version>21</java.version>
         <spring-ai.version>1.1.4</spring-ai.version>
+        <!-- AWS SDK Java 2.x 版本。
+             2026-07-13 从 Maven Central 元数据核对并固定为 2.47.5。
+             必须显式固定而非使用 RELEASE/LATEST，原因：
+             1. Maven 的动态版本解析在不同时间可能拉到不同版本，导致构建不可复现
+             2. AWS SDK 小版本升级可能改变 S3 客户端默认行为（如签名算法、重试策略）
+             3. 固定版本后通过 Dependabot/Renovate 等工具主动升级，而非被动漂移 -->
+        <aws-sdk.version>2.47.5</aws-sdk.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     </properties>
@@ -29,6 +36,18 @@
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
                 <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- AWS SDK BOM：统一管理 S3 客户端及其所有传递依赖的版本。
+                 使用 BOM 的原因：
+                 1. S3 模块依赖 aws-core、auth、regions 等多个子模块，BOM 确保版本一致
+                 2. 避免手动逐个声明传递依赖的版本，降低版本冲突风险
+                 3. 未来增加其他 AWS 服务（如 SQS、SNS）时只需新增 artifactId，版本由 BOM 统一管理 -->
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws-sdk.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -121,6 +140,19 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- 阶段 7 P0：AWS S3 SDK（通过阿里云 OSS 的 S3 兼容接口使用）。
+             用途：
+             1. CreateMultipartUpload — 创建 OSS 分片上传
+             2. S3Presigner — 为浏览器直传生成短时预签名 PUT URL
+             3. CompleteMultipartUpload — 合并分片为完整对象
+             4. AbortMultipartUpload — 取消上传释放分片
+             5. HeadObject / DeleteObject — 对象校验与清理
+             不使用阿里云官方 OSS SDK 的原因：S3 兼容接口可随时切换为 AWS S3/MinIO 等其它 S3 服务。
+             版本由上方 BOM 统一管理，此处无需写 version。 -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
         </dependency>
 
         <!-- ===== 测试 ===== -->

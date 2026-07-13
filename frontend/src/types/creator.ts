@@ -726,7 +726,7 @@ export type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | '
  * 创作台一级步骤。
  * 持久化 activeStep 时复用同一类型，避免主壳和子组件各自维护 tab 名称。
  */
-export type CreatorActiveStep = 'task' | 'prePublish' | 'feedback' | 'report' | 'usage' | 'videoAnalysis'
+export type CreatorActiveStep = 'task' | 'prePublish' | 'preflight' | 'feedback' | 'report' | 'usage' | 'videoAnalysis'
 
 // ═══════════════════════════════════════════
 // P0-3: B站账号绑定

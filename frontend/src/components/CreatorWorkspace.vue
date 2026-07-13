@@ -39,12 +39,14 @@ import {
   startPrePublishWorkflow,
   updateCreatorTask,
 } from '@/api/creator'
+import { getMediaAccessSession } from '@/api/media'
 import MessageBubble from '@/components/MessageBubble.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
 import AiCreationConsole from '@/components/creator/AiCreationConsole.vue'
 import GuidanceEditorModal from '@/components/creator/GuidanceEditorModal.vue'
 import FeedbackTab from '@/components/creator/FeedbackTab.vue'
 import MaterialsTab from '@/components/creator/MaterialsTab.vue'
+import PreflightTab from '@/components/creator/PreflightTab.vue'
 import PrePublishTab from '@/components/creator/PrePublishTab.vue'
 import ReportTab from '@/components/creator/ReportTab.vue'
 import SuggestionCard from '@/components/creator/SuggestionCard.vue'
@@ -142,7 +144,7 @@ import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
 type TaskManageMode = 'create' | 'edit'
-type CreatorWorkStep = 'prePublish' | 'feedback' | 'report'
+type CreatorWorkStep = 'prePublish' | 'preflight' | 'feedback' | 'report'
 type CreatorStepKey = 'task' | CreatorWorkStep
 type FeedbackChatTurn = {
   id: string
@@ -335,35 +337,45 @@ const selectedWorkflowMessageId = ref('')
 // activeStep / restoredTaskId 从 Pinia creatorStore 读取，替代原来的 localStorage + persistWorkspaceState 模式
 const creatorStore = useCreatorStore()
 const { activeStep, restoredTaskId } = storeToRefs(creatorStore)
-const creatorStepMetas: Array<{
+const isMediaFeatureEnabled = ref(false)
+type CreatorStepMeta = {
   key: CreatorStepKey
   label: string
   shortLabel: string
   description: string
-}> = [
-  { key: 'task', label: '视频资料', shortLabel: '资料', description: '填写视频基础信息' },
-  { key: 'prePublish', label: '发布方案', shortLabel: '发布', description: '生成发布计划与方案' },
-  { key: 'feedback', label: '观众反馈', shortLabel: '反馈', description: '收集观众意见与反馈' },
-  { key: 'report', label: '复盘报告', shortLabel: '复盘', description: '生成复盘总结报告' },
-]
+}
+const creatorStepMetas = computed<CreatorStepMeta[]>(() => {
+  const steps: CreatorStepMeta[] = [
+    { key: 'task', label: '视频资料', shortLabel: '资料', description: '填写视频基础信息' },
+    { key: 'prePublish', label: '发布方案', shortLabel: '发布', description: '生成发布计划与方案' },
+  ]
+  if (isMediaFeatureEnabled.value) {
+    steps.push({ key: 'preflight', label: '成片试映', shortLabel: '试映', description: '上传成片并完成发布前体检' })
+  }
+  steps.push(
+    { key: 'feedback', label: '观众反馈', shortLabel: '反馈', description: '收集观众意见与反馈' },
+    { key: 'report', label: '复盘报告', shortLabel: '复盘', description: '生成复盘总结报告' },
+  )
+  return steps
+})
 const activeCreatorStepIndex = computed(() => {
-  const matchedIndex = creatorStepMetas.findIndex((step) => step.key === activeStep.value)
-  // 开销统计属于开发者辅助入口，不参与普通创作者四步流程；移动端进度条保持在复盘阶段，避免第五步挤压窄屏。
+  const matchedIndex = creatorStepMetas.value.findIndex((step) => step.key === activeStep.value)
+  // 开销统计属于开发者辅助入口，不参与普通创作者五步流程；移动端进度条保持在复盘阶段。
   if (activeStep.value === 'usage') {
-    return creatorStepMetas.length - 1
+    return creatorStepMetas.value.length - 1
   }
   return matchedIndex >= 0 ? matchedIndex : 0
 })
-// 使用 ?? 兜底第一个步骤元信息，满足 TypeScript 对数组索引可能返回 undefined 的严格检查；creatorStepMetas 是常量数组，始终有 4 个元素，所以 [0] 安全非空。
+// 使用 ?? 兜底第一个步骤元信息；creatorStepMetas 会随媒体能力开关变化，但始终至少包含基础四步。
 const activeCreatorStepMeta = computed(
-  () => creatorStepMetas[activeCreatorStepIndex.value] ?? creatorStepMetas[0]!,
+  () => creatorStepMetas.value[activeCreatorStepIndex.value] ?? creatorStepMetas.value[0]!,
 )
-const creatorProgressPercent = computed(() => `${((activeCreatorStepIndex.value + 1) / creatorStepMetas.length) * 100}%`)
+const creatorProgressPercent = computed(() => `${((activeCreatorStepIndex.value + 1) / creatorStepMetas.value.length) * 100}%`)
 const currentTaskProgressIndex = computed(() => {
   if (!selectedTask.value) {
     return 0
   }
-  return creatorStepMetas.findIndex((step) => step.key === resolveTaskEntryStep(selectedTask.value!))
+  return creatorStepMetas.value.findIndex((step) => step.key === resolveTaskEntryStep(selectedTask.value!))
 })
 // 当前任务详情默认折叠，让发布前优化和复盘区域成为页面第一视觉重点。
 const isCurrentTaskExpanded = ref(false)
@@ -567,7 +579,7 @@ const isActiveStepReadOnly = computed(() => {
   if (taskManageMode.value === 'edit') {
     return false
   }
-  const matchedIndex = creatorStepMetas.findIndex((step) => step.key === activeStep.value)
+  const matchedIndex = creatorStepMetas.value.findIndex((step) => step.key === activeStep.value)
   return matchedIndex >= 0 && matchedIndex < currentTaskProgressIndex.value
 })
 const hasFeedbackChatTurns = computed(() => feedbackChatTurns.value.length > 0)
@@ -858,8 +870,22 @@ onMounted(() => {
   loadGuidanceSettings()
   loadWorkspaceState()
   void refreshTasks()
+  void refreshMediaFeatureAvailability()
   window.addEventListener('keydown', handleWorkspaceKeydown)
 })
+
+async function refreshMediaFeatureAvailability() {
+  try {
+    const session = await getMediaAccessSession()
+    isMediaFeatureEnabled.value = session.enabled
+  } catch {
+    // 能力探测失败时隐藏新入口，保留旧创作流程可用，不把可选媒体链路变成主工作台阻塞项。
+    isMediaFeatureEnabled.value = false
+  }
+  if (!isMediaFeatureEnabled.value && activeStep.value === 'preflight') {
+    activeStep.value = selectedTask.value && hasConfirmedPrePublish.value ? 'feedback' : 'prePublish'
+  }
+}
 
 onBeforeUnmount(() => {
   closeWorkflowEventSource()
@@ -1154,10 +1180,14 @@ function cancelEditTask() {
 }
 
 function creatorStepIndex(stepKey: CreatorStepKey) {
-  return creatorStepMetas.findIndex((step) => step.key === stepKey)
+  return creatorStepMetas.value.findIndex((step) => step.key === stepKey)
 }
 
 function isCreatorStepCompleted(stepKey: CreatorStepKey) {
+  // P0-0 还没有把成片完成状态聚合进任务快照，不能仅凭旧任务状态误标“成片试映已完成”。
+  if (stepKey === 'preflight') {
+    return false
+  }
   const index = creatorStepIndex(stepKey)
   return index >= 0 && index < currentTaskProgressIndex.value
 }
@@ -1168,6 +1198,9 @@ function canNavigateCreatorStep(stepKey: CreatorStepKey) {
   }
   if (stepKey === 'prePublish') {
     return hasSelectedTask.value
+  }
+  if (stepKey === 'preflight') {
+    return isMediaFeatureEnabled.value && canEnterFeedback.value
   }
   if (stepKey === 'feedback') {
     return canEnterFeedback.value
@@ -1848,6 +1881,7 @@ function resolveTaskEntryStep(task: Pick<CreatorTask, 'status'>): CreatorWorkSte
     return 'report'
   }
   if (hasPrePublishResult(task.status)) {
+    // P0-0 默认开关关闭，先保留旧任务进入观众反馈的行为；用户可手动进入成片试映做存储 Spike。
     return 'feedback'
   }
   return 'prePublish'
@@ -1864,12 +1898,16 @@ function normalizeReturnStepForTask(
   if (targetStep === 'feedback' && !hasPrePublishResult(task.status)) {
     return resolveTaskEntryStep(task)
   }
+  if (targetStep === 'preflight' && !hasPrePublishResult(task.status)) {
+    return resolveTaskEntryStep(task)
+  }
   return targetStep
 }
 
 function resolveCurrentEditReturnStep(): CreatorWorkStep {
   if (
     activeStep.value === 'prePublish' ||
+    activeStep.value === 'preflight' ||
     activeStep.value === 'feedback' ||
     activeStep.value === 'report'
   ) {
@@ -2288,6 +2326,7 @@ provideCreatorWorkspace({
         >
           <span :class="{ active: Boolean(selectedTask) }">视频资料</span>
           <span :class="{ active: Boolean(suggestion) }">发布方案</span>
+          <span v-if="isMediaFeatureEnabled" :class="{ active: activeStep === 'preflight' }">成片试映</span>
           <span :class="{ active: Boolean(feedback || feedbackDashboard) }">观众反馈</span>
           <span :class="{ active: Boolean(feedbackReport) }">复盘报告</span>
         </div>
@@ -2560,6 +2599,30 @@ provideCreatorWorkspace({
               </span>
             </button>
             <button
+              v-if="isMediaFeatureEnabled"
+              type="button"
+              :disabled="!canNavigateCreatorStep('preflight')"
+              :class="{
+                active: activeStep === 'preflight',
+                completed: isCreatorStepCompleted('preflight'),
+              }"
+              :aria-current="activeStep === 'preflight' ? 'step' : undefined"
+              @click="navigateCreatorStep('preflight')"
+            >
+              <span class="creator-step-count">3</span>
+              <span class="creator-step-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M4.5 6h15v11.5h-15z" />
+                  <path d="M9.5 9l5 2.75-5 2.75z" />
+                  <path d="M7 20h10" />
+                </svg>
+              </span>
+              <span class="creator-step-text">
+                <strong>成片试映</strong>
+                <small>上传成片并发布前体检</small>
+              </span>
+            </button>
+            <button
               type="button"
               :disabled="!canNavigateCreatorStep('feedback')"
               :class="{
@@ -2569,7 +2632,7 @@ provideCreatorWorkspace({
               :aria-current="activeStep === 'feedback' ? 'step' : undefined"
               @click="navigateCreatorStep('feedback')"
             >
-              <span class="creator-step-count">3</span>
+              <span class="creator-step-count">{{ isMediaFeatureEnabled ? 4 : 3 }}</span>
               <span class="creator-step-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
                   <path d="M5 6.5h14v8.5h-8l-4 3v-3h-2z" />
@@ -2588,7 +2651,7 @@ provideCreatorWorkspace({
               :aria-current="activeStep === 'report' ? 'step' : undefined"
               @click="navigateCreatorStep('report')"
             >
-              <span class="creator-step-count">4</span>
+              <span class="creator-step-count">{{ isMediaFeatureEnabled ? 5 : 4 }}</span>
               <span class="creator-step-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
                   <path d="M6 4.5h12v15h-12z" />
@@ -2981,6 +3044,8 @@ provideCreatorWorkspace({
         </Teleport>
 
         <PrePublishTab v-if="activeStep === 'prePublish'" />
+
+        <PreflightTab v-if="isMediaFeatureEnabled && activeStep === 'preflight'" />
 
         <FeedbackTab v-if="activeStep === 'feedback'" />
 

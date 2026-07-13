@@ -1,5 +1,10 @@
 server:
   port: 8080
+  # 让 request.isSecure() 正确识别 Nginx 转发的 HTTPS 请求。
+  # 设置为 framework 后，Spring 会解析 X-Forwarded-Proto / X-Forwarded-Ssl 等标准代理头，
+  # request.isSecure() 才能正确返回 true，从而让媒体会话 Cookie 的 Secure 属性正确设置。
+  # 如果 Nginx 在本地，还需要配置 Tomcat 的 RemoteIpValve 信任代理 IP。
+  forward-headers-strategy: framework
 
 spring:
   application:
@@ -126,7 +131,48 @@ mybatis:
 # ========== 创作者反馈追问 RAG（阶段 4.13） ==========
 # 业务开关独立于 spring.ai 基础设施开关：即使 Milvus/Embedding 连上，也只有 enabled=true 才让追问走向量检索，
 # 避免“基础设施就绪但业务还没准备好”时追问链路被动切到 RAG。
-creator:
+  # ========== 阶段 7 P0：私有媒体能力 ==========
+  # 注意：媒体能力默认关闭。只有访问口令、Redis、OSS 和视频分析 Provider 全部配置完成后才显式开启，
+  # 避免未配置时启动即 5xx 或开放未受保护的大文件上传接口。
+  media:
+    # 媒体链路总开关；设为 true 后才加载所有媒体相关 Bean（S3 客户端、Filter、Controller）。
+    enabled: ${CREATOR_MEDIA_ENABLED:false}
+    # 共享访问口令；P0 单部署认证凭据，生产环境通过环境变量注入。
+    # 口令不可为空或仅空白字符，否则 validateEnabledConfiguration() 会拒绝。
+    access-code: ${CREATOR_MEDIA_ACCESS_CODE:}
+    # 单文件字节数上限，默认 1.5GB = 1500000000 字节。
+    # P0 前后端共享同一固定值，不对外开放环境变量调整，
+    # 避免服务端和浏览器端的分片协议不一致导致上传失败。
+    max-file-bytes: 1500000000
+    # 单视频时长上限毫秒，默认 1800000ms = 30 分钟。
+    # P0-1 阶段 ffprobe 探测后生效；P0-0 阶段仅声明不校验。
+    max-duration-ms: 1800000
+    # 媒体访问会话 Redis TTL；默认 12h，超时后需重新输入访问口令。
+    # 格式支持 Spring Boot Duration：12h、720m、43200s 等。
+    access-session-ttl: ${CREATOR_MEDIA_ACCESS_SESSION_TTL:12h}
+    # 未发布成片及其派生媒体的保留天数，超期由定时任务清理原片对象。
+    unpublished-retention-days: ${CREATOR_MEDIA_UNPUBLISHED_RETENTION_DAYS:30}
+    # ----- 访问控制子配置 -----
+    access:
+      # HttpOnly Cookie 名称；前端 JS 无法读取，仅浏览器自动携带。
+      cookie-name: ${CREATOR_MEDIA_ACCESS_COOKIE_NAME:LINKAGENT_MEDIA_SESSION}
+      # 同 IP 在失败窗口内的最大尝试次数；超限后返回 429 Too Many Requests。
+      max-failures: ${CREATOR_MEDIA_ACCESS_MAX_FAILURES:5}
+      # 失败计数滑动窗口；窗口过期后计数器自动清零。
+      failure-window: ${CREATOR_MEDIA_ACCESS_FAILURE_WINDOW:10m}
+    # ----- 上传子配置 -----
+    upload:
+      # 单分片目标字节数，默认 16 MiB = 16777216。
+      # 固定值原因：分片大小是客户端和 OSS 之间的协议参数，
+      # 服务端调整后已创建的上传会话会出现分片大小不一致。
+      # 下限 5 MiB（S3 Multipart Upload 最小分片），上限由 totalParts=10000 与文件大小推导。
+      part-size-bytes: 16777216
+      # 单次分片签名批量上限；默认 20，与前端并发上传数对齐。
+      max-sign-batch: 20
+      # 预签名 URL 有效期；默认 15m，浏览器必须在此时间内完成分片 PUT。
+      presign-ttl: ${CREATOR_MEDIA_UPLOAD_PRESIGN_TTL:15m}
+      # 上传会话最大存活时间；默认 24h，超时未完成则自动标记 EXPIRED。
+      abandoned-ttl: ${CREATOR_MEDIA_UPLOAD_ABANDONED_TTL:24h}
   pre-publish:
     # 默认启用发布前优化 Agent 链路；演示或排障时可通过 PRE_PUBLISH_AGENT_ENABLED=false 回退旧直连 LLM 链路。
     agent:
@@ -226,3 +272,35 @@ linkagent:
     # 生产环境必须通过 LINKAGENT_AES_KEY 环境变量注入，默认值为空表示未配置。
     # 生成方式：openssl rand -base64 32
     aes-key: ${LINKAGENT_AES_KEY:}
+
+# ========== 阶段 7 P0：私有媒体对象存储（S3 兼容协议） ==========
+# P0 默认连接阿里云 OSS 香港地域的 S3 兼容接口。
+# 三个端点（internal / browser / provider）的默认值相同，实际部署时可根据网络拓扑分别覆盖：
+#   - internalEndpoint：后端服务访问 OSS，部署在同 Region 时可改为内网地址节省流量
+#   - browserEndpoint：浏览器直传 OSS，必须是公网可达地址（预签名 URL 的 host）
+#   - providerEndpoint：云端 AI 模型访问 OSS（后续视频分析场景），默认公网
+storage:
+  s3:
+    # 香港地域的选择原因：中国大陆 OSS 新用户必须绑定自定义数据域名才能使用 S3 兼容接口，
+    # 香港地域目前无此限制，且延迟对国内用户可接受。真实回源效果仍需 P0-0 实测验证。
+    internal-endpoint: ${MEDIA_S3_INTERNAL_ENDPOINT:https://s3.oss-cn-hongkong.aliyuncs.com}
+    browser-endpoint: ${MEDIA_S3_BROWSER_ENDPOINT:https://s3.oss-cn-hongkong.aliyuncs.com}
+    provider-endpoint: ${MEDIA_S3_PROVIDER_ENDPOINT:https://s3.oss-cn-hongkong.aliyuncs.com}
+    # S3 签名使用的 Region 标识。
+    # 阿里云官方 Java SDK 2.x 示例与文档均使用 aws-global，
+    # 改为其他值（如 oss-cn-hongkong）可能导致签名校验失败。
+    region: ${MEDIA_S3_REGION:aws-global}
+    # RAM 用户 AccessKey；生产环境必须通过环境变量注入，默认值为空。
+    # 该 RAM 用户需要对指定 Bucket 有 PutObject、GetObject、DeleteObject 和 Multipart Upload 权限。
+    access-key: ${MEDIA_S3_ACCESS_KEY:}
+    secret-key: ${MEDIA_S3_SECRET_KEY:}
+    # OSS Bucket 名称（如 linkagent-media）；权限策略应限制该 Bucket 为私有读写。
+    bucket: ${MEDIA_S3_BUCKET:}
+    # 寻址模式：阿里云 OSS 只支持 Virtual Hosted-Style（bucket 作为域名子域），
+    # 不支持 MinIO 等自建服务常用的 Path-Style（bucket 作为 URL 路径段）。
+    # 设为 true 时若 endpoint 包含 aliyuncs.com，validateConfigured() 会主动拒绝启动。
+    path-style-access: ${MEDIA_S3_PATH_STYLE_ACCESS:false}
+    # AWS Chunked Encoding（aws-chunked）：一种流式上传的传输编码方式。
+    # 阿里云 OSS 不支持此编码，Java SDK 2.x 必须显式关闭，
+    # 否则签名校验失败（OSS 收到 aws-chunked 数据后返回 SignatureDoesNotMatch）。
+    chunked-encoding-enabled: ${MEDIA_S3_CHUNKED_ENCODING_ENABLED:false}
