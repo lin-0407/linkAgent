@@ -98,6 +98,34 @@ public interface CreatorWorkflowMapper {
     Optional<CreatorWorkflowSessionRecord> findSession(@Param("taskId") String taskId,
                                                        @Param("sessionId") String sessionId);
 
+    /**
+     * 在短事务内锁定会话并读取最新状态。
+     *
+     * 发送补充消息和确认建议都需要先锁定同一行，避免它们基于旧状态继续写入，
+     * 将已被其他请求抢占的 RUNNING 状态覆盖回等待输入或已确认状态。
+     */
+    @Select("""
+            SELECT id,
+                   session_id,
+                   task_id,
+                   stage,
+                   status,
+                   user_id,
+                   confirmed_result_id,
+                   error_message,
+                   create_time,
+                   update_time
+            FROM creator_workflow_session
+            WHERE task_id = #{taskId}
+              AND session_id = #{sessionId}
+              AND is_deleted = 0
+            LIMIT 1
+            FOR UPDATE
+            """)
+    @ResultMap("CreatorWorkflowSessionRecordMap")
+    Optional<CreatorWorkflowSessionRecord> findSessionForUpdate(@Param("taskId") String taskId,
+                                                                 @Param("sessionId") String sessionId);
+
     @Update("""
             UPDATE creator_workflow_session
             SET status = #{status},
@@ -111,7 +139,7 @@ public interface CreatorWorkflowMapper {
                             @Param("errorMessage") String errorMessage);
 
     /**
-     * 原子抢占发布前分析的执行权。
+     * 原子抢占发布前执行权。
      *
      * 只允许尚未执行、上轮失败可重试或等待用户确认后重新分析的会话切换为运行中。
      * 将状态判断放进同一条 UPDATE，是为了避免两个请求先后读到相同旧状态后都调用模型，
@@ -130,8 +158,8 @@ public interface CreatorWorkflowMapper {
               AND status IN ('WAITING_USER_INPUT', 'FAILED', 'WAITING_CONFIRMATION')
               AND is_deleted = 0
             """)
-    int claimPrePublishAnalysis(@Param("sessionId") String sessionId,
-                                @Param("runningStatus") String runningStatus);
+    int claimPrePublishExecution(@Param("sessionId") String sessionId,
+                                 @Param("runningStatus") String runningStatus);
 
     @Update("""
             UPDATE creator_workflow_session

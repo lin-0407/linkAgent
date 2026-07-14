@@ -296,8 +296,8 @@ public class CreatorWorkflowService {
     /**
      * 用户在交互台中发送文本消息。
      * <p>
-     * 状态约束：只有 WAITING_USER_INPUT 和 FAILED 状态下才能追加消息
-     * （RUNNING/CONFIRMED/CANCELLED 状态拒绝追加，防止并发干扰）。
+     * 状态约束：WAITING_USER_INPUT、FAILED 和 WAITING_CONFIRMATION 状态下可以追加消息，
+     * 让用户在看到建议后补充修改要求；RUNNING/CONFIRMED/CANCELLED 状态拒绝追加，防止并发干扰。
      * 消息写入后自动将状态推进为 WAITING_USER_INPUT，等待用户下一轮操作。
      *
      * @param taskId    创作任务ID
@@ -309,7 +309,7 @@ public class CreatorWorkflowService {
     public CreatorWorkflowMessageResponse sendMessage(String taskId,
                                                       String sessionId,
                                                       CreatorWorkflowMessageCreateRequest request) {
-        CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
+        CreatorWorkflowSessionRecord sessionRecord = getSessionRecordForUpdate(taskId, sessionId);
         ensureCanAppendMessage(sessionRecord);
 
         CreatorWorkflowMessageRecord messageRecord = appendMessage(
@@ -370,14 +370,7 @@ public class CreatorWorkflowService {
         // 先由数据库原子抢占执行权，再开始画像初始化和 LLM 调用。
         // 前端禁用按钮只能减少重复点击，无法覆盖双标签页、网络重试或直接调用接口的并发请求；
         // 条件更新返回 0 时说明会话状态已被其他请求改变，必须在产生模型成本前立即拒绝本次请求。
-        if (creatorWorkflowMapper.claimPrePublishAnalysis(
-                sessionRecord.getSessionId(),
-                CreatorWorkflowStatus.RUNNING.name()) != 1) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前工作流正在运行或状态已变化，请刷新后重试");
-        }
-        sessionRecord.setStatus(CreatorWorkflowStatus.RUNNING.name());
-        sessionRecord.setErrorMessage(null);
-        publishSessionStatus(sessionRecord);
+        sessionRecord = claimPrePublishExecution(sessionRecord);
 
         CreatorWorkflowStepRecord currentStep = null;
         try {
@@ -556,6 +549,9 @@ public class CreatorWorkflowService {
      *   <li>状态推进为 WAITING_USER_INPUT，用户可以继续补充修改要求或进入下一步</li>
      * </ol>
      * <p>
+     * 为什么不使用覆盖整个方法的事务：方法中包含 LLM 调用，长事务会长期持有会话行锁。
+     * 进入 RUNNING 前已经通过条件更新完成短暂的原子抢占，后续写入与发布前分析保持相同的可追踪策略。
+     * <p>
      * 为什么先检查是否有完整文稿：文稿草稿是"从大纲/创意点子扩写口播稿"，如果用户已经上传
      * 了完整的口播脚本或字幕，扩写不仅多余而且可能覆盖用户的真实创作内容。
      *
@@ -564,7 +560,6 @@ public class CreatorWorkflowService {
      * @param request   文稿草稿请求，含额外要求
      * @return 文稿草稿响应，含生成的文稿全文和关联消息
      */
-    @Transactional
     public PrePublishDraftResponse generatePrePublishManuscriptDraft(String taskId,
                                                                      String sessionId,
                                                                      PrePublishDraftRequest request) {
@@ -580,14 +575,9 @@ public class CreatorWorkflowService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前任务已有较完整文稿或字幕，请直接生成发布方案");
         }
 
+        sessionRecord = claimPrePublishExecution(sessionRecord);
         CreatorWorkflowStepRecord currentStep = null;
         try {
-            updateSessionStatus(
-                    sessionRecord.getTaskId(),
-                    sessionRecord.getSessionId(),
-                    CreatorWorkflowStatus.RUNNING,
-                    null
-            );
             appendAndPublishMessage(
                     sessionRecord.getTaskId(),
                     sessionRecord.getSessionId(),
@@ -718,7 +708,7 @@ public class CreatorWorkflowService {
     public CreatorWorkflowSessionResponse confirmPrePublishSuggestion(String taskId,
                                                                       String sessionId,
                                                                       CreatorWorkflowConfirmRequest request) {
-        CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
+        CreatorWorkflowSessionRecord sessionRecord = getSessionRecordForUpdate(taskId, sessionId);
         CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findBySuggestionId(request.suggestionId().trim())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "发布前优化建议不存在"));
         if (!sessionRecord.getTaskId().equals(suggestionRecord.getTaskId())) {
@@ -1327,7 +1317,37 @@ public class CreatorWorkflowService {
     }
 
     /**
-     * 状态前置校验：只有 WAITING_USER_INPUT 和 FAILED 状态允许用户追加消息。
+     * 锁定会话后读取最新状态。
+     *
+     * 此方法只能在短事务的发送消息或确认建议流程中调用。锁会在事务提交后立即释放，
+     * 不用于包裹 LLM 调用，避免慢模型请求长期阻塞用户后续操作。
+     */
+    private CreatorWorkflowSessionRecord getSessionRecordForUpdate(String taskId, String sessionId) {
+        getTaskRecord(taskId);
+        return creatorWorkflowMapper.findSessionForUpdate(taskId.trim(), sessionId.trim())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "工作流会话不存在"));
+    }
+
+    /**
+     * 原子抢占发布前分析或文稿草稿生成的执行权。
+     *
+     * 条件更新成功后状态已提交为 RUNNING，其他写入操作会在锁定会话时读到 RUNNING 并拒绝。
+     * 这里不持有 Java 同步锁或数据库事务等待 LLM 返回，既防止重复模型调用，也避免慢调用阻塞会话。
+     */
+    private CreatorWorkflowSessionRecord claimPrePublishExecution(CreatorWorkflowSessionRecord sessionRecord) {
+        if (creatorWorkflowMapper.claimPrePublishExecution(
+                sessionRecord.getSessionId(),
+                CreatorWorkflowStatus.RUNNING.name()) != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前工作流正在运行或状态已变化，请刷新后重试");
+        }
+        sessionRecord.setStatus(CreatorWorkflowStatus.RUNNING.name());
+        sessionRecord.setErrorMessage(null);
+        publishSessionStatus(sessionRecord);
+        return sessionRecord;
+    }
+
+    /**
+     * 状态前置校验：用户可在等待输入、失败或等待确认时追加消息。
      * RUNNING 时追加会干扰正在执行的 Agent/LLM 流程；
      * CONFIRMED/CANCELLED 时追加没有业务意义（会话已终结）。
      */

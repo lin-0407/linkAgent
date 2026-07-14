@@ -26,6 +26,8 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -84,7 +86,7 @@ class CreatorWorkflowServiceTest {
         when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(taskRecord));
         when(workflowMapper.findSession("task-1", "session-1")).thenReturn(Optional.of(sessionRecord));
         when(taskMapper.listMaterialsByTaskId("task-1")).thenReturn(List.of(materialRecord));
-        when(workflowMapper.claimPrePublishAnalysis("session-1", CreatorWorkflowStatus.RUNNING.name()))
+        when(workflowMapper.claimPrePublishExecution("session-1", CreatorWorkflowStatus.RUNNING.name()))
                 .thenReturn(0);
 
         // 抢占失败应明确返回 409，而不是继续执行后在消息或建议覆盖时才暴露不一致。
@@ -98,5 +100,106 @@ class CreatorWorkflowServiceTest {
         // 409 必须发生在画像初始化和建议生成之前，
         // 否则虽然最终拒绝了请求，仍会产生不必要的 LLM 调用成本。
         verifyNoInteractions(profileService, suggestionService, runtimeSettingService);
+    }
+
+    @Test
+    void shouldRejectDraftGenerationBeforeCallingModelWhenAnotherRequestHasClaimedSession() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        PrePublishSuggestionService suggestionService = mock(PrePublishSuggestionService.class);
+        CreatorWorkflowEventPublisher eventPublisher = mock(CreatorWorkflowEventPublisher.class);
+        LlmApiUsageService usageService = mock(LlmApiUsageService.class);
+        LLMService llmService = mock(LLMService.class);
+        RuntimeSettingService runtimeSettingService = mock(RuntimeSettingService.class);
+        CreatorPreferenceService preferenceService = mock(CreatorPreferenceService.class);
+        CreatorProfileService profileService = mock(CreatorProfileService.class);
+        CreatorWorkflowService service = new CreatorWorkflowService(
+                taskMapper,
+                suggestionMapper,
+                workflowMapper,
+                suggestionService,
+                eventPublisher,
+                usageService,
+                llmService,
+                runtimeSettingService,
+                preferenceService,
+                profileService
+        );
+
+        CreatorTaskRecord taskRecord = new CreatorTaskRecord();
+        taskRecord.setTaskId("task-1");
+        CreatorMaterialRecord materialRecord = new CreatorMaterialRecord();
+        materialRecord.setTaskId("task-1");
+        materialRecord.setMaterialType("TITLE_DRAFT");
+        materialRecord.setContent("用于生成文稿的短大纲");
+        CreatorWorkflowSessionRecord sessionRecord = new CreatorWorkflowSessionRecord();
+        sessionRecord.setSessionId("session-1");
+        sessionRecord.setTaskId("task-1");
+        sessionRecord.setStage(CreatorWorkflowStage.PRE_PUBLISH.name());
+        sessionRecord.setStatus(CreatorWorkflowStatus.WAITING_USER_INPUT.name());
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(taskRecord));
+        when(workflowMapper.findSession("task-1", "session-1")).thenReturn(Optional.of(sessionRecord));
+        when(taskMapper.listMaterialsByTaskId("task-1")).thenReturn(List.of(materialRecord));
+        when(workflowMapper.claimPrePublishExecution("session-1", CreatorWorkflowStatus.RUNNING.name()))
+                .thenReturn(0);
+
+        // 文稿草稿与发布方案都会调用模型，必须共享同一份会话抢占机制。
+        assertThatThrownBy(() -> service.generatePrePublishManuscriptDraft(
+                "task-1",
+                "session-1",
+                new com.link.linkagent.creator.workflow.model.PrePublishDraftRequest(null)
+        )).isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        verifyNoInteractions(llmService);
+    }
+
+    @Test
+    void shouldRejectSupplementAfterExecutionClaimHasChangedSessionToRunning() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        PrePublishSuggestionService suggestionService = mock(PrePublishSuggestionService.class);
+        CreatorWorkflowEventPublisher eventPublisher = mock(CreatorWorkflowEventPublisher.class);
+        LlmApiUsageService usageService = mock(LlmApiUsageService.class);
+        LLMService llmService = mock(LLMService.class);
+        RuntimeSettingService runtimeSettingService = mock(RuntimeSettingService.class);
+        CreatorPreferenceService preferenceService = mock(CreatorPreferenceService.class);
+        CreatorProfileService profileService = mock(CreatorProfileService.class);
+        CreatorWorkflowService service = new CreatorWorkflowService(
+                taskMapper,
+                suggestionMapper,
+                workflowMapper,
+                suggestionService,
+                eventPublisher,
+                usageService,
+                llmService,
+                runtimeSettingService,
+                preferenceService,
+                profileService
+        );
+
+        CreatorTaskRecord taskRecord = new CreatorTaskRecord();
+        taskRecord.setTaskId("task-1");
+        CreatorWorkflowSessionRecord runningSession = new CreatorWorkflowSessionRecord();
+        runningSession.setSessionId("session-1");
+        runningSession.setTaskId("task-1");
+        runningSession.setStage(CreatorWorkflowStage.PRE_PUBLISH.name());
+        runningSession.setStatus(CreatorWorkflowStatus.RUNNING.name());
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(taskRecord));
+        when(workflowMapper.findSessionForUpdate("task-1", "session-1"))
+                .thenReturn(Optional.of(runningSession));
+
+        // 模拟补充请求在等待数据库锁期间，另一条分析请求已成功抢占会话。
+        // 锁释放后必须以最新的 RUNNING 状态拒绝补充，而不是把状态写回 WAITING_USER_INPUT。
+        assertThatThrownBy(() -> service.sendMessage(
+                "task-1",
+                "session-1",
+                new com.link.linkagent.creator.workflow.model.CreatorWorkflowMessageCreateRequest("补充要求")
+        )).isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("不可继续发送消息");
+
+        verify(workflowMapper, never()).insertMessage(org.mockito.ArgumentMatchers.any());
     }
 }
