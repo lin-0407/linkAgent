@@ -22,6 +22,8 @@ import java.util.Optional;
  * 独立于已有 CreatorTaskMapper 和 CreatorInteractiveMapper，
  * 避免把账号、视频缓存、任务绑定和分析报告混入已有访问层，导致单一 Mapper 过大。
  * 全部使用注解 SQL，保持和项目其它 Mapper 一致的风格。
+ * 查询返回对象均为普通 JavaBean，使用 @Results 按属性 setter 映射；
+ * 持久化模型不能改为 Java record，否则 MyBatis 无法回填查询结果。
  */
 @Mapper
 public interface CreatorBilibiliMapper {

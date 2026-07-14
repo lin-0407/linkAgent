@@ -141,22 +141,23 @@ public class GlobalExceptionHandler {
      * 处理 {@link DataAccessException}（Spring 数据库访问底层统一异常）。
      * <p>
      * 捕获范围：涵盖 JDBC、JPA、MyBatis 等所有数据访问层的异常（连接失败、SQL 语法错误、约束冲突等）。
-     * 统一返回 500 并指引开发者检查 init.sql 是否执行，因为开发环境中最常见的数据库错误就是表不存在。
-     * 生产环境应该通过更精细的异常映射区分具体数据库问题（如唯一约束冲突 → 409）。
+     * 统一返回 500，并提示作者查看后端日志中的根异常。
+     * DataAccessException 既可能是表或字段缺失，也可能是 Mapper 映射、连接或约束问题，
+     * 不能再把所有情况误导为 init.sql 未执行。
      *
      * @param exception 数据访问异常（具体子类由 ORM 框架决定）
      * @param request   HTTP 请求
-     * @return 500 + 数据库修复指引
+     * @return 500 + 数据库排查指引
      */
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<ApiErrorResponse> handleDataAccess(DataAccessException exception,
                                                             HttpServletRequest request) {
-        // 数据库异常常见于本地库没有重新执行 init.sql，这里保留日志细节，前端只展示处理建议。
+        // 前端不回显底层 SQL 和堆栈，避免把内部实现暴露到页面；具体根因保留在后端日志中。
         log.error("数据库访问失败: path={}", request.getRequestURI(), exception);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new ApiErrorResponse(
                         HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                        "数据库操作失败，请确认 backend/src/main/resources/sql/init.sql 已重新执行。",
+                        "数据库操作失败，请查看后端日志中的 Caused by 定位具体原因。",
                         request.getRequestURI()
                 ));
     }

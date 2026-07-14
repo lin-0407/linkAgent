@@ -75,7 +75,7 @@ public class CreatorBilibiliService {
             // 已有绑定：更新 UID，同时重置昵称和同步信息。
             // 因为 UID 变了意味着旧缓存和昵称不再有效，等下次同步时重新拉取。
             // 使用专用的 updateAccountUid 而非 updateAccountSyncResult——后者没有权限改动 UID。
-            bilibiliMapper.updateAccountUid(record.accountId(), request.bilibiliUid());
+            bilibiliMapper.updateAccountUid(record.getAccountId(), request.bilibiliUid());
             var updated = bilibiliMapper.findAccountByUserId(request.userId()).orElseThrow();
             return toAccountResponse(updated);
         }
@@ -134,16 +134,16 @@ public class CreatorBilibiliService {
 
         LocalDateTime now = LocalDateTime.now();
         bilibiliMapper.updateAccountSyncResult(
-                account.accountId(),
-                account.nickname(),
+                account.getAccountId(),
+                account.getNickname(),
                 "ACTIVE",
                 now,
                 null
         );
 
-        log.info("B站视频同步（占位）：userId={}, bilibiliUid={}", userId, account.bilibiliUid());
+        log.info("B站视频同步（占位）：userId={}, bilibiliUid={}", userId, account.getBilibiliUid());
         return Map.of(
-                "bilibiliUid", account.bilibiliUid(),
+                "bilibiliUid", account.getBilibiliUid(),
                 "syncedCount", 0,
                 "linkedCount", 0,
                 "anomalyCount", 0,
@@ -182,7 +182,7 @@ public class CreatorBilibiliService {
         // 检查是否已有绑定——已有则直接返回，不允许覆盖
         var existingBinding = bilibiliMapper.findBindingByTaskId(taskId);
         if (existingBinding.isPresent()) {
-            log.info("任务已有BV绑定，直接返回：taskId={}, bvid={}", taskId, existingBinding.get().bvid());
+            log.info("任务已有BV绑定，直接返回：taskId={}, bvid={}", taskId, existingBinding.get().getBvid());
             return toBindingResponse(existingBinding.get());
         }
 
@@ -192,7 +192,7 @@ public class CreatorBilibiliService {
         if (!conflictingBindings.isEmpty()) {
             // 区分同用户和跨用户冲突：跨用户冲突应阻止而非仅警告
             boolean hasCrossUserConflict = conflictingBindings.stream()
-                    .anyMatch(b -> !request.userId().equals(b.userId()));
+                    .anyMatch(b -> !request.userId().equals(b.getUserId()));
             if (hasCrossUserConflict) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                         "该BV号已被其他用户绑定，请确认BV号是否正确");
@@ -277,7 +277,7 @@ public class CreatorBilibiliService {
 
         // 收集所有关联的 taskId，批量查询任务名称，避免 N+1
         List<String> taskIds = bindings.stream()
-                .map(TaskVideoBindingRecord::taskId)
+                .map(TaskVideoBindingRecord::getTaskId)
                 .distinct()
                 .toList();
         var tasks = bilibiliMapper.findTasksByTaskIds(taskIds);
@@ -292,36 +292,36 @@ public class CreatorBilibiliService {
         List<BilibiliVideoResponse> result = new ArrayList<>();
         for (var binding : bindings) {
             // 只展示已校验通过的绑定；null 状态视为未校验，不展示
-            if (!"BOUND".equals(binding.bindingStatus())) {
+            if (!"BOUND".equals(binding.getBindingStatus())) {
                 continue;
             }
             // userId 隔离：只返回当前用户的绑定，防止跨用户数据泄露
-            if (!userId.equals(binding.userId())) {
+            if (!userId.equals(binding.getUserId())) {
                 continue;
             }
 
-            String taskName = taskMap.getOrDefault(binding.taskId(), null);
+            String taskName = taskMap.getOrDefault(binding.getTaskId(), null);
 
             // 查找视频缓存
-            var video = bilibiliMapper.findVideoByBvidAndUid(binding.bvid(), bilibiliUid);
+            var video = bilibiliMapper.findVideoByBvidAndUid(binding.getBvid(), bilibiliUid);
             if (video.isPresent()) {
                 var v = video.get();
                 result.add(new BilibiliVideoResponse(
-                        v.videoId(), v.bilibiliUid(), v.bvid(), v.aid(),
-                        v.title(), v.coverUrl(), v.publishTime(),
-                        v.viewCount(), v.likeCount(), v.coinCount(),
-                        v.favoriteCount(), v.shareCount(),
-                        v.syncStatus(), v.lastSyncTime(),
-                        true, binding.taskId(), taskName
+                        v.getVideoId(), v.getBilibiliUid(), v.getBvid(), v.getAid(),
+                        v.getTitle(), v.getCoverUrl(), v.getPublishTime(),
+                        v.getViewCount(), v.getLikeCount(), v.getCoinCount(),
+                        v.getFavoriteCount(), v.getShareCount(),
+                        v.getSyncStatus(), v.getLastSyncTime(),
+                        true, binding.getTaskId(), taskName
                 ));
             } else {
                 // 缓存中没有视频信息时返回基础响应
                 result.add(new BilibiliVideoResponse(
-                        null, bilibiliUid, binding.bvid(), null,
+                        null, bilibiliUid, binding.getBvid(), null,
                         null, null, null,
                         null, null, null, null, null,
                         "STALE", null,
-                        true, binding.taskId(), taskName
+                        true, binding.getTaskId(), taskName
                 ));
             }
         }
@@ -343,15 +343,15 @@ public class CreatorBilibiliService {
      */
     private BilibiliAccountResponse toAccountResponse(BilibiliAccountRecord record) {
         return new BilibiliAccountResponse(
-                record.accountId(),
-                record.userId(),
-                record.bilibiliUid(),
-                record.nickname(),
-                record.bindStatus(),
-                record.lastSyncTime(),
-                record.lastSyncError(),
-                record.createTime(),
-                record.updateTime()
+                record.getAccountId(),
+                record.getUserId(),
+                record.getBilibiliUid(),
+                record.getNickname(),
+                record.getBindStatus(),
+                record.getLastSyncTime(),
+                record.getLastSyncError(),
+                record.getCreateTime(),
+                record.getUpdateTime()
         );
     }
 
@@ -365,15 +365,15 @@ public class CreatorBilibiliService {
      */
     private TaskVideoBindingResponse toBindingResponse(TaskVideoBindingRecord record) {
         return new TaskVideoBindingResponse(
-                record.bindingId(),
-                record.taskId(),
-                record.userId(),
-                record.bilibiliUid(),
-                record.bvid(),
-                record.bindingStatus(),
-                record.verifyMessage(),
-                record.createTime(),
-                record.updateTime()
+                record.getBindingId(),
+                record.getTaskId(),
+                record.getUserId(),
+                record.getBilibiliUid(),
+                record.getBvid(),
+                record.getBindingStatus(),
+                record.getVerifyMessage(),
+                record.getCreateTime(),
+                record.getUpdateTime()
         );
     }
 }
