@@ -19,6 +19,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -142,14 +143,16 @@ public class CreatorBilibiliService {
         );
 
         log.info("B站视频同步（占位）：userId={}, bilibiliUid={}", userId, account.getBilibiliUid());
-        return Map.of(
-                "bilibiliUid", account.getBilibiliUid(),
-                "syncedCount", 0,
-                "linkedCount", 0,
-                "anomalyCount", 0,
-                "lastError", (Object) null,
-                "message", "B站视频同步功能开发中。请先在创作任务中手动绑定已发布视频的BV号。"
-        );
+        // 同步成功且没有异常时 lastError 的语义是 null，Map.of 不允许 null 值会直接抛 NPE。
+        // 使用 LinkedHashMap 保留响应字段顺序，也让前端能稳定收到明确的空错误字段。
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("bilibiliUid", account.getBilibiliUid());
+        response.put("syncedCount", 0);
+        response.put("linkedCount", 0);
+        response.put("anomalyCount", 0);
+        response.put("lastError", null);
+        response.put("message", "B站视频同步功能开发中。请先在创作任务中手动绑定已发布视频的BV号。");
+        return response;
     }
 
     /**
