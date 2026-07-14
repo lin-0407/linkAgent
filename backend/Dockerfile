@@ -3,8 +3,11 @@ FROM maven:3.9.9-eclipse-temurin-21 AS build
 
 WORKDIR /workspace
 
-# 先复制依赖描述文件，是为了让 Docker 利用缓存，减少后续只改业务代码时的重复下载。
+# 依赖描述文件单独成层，源码变化时可以继续复用已经下载好的 Maven 依赖。
 COPY backend/pom.xml .
+
+RUN mvn -B -DskipTests dependency:go-offline
+
 COPY backend/src ./src
 
 RUN mvn -DskipTests package

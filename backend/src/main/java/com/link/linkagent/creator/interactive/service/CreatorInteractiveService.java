@@ -841,8 +841,9 @@ public class CreatorInteractiveService {
      * <p>
      * 核心约束：只输出 JSON 对象，不要 Markdown/解释文字，因为此处输出需要程序解析。
      * 严格要求每张卡片具体到当前用户想法，防止 AI 输出千篇一律的通用模板。
+     * 保持包级可见，让同包的人工评测复用生产提示词，避免测试复制后与真实链路逐渐漂移。
      */
-    private String buildCreativeSystemPrompt() {
+    String buildCreativeSystemPrompt() {
         return """
                 你是 B 站内容创作者的选题策划助手。
                 你的任务是把用户的一段自然语言创作想法，拆成 3 个可选创意方向。
@@ -865,8 +866,9 @@ public class CreatorInteractiveService {
      * JSON Schema 内嵌设计：将字段定义直接放在用户提示词中，每个字段附带中文说明，
      * 让 LLM 清楚知道每个字段的业务语义。这比放在系统提示词中更有效，
      * 因为 LLM 对用户消息中的指令关注度更高。
+     * 保持包级可见，让评测输入和生产调用使用完全相同的用户提示词构造规则。
      */
-    private String buildCreativeUserPrompt(InteractiveSessionRecord session, String extraRequirement) {
+    String buildCreativeUserPrompt(InteractiveSessionRecord session, String extraRequirement) {
         String backgroundContext = TextUtil.trimToNull(session.getBackgroundContext());
         String understandingSummary = TextUtil.trimToNull(session.getUnderstandingSummary());
 
