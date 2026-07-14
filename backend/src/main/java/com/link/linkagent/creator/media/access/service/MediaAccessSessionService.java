@@ -25,13 +25,13 @@ import java.util.concurrent.TimeUnit;
 /**
  * P0 单部署媒体访问会话服务。
  * <p>
- * 在完整账号系统接入前，通过共享访问口令 + HttpOnly Cookie 为个人作品集和受控演示
- * 提供最低可信边界。
+ * 通过共享访问口令 + HttpOnly Cookie 为个人自托管和演示环境
+ * 提供最低访问边界。
  * <p>
  * 安全设计原则：
  * <ul>
  *   <li>Redis 只保存 sessionId 的 SHA-256 摘要，不保存原始 sessionId</li>
- *   <li>浏览器只保存 HttpOnly、Secure、SameSite=Strict 的 Cookie</li>
+ *   <li>浏览器只保存 HttpOnly、SameSite=Strict 的 Cookie；HTTPS 请求额外设置 Secure</li>
  *   <li>即使 Redis 数据被读取，也不能直接拿其中的摘要冒充浏览器会话</li>
  *   <li>访问口令比对使用恒定时间比较，防止时序攻击推断口令长度</li>
  *   <li>失败次数限流：同一 IP 在配置窗口内超过上限后锁定</li>
@@ -72,23 +72,17 @@ public class MediaAccessSessionService {
      * <p>
      * 安全约束：
      * <ul>
-     *   <li>非本机环境必须使用 HTTPS（非加密链路上传输 Cookie 会被中间人截获）</li>
      *   <li>同一 IP 在配置窗口内失败超过上限后锁定</li>
      *   <li>口令比对使用恒定时间 SHA-256 比较，防止时序攻击</li>
      * </ul>
      *
      * @param accessCode 浏览器提交的访问口令
-     * @param request    HTTP 请求（用于获取客户端 IP 和判断是否 HTTPS）
+     * @param request    HTTP 请求（用于获取客户端 IP）
      * @return 创建结果（含原始 sessionId，由 Controller 设置 Cookie）
      */
     public CreatedMediaSession createSession(String accessCode, HttpServletRequest request) {
         // 校验媒体能力配置是否就绪（口令非空、Redis 连接等）
         ensureFeatureReady();
-        // 非 HTTPS 且非本机回环地址时拒绝：Cookie 不能在 HTTP 链路上传输
-        if (!request.isSecure() && !isLoopback(request.getRemoteAddr())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "非本机环境必须使用 HTTPS 创建媒体访问会话");
-        }
-
         // 基于客户端 IP 的失败次数限流 key（IP 经过 SHA-256 摘要，不存原始 IP）
         String failureKey = failureKey(request.getRemoteAddr());
         ensureNotRateLimited(failureKey); // 检查是否已被锁定
@@ -347,16 +341,6 @@ public class MediaAccessSessionService {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("当前 JDK 不支持 SHA-256", exception);
         }
-    }
-
-    /**
-     * 判断是否为本地回环地址。
-     * P0 允许本地开发环境使用 HTTP（localhost），生产环境必须 HTTPS。
-     */
-    private boolean isLoopback(String remoteAddress) {
-        return "127.0.0.1".equals(remoteAddress)
-                || "0:0:0:0:0:0:0:1".equals(remoteAddress) // IPv6 回环地址的完整表示
-                || "::1".equals(remoteAddress);             // IPv6 回环地址的缩写
     }
 
     /**
