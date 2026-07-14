@@ -843,7 +843,7 @@ public class CreatorInteractiveService {
      * 严格要求每张卡片具体到当前用户想法，防止 AI 输出千篇一律的通用模板。
      * 保持包级可见，让同包的人工评测复用生产提示词，避免测试复制后与真实链路逐渐漂移。
      */
-    String buildCreativeSystemPrompt() {
+    static String buildCreativeSystemPrompt() {
         return """
                 你是 B 站内容创作者的选题策划助手。
                 你的任务是把用户的一段自然语言创作想法，拆成 3 个可选创意方向。
@@ -868,7 +868,7 @@ public class CreatorInteractiveService {
      * 因为 LLM 对用户消息中的指令关注度更高。
      * 保持包级可见，让评测输入和生产调用使用完全相同的用户提示词构造规则。
      */
-    String buildCreativeUserPrompt(InteractiveSessionRecord session, String extraRequirement) {
+    static String buildCreativeUserPrompt(InteractiveSessionRecord session, String extraRequirement) {
         String backgroundContext = TextUtil.trimToNull(session.getBackgroundContext());
         String understandingSummary = TextUtil.trimToNull(session.getUnderstandingSummary());
 

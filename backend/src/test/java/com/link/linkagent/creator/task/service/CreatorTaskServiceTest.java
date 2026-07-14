@@ -9,6 +9,8 @@ import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskUpdateRequest;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
@@ -19,6 +21,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 class CreatorTaskServiceTest {
 
@@ -72,6 +75,45 @@ class CreatorTaskServiceTest {
                 ))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("创作任务不存在");
+    }
+
+    @Test
+    void shouldRejectTaskUpdateAfterPrePublishSuggestionHasBeenConfirmed() {
+        FakeCreatorTaskMapper mapper = new FakeCreatorTaskMapper();
+        mapper.taskRecord = createTaskRecord();
+        mapper.taskRecord.setStatus(CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name());
+        CreatorTaskService service = new CreatorTaskService(mapper);
+
+        // 已确认的发布方案会作为后续反馈和复盘的事实基线，
+        // 不能再通过普通任务保存覆盖视频类型或文稿，否则历史结论会失去对应输入。
+        assertThatThrownBy(() -> service.updateTask(
+                "task-1",
+                new CreatorTaskUpdateRequest("新任务名", "游戏攻略", "新标题", "新简介", "新文稿", null)
+        )).isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        // 拒绝必须发生在任何持久化调用之前，保证已确认任务的原始材料没有被部分覆盖。
+        assertThat(mapper.updatedTaskName).isNull();
+        assertThat(mapper.updatedVideoType).isNull();
+        assertThat(mapper.updatedStatuses).isEmpty();
+    }
+
+    @Test
+    void shouldRejectMaterialImportAfterPrePublishSuggestionHasBeenConfirmed() {
+        FakeCreatorTaskMapper mapper = new FakeCreatorTaskMapper();
+        mapper.taskRecord = createTaskRecord();
+        mapper.taskRecord.setStatus(CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name());
+        CreatorTaskService service = new CreatorTaskService(mapper);
+
+        // 文件导入与表单保存都能修改分析输入，因此必须使用同一份任务锁定规则。
+        // 任务已锁定时应在读取文件前失败，避免无意义的文件解析和覆盖风险。
+        MultipartFile file = mock(MultipartFile.class);
+        assertThatThrownBy(() -> service.importMaterial("task-1", "MANUSCRIPT", file))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(mapper.materialsByType).isEmpty();
+        assertThat(mapper.updatedStatuses).isEmpty();
     }
 
     private CreatorTaskRecord createTaskRecord() {

@@ -110,6 +110,29 @@ public interface CreatorWorkflowMapper {
                             @Param("status") String status,
                             @Param("errorMessage") String errorMessage);
 
+    /**
+     * 原子抢占发布前分析的执行权。
+     *
+     * 只允许尚未执行、上轮失败可重试或等待用户确认后重新分析的会话切换为运行中。
+     * 将状态判断放进同一条 UPDATE，是为了避免两个请求先后读到相同旧状态后都调用模型，
+     * 从数据库层保证只有影响行数为 1 的请求可以继续生成建议。
+     *
+     * @param sessionId     工作流会话ID
+     * @param runningStatus 目标运行状态，调用方传入 RUNNING 以保持状态枚举由业务层统一管理
+     * @return 1 表示本请求抢占成功；0 表示会话已被其他请求抢占或当前状态不可分析
+     */
+    @Update("""
+            UPDATE creator_workflow_session
+            SET status = #{runningStatus},
+                error_message = NULL,
+                update_time = CURRENT_TIMESTAMP
+            WHERE session_id = #{sessionId}
+              AND status IN ('WAITING_USER_INPUT', 'FAILED', 'WAITING_CONFIRMATION')
+              AND is_deleted = 0
+            """)
+    int claimPrePublishAnalysis(@Param("sessionId") String sessionId,
+                                @Param("runningStatus") String runningStatus);
+
     @Update("""
             UPDATE creator_workflow_session
             SET status = #{status},

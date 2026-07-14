@@ -1055,7 +1055,7 @@ function openUsageStats() {
 function resetTaskForm() { taskModule.resetTaskForm() }
 function fillTaskForm(task: CreatorTask) { taskModule.fillTaskForm(task) }
 function getMaterialContent(task: CreatorTask, materialType: string) { return taskModule.getMaterialContent(task, materialType) }
-function hasTaskMaterialChanged(task: CreatorTask) { return taskModule.hasTaskMaterialChanged(task) }
+function hasTaskAnalysisInputChanged(task: CreatorTask) { return taskModule.hasTaskAnalysisInputChanged(task) }
 
 function resetGeneratedTaskResults() {
   closeWorkflowEventSource()
@@ -1108,7 +1108,7 @@ async function submitTask() {
 
 async function updateTask() {
   if (!selectedTask.value) return
-  const materialChanged = hasTaskMaterialChanged(selectedTask.value)
+  const analysisInputChanged = hasTaskAnalysisInputChanged(selectedTask.value)
   const returnStep = editReturnStep.value
   // 委托 taskModule 执行更新（内部已处理 loading / store / selectedTask）
   const task = await taskModule.submitUpdateTask()
@@ -1119,17 +1119,17 @@ async function updateTask() {
     loadCreatorPreferences(task.userId),
     loadCreatorContextTerms(task.userId, task.videoType),
   ])
-  if (materialChanged) {
+  if (analysisInputChanged) {
     resetGeneratedTaskResults()
     await loadPrePublishWorkflow(task.taskId, false)
   } else {
     await loadPrePublishWorkflow(task.taskId)
   }
   taskManageMode.value = 'create'
-  activeStep.value = materialChanged ? 'prePublish' : normalizeReturnStepForTask(task, returnStep)
+  activeStep.value = analysisInputChanged ? 'prePublish' : normalizeReturnStepForTask(task, returnStep)
   await refreshTasks()
-  successMessage.value = materialChanged
-    ? '任务内容已更新，旧建议已清空，请重新生成。'
+  successMessage.value = analysisInputChanged
+    ? '任务分析输入已更新，旧建议已清空，请重新生成。'
     : '任务名称已更新。'
 }
 
@@ -1150,6 +1150,10 @@ async function startEditTask(taskId: string) {
   editReturnStep.value = resolveCurrentEditReturnStep()
   const alreadyLoaded = selectedTask.value?.taskId === taskId
   if (alreadyLoaded) {
+    if (!isTaskMaterialsEditable(selectedTask.value!)) {
+      errorMessage.value = '发布方案已确认，任务资料仅可查看，不支持原地修改。'
+      return
+    }
     taskManageMode.value = 'edit'
     isTaskComposerOpen.value = true
     taskModule.fillTaskForm(selectedTask.value!)
@@ -1160,6 +1164,10 @@ async function startEditTask(taskId: string) {
   }
   await selectTask(taskId)
   if (selectedTask.value?.taskId !== taskId) return
+  if (!isTaskMaterialsEditable(selectedTask.value)) {
+    errorMessage.value = '发布方案已确认，任务资料仅可查看，不支持原地修改。'
+    return
+  }
   taskManageMode.value = 'edit'
   isTaskComposerOpen.value = true
   taskModule.fillTaskForm(selectedTask.value!)
@@ -1177,6 +1185,14 @@ function cancelEditTask() {
   }
   taskModule.fillTaskForm(selectedTask.value)
   activeStep.value = normalizeReturnStepForTask(selectedTask.value, editReturnStep.value)
+}
+
+/**
+ * 发布方案确认前任务保持 DRAFT，可继续修正文稿和视频类型；
+ * 确认后这些输入会成为反馈与复盘的基线，只允许查看而不能原地覆盖。
+ */
+function isTaskMaterialsEditable(task: Pick<CreatorTask, 'status'>) {
+  return task.status === 'DRAFT'
 }
 
 function creatorStepIndex(stepKey: CreatorStepKey) {
@@ -1218,6 +1234,11 @@ function navigateCreatorStep(stepKey: CreatorStepKey) {
       taskModule.fillTaskForm(selectedTask.value)
     }
     taskManageMode.value = 'create'
+  }
+  if (stepKey === 'task' && selectedTask.value) {
+    // 已确认任务的资料页只读展示仍复用同一份表单状态，
+    // 每次进入时回填当前任务，避免显示上一个任务残留的材料而误导创作者。
+    taskModule.fillTaskForm(selectedTask.value)
   }
   isTaskComposerOpen.value = true
   activeStep.value = stepKey
@@ -2430,6 +2451,7 @@ provideCreatorWorkspace({
                       查看
                     </button>
                     <button
+                      v-if="isTaskMaterialsEditable(task)"
                       type="button"
                       class="creator-secondary-action creator-mini-button"
                       @click="startEditTask(task.taskId)"

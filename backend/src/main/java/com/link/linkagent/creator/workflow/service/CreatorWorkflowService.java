@@ -367,6 +367,18 @@ public class CreatorWorkflowService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "创作任务缺少可分析材料");
         }
 
+        // 先由数据库原子抢占执行权，再开始画像初始化和 LLM 调用。
+        // 前端禁用按钮只能减少重复点击，无法覆盖双标签页、网络重试或直接调用接口的并发请求；
+        // 条件更新返回 0 时说明会话状态已被其他请求改变，必须在产生模型成本前立即拒绝本次请求。
+        if (creatorWorkflowMapper.claimPrePublishAnalysis(
+                sessionRecord.getSessionId(),
+                CreatorWorkflowStatus.RUNNING.name()) != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前工作流正在运行或状态已变化，请刷新后重试");
+        }
+        sessionRecord.setStatus(CreatorWorkflowStatus.RUNNING.name());
+        sessionRecord.setErrorMessage(null);
+        publishSessionStatus(sessionRecord);
+
         CreatorWorkflowStepRecord currentStep = null;
         try {
             // 确保创作者画像存在（不存在时从历史偏好中 LLM 初始化）
@@ -375,12 +387,6 @@ public class CreatorWorkflowService {
             // 因为画像初始化是一次性动作，不是每轮分析都需要展示给用户的操作
             creatorProfileService.ensureProfile(sessionRecord.getUserId());
 
-            updateSessionStatus(
-                    sessionRecord.getTaskId(),
-                    sessionRecord.getSessionId(),
-                    CreatorWorkflowStatus.RUNNING,
-                    null
-            );
             appendAndPublishMessage(
                     sessionRecord.getTaskId(),
                     sessionRecord.getSessionId(),

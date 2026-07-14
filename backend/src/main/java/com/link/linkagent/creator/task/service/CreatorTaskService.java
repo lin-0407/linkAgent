@@ -38,9 +38,9 @@ import java.util.UUID;
  * 架构定位：位于领域服务层，只依赖 {@link CreatorTaskMapper} 做数据访问，
  * 不调用 LLM/Agent 或记忆层——保证任务管理的纯粹性和低耦合。
  * <p>
- * 材料变更的回退策略（updateTask / importMaterial）：当任务材料或视频类型发生变化时，
- * 自动将任务状态回退为 DRAFT。这样做是因为旧的分析建议（如发布前优化建议）是基于变更前的
- * 材料输入生成的，材料变化后这些建议已经失效，用户应该重新走分析流程。
+ * 材料变更的回退策略（updateTask / importMaterial）：任务仍处于 DRAFT 时，材料或视频类型发生变化会
+ * 自动将任务状态保持为 DRAFT。发布方案确认后，任务材料会成为反馈和复盘的事实基线，
+ * 不再允许原地修改，避免历史建议、反馈结论与实际输入发生错位。
  */
 @Service
 public class CreatorTaskService {
@@ -115,9 +115,9 @@ public class CreatorTaskService {
     /**
      * 更新创作任务的基本信息和材料内容。
      * <p>
-     * 关键行为：当检测到材料内容发生变化或视频类型变更时，自动将任务状态回退为 DRAFT。
-     * 这样做是因为旧的分析建议（如发布前优化建议）基于变更前的输入生成，
-     * 继续保留 PRE_PUBLISH_ANALYZED 状态会误导用户认为建议仍然有效。
+     * 关键行为：仅 DRAFT 任务可更新；当检测到材料内容发生变化或视频类型变更时，
+     * 任务保持在 DRAFT，要求用户重新生成发布方案。发布方案确认后任务会被锁定，
+     * 防止后续反馈和复盘引用的基线与用户原地覆盖后的材料不一致。
      * <p>
      * 为什么材料为空时做软删除而非报错：覆盖式编辑允许用户清空某类材料，
      * 不想填的内容置空是合理操作，不应阻止。
@@ -130,6 +130,7 @@ public class CreatorTaskService {
     public CreatorTaskResponse updateTask(String taskId, CreatorTaskUpdateRequest request) {
         String safeTaskId = normalizeTaskId(taskId);
         CreatorTaskRecord taskRecord = getTaskRecord(safeTaskId);
+        ensureTaskMaterialsEditable(taskRecord);
         List<CreatorMaterialRecord> currentMaterials = creatorTaskMapper.listMaterialsByTaskId(safeTaskId);
         boolean materialChanged = isMaterialChanged(currentMaterials, request);
         String taskName = normalizeTaskName(request.taskName(), request.titleDraft());
@@ -153,7 +154,7 @@ public class CreatorTaskService {
      * 内容长度在类型对应的上限内。
      * <p>
      * 导入后自动修剪首尾空白并去除 UTF-8 BOM 头（部分编辑器会在文件开头写入 ﻿）。
-     * 与 updateTask 一致：若导入内容与当前内容不同，任务状态回退为 DRAFT。
+     * 与 updateTask 一致：只允许 DRAFT 任务导入材料；导入内容变化后任务保持在 DRAFT。
      * <p>
      * 为什么用文件导入而非文本框粘贴：B 站创作者的实际素材通常以文件形式存在
      * （SRT 字幕、Markdown 文稿），文件导入减少手动复制粘贴的格式丢失风险。
@@ -167,6 +168,7 @@ public class CreatorTaskService {
     public CreatorTaskResponse importMaterial(String taskId, String materialType, MultipartFile file) {
         String safeTaskId = normalizeTaskId(taskId);
         CreatorTaskRecord taskRecord = getTaskRecord(safeTaskId);
+        ensureTaskMaterialsEditable(taskRecord);
         CreatorMaterialType safeMaterialType = parseMaterialType(materialType);
         validateMaterialImportFile(file);
         String importedContent = readMaterialImportText(file);
@@ -356,6 +358,24 @@ public class CreatorTaskService {
     private CreatorTaskRecord getTaskRecord(String taskId) {
         return creatorTaskMapper.findTaskByTaskId(taskId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+    }
+
+    /**
+     * 校验任务材料是否仍允许修改。
+     *
+     * 发布方案确认后，任务状态会离开 DRAFT，标题、视频类型和文稿都已经参与过建议生成，
+     * 并会继续作为反馈分析和复盘报告的对照基线。这里在服务层统一拦截表单保存和文件导入，
+     * 避免只依赖前端只读状态而被直接调用接口绕过。
+     *
+     * @param taskRecord 当前任务记录
+     */
+    private void ensureTaskMaterialsEditable(CreatorTaskRecord taskRecord) {
+        if (!CreatorTaskStatus.DRAFT.name().equals(taskRecord.getStatus())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "发布方案已确认，任务资料已锁定；如需调整请新建修订任务"
+            );
+        }
     }
 
     private String normalizeTaskId(String taskId) {

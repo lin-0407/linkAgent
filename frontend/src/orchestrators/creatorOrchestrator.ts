@@ -23,7 +23,7 @@ interface TaskModule {
   resetTaskForm: () => void
   fillTaskForm: (task: Record<string, unknown>) => void
   getMaterialContent: (task: Record<string, unknown>, materialType: string) => string
-  hasTaskMaterialChanged: (task: Record<string, unknown>) => boolean
+  hasTaskAnalysisInputChanged: (task: Record<string, unknown>) => boolean
   selectedTaskId: Ref<string>
   hasSelectedTaskMaterials: Ref<boolean>
 }

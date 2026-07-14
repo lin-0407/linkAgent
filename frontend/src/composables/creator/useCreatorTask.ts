@@ -163,13 +163,18 @@ export function useCreatorTask(errorRef: Ref<string>) {
     return (found as Record<string, unknown>)?.content as string || (found as Record<string, unknown>)?.fileName as string || ''
   }
 
-  function hasTaskMaterialChanged(task: CreatorTask) {
-    return (
+  /**
+   * 判断本次编辑是否改变了发布前分析的输入。
+   *
+   * 后端生成建议时会同时读取四类材料和视频类型语境，因此前端不能只比较材料。
+   * 只要其中任一项变化，就必须清空旧建议并创建新工作流会话，避免旧类型的方案继续进入反馈阶段。
+   */
+  function hasTaskAnalysisInputChanged(task: CreatorTask) {
+    return normalizeVideoType(task.videoType) !== normalizeVideoType(taskForm.videoType) ||
       getMaterialContent(task, 'TITLE_DRAFT') !== taskForm.titleDraft.trim() ||
       getMaterialContent(task, 'DESCRIPTION_DRAFT') !== taskForm.descriptionDraft.trim() ||
       getMaterialContent(task, 'MANUSCRIPT') !== taskForm.manuscript.trim() ||
       getMaterialContent(task, 'SUBTITLE') !== taskForm.subtitle.trim()
-    )
   }
 
   function resetGeneratedTaskResults() {
@@ -322,7 +327,7 @@ export function useCreatorTask(errorRef: Ref<string>) {
     taskStatusOptions, videoTypeOptions,
     // 方法
     refreshTasks, resetTaskForm, fillTaskForm, getMaterialContent,
-    hasTaskMaterialChanged, resetGeneratedTaskResults,
+    hasTaskAnalysisInputChanged, resetGeneratedTaskResults,
     submitTask, submitUpdateTask, loadTask, confirmDeleteTask,
     askDeleteTask, cancelDeleteTask,
     startCreateTask, startEditTask, cancelEditTask,
@@ -331,6 +336,14 @@ export function useCreatorTask(errorRef: Ref<string>) {
 
 // ── 内部工具 ──
 const hasText = (v: string) => v.trim().length > 0
+
+/**
+ * 与后端默认值保持一致，避免空值和“未分类”在前端被误判为两次不同编辑。
+ */
+function normalizeVideoType(value: string | null | undefined) {
+  const normalizedValue = value?.trim()
+  return normalizedValue || '未分类'
+}
 
 function statusLabel(status: string) {
   const labels: Record<string, string> = {
