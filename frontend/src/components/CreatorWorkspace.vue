@@ -49,14 +49,12 @@ import MaterialsTab from '@/components/creator/MaterialsTab.vue'
 import PreflightTab from '@/components/creator/PreflightTab.vue'
 import PrePublishTab from '@/components/creator/PrePublishTab.vue'
 import ReportTab from '@/components/creator/ReportTab.vue'
-import SuggestionCard from '@/components/creator/SuggestionCard.vue'
 import TaskListPanel from '@/components/creator/TaskListPanel.vue'
 import UsageTab from '@/components/creator/UsageTab.vue'
 import { useCreatorFeedbackEvent } from '@/composables/creator/useCreatorFeedbackEvent'
 import { provideCreatorWorkspace } from '@/composables/creator/useCreatorWorkspaceContext'
 import {
   clampScriptNumber,
-  contextSaveKey,
   contextTermPolarity,
   contextTermSourceLabel,
   contextTermTypeLabel,
@@ -111,8 +109,6 @@ import type {
   CreatorContextTerm,
   CreatorContextTermPayload,
   CreatorContextTermType,
-  CreatorEventType,
-  CreatorRejectReason,
   CreatorPreference,
   CreatorPreferenceMode,
   CreatorSuggestion,
@@ -598,96 +594,6 @@ const materialPreview = computed(() => {
   }))
 })
 
-const sellingPoints = computed(() => parseJsonArray(suggestion.value?.sellingPoints))
-const riskPoints = computed(() => parseJsonArray(suggestion.value?.riskPoints))
-const titleSuggestions = computed(() => parseJsonArray(suggestion.value?.titleSuggestions))
-const actionableRevisionPlan = computed(() =>
-  parseJsonArray(suggestion.value?.actionableRevisionPlan),
-)
-const tagSuggestions = computed(() => parseJsonArray(suggestion.value?.tagSuggestions))
-
-// ── 建议卡片：把后端返回的 JSON 数组解析成 SuggestionCard 需要的结构 ──
-// 卡片组件只接收已解析的 item，不重复实现 parseJsonArray/getRecordText 逻辑，
-// 这样解析逻辑单一来源，避免卡片和列表两套解析互相漂移。
-type SuggestionCardItem = {
-  content: string
-  viewerPsychology?: string
-  clickReason?: string
-  trustRisk?: string
-  bestScenario?: string
-  reason?: string
-  risk?: string
-}
-
-const titleSuggestionCards = computed<SuggestionCardItem[]>(() =>
-  titleSuggestions.value.map((raw) => ({
-    content: getRecordText(raw, 'title') || formatValue(raw),
-    viewerPsychology: getRecordText(raw, 'viewerPsychology') || undefined,
-    clickReason: getRecordText(raw, 'clickReason') || undefined,
-    trustRisk: getRecordText(raw, 'trustRisk') || undefined,
-    bestScenario: getRecordText(raw, 'bestScenario') || undefined,
-    reason: getRecordText(raw, 'reason') || undefined,
-    risk: getRecordText(raw, 'risk') || undefined,
-  })),
-)
-
-// 标签建议同样转成卡片结构，只是没有那么多元信息字段
-const tagSuggestionCards = computed<SuggestionCardItem[]>(() =>
-  tagSuggestions.value.map((raw) => ({ content: formatValue(raw) })),
-)
-
-// 已采纳的标题集合：用 content 去重，采纳后卡片视觉态切换，避免重复上报
-const acceptedTitleContents = ref<Set<string>>(new Set())
-const acceptedTagContents = ref<Set<string>>(new Set())
-
-/** 卡片"采纳"：上报 ACCEPTED 事件并标记为已采纳 */
-async function onAcceptSuggestion(
-  type: 'title' | 'tag',
-  item: SuggestionCardItem,
-  rank?: number,
-) {
-  const eventType: CreatorEventType =
-    type === 'title' ? 'TITLE_ACCEPTED' : 'TAG_ACCEPTED'
-  const ok = await feedbackEvent.reportAccept(
-    eventType,
-    selectedTaskId.value,
-    item.content,
-    rank,
-  )
-  if (ok) {
-    const store = type === 'title' ? acceptedTitleContents : acceptedTagContents
-    store.value.add(item.content)
-  }
-}
-
-/** 卡片"复制"：写入剪贴板，复制成功由卡片自身给"已复制"提示，这里只负责副作用 */
-async function onCopySuggestion(item: SuggestionCardItem) {
-  try {
-    await navigator.clipboard.writeText(item.content)
-  } catch {
-    // 剪贴板可能被浏览器策略拦截（非 HTTPS / 无焦点），失败不阻塞，静默降级
-  }
-}
-
-/** 卡片"不太好"：上报 REJECTED 事件，带上原因 */
-function onRejectSuggestion(
-  type: 'title' | 'tag',
-  item: SuggestionCardItem,
-  reason: CreatorRejectReason,
-  reasonText: string,
-  rank?: number,
-) {
-  const eventType: CreatorEventType =
-    type === 'title' ? 'TITLE_REJECTED' : 'TAG_REJECTED'
-  void feedbackEvent.reportReject(
-    eventType,
-    selectedTaskId.value,
-    item.content,
-    reason,
-    reasonText,
-    rank,
-  )
-}
 const hotTopics = computed(() => parseJsonArray(feedbackReport.value?.hotTopics))
 const controversyPoints = computed(() => parseJsonArray(feedbackReport.value?.controversyPoints))
 const misunderstandingPoints = computed(() =>
@@ -855,9 +761,6 @@ const guidanceEditorTitle = computed(() => {
   return ''
 })
 const resultModalTitle = computed(() => {
-  if (resultModalTarget.value === 'prePublishSuggestion') {
-    return '发布方案'
-  }
   if (resultModalTarget.value === 'feedbackDashboard') {
     return '观众反馈导入结果'
   }
@@ -1632,7 +1535,6 @@ async function runPrePublishAnalyze() {
     }
     await refreshPrePublishWorkflowMessages()
     successMessage.value = '发布前优化建议已生成，请确认采用后再进入评论弹幕分析。'
-    openResultModal('prePublishSuggestion')
   } catch (error) {
     showError(error)
   } finally {
@@ -2053,9 +1955,6 @@ function syncWorkflowSelection(messageId?: string) {
 
 
 function openResultModal(target: ResultModalTarget) {
-  if (target === 'prePublishSuggestion' && !suggestion.value) {
-    return
-  }
   if (target === 'feedbackDashboard' && !feedbackDashboard.value && !feedbackFetchResult.value) {
     return
   }
@@ -2243,6 +2142,7 @@ provideCreatorWorkspace({
     formatInputCount,
     formatUsageToken,
     hasConfirmedPrePublish,
+    hasPrePublishPreferenceModeSnapshot,
     hasFullScriptMaterial,
     hasFeedbackSampleInput,
     hasSelectedTask,
@@ -2266,8 +2166,11 @@ provideCreatorWorkspace({
     isConfirmingPrePublish,
     isActiveStepReadOnly,
     isSendingWorkflowMessage,
+    isSavingCreatorContextTerm,
     isSavingFeedback,
     isUpdatingTask,
+    lastPreferenceModeLabel,
+    lastPreferenceModeNote,
     materialPreview,
     openGuidanceEditor,
     openResultModal,
@@ -2280,6 +2183,8 @@ provideCreatorWorkspace({
     refreshUsageStats,
     runFeedbackAnalyze,
     runPrePublishAnalyze,
+    saveContextTermFromSuggestion,
+    savingContextTermKey,
     selectedPreferenceModeLabel,
     selectedTask,
     selectedTaskId,
@@ -3370,228 +3275,7 @@ provideCreatorWorkspace({
         </header>
 
         <div class="creator-result-modal-body">
-          <template v-if="resultModalTarget === 'prePublishSuggestion' && suggestion">
-            <div class="creator-result-grid">
-              <article class="creator-confirm-panel span-full">
-                <div>
-                  <span>采用状态</span>
-                  <strong>{{ hasConfirmedPrePublish ? '已采用' : '待采用' }}</strong>
-                  <p>
-                    {{
-                      hasConfirmedPrePublish
-                        ? '本轮发布方案已确认，观众反馈阶段已开放。'
-                        : '建议生成后不会自动进入下一步，需要你确认采用。'
-                    }}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  class="creator-primary-button"
-                  :disabled="!canConfirmPrePublish"
-                  @click="confirmPrePublishResult"
-                >
-                  {{
-                    hasConfirmedPrePublish
-                      ? '已采用'
-                      : isConfirmingPrePublish
-                        ? '确认中...'
-                        : '采用本轮建议'
-                  }}
-                </button>
-              </article>
-              <article class="creator-result-block span-full">
-                <span>偏好使用方式</span>
-                <strong>
-                  {{ hasPrePublishPreferenceModeSnapshot ? lastPreferenceModeLabel : '未记录生成方式' }}
-                </strong>
-                <p>
-                  {{
-                    !hasPrePublishPreferenceModeSnapshot
-                      ? '历史结果未保存偏好使用方式；重新生成后会记录。'
-                      : lastPrePublishPreferenceMode === 'USE_HISTORY'
-                        ? lastPreferenceModeNote
-                        : lastPrePublishPreferenceMode === 'EXPERIMENT'
-                          ? '历史偏好仅作避坑参考，本期覆盖要求优先。'
-                          : '历史偏好未参与本次发布前优化。'
-                  }}
-                </p>
-              </article>
-              <article class="creator-result-block span-full">
-                <span>内容摘要</span>
-                <p>{{ suggestion.contentSummary || '未解析到摘要' }}</p>
-              </article>
-              <article class="creator-result-block span-full">
-                <span>创作者困境</span>
-                <p>{{ suggestion.creatorDilemma || '未解析到创作者困境' }}</p>
-              </article>
-              <article class="creator-result-block">
-                <span>目标受众</span>
-                <p>{{ suggestion.audienceProfile || '未解析到受众判断' }}</p>
-                <button
-                  v-if="suggestion.audienceProfile"
-                  type="button"
-                  class="creator-ghost-button creator-mini-button"
-                  :disabled="isSavingCreatorContextTerm"
-                  @click="
-                    saveContextTermFromSuggestion(
-                      suggestion.audienceProfile || '',
-                      'AUDIENCE_CONCERN',
-                      '来自发布前优化的目标受众判断',
-                    )
-                  "
-                >
-                  保存为观众关注点
-                </button>
-              </article>
-              <article class="creator-result-block">
-                <span>观众钩子</span>
-                <p>{{ suggestion.audienceHook || '未解析到观众钩子' }}</p>
-                <button
-                  v-if="suggestion.audienceHook"
-                  type="button"
-                  class="creator-ghost-button creator-mini-button"
-                  :disabled="isSavingCreatorContextTerm"
-                  @click="
-                    saveContextTermFromSuggestion(
-                      suggestion.audienceHook || '',
-                      'AUDIENCE_CONCERN',
-                      '来自发布前优化的观众钩子判断',
-                    )
-                  "
-                >
-                  保存为观众关注点
-                </button>
-              </article>
-              <article class="creator-result-block span-full">
-                <span>内容定位</span>
-                <p>{{ suggestion.contentPositioning || '未解析到内容定位' }}</p>
-              </article>
-              <article class="creator-result-block">
-                <span>建议分区</span>
-                <p>{{ suggestion.partitionSuggestion || '未解析到分区建议' }}</p>
-              </article>
-              <article class="creator-result-block span-full">
-                <span>可执行修改计划</span>
-                <p v-if="actionableRevisionPlan.length === 0">未解析到可执行修改计划</p>
-                <div v-if="actionableRevisionPlan.length > 0" class="creator-list">
-                  <section v-for="(item, index) in actionableRevisionPlan" :key="index">
-                    <strong>
-                      {{
-                        getRecordText(item, 'target') ||
-                        getRecordText(item, 'priority') ||
-                        formatValue(item)
-                      }}
-                    </strong>
-                    <p v-if="getRecordText(item, 'problem')">
-                      问题：{{ getRecordText(item, 'problem') }}
-                    </p>
-                    <p v-if="getRecordText(item, 'action')">
-                      动作：{{ getRecordText(item, 'action') }}
-                    </p>
-                    <p v-if="getRecordText(item, 'expectedEffect')">
-                      预期效果：{{ getRecordText(item, 'expectedEffect') }}
-                    </p>
-                  </section>
-                </div>
-              </article>
-              <article class="creator-result-block span-full">
-                <span>标题建议{{ titleSuggestionCards.length ? `（${titleSuggestionCards.length} 个）` : '' }}</span>
-                <p v-if="titleSuggestionCards.length === 0" class="creator-muted">未解析到标题建议</p>
-                <!-- 用卡片网格替代原来的纯文本列表，每条标题独立成卡，带采纳/复制/反馈 -->
-                <div v-if="titleSuggestionCards.length > 0" class="suggestion-card-grid">
-                  <SuggestionCard
-                    v-for="(cardItem, index) in titleSuggestionCards"
-                    :key="index"
-                    type="title"
-                    :item="cardItem"
-                    :rank="index + 1"
-                    :reporting="feedbackEvent.isReporting(cardItem.content, 'TITLE_ACCEPTED')"
-                    :accepted="acceptedTitleContents.has(cardItem.content)"
-                    @accept="onAcceptSuggestion('title', $event, titleSuggestionCards.indexOf(cardItem) + 1)"
-                    @copy="onCopySuggestion"
-                    @reject="(item, reason, reasonText) => onRejectSuggestion('title', item, reason, reasonText, titleSuggestionCards.indexOf(item) + 1)"
-                  >
-                    <!-- 二级操作：保留原有"保存为标题套路"，作为沉淀到语境库的入口 -->
-                    <template #secondary-actions>
-                      <button
-                        type="button"
-                        class="creator-ghost-button creator-mini-button"
-                        :disabled="
-                          isSavingCreatorContextTerm &&
-                          savingContextTermKey === contextSaveKey(cardItem.content, 'TITLE_PATTERN')
-                        "
-                        @click="
-                          saveContextTermFromSuggestion(
-                            cardItem.content,
-                            'TITLE_PATTERN',
-                            cardItem.reason || cardItem.clickReason,
-                          )
-                        "
-                      >
-                        保存为标题套路
-                      </button>
-                    </template>
-                  </SuggestionCard>
-                </div>
-              </article>
-              <article class="creator-result-block">
-                <span>核心卖点</span>
-                <ul>
-                  <li v-for="(item, index) in sellingPoints" :key="index">
-                    {{ formatValue(item) }}
-                  </li>
-                </ul>
-              </article>
-              <article class="creator-result-block">
-                <span>风险点</span>
-                <ul>
-                  <li v-for="(item, index) in riskPoints" :key="index">{{ formatValue(item) }}</li>
-                </ul>
-              </article>
-              <article class="creator-result-block">
-                <span>标签建议{{ tagSuggestionCards.length ? `（${tagSuggestionCards.length} 个）` : '' }}</span>
-                <p v-if="tagSuggestionCards.length === 0" class="creator-muted">未解析到标签建议</p>
-                <!-- 标签建议用紧凑卡片网格，每条可采纳/复制/反馈 -->
-                <div v-if="tagSuggestionCards.length > 0" class="suggestion-card-grid suggestion-card-grid-tags">
-                  <SuggestionCard
-                    v-for="(cardItem, index) in tagSuggestionCards"
-                    :key="index"
-                    type="tag"
-                    :item="cardItem"
-                    :rank="index + 1"
-                    :reporting="feedbackEvent.isReporting(cardItem.content, 'TAG_ACCEPTED')"
-                    :accepted="acceptedTagContents.has(cardItem.content)"
-                    @accept="onAcceptSuggestion('tag', $event)"
-                    @copy="onCopySuggestion"
-                    @reject="(item, reason, reasonText) => onRejectSuggestion('tag', item, reason, reasonText)"
-                  >
-                    <template #secondary-actions>
-                      <button
-                        type="button"
-                        class="creator-ghost-button creator-mini-button"
-                        :disabled="isSavingCreatorContextTerm"
-                        @click="
-                          saveContextTermFromSuggestion(
-                            cardItem.content,
-                            'KEYWORD',
-                            '来自发布前优化的标签建议',
-                          )
-                        "
-                      >
-                        存为关键词
-                      </button>
-                    </template>
-                  </SuggestionCard>
-                </div>
-              </article>
-              <article class="creator-result-block">
-                <span>简介建议</span>
-                <p>{{ suggestion.descriptionSuggestion || '未解析到简介建议' }}</p>
-              </article>
-            </div>
-          </template>
-
-          <template v-else-if="resultModalTarget === 'feedbackDashboard'">
+          <template v-if="resultModalTarget === 'feedbackDashboard'">
             <div class="creator-result-grid">
               <article
                 v-if="showDeveloperTools && feedbackFetchResult"

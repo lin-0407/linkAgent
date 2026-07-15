@@ -720,7 +720,7 @@ export type CreatorFeedbackEventPayload = {
  * 创作台结果弹窗目标。
  * 主壳和子组件共享这个类型，是为了让弹窗入口保持同一组合法值。
  */
-export type ResultModalTarget = 'prePublishSuggestion' | 'feedbackDashboard' | 'feedbackReport'
+export type ResultModalTarget = 'feedbackDashboard' | 'feedbackReport'
 
 /**
  * 创作台一级步骤。

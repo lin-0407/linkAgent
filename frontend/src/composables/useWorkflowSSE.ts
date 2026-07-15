@@ -19,7 +19,7 @@ export type SseConnectionStatus =
  * 步骤类 SSE 事件携带的载荷。
  *
  * 后端 CreatorWorkflowService.buildStepPayload 推送的字段，原本被前端无参 handler 丢弃。
- * 现在透传给调用方，用于 AnalysisProgress 时间轴做"实时增量高亮"：
+ * 现在透传给调用方，用于紧凑状态条和过程详情实时更新：
  * 后端推 step_started 时用 userLabel 立即显示一个"运行中"节点，不必等 HTTP 全量刷新。
  */
 export interface WorkflowStepEvent {

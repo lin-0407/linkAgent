@@ -3,10 +3,13 @@ package com.link.linkagent.creator.interactive.service;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.link.linkagent.creator.interactive.model.InteractiveSessionRecord;
 import com.link.linkagent.util.LlmJsonUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -41,17 +44,49 @@ import static org.assertj.core.api.Assertions.assertThat;
 @EnabledIfSystemProperty(named = "linkagent.creative-idea-eval.mode", matches = "generate|summarize")
 class CreativeIdeaManualEvaluationTest {
 
+    private static final Logger log = LoggerFactory.getLogger(CreativeIdeaManualEvaluationTest.class);
     private static final int QUESTION_COUNT = 10;
-    private static final int ANSWER_COUNT_PER_QUESTION = 3;
+    private static final int ANSWER_COUNT_PER_QUESTION = 1;
     private static final int MAX_GENERATION_ATTEMPTS = 3;
     private static final int MAX_PARALLEL_QUESTIONS = 10;
     private static final int MAX_ANALYSIS_DATA_CHARS = 50000;
     private static final String OVERWRITE_PROPERTY = "linkagent.creative-idea-eval.overwrite";
+    // 偏好总结需要更强的归纳能力，因此只在第二阶段显式覆盖模型和推理强度，不影响创意样本生成。
+    private static final String PREFERENCE_ANALYSIS_MODEL = "deepseek-v4-pro";
+    private static final String PREFERENCE_ANALYSIS_REASONING_EFFORT = "max";
     private static final String PREFERENCE_ANALYSIS_SYSTEM_PROMPT = """
-            你是 AI 创意建议人工评分分析 Agent。
-            你的职责是从作者的人工分数中归纳风格偏好，并对创意生成系统提示词提出修改建议。
-            你不能调用工具，不能擅自修改评分，也不能把相关性描述成确定因果。
-            最终必须只输出任务要求的 JSON 对象。
+            你是B站内容创作者的选题策划助手。你的任务是把用户的一段自然语言创作想法，拆成3个可选创意方向（卡片），必须以JSON格式输出。
+            
+            【核心要求】
+            1. 忠实于用户原始想法，不编造故事，不假设用户职业、受众或技术水平。
+            2. 风格适配视频类型：游戏类可幽默短小、允许借助隐喻或适度玩梗；生活类注重情绪共鸣和真实感；知识/技术类强调清晰实用，避免术语轰炸；编程/项目类可体现技术深度但需具体。
+            3. 所有文本避免营销腔和AI生成套话，要用口语化、自然的中文表达。
+            
+            【标题指南】
+            - 简洁有力，直接体现视频核心看点或情绪，少用“：”分隔的模板格式，但也不要不用，在最适合的时候使用就行。
+            - 不主观夸大，但是可以作为吸引人的标题参考方向，游戏/生活类可带些许颜色幽默或前卫梗隐喻，但需保证点击前能猜出大致内容。
+            - 知识类标题应清晰传达范围或疑问，如“三个方法帮你…”“为什么…？”，但是不要只局限这些格式，可以充分发挥想象力。
+            【简介指南】
+            - 用1-2句自然描述视频内容和特点，可提及具体细节（如BGM风格、场景、数据），但严禁“评论区聊聊”“弹幕告诉我”等强行互动引导。
+            - 如需邀请互动，采用“如果你也有…”“你的…是什么？”等自然提问，且不要独占一行，可融入描述结尾。
+            - 杜绝AI风格描述（如“用XX场景告诉你”“就像XX一样”），力求直接、真诚。
+            【内容方向】
+            - 每张卡片需给出可执行的叙事角度（如对比、故事线、模块拆解），但必须结合用户想法具体化，不写通用套话。
+            - 对于非功能性内容（如游戏失误、生活日常），挖掘情绪价值或独特视角，不强行定义“意义”。
+            - 避免使用过时梗和观点假想化；如果用户未提供，不凭空编造详细参数或剧情。
+            【输出JSON格式】
+            {
+              "options": [
+                  {
+                  "optionName": "方向简短名称",
+                  "titleOutline": ["备选标题1", "备选标题2"],
+                  "descriptionOutline": ["简介句子", "关键词语", "互动邀请（可选，无则空字符串）"],
+                  "sellingPoints": ["卖点1", "卖点2"],
+                  "recommendReason": "推荐理由"
+                  }
+             ]
+            }
+            注意：所有数组字段必须是字符串数组，每张卡片都要具体到当前用户想法。只输出JSON，不要Markdown或额外解释。"
             """;
     private static final Path DOT_ENV_PATH_FROM_BACKEND = Path.of("..", ".env");
     private static final Path DOT_ENV_PATH_FROM_ROOT = Path.of(".env");
@@ -146,7 +181,20 @@ class CreativeIdeaManualEvaluationTest {
                 .isLessThanOrEqualTo(MAX_ANALYSIS_DATA_CHARS);
 
         String taskMessage = buildPreferenceAnalysisTask(creativeSystemPrompt, compactEvaluationData);
-        String agentAnswer = callModel(PREFERENCE_ANALYSIS_SYSTEM_PROMPT, taskMessage);
+        OpenAiChatOptions preferenceAnalysisOptions = OpenAiChatOptions.builder()
+                .model(PREFERENCE_ANALYSIS_MODEL)
+                .reasoningEffort(PREFERENCE_ANALYSIS_REASONING_EFFORT)
+                .responseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null))
+                .build();
+        log.info("创意偏好总结模型调用开始，model={}, reasoningEffort={}",
+                PREFERENCE_ANALYSIS_MODEL, PREFERENCE_ANALYSIS_REASONING_EFFORT);
+        String agentAnswer = chatClient.prompt()
+                .system(PREFERENCE_ANALYSIS_SYSTEM_PROMPT)
+                .user(taskMessage)
+                .options(preferenceAnalysisOptions)
+                .call()
+                .content();
+        log.info("创意偏好总结模型完整原始输出：\n{}", agentAnswer);
         assertThat(agentAnswer).as("偏好总结 Agent 没有返回最终答案").isNotBlank();
 
         JsonNode parsedSummary = tryParseJson(agentAnswer);
@@ -198,7 +246,7 @@ class CreativeIdeaManualEvaluationTest {
         );
         List<AnswerEvaluation> answers = new ArrayList<>();
         for (int answerVersion = 1; answerVersion <= ANSWER_COUNT_PER_QUESTION; answerVersion++) {
-            answers.add(generateAnswer(answerVersion, creativeSystemPrompt, userPrompt));
+            answers.add(generateAnswer(question.questionId(), answerVersion, creativeSystemPrompt, userPrompt));
         }
         return new QuestionEvaluation(question, answers);
     }
@@ -210,7 +258,8 @@ class CreativeIdeaManualEvaluationTest {
      * 全部尝试失败时不会向外抛出，而是转换成带 error 和 rawOutput 的回答记录，
      * 这样整批结果仍能落盘，作者可以直接看到最后一次失败模型实际返回了什么。
      */
-    private AnswerEvaluation generateAnswer(int answerVersion,
+    private AnswerEvaluation generateAnswer(String questionId,
+                                            int answerVersion,
                                             String creativeSystemPrompt,
                                             String userPrompt) {
         long startNanos = System.nanoTime();
@@ -221,10 +270,17 @@ class CreativeIdeaManualEvaluationTest {
             lastRawOutput = null;
             lastResponse = null;
             try {
+                log.info("创意建议模型调用开始，questionId={}, answerVersion={}, attempt={}, model={}",
+                        questionId, answerVersion, attempt, modelConfig.modelName());
                 lastRawOutput = callModel(creativeSystemPrompt, userPrompt);
+                log.info("创意建议模型完整原始输出，questionId={}, answerVersion={}, attempt={}：\n{}",
+                        questionId, answerVersion, attempt, lastRawOutput);
                 lastResponse = objectMapper.readTree(LlmJsonUtil.extractJsonObject(lastRawOutput));
+                lastResponse = attachManualReviewFields(lastResponse);
                 lastError = validateCreativeResponse(lastResponse);
                 if (lastError == null) {
+                    log.info("创意建议模型调用完成，questionId={}, answerVersion={}, attempt={}, elapsedMs={}, status=success",
+                            questionId, answerVersion, attempt, elapsedMillis(startNanos));
                     return new AnswerEvaluation(
                             answerVersion,
                             modelConfig.modelName(),
@@ -233,14 +289,20 @@ class CreativeIdeaManualEvaluationTest {
                             lastResponse,
                             null,
                             null,
-                            null
+                        null
                     );
                 }
+                log.warn("创意建议模型输出结构校验失败，questionId={}, answerVersion={}, attempt={}, error={}",
+                        questionId, answerVersion, attempt, lastError);
             } catch (RuntimeException | IOException exception) {
                 lastResponse = null;
                 lastError = exception.getMessage();
+                log.warn("创意建议模型调用或响应解析失败，questionId={}, answerVersion={}, attempt={}, error={}",
+                        questionId, answerVersion, attempt, lastError, exception);
             }
         }
+        log.warn("创意建议模型调用最终失败，questionId={}, answerVersion={}, attempts={}, elapsedMs={}, error={}",
+                questionId, answerVersion, MAX_GENERATION_ATTEMPTS, elapsedMillis(startNanos), lastError);
         return new AnswerEvaluation(
                 answerVersion,
                 modelConfig.modelName(),
@@ -360,7 +422,8 @@ class CreativeIdeaManualEvaluationTest {
     /**
      * 校验回答是否满足创意方向卡的最小结构契约。
      *
-     * 本阶段不自动判断内容好坏，只确认 options 存在且恰好有 3 个；内容质量由作者填写 score。
+     * 本阶段不自动判断内容好坏，只确认 options 存在且恰好有 3 个；
+     * 整体质量由作者填写 score，具体卡片问题由作者填写 manualReview.comment。
      */
     private String validateCreativeResponse(JsonNode response) {
         JsonNode options = response.path("options");
@@ -371,6 +434,27 @@ class CreativeIdeaManualEvaluationTest {
             return "options 数量不是3，实际为" + options.size();
         }
         return null;
+    }
+
+    /**
+     * 为每张创意卡片补充独立的人工意见入口。
+     *
+     * 人工意见属于评测元数据，不应要求模型生成，否则模型可能预填内容并干扰作者判断；
+     * 因此在模型 JSON 解析完成后统一写入空字符串，作者可直接针对具体卡片填写看法。
+     */
+    private JsonNode attachManualReviewFields(JsonNode response) {
+        JsonNode options = response.path("options");
+        if (!options.isArray()) {
+            return response;
+        }
+        for (JsonNode option : options) {
+            if (option instanceof ObjectNode optionObject) {
+                ObjectNode manualReview = objectMapper.createObjectNode();
+                manualReview.put("comment", "");
+                optionObject.set("manualReview", manualReview);
+            }
+        }
+        return response;
     }
 
     /**
@@ -403,7 +487,7 @@ class CreativeIdeaManualEvaluationTest {
      * 从完整评测结果中提取偏好分析真正需要的数据。
      *
      * 完整文件还包含 Token、耗时和原始错误等字段，全部传给 Agent 会浪费上下文；
-     * 这里只保留问题、分数、创意名称、标题骨架、简介骨架、亮点和推荐理由。
+     * 这里只保留问题、分数、创意名称、标题骨架、简介骨架、亮点、推荐理由和逐卡人工意见。
      */
     private String buildCompactEvaluationData(EvaluationResultDataset resultDataset) throws IOException {
         List<CompactQuestionEvaluation> compactQuestions = resultDataset.questions().stream()
@@ -431,7 +515,8 @@ class CreativeIdeaManualEvaluationTest {
                         option.path("titleOutline"),
                         option.path("descriptionOutline"),
                         option.path("sellingPoints"),
-                        option.path("recommendReason").asText("")
+                        option.path("recommendReason").asText(""),
+                        option.path("manualReview").path("comment").asText("")
                 ));
             }
         }
@@ -459,14 +544,16 @@ class CreativeIdeaManualEvaluationTest {
                 %s
                 </creative_system_prompt>
 
-                下面是作者已经人工评分的回答。score 为0到10分，分数越高表示作者越喜欢整份回答：
+                下面是作者已经人工评审的回答。score 为0到10分，分数越高表示作者越喜欢整份回答；
+                每张卡片的 manualComment 是作者针对该卡片填写的具体意见，空字符串表示作者没有补充意见：
                 <scored_answers>
                 %s
                 </scored_answers>
 
                 请分析高分和低分回答在创意方向、标题骨架、简介结构上的共同模式。
                 单一总分只能说明整体偏好，不要把相关性武断解释为某个单字段的确定因果。
-                所有判断必须引用 questionId 和 answerVersion 作为依据。
+                卡片级 manualComment 可以作为具体归因依据，其语义优先于从总分进行的推测。
+                所有判断必须引用 questionId、answerVersion 和相关 optionName 作为依据。
 
                 最终只输出一个 JSON 对象，字段固定如下：
                 {
@@ -476,7 +563,7 @@ class CreativeIdeaManualEvaluationTest {
                   "ideaPreferences": ["创意方向偏好"],
                   "titlePreferences": ["标题骨架偏好"],
                   "descriptionPreferences": ["简介结构偏好"],
-                  "evidence": ["questionId-v版本号：具体依据"],
+                  "evidence": ["questionId-v版本号-optionName：具体依据"],
                   "currentPromptProblems": ["当前系统提示词的问题"],
                   "promptOptimizationSuggestions": ["可执行的提示词优化建议"],
                   "proposedSystemPrompt": "基于评分建议的新系统提示词草案"
@@ -653,7 +740,8 @@ class CreativeIdeaManualEvaluationTest {
             JsonNode titleOutline,
             JsonNode descriptionOutline,
             JsonNode sellingPoints,
-            String recommendReason
+            String recommendReason,
+            String manualComment
     ) {
     }
 

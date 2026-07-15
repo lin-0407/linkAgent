@@ -178,7 +178,7 @@ const guideOpen = ref(false)
     <RouterView v-slot="{ Component }">
       <component :is="Component" :developer-mode="developerMode" />
     </RouterView>
-    <AgentFloatingWindow :developer-mode="developerMode" />
+    <AgentFloatingWindow v-if="!isCreatorRoute" :developer-mode="developerMode" />
     <!-- 底部运行时状态栏：全局可见，展示 LLM/向量库/SSE 健康状态 -->
     <SystemStatusBar />
     <SettingsDrawer v-model:open="settingsOpen" v-model:developer-mode="developerMode" />

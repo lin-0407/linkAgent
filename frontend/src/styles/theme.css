@@ -4163,8 +4163,7 @@ textarea:focus {
   align-items: start;
 }
 
-.creator-ai-console-panel,
-.creator-ai-next-panel {
+.creator-ai-console-panel {
   border: 1px solid rgba(23, 32, 51, 0.1);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.94);
@@ -4178,28 +4177,24 @@ textarea:focus {
   padding: 16px;
 }
 
-.creator-ai-console-head,
-.creator-ai-next-panel header {
+.creator-ai-console-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.creator-ai-console-head div,
-.creator-ai-next-panel header {
+.creator-ai-console-head div {
   min-width: 0;
 }
 
 .creator-ai-console-head span,
-.creator-ai-next-panel header span,
 .creator-ai-message small {
   color: var(--muted);
   font-size: 12px;
 }
 
-.creator-ai-console-head strong,
-.creator-ai-next-panel header strong {
+.creator-ai-console-head strong {
   display: block;
   margin-top: 3px;
   overflow-wrap: anywhere;
@@ -4245,7 +4240,6 @@ textarea:focus {
 }
 
 .creator-ai-lead p,
-.creator-ai-next-panel p,
 .creator-ai-message p {
   margin: 0;
   color: var(--text);
@@ -4301,8 +4295,7 @@ textarea:focus {
   border-radius: 8px;
 }
 
-.creator-ai-composer textarea,
-.creator-ai-next-panel textarea {
+.creator-ai-composer textarea {
   width: 100%;
   min-height: 94px;
   padding: 11px 12px;
@@ -4314,34 +4307,16 @@ textarea:focus {
   outline: none;
 }
 
-.creator-ai-composer textarea:focus,
-.creator-ai-next-panel textarea:focus {
+.creator-ai-composer textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-ring);
 }
 
-.creator-ai-composer-actions,
-.creator-ai-next-actions {
+.creator-ai-composer-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
-}
-
-.creator-ai-next-panel {
-  position: sticky;
-  top: 16px;
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-}
-
-.creator-ai-next-panel > .creator-ghost-button {
-  justify-self: start;
-}
-
-.creator-ai-process-summary {
-  margin-top: 0;
 }
 
 .creator-ai-support-details {
@@ -7471,7 +7446,7 @@ body {
 .creator-workbench-shell .creator-layout {
   width: 100%;
   max-width: none;
-  grid-template-columns: 352px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
   align-items: stretch;
   gap: 0;
   margin: 0;
@@ -7841,9 +7816,6 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .creator-ai-next-panel {
-    position: static;
-  }
 }
 
 @media (max-width: 820px) {
@@ -8186,6 +8158,7 @@ body {
 
 @media (max-width: 820px) {
   .creator-workbench-shell {
+    --creator-mobile-flow-top: var(--surface-topbar-height);
     width: 100%;
     max-width: 100vw;
     padding: 10px;
@@ -8205,7 +8178,7 @@ body {
 
   .creator-workbench-shell .creator-flow-card {
     position: sticky;
-    top: 62px;
+    top: var(--creator-mobile-flow-top);
     z-index: 15;
     gap: 10px;
     padding: 10px;
