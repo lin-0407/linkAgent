@@ -21,6 +21,11 @@ const loading = ref(false)
 const error = ref('')
 const videos = ref<BilibiliVideo[]>([])
 
+/** 同一 BV 可以属于多个任务，使用任务和 BV 的组合值避免 Vue 复用错卡片。 */
+function videoKey(video: BilibiliVideo): string {
+  return `${video.taskId || 'unbound'}:${video.bvid}`
+}
+
 /** 加载视频列表 */
 async function loadVideos() {
   if (!props.bilibiliUid) return
@@ -73,7 +78,7 @@ defineExpose({ refresh: loadVideos })
     <div v-else class="linked-video-grid">
       <LinkedVideoCard
         v-for="video in videos"
-        :key="video.bvid"
+        :key="videoKey(video)"
         :video="video"
         @select="emit('selectVideo', $event)"
       />

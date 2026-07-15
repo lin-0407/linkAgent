@@ -10,6 +10,11 @@ defineProps<{
   video: BilibiliVideo
 }>()
 
+/** 任务复用同一 BV 时也要保持标题 ID 唯一，避免无障碍关联指向错误卡片。 */
+function titleId(video: BilibiliVideo): string {
+  return `video-title-${video.taskId || 'unbound'}-${video.bvid}`
+}
+
 const emit = defineEmits<{
   select: [video: BilibiliVideo]
 }>()
@@ -34,7 +39,7 @@ function analysisLabel(video: BilibiliVideo): { text: string; cls: string } {
     class="linked-video-card"
     role="button"
     tabindex="0"
-    :aria-labelledby="'video-title-' + video.bvid"
+    :aria-labelledby="titleId(video)"
     @click="emit('select', video)"
     @keydown.enter="emit('select', video)"
   >
@@ -59,7 +64,7 @@ function analysisLabel(video: BilibiliVideo): { text: string; cls: string } {
 
     <!-- 信息区 -->
     <div class="card-body">
-      <h4 :id="'video-title-' + video.bvid" class="card-title">{{ video.title || '未获取到标题' }}</h4>
+      <h4 :id="titleId(video)" class="card-title">{{ video.title || '未获取到标题' }}</h4>
 
       <div class="card-meta">
         <code class="card-bv">{{ video.bvid }}</code>

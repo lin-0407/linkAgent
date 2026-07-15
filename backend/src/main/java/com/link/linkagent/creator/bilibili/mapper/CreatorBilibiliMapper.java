@@ -359,6 +359,28 @@ public interface CreatorBilibiliMapper {
                             @Param("verifyMessage") String verifyMessage);
 
     /**
+     * 修正尚未通过校验的任务视频绑定。
+     *
+     * 只有非 BOUND 状态允许走这个方法；已确认绑定继续由 Service 层保护，避免误覆盖已经验证通过的任务。
+     */
+    @Update("""
+            UPDATE creator_task_video_binding
+            SET bilibili_uid = #{bilibiliUid},
+                bvid = #{bvid},
+                binding_status = #{bindingStatus},
+                verify_message = #{verifyMessage},
+                update_time = CURRENT_TIMESTAMP
+            WHERE binding_id = #{bindingId}
+              AND is_deleted = 0
+              AND (binding_status IS NULL OR binding_status <> 'BOUND')
+            """)
+    int updateBindingDetails(@Param("bindingId") String bindingId,
+                             @Param("bilibiliUid") String bilibiliUid,
+                             @Param("bvid") String bvid,
+                             @Param("bindingStatus") String bindingStatus,
+                             @Param("verifyMessage") String verifyMessage);
+
+    /**
      * 按 BV 号查所有未删除绑定，用于冲突检测。
      * 当用户尝试把同一个 BV 绑定到第二个任务时，Service 层用此方法检查并给出警告。
      */

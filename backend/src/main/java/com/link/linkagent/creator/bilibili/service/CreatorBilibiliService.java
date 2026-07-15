@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -194,7 +195,7 @@ public class CreatorBilibiliService {
      * <p>
      * 设计决策：
      * <ul>
-     *   <li>已有绑定不可覆盖——防止用户误操作清掉完成校验的 BOUND 状态。</li>
+     *   <li>BOUND 绑定不可覆盖——防止用户误操作清掉完成校验的状态；异常或待校验绑定允许修正。</li>
      *   <li>同用户 BV 冲突只警告不阻止——用户可能想对同一视频做多次分析（不同版本/不同角度）。</li>
      *   <li>跨用户 BV 冲突直接拒绝——同一 BV 属于两个不同创作者在业务上不合理。</li>
      *   <li>DuplicateKeyException 并发兜底——高并发下 insert 可能触发唯一索引冲突，
@@ -217,9 +218,10 @@ public class CreatorBilibiliService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权操作其他用户的创作任务");
         }
 
-        // 检查是否已有绑定——已有则直接返回，不允许覆盖
+        // 已确认的绑定不能覆盖，避免用户误操作清掉已经验证通过的任务；异常或待校验状态允许修正。
         var existingBinding = bilibiliMapper.findBindingByTaskId(taskId);
-        if (existingBinding.isPresent()) {
+        if (existingBinding.isPresent()
+                && "BOUND".equals(existingBinding.get().getBindingStatus())) {
             log.info("任务已有BV绑定，直接返回：taskId={}, bvid={}", taskId, existingBinding.get().getBvid());
             return toBindingResponse(existingBinding.get());
         }
@@ -233,7 +235,11 @@ public class CreatorBilibiliService {
         }
 
         // 检查 BV 是否已被其他任务绑定——区分同用户和跨用户冲突
-        var conflictingBindings = bilibiliMapper.findBindingsByBvid(request.bvid());
+        String existingBindingId = existingBinding.map(TaskVideoBindingRecord::getBindingId).orElse(null);
+        var conflictingBindings = bilibiliMapper.findBindingsByBvid(request.bvid()).stream()
+                // 修正已有绑定时排除它自己，否则同一个任务会被误报为“重复绑定”。
+                .filter(binding -> binding != null && !Objects.equals(existingBindingId, binding.getBindingId()))
+                .toList();
         String verifyMessage = null;
         if (!conflictingBindings.isEmpty()) {
             // 区分同用户和跨用户冲突：跨用户冲突应阻止而非仅警告
@@ -259,6 +265,29 @@ public class CreatorBilibiliService {
         if ("BOUND".equals(bindingStatus)) {
             String cachedMessage = "视频已在当前UID的公开视频缓存中，绑定校验通过";
             verifyMessage = verifyMessage == null ? cachedMessage : verifyMessage + "；" + cachedMessage;
+        }
+
+        // 已有异常绑定直接更新，避免用户必须删除任务才能修正 BV；新绑定仍走插入和并发幂等兜底。
+        if (existingBinding.isPresent()) {
+            TaskVideoBindingRecord record = existingBinding.get();
+            int updatedRows = bilibiliMapper.updateBindingDetails(
+                    record.getBindingId(),
+                    request.bilibiliUid(),
+                    request.bvid(),
+                    bindingStatus,
+                    verifyMessage
+            );
+            // 同步线程可能在本次请求期间先把状态推进为 BOUND，此时保留数据库中的已确认结果。
+            if (updatedRows == 0) {
+                return bilibiliMapper.findBindingByTaskId(taskId)
+                        .map(this::toBindingResponse)
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.INTERNAL_SERVER_ERROR, "更新任务视频绑定时记录已不存在"));
+            }
+            return bilibiliMapper.findBindingByTaskId(taskId)
+                    .map(this::toBindingResponse)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.INTERNAL_SERVER_ERROR, "更新任务视频绑定后无法读取结果"));
         }
 
         // 创建绑定（并发安全：捕获 DuplicateKeyException 后返回已有记录）

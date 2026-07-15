@@ -23,6 +23,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -162,6 +163,69 @@ class CreatorBilibiliServiceTest {
         assertThat(result.taskId()).isEqualTo("task-1");
         assertThat(result.bindingStatus()).isEqualTo("WAITING_VERIFY");
         verify(bilibiliMapper).insertBinding(org.mockito.ArgumentMatchers.any(TaskVideoBindingRecord.class));
+    }
+
+    /** 非 BOUND 绑定允许重新填写 BV，并在缓存可信时直接恢复为 BOUND。 */
+    @Test
+    void shouldRepairNonBoundBinding() {
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        TaskVideoBindingRecord oldBinding = binding(
+                "task-1", "default", "27058248", "BV1xx411c7mD", "UID_MISMATCH");
+        TaskVideoBindingRecord updatedBinding = binding(
+                "task-1", "default", "27058248", "BV1yy511c7eF", "BOUND");
+
+        when(taskMapper.findTaskByTaskId("task-1"))
+                .thenReturn(Optional.of(task("task-1", "测试任务")));
+        when(bilibiliMapper.findBindingByTaskId("task-1"))
+                .thenReturn(Optional.of(oldBinding), Optional.of(updatedBinding));
+        when(bilibiliMapper.findAccountByUserId("default"))
+                .thenReturn(Optional.of(account("default", "27058248")));
+        when(bilibiliMapper.findBindingsByBvid("BV1yy511c7eF"))
+                .thenReturn(List.of());
+        when(bilibiliMapper.findVideoByBvidAndUid("BV1yy511c7eF", "27058248"))
+                .thenReturn(Optional.of(video("27058248", "BV1yy511c7eF")));
+        when(bilibiliMapper.updateBindingDetails(
+                "binding-1", "27058248", "BV1yy511c7eF", "BOUND",
+                "视频已在当前UID的公开视频缓存中，绑定校验通过"))
+                .thenReturn(1);
+        CreatorBilibiliService service = service(bilibiliMapper, taskMapper);
+
+        TaskVideoBindingResponse result = service.bindBvToTask(
+                "task-1", new BindBvRequest("default", "27058248", "BV1yy511c7eF"));
+
+        assertThat(result.bindingStatus()).isEqualTo("BOUND");
+        assertThat(result.bvid()).isEqualTo("BV1yy511c7eF");
+        verify(bilibiliMapper).updateBindingDetails(
+                "binding-1", "27058248", "BV1yy511c7eF", "BOUND",
+                "视频已在当前UID的公开视频缓存中，绑定校验通过");
+    }
+
+    /** 已校验通过的绑定必须保持只读，后续重复请求不能换成另一个 BV。 */
+    @Test
+    void shouldNotOverwriteBoundBinding() {
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        TaskVideoBindingRecord boundBinding = binding(
+                "task-1", "default", "27058248", "BV1xx411c7mD", "BOUND");
+
+        when(taskMapper.findTaskByTaskId("task-1"))
+                .thenReturn(Optional.of(task("task-1", "测试任务")));
+        when(bilibiliMapper.findBindingByTaskId("task-1"))
+                .thenReturn(Optional.of(boundBinding));
+        CreatorBilibiliService service = service(bilibiliMapper, taskMapper);
+
+        TaskVideoBindingResponse result = service.bindBvToTask(
+                "task-1", new BindBvRequest("default", "27058248", "BV1yy511c7eF"));
+
+        assertThat(result.bindingStatus()).isEqualTo("BOUND");
+        assertThat(result.bvid()).isEqualTo("BV1xx411c7mD");
+        verify(bilibiliMapper, never()).updateBindingDetails(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.nullable(String.class));
     }
 
     /** 已同步缓存能够证明 BV 归属时，绑定不应继续停留在 WAITING_VERIFY。 */

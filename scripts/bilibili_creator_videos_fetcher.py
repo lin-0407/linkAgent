@@ -74,11 +74,24 @@ def main() -> int:
     try:
         payload = collect_payload(args)
     except (BiliApiError, ValueError, OSError, json.JSONDecodeError) as error:
-        print(f"同步失败：{error}", file=sys.stderr)
+        write_utf8(sys.stderr, f"同步失败：{error}\n")
         return 1
 
-    json.dump(payload, sys.stdout, ensure_ascii=False, separators=(",", ":"))
+    # 标准输出重定向到文件时可能沿用 Windows 本地编码，直接 json.dump 会让中文标题无法被 Java 按 UTF-8 解析。
+    write_utf8(sys.stdout, json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     return 0
+
+
+def write_utf8(stream: Any, text: str) -> None:
+    """用 UTF-8 写入脚本边界，避免终端或重定向文件的本地编码影响 JSON。"""
+    buffer = getattr(stream, "buffer", None)
+    if buffer is not None:
+        buffer.write(text.encode("utf-8"))
+        buffer.flush()
+        return
+    # StringIO 等测试流没有 buffer，保留文本写入能力，不影响正式进程的字节编码保证。
+    stream.write(text)
+    stream.flush()
 
 
 def parse_args() -> argparse.Namespace:

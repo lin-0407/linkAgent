@@ -16,6 +16,7 @@ const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const binding = ref<TaskVideoBinding | null>(null)
+const editing = ref(false)
 
 // 表单输入
 const uidInput = ref('')
@@ -38,6 +39,9 @@ onMounted(async () => {
   loading.value = true
   try {
     binding.value = await getTaskVideoBinding(props.taskId)
+    // 先预填已有值，用户打开修正入口时只需修改出错字段。
+    uidInput.value = binding.value.bilibiliUid || ''
+    bvInput.value = binding.value.bvid
   } catch {
     // 404 表示还没有绑定，正常流程，不报错
     binding.value = null
@@ -64,12 +68,30 @@ async function handleBind() {
       bvid: bvInput.value.trim(),
     })
     binding.value = result
+    editing.value = false
     emit('bound', result)
   } catch (e: any) {
     error.value = e?.message || '绑定失败，请稍后重试'
   } finally {
     saving.value = false
   }
+}
+
+/** 只有未通过校验的绑定允许编辑，BOUND 状态继续保持不可覆盖。 */
+function startEdit() {
+  if (!binding.value || binding.value.bindingStatus === 'BOUND') return
+  uidInput.value = binding.value.bilibiliUid || ''
+  bvInput.value = binding.value.bvid
+  bvError.value = ''
+  error.value = ''
+  editing.value = true
+}
+
+/** 取消修正时恢复只读状态，避免误改原绑定展示。 */
+function cancelEdit() {
+  editing.value = false
+  bvError.value = ''
+  error.value = ''
 }
 </script>
 
@@ -81,7 +103,7 @@ async function handleBind() {
     </p>
 
     <!-- 已绑定状态 -->
-    <div v-if="binding" class="bv-binding-status">
+    <div v-if="binding && !editing" class="bv-binding-status">
       <div class="bv-binding-status-row">
         <span class="bv-binding-label">BV 号</span>
         <code class="bv-binding-value">{{ binding.bvid }}</code>
@@ -99,10 +121,21 @@ async function handleBind() {
         <span class="bv-binding-label">说明</span>
         <span class="bv-binding-message">{{ binding.verifyMessage }}</span>
       </div>
+      <button
+        v-if="binding.bindingStatus !== 'BOUND'"
+        type="button"
+        class="creator-btn creator-btn-secondary"
+        @click="startEdit"
+      >
+        修改绑定
+      </button>
     </div>
 
-    <!-- 绑定输入区（无已有绑定时展示）-->
+    <!-- 绑定输入区：首次绑定或修正异常绑定时展示。 -->
     <div v-else-if="!loading" class="bv-binding-form">
+      <p v-if="binding" class="bv-binding-edit-hint">
+        当前绑定未通过校验，请修正 UID 或 BV 号后重新提交。
+      </p>
       <label class="bv-binding-field" for="bv-binding-uid">
         <span class="bv-binding-field-label">B站 UID</span>
         <input
@@ -133,6 +166,15 @@ async function handleBind() {
         @click="handleBind"
       >
         {{ saving ? '绑定中...' : '绑定 BV' }}
+      </button>
+      <button
+        v-if="binding"
+        type="button"
+        class="creator-btn creator-btn-secondary"
+        :disabled="saving"
+        @click="cancelEdit"
+      >
+        取消修改
       </button>
       <p v-if="error" class="bv-binding-error">{{ error }}</p>
     </div>
@@ -225,6 +267,13 @@ async function handleBind() {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.bv-binding-edit-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--creator-muted-ink, #86868b);
+  line-height: 1.5;
 }
 
 .bv-binding-field {

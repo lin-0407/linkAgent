@@ -352,7 +352,7 @@ class CreativeIdeaManualEvaluationTest {
         Map<String, String> dotEnv = readDotEnv();
         String webSearchBaseUrl = dotEnv.getOrDefault("WEB_SEARCH_BASE_URL", "https://html.duckduckgo.com");
         WebSearchTool webSearchTool = new WebSearchTool(
-                RestClient.builder().baseUrl(webSearchBaseUrl).build(), objectMapper);
+                RestClient.builder().baseUrl(webSearchBaseUrl).build());
         ToolRegistry toolRegistry = new ToolRegistry(List.of(webSearchTool));
         toolRegistry.init();
         ToolExecutor toolExecutor = new ToolExecutor(toolRegistry, new ToolExecutionProperties(20, 1));
