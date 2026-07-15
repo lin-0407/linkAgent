@@ -2,22 +2,13 @@ import { ApiError, del, get, post } from './http'
 import type {
   CreateMediaUploadPayload,
   DraftVideo,
-  MediaAccessSession,
   MediaUpload,
   MediaUploadPart,
   PresignedMediaUploadPart,
 } from '@/types/media'
 
-export function createMediaAccessSession(accessCode: string) {
-  return post<MediaAccessSession>('/media-access/session', { accessCode })
-}
-
-export function getMediaAccessSession() {
-  return get<MediaAccessSession>('/media-access/session')
-}
-
-export function deleteMediaAccessSession() {
-  return del('/media-access/session')
+export function getMediaFeatureStatus() {
+  return get<{ enabled: boolean }>('/creator/media/status')
 }
 
 export function createDraftVideoUpload(

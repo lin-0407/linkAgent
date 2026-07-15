@@ -5,6 +5,10 @@ import com.link.linkagent.creator.bilibili.model.BilibiliAccountRecord;
 import com.link.linkagent.creator.bilibili.model.BilibiliAccountResponse;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoRecord;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoResponse;
+import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncItem;
+import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncPayload;
+import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncResponse;
+import com.link.linkagent.creator.bilibili.model.BilibiliVideoVerificationResult;
 import com.link.linkagent.creator.bilibili.model.BindAccountRequest;
 import com.link.linkagent.creator.bilibili.model.BindBvRequest;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
@@ -15,7 +19,6 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,30 +27,65 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * B站接口服务层的空值回归测试。
+ * B站账号、视频同步和任务绑定服务层测试。
  * <p>
- * 控制器本身只负责参数校验和转发；会导致 NPE 的业务组合在 Service 层。
- * 因此这里用 Mock Mapper 覆盖 B站模块全部六个对外服务入口，不依赖真实 MySQL 或 B站接口。
+ * 控制器只负责参数校验和转发；同步事务、归属校验和幂等绑定都在 Service 层验证，
+ * 测试不依赖真实 MySQL、B站接口或 Python 进程。
  */
 class CreatorBilibiliServiceTest {
 
-    /**
-     * 同步接口当前没有真实 B站错误时，lastError 的业务语义就是 null。
-     * Map.of 不接受 null，本用例在修复前会稳定复现线上 NPE。
-     */
+    /** 同步入口应把当前用户绑定的 BV 交给 Provider 定向校验，并返回持久化结果。 */
     @Test
-    void shouldReturnNullableLastErrorWhenSyncSucceedsWithoutError() {
+    void shouldSyncAccountVideosAndReturnStructuredResult() {
         CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
         CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        BilibiliVideoSyncProvider syncProvider = mock(BilibiliVideoSyncProvider.class);
+        BilibiliVideoSyncPersistenceService persistenceService = mock(BilibiliVideoSyncPersistenceService.class);
+        BilibiliAccountRecord account = account("default", "27058248");
+        TaskVideoBindingRecord binding = binding(
+                "task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY");
+        BilibiliVideoSyncPayload payload = syncPayload("27058248");
+        BilibiliVideoSyncResponse expected = new BilibiliVideoSyncResponse(
+                "27058248", "SUCCESS", 1, 1, 0, null, List.of(), false, "同步完成");
+
         when(bilibiliMapper.findAccountByUserId("default"))
-                .thenReturn(Optional.of(account("default", "27058248")));
-        CreatorBilibiliService service = new CreatorBilibiliService(bilibiliMapper, taskMapper);
+                .thenReturn(Optional.of(account));
+        when(bilibiliMapper.listBindingsByUserId("default")).thenReturn(List.of(binding));
+        when(syncProvider.fetch("27058248", List.of("BV1xx411c7mD"))).thenReturn(payload);
+        when(persistenceService.persist(account, payload, List.of(binding))).thenReturn(expected);
+        CreatorBilibiliService service = new CreatorBilibiliService(
+                bilibiliMapper, taskMapper, syncProvider, persistenceService);
 
-        Map<String, Object> result = service.syncVideos("default");
+        BilibiliVideoSyncResponse result = service.syncVideos("default");
 
-        assertThat(result).containsKey("lastError");
-        assertThat(result.get("lastError")).isNull();
-        assertThat(result.get("bilibiliUid")).isEqualTo("27058248");
+        assertThat(result.lastError()).isNull();
+        assertThat(result.bilibiliUid()).isEqualTo("27058248");
+        assertThat(result.linkedCount()).isEqualTo(1);
+        verify(syncProvider).fetch("27058248", List.of("BV1xx411c7mD"));
+    }
+
+    /** 同步持久化应幂等写入视频缓存，并把归属正确的待校验绑定推进为 BOUND。 */
+    @Test
+    void shouldPersistSyncedVideoAndVerifyBinding() {
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        BilibiliVideoSyncPersistenceService persistenceService =
+                new BilibiliVideoSyncPersistenceService(bilibiliMapper);
+        BilibiliAccountRecord account = account("default", "27058248");
+        TaskVideoBindingRecord binding = binding(
+                "task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY");
+
+        BilibiliVideoSyncResponse result = persistenceService.persist(
+                account,
+                syncPayload("27058248"),
+                List.of(binding)
+        );
+
+        assertThat(result.syncedCount()).isEqualTo(1);
+        assertThat(result.linkedCount()).isEqualTo(1);
+        assertThat(result.anomalyCount()).isZero();
+        verify(bilibiliMapper).insertVideo(org.mockito.ArgumentMatchers.any(BilibiliVideoRecord.class));
+        verify(bilibiliMapper).updateBindingStatus(
+                "binding-1", "BOUND", "BV归属校验通过");
     }
 
     /** POST /accounts：首次绑定时应创建记录并返回完整账号信息。 */
@@ -108,10 +146,14 @@ class CreatorBilibiliServiceTest {
         CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
         CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
         when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(task("task-1", "测试任务")));
+        when(bilibiliMapper.findAccountByUserId("default"))
+                .thenReturn(Optional.of(account("default", "27058248")));
         when(bilibiliMapper.findBindingByTaskId("task-1"))
                 .thenReturn(Optional.empty(), Optional.of(
                         binding("task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY")));
         when(bilibiliMapper.findBindingsByBvid("BV1xx411c7mD")).thenReturn(List.of());
+        when(bilibiliMapper.findVideoByBvidAndUid("BV1xx411c7mD", "27058248"))
+                .thenReturn(Optional.empty());
         CreatorBilibiliService service = service(bilibiliMapper, taskMapper);
 
         TaskVideoBindingResponse result = service.bindBvToTask(
@@ -120,6 +162,30 @@ class CreatorBilibiliServiceTest {
         assertThat(result.taskId()).isEqualTo("task-1");
         assertThat(result.bindingStatus()).isEqualTo("WAITING_VERIFY");
         verify(bilibiliMapper).insertBinding(org.mockito.ArgumentMatchers.any(TaskVideoBindingRecord.class));
+    }
+
+    /** 已同步缓存能够证明 BV 归属时，绑定不应继续停留在 WAITING_VERIFY。 */
+    @Test
+    void shouldBindCachedVideoImmediately() {
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(task("task-1", "测试任务")));
+        when(bilibiliMapper.findBindingByTaskId("task-1"))
+                .thenReturn(Optional.empty(), Optional.of(
+                        binding("task-1", "default", "27058248", "BV1xx411c7mD", "BOUND")));
+        when(bilibiliMapper.findAccountByUserId("default"))
+                .thenReturn(Optional.of(account("default", "27058248")));
+        when(bilibiliMapper.findBindingsByBvid("BV1xx411c7mD")).thenReturn(List.of());
+        when(bilibiliMapper.findVideoByBvidAndUid("BV1xx411c7mD", "27058248"))
+                .thenReturn(Optional.of(video("27058248", "BV1xx411c7mD")));
+        CreatorBilibiliService service = service(bilibiliMapper, taskMapper);
+
+        TaskVideoBindingResponse result = service.bindBvToTask(
+                "task-1", new BindBvRequest("default", "27058248", "BV1xx411c7mD"));
+
+        assertThat(result.bindingStatus()).isEqualTo("BOUND");
+        verify(bilibiliMapper).insertBinding(org.mockito.ArgumentMatchers.argThat(record ->
+                "BOUND".equals(record.getBindingStatus())));
     }
 
     /** GET /tasks/{taskId}/video-binding：已有绑定应直接转换为前端响应。 */
@@ -204,6 +270,43 @@ class CreatorBilibiliServiceTest {
 
     private CreatorBilibiliService service(CreatorBilibiliMapper bilibiliMapper,
                                             CreatorTaskMapper taskMapper) {
-        return new CreatorBilibiliService(bilibiliMapper, taskMapper);
+        return new CreatorBilibiliService(
+                bilibiliMapper,
+                taskMapper,
+                mock(BilibiliVideoSyncProvider.class),
+                mock(BilibiliVideoSyncPersistenceService.class)
+        );
+    }
+
+    private BilibiliVideoSyncPayload syncPayload(String bilibiliUid) {
+        BilibiliVideoSyncItem video = new BilibiliVideoSyncItem(
+                "BV1xx411c7mD",
+                1L,
+                "测试视频",
+                "https://example.com/cover.jpg",
+                1784010000L,
+                100L,
+                10L,
+                1L,
+                2L,
+                3L,
+                bilibiliUid,
+                "{}"
+        );
+        BilibiliVideoVerificationResult verification = new BilibiliVideoVerificationResult(
+                "BV1xx411c7mD",
+                "FOUND",
+                bilibiliUid,
+                "BV归属校验通过"
+        );
+        return new BilibiliVideoSyncPayload(
+                bilibiliUid,
+                "测试账号",
+                false,
+                false,
+                List.of(video),
+                List.of(verification),
+                List.of()
+        );
     }
 }

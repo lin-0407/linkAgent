@@ -1,0 +1,12 @@
+# 后端镜像使用项目根目录作为构建上下文，只允许发送构建实际需要的文件。
+*
+
+!backend/
+backend/*
+!backend/Dockerfile
+!backend/pom.xml
+!backend/src/
+!backend/src/**
+
+!scripts/
+!scripts/**

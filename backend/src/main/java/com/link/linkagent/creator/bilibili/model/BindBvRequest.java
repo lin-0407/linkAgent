@@ -18,6 +18,7 @@ public record BindBvRequest(
 
         @NotBlank(message = "B站UID不能为空")
         @Size(max = 32, message = "B站UID长度不能超过32个字符")
+        @Pattern(regexp = "^[0-9]+$", message = "B站UID只能包含数字")
         String bilibiliUid,
 
         @NotBlank(message = "BV号不能为空")

@@ -36,6 +36,7 @@ class CreatorBilibiliMapperMappingTest {
         assertUsesResults("findBindingByTaskId", String.class);
         assertUsesResultMap("findBindingsByBvid", String.class);
         assertUsesResultMap("listBindingsByUid", String.class);
+        assertUsesResultMap("listBindingsByUserId", String.class);
         assertUsesResults("findAnalysisReportByTaskId", String.class);
     }
 

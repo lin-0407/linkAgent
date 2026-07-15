@@ -4,6 +4,7 @@ import com.link.linkagent.creator.bilibili.mapper.CreatorBilibiliMapper;
 import com.link.linkagent.creator.bilibili.model.BilibiliAccountRecord;
 import com.link.linkagent.creator.bilibili.model.BilibiliAccountResponse;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoResponse;
+import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncResponse;
 import com.link.linkagent.creator.bilibili.model.BindAccountRequest;
 import com.link.linkagent.creator.bilibili.model.BindBvRequest;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
@@ -13,15 +14,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -32,11 +30,11 @@ import java.util.UUID;
  * 任务视频绑定是任务生命周期中的关键步骤（BV 号关联分析），两者在业务语义上正交，
  * 拆分可让各自独立演进，不互相拖累。
  * <p>
- * P0-3 的 syncVideos 是第一版占位实现——B站公开API同步能力在后续迭代补齐。
- * 当前只提供账号绑定、BV绑定和已绑定视频查询能力。
+ * B站公开视频同步由 {@link BilibiliVideoSyncProvider} 负责外部脚本调用，
+ * 再由 {@link BilibiliVideoSyncPersistenceService} 在独立事务中保存结果。
  * <p>
- * 架构位置：本服务位于 creator.bilibili 模块的 service 层，向下依赖 Mapper 层做数据读写，
- * 向上被 Controller 层直接调用。不依赖任何其他业务 Service，避免循环依赖。
+ * 架构位置：本服务位于 creator.bilibili 模块的 service 层，向下依赖 Mapper 和本模块同步服务，
+ * 向上被 Controller 层直接调用，不依赖其他创作领域 Service，避免循环依赖。
  */
 @Service
 public class CreatorBilibiliService {
@@ -47,11 +45,19 @@ public class CreatorBilibiliService {
     private final CreatorBilibiliMapper bilibiliMapper;
     /** 创作任务数据访问层，仅用于校验任务是否存在（不侵入任务管理逻辑） */
     private final CreatorTaskMapper taskMapper;
+    /** B站公开视频采集 Provider，只负责外部脚本调用和 JSON 解析 */
+    private final BilibiliVideoSyncProvider syncProvider;
+    /** 同步结果持久化服务，确保外部调用完成后才开启数据库事务 */
+    private final BilibiliVideoSyncPersistenceService syncPersistenceService;
 
     public CreatorBilibiliService(CreatorBilibiliMapper bilibiliMapper,
-                                  CreatorTaskMapper taskMapper) {
+                                  CreatorTaskMapper taskMapper,
+                                  BilibiliVideoSyncProvider syncProvider,
+                                  BilibiliVideoSyncPersistenceService syncPersistenceService) {
         this.bilibiliMapper = bilibiliMapper;
         this.taskMapper = taskMapper;
+        this.syncProvider = syncProvider;
+        this.syncPersistenceService = syncPersistenceService;
     }
 
     /**
@@ -116,50 +122,75 @@ public class CreatorBilibiliService {
     }
 
     /**
-     * 同步 B 站视频列表（P0-3 占位实现）。
+     * 同步 B 站视频列表并校验任务 BV 归属。
      * <p>
-     * 第一版不实际调用 B 站 API，只更新同步时间并返回提示信息。
-     * 后续迭代会接入 B 站公开视频接口，自动拉取创作者视频列表。
-     * 为什么现在就要做占位：提前把接口契约和调用方（前端）对齐，后续接入真实 API 时
-     * 只需改本方法内部逻辑，前端和 Controller 层的调用关系无需变动。
+     * 先执行外部脚本，再把完整结果交给独立事务持久化；这样 B站接口变慢时不会长时间持有数据库连接。
+     * 同步失败时保留上一次成功缓存，只记录本次错误，避免一次临时网络故障把页面变成空状态。
      *
-     * @param userId 平台用户 ID，需要已绑定 B 站 UID
-     * @return 同步结果，含占位提示信息
+     * @param userId 平台用户 ID，需要已绑定 B 站账号
+     * @return 同步结果，含视频数量、绑定数量和异常说明
      * @throws ResponseStatusException 404 如果用户未绑定 B 站账号
      */
-    @Transactional
-    public Map<String, Object> syncVideos(String userId) {
+    public BilibiliVideoSyncResponse syncVideos(String userId) {
         var account = bilibiliMapper.findAccountByUserId(userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "未找到B站账号绑定，请先绑定UID"));
 
-        LocalDateTime now = LocalDateTime.now();
-        bilibiliMapper.updateAccountSyncResult(
-                account.getAccountId(),
-                account.getNickname(),
-                "ACTIVE",
-                now,
-                null
-        );
+        var bindings = bilibiliMapper.listBindingsByUserId(userId);
+        List<String> targetBvids = bindings == null
+                ? List.of()
+                : bindings.stream()
+                        .map(TaskVideoBindingRecord::getBvid)
+                        .filter(value -> value != null)
+                        .distinct()
+                        .toList();
 
-        log.info("B站视频同步（占位）：userId={}, bilibiliUid={}", userId, account.getBilibiliUid());
-        // 同步成功且没有异常时 lastError 的语义是 null，Map.of 不允许 null 值会直接抛 NPE。
-        // 使用 LinkedHashMap 保留响应字段顺序，也让前端能稳定收到明确的空错误字段。
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("bilibiliUid", account.getBilibiliUid());
-        response.put("syncedCount", 0);
-        response.put("linkedCount", 0);
-        response.put("anomalyCount", 0);
-        response.put("lastError", null);
-        response.put("message", "B站视频同步功能开发中。请先在创作任务中手动绑定已发布视频的BV号。");
-        return response;
+        try {
+            var payload = syncProvider.fetch(account.getBilibiliUid(), targetBvids);
+            BilibiliVideoSyncResponse result = syncPersistenceService.persist(account, payload, bindings);
+            log.info("B站公开视频同步完成：userId={}, bilibiliUid={}, syncedCount={}, linkedCount={}, anomalyCount={}",
+                    userId, account.getBilibiliUid(), result.syncedCount(), result.linkedCount(), result.anomalyCount());
+            return result;
+        } catch (ResponseStatusException exception) {
+            recordSyncFailure(account, exception.getReason());
+            throw exception;
+        } catch (RuntimeException exception) {
+            recordSyncFailure(account, "同步结果保存失败，请稍后重试");
+            log.error("B站公开视频同步结果处理失败：userId={}, bilibiliUid={}",
+                    userId, account.getBilibiliUid(), exception);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "B站公开视频同步失败，请稍后重试");
+        }
+    }
+
+    /** 同步失败只更新一条账号记录，不触碰上一次成功的同步时间和视频缓存。 */
+    private void recordSyncFailure(BilibiliAccountRecord account, String reason) {
+        String normalizedReason = reason == null || reason.isBlank()
+                ? "B站公开视频同步失败"
+                : reason.trim();
+        if (normalizedReason.length() > 500) {
+            normalizedReason = normalizedReason.substring(0, 500);
+        }
+        try {
+            bilibiliMapper.updateAccountSyncResult(
+                    account.getAccountId(),
+                    account.getNickname(),
+                    "SYNC_FAILED",
+                    account.getLastSyncTime(),
+                    normalizedReason
+            );
+        } catch (RuntimeException exception) {
+            // 失败状态记录是补偿动作，不能覆盖真正的同步异常，否则调用方会拿到错误的根因。
+            log.error("记录B站同步失败状态时数据库写入失败：accountId={}", account.getAccountId(), exception);
+        }
+        log.warn("B站公开视频同步失败：userId={}, bilibiliUid={}, reason={}",
+                account.getUserId(), account.getBilibiliUid(), normalizedReason);
     }
 
     /**
      * 将 BV 号绑定到创作任务。
      * <p>
      * 校验链：任务存在 → 已有绑定检查 → BV 冲突检测（同用户警告、跨用户阻止）。
-     * 绑定后默认状态为 WAITING_VERIFY，等待后续 UID 同步校验。
+     * 已有可信视频缓存时直接进入 BOUND，否则进入 WAITING_VERIFY，等待后续 UID 同步校验。
      * <p>
      * 设计决策：
      * <ul>
@@ -182,11 +213,23 @@ public class CreatorBilibiliService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "创作任务不存在：" + taskId));
 
+        if (!request.userId().equals(task.getUserId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "无权操作其他用户的创作任务");
+        }
+
         // 检查是否已有绑定——已有则直接返回，不允许覆盖
         var existingBinding = bilibiliMapper.findBindingByTaskId(taskId);
         if (existingBinding.isPresent()) {
             log.info("任务已有BV绑定，直接返回：taskId={}, bvid={}", taskId, existingBinding.get().getBvid());
             return toBindingResponse(existingBinding.get());
+        }
+
+        var account = bilibiliMapper.findAccountByUserId(request.userId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "请先绑定B站UID，再绑定任务BV"));
+        if (!request.bilibiliUid().equals(account.getBilibiliUid())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "任务中的B站UID必须与当前账号绑定的UID一致");
         }
 
         // 检查 BV 是否已被其他任务绑定——区分同用户和跨用户冲突
@@ -207,6 +250,17 @@ public class CreatorBilibiliService {
                     request.bvid(), request.userId(), conflictingBindings.size());
         }
 
+        // 已经同步过的视频可以直接完成校验，避免用户在“先同步、后绑定”时还要重复点击同步。
+        String bindingStatus = bilibiliMapper.findVideoByBvidAndUid(request.bvid(), request.bilibiliUid())
+                .filter(video -> "SYNCED".equals(video.getSyncStatus()))
+                .isPresent()
+                ? "BOUND"
+                : "WAITING_VERIFY";
+        if ("BOUND".equals(bindingStatus)) {
+            String cachedMessage = "视频已在当前UID的公开视频缓存中，绑定校验通过";
+            verifyMessage = verifyMessage == null ? cachedMessage : verifyMessage + "；" + cachedMessage;
+        }
+
         // 创建绑定（并发安全：捕获 DuplicateKeyException 后返回已有记录）
         var record = new TaskVideoBindingRecord(
                 null,
@@ -215,7 +269,7 @@ public class CreatorBilibiliService {
                 request.userId(),
                 request.bilibiliUid(),
                 request.bvid(),
-                "WAITING_VERIFY",
+                bindingStatus,
                 verifyMessage,
                 null,
                 null

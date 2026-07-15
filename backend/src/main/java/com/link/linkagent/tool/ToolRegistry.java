@@ -99,7 +99,7 @@ public class ToolRegistry {
      * 不如让应用启动直接失败，开发者能立刻定位问题。
      */
     @PostConstruct
-    void init() {
+    public void init() {
         // 第一步：汇聚本地工具 + MCP 适配工具到统一列表
         List<Tool> allTools = new ArrayList<>(tools);
         toolCallbackProviders.stream()

@@ -47,8 +47,8 @@ import java.util.UUID;
  * 浏览器直接把文件分片 PUT 到 OSS；本服务只负责可信归属、短时签名、ETag 登记、
  * 完成校验和 MySQL 状态收敛，因此 1.5 GB 文件不会进入 JVM 堆或 Spring MultipartFile。
  * <p>
- * 关键安全约束：ownerId 不由客户端传入，而是从 {@link com.link.linkagent.creator.media.access.filter.MediaAccessSessionFilter}
- * 注入的 request 属性中读取，确保只有通过媒体访问口令认证的会话才能操作上传。
+ * 单人工作台固定使用 default 作为归属。ownerId 仍保存在媒体记录中，
+ * 这样未来增加数据隔离时无需重建对象键与数据表。
  */
 @Service
 // 只有 creator.media.enabled=true 时才创建该 Bean，避免未配置 OSS 凭证的部署启动失败
@@ -93,7 +93,7 @@ public class MediaUploadService {
      * 支持幂等重试：同一任务同一 Idempotency-Key 和相同文件指纹，重复请求返回原会话而非新建。
      * 文件指纹是文件名、大小和最后修改时间的 SHA-256 摘要，防止不同文件共用同一幂等键。
      *
-     * @param ownerId        可信媒体归属（来自 Filter 注入的 request 属性，非客户端传入）
+     * @param ownerId        单人工作台固定媒体归属
      * @param taskId         创作任务 ID
      * @param idempotencyKey 浏览器生成的幂等键（通常基于 taskId + fileFingerprint）
      * @param request        创建请求（版本名、文件名、大小、媒体类型、最后修改时间）
@@ -128,9 +128,9 @@ public class MediaUploadService {
             return toUploadResponse(optionalUpload.upload());
         }
 
-        // 校验任务是否存在且属于当前 owner（P0 ownerId 固定为 default）
+        // 校验任务是否存在且属于单人工作台默认归属。
         if (mediaUploadMapper.countTaskByOwner(normalizedTaskId, ownerId) != 1) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在或不属于当前媒体会话");
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在");
         }
 
         // 查是否已有该任务的成片记录：没有则新建，有则需判断是否能复用

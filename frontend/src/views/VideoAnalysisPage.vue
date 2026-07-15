@@ -12,6 +12,8 @@ import type { BilibiliAccount, BilibiliVideo } from '@/types/creator'
 
 // 当前绑定的 B 站 UID — 账号加载成功后设置
 const currentUid = ref<string | null>(null)
+// 同步完成后调用视频网格公开的 refresh，不通过重建整页来刷新数据。
+const videoGrid = ref<InstanceType<typeof LinkedVideoGrid> | null>(null)
 // 用户选中的视频 — P0-4 展示完整分析
 const selectedVideo = ref<BilibiliVideo | null>(null)
 
@@ -24,6 +26,11 @@ function onAccountReady(account: BilibiliAccount | null) {
 function onSelectVideo(video: BilibiliVideo) {
   selectedVideo.value = video
 }
+
+/** 同步完成后立即刷新卡片，避免用户手动刷新浏览器。 */
+function onSyncCompleted() {
+  void videoGrid.value?.refresh()
+}
 </script>
 
 <template>
@@ -31,14 +38,18 @@ function onSelectVideo(video: BilibiliVideo) {
     <header class="video-analysis-header">
       <h2>视频分析与复盘</h2>
       <p class="video-analysis-subtitle">
-        已绑定任务的视频将自动出现在这里，点击即可查看详细分析。
+        已绑定任务的视频会在同步校验后出现在这里。
       </p>
     </header>
 
-    <BilibiliAccountPanel @account-ready="onAccountReady" />
+    <BilibiliAccountPanel
+      @account-ready="onAccountReady"
+      @sync-completed="onSyncCompleted"
+    />
 
     <LinkedVideoGrid
       v-if="currentUid"
+      ref="videoGrid"
       :bilibili-uid="currentUid"
       @select-video="onSelectVideo"
     />

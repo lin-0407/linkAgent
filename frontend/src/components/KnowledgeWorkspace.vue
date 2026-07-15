@@ -18,6 +18,7 @@ import {
   type KnowledgeVideoContextEventDetail,
 } from '@/utils/agentContext'
 import CompetitorAnalysisModal from '@/components/creator/CompetitorAnalysisModal.vue'
+import NotificationToast from '@/components/NotificationToast.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -46,7 +47,8 @@ const STRATEGY_OPTIONS = [
   { value: 'NONE', label: '不增强' },
 ] as const
 
-const PAGE_SIZE = 12
+// 案例卡片包含摘要和数据指标，单页控制在 8 条内，避免列表重新变成长页面。
+const PAGE_SIZE = 8
 const TOPIC_SEARCH_PAGE_SIZE = 5
 
 const form = reactive({
@@ -55,8 +57,17 @@ const form = reactive({
   category: '',
 })
 const importing = ref(false)
-const importResult = ref<ReferenceVideoImportResult | null>(null)
-const importError = ref('')
+
+type KnowledgeNotice = {
+  id: number
+  type: 'success' | 'error'
+  title: string
+  message: string
+}
+
+// 同一时间只展示一条提示，避免连续请求时多个右上角弹窗相互遮挡。
+const notice = ref<KnowledgeNotice | null>(null)
+let noticeSequence = 0
 
 const items = ref<ReferenceVideo[]>([])
 const total = ref(0)
@@ -75,7 +86,6 @@ const searching = ref(false)
 const searchError = ref('')
 const searchResult = ref<ReferenceVideoTopicSearchResult | null>(null)
 const analysisLoadingVideoId = ref('')
-const analysisError = ref('')
 
 // P1-1 竞品分析弹窗状态：记录用户点击了哪个竞品卡片，传给 CompetitorAnalysisModal
 const competitorTarget = ref<ReferenceVideo | null>(null)
@@ -106,12 +116,52 @@ const evidenceByVideoId = computed(() => {
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
-// 导入结果分三种情况给文案：真入库 / 因 BV 重复跳过 / 脚本没采到视频。
-const importSummary = computed(() => {
-  const result = importResult.value
-  if (!result) {
-    return ''
+type PagerItem = {
+  key: string
+  page: number | null
+}
+
+// 分页器始终保留首尾页和当前页附近页码，大量案例时不把所有页码横向堆满。
+const visiblePages = computed<PagerItem[]>(() => {
+  const lastPage = totalPages.value
+  const items: PagerItem[] = []
+  const addPage = (targetPage: number) => {
+    items.push({ key: `page-${targetPage}`, page: targetPage })
   }
+
+  if (lastPage <= 7) {
+    for (let targetPage = 1; targetPage <= lastPage; targetPage += 1) {
+      addPage(targetPage)
+    }
+    return items
+  }
+
+  let startPage = Math.max(2, page.value - 1)
+  let endPage = Math.min(lastPage - 1, page.value + 1)
+  if (page.value <= 4) {
+    startPage = 2
+    endPage = 5
+  } else if (page.value >= lastPage - 3) {
+    startPage = lastPage - 4
+    endPage = lastPage - 1
+  }
+
+  addPage(1)
+  if (startPage > 2) {
+    items.push({ key: 'leading-ellipsis', page: null })
+  }
+  for (let targetPage = startPage; targetPage <= endPage; targetPage += 1) {
+    addPage(targetPage)
+  }
+  if (endPage < lastPage - 1) {
+    items.push({ key: 'trailing-ellipsis', page: null })
+  }
+  addPage(lastPage)
+  return items
+})
+
+// 导入结果分三种情况给文案：真入库 / 因 BV 重复跳过 / 脚本没采到视频。
+function importSummary(result: ReferenceVideoImportResult) {
   if (result.importedCount > 0) {
     return `成功导入 ${result.importedCount} 条案例（层级 ${tierLabel(result.tier)}）。`
   }
@@ -119,7 +169,7 @@ const importSummary = computed(() => {
     return '该 BV 已在案例库中，本次按 BV 幂等去重跳过。'
   }
   return '没有采集到可入库的视频，请换一个 BV 重试。'
-})
+}
 
 function tierLabel(value: string) {
   return TIER_OPTIONS.find((option) => option.value === value)?.label ?? value
@@ -197,26 +247,33 @@ function qualityScoreTitle(video: ReferenceVideo) {
   return ''
 }
 
+function showNotice(type: KnowledgeNotice['type'], title: string, message: string) {
+  notice.value = { id: ++noticeSequence, type, title, message }
+}
+
+function closeNotice() {
+  notice.value = null
+}
+
 async function submitFetchImport() {
   const bvInput = form.bvInput.trim()
   if (!bvInput || importing.value) {
     return
   }
   importing.value = true
-  importError.value = ''
-  importResult.value = null
   try {
-    importResult.value = await fetchImportReferenceVideo({
+    const result = await fetchImportReferenceVideo({
       bvInput,
       tier: form.tier,
       category: form.category,
     })
+    showNotice('success', '采集完成', importSummary(result))
     // 成功后清空 BV 输入，避免误重复提交；导入的新案例回到第一页查看。
     form.bvInput = ''
     page.value = 1
     await loadList()
   } catch (error) {
-    importError.value = error instanceof Error ? error.message : String(error)
+    showNotice('error', '采集失败', error instanceof Error ? error.message : String(error))
   } finally {
     importing.value = false
   }
@@ -237,6 +294,7 @@ async function loadList() {
     page.value = result.page
   } catch (error) {
     listError.value = error instanceof Error ? error.message : String(error)
+    showNotice('error', '列表加载失败', listError.value)
   } finally {
     listLoading.value = false
   }
@@ -248,11 +306,14 @@ function applyFilters() {
 }
 
 function changePage(delta: number) {
-  const next = page.value + delta
-  if (next < 1 || next > totalPages.value) {
+  goToPage(page.value + delta)
+}
+
+function goToPage(targetPage: number | null) {
+  if (targetPage === null || targetPage < 1 || targetPage > totalPages.value || targetPage === page.value) {
     return
   }
-  page.value = next
+  page.value = targetPage
   void loadList()
 }
 
@@ -294,7 +355,6 @@ async function submitSearch(targetPage = 1) {
   }
   searching.value = true
   searchError.value = ''
-  analysisError.value = ''
   try {
     searchResult.value = await topicSearchReferenceVideos({
       query,
@@ -308,6 +368,7 @@ async function submitSearch(targetPage = 1) {
     // 检索失败清掉旧结果，避免把上一次命中误当本次结果展示。
     searchResult.value = null
     searchError.value = error instanceof Error ? error.message : String(error)
+    showNotice('error', '检索失败', searchError.value)
   } finally {
     searching.value = false
   }
@@ -328,7 +389,6 @@ async function openVideoAnalysis(hit: ReferenceVideo) {
     return
   }
   analysisLoadingVideoId.value = hit.videoId
-  analysisError.value = ''
   try {
     const context = await getReferenceVideoAnalysisContext(hit.videoId)
     const detail: KnowledgeVideoContextEventDetail = {
@@ -337,7 +397,7 @@ async function openVideoAnalysis(hit: ReferenceVideo) {
     }
     window.dispatchEvent(new CustomEvent(KNOWLEDGE_VIDEO_CONTEXT_EVENT, { detail }))
   } catch (error) {
-    analysisError.value = error instanceof Error ? error.message : String(error)
+    showNotice('error', '案例内容加载失败', error instanceof Error ? error.message : String(error))
   } finally {
     analysisLoadingVideoId.value = ''
   }
@@ -364,115 +424,102 @@ onMounted(() => {
     </header>
 
     <section class="creator-section knowledge-workspace-section">
-      <div class="knowledge-block">
-        <div class="creator-section-head"><h3>添加参考案例</h3></div>
-        <p class="creator-inline-note">
-          输入单个 BV 号或视频链接，系统会整理视频信息、评论和弹幕，沉淀成可参考的案例。采集约需 10-60 秒，请耐心等待。
-        </p>
-        <div class="knowledge-form">
-          <label>
-            <span>BV 号 / 视频链接</span>
+      <NotificationToast
+        :key="notice?.id ?? 0"
+        :type="notice?.type ?? 'success'"
+        :title="notice?.title"
+        :message="notice?.message ?? ''"
+        @close="closeNotice"
+      />
+
+      <div class="knowledge-top-grid">
+        <div class="knowledge-block knowledge-import-block">
+          <div class="creator-section-head"><h3>添加参考案例</h3></div>
+          <div class="knowledge-form">
+            <label>
+              <span>BV 号 / 视频链接</span>
+              <input
+                v-model="form.bvInput"
+                type="text"
+                placeholder="BV 号或视频链接"
+                :disabled="importing"
+                @keyup.enter="submitFetchImport"
+              />
+            </label>
+            <label>
+              <span>案例层级</span>
+              <select v-model="form.tier" :disabled="importing">
+                <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+            <label>
+              <span>分区（可选）</span>
+              <input
+                v-model="form.category"
+                type="text"
+                placeholder="分区"
+                :disabled="importing"
+              />
+            </label>
+            <button
+              type="button"
+              class="creator-primary-button knowledge-import-submit"
+              :disabled="importing || !form.bvInput.trim()"
+              @click="submitFetchImport"
+            >
+              {{ importing ? '采集中…' : '采集并导入' }}
+            </button>
+          </div>
+        </div>
+
+        <div class="knowledge-block knowledge-search-block">
+          <div class="creator-section-head"><h3>找灵感</h3></div>
+          <div class="knowledge-toolbar knowledge-search-toolbar">
             <input
-              v-model="form.bvInput"
+              v-model="searchQuery"
               type="text"
-              placeholder="BV1xxxxxxxxx 或 https://www.bilibili.com/video/BV..."
-              :disabled="importing"
-              @keyup.enter="submitFetchImport"
+              class="knowledge-search-input"
+              placeholder="输入想借鉴的方向"
+              :disabled="searching"
+              @keyup.enter="submitSearch()"
             />
-          </label>
-          <label>
-            <span>案例层级</span>
-            <select v-model="form.tier" :disabled="importing">
+            <select v-model="searchTier" class="knowledge-search-tier" :disabled="searching">
+              <option value="">全部层级</option>
               <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
                 {{ option.label }}
               </option>
             </select>
-          </label>
-          <label>
-            <span>分区（可选）</span>
             <input
-              v-model="form.category"
+              v-model="searchCategory"
               type="text"
-              placeholder="留空则用视频自身分区"
-              :disabled="importing"
+              class="knowledge-search-category"
+              placeholder="分区"
+              :disabled="searching"
+              @keyup.enter="submitSearch()"
             />
-          </label>
-        </div>
-        <div class="creator-action-row">
-          <button
-            type="button"
-            class="creator-primary-button"
-            :disabled="importing || !form.bvInput.trim()"
-            @click="submitFetchImport"
-          >
-            {{ importing ? '采集中…（约 10–60 秒）' : '采集并导入' }}
-          </button>
-        </div>
-        <div v-if="importResult" class="creator-alert success-alert">
-          <strong>采集完成</strong>
-          <span>{{ importSummary }}</span>
-        </div>
-        <div v-if="importError" class="creator-alert error-alert">
-          <strong>采集失败</strong>
-          <span>{{ importError }}</span>
-        </div>
-      </div>
+            <select
+              v-if="developerMode"
+              v-model="searchStrategy"
+              class="knowledge-search-strategy"
+              :disabled="searching"
+              title="查询增强策略"
+            >
+              <option v-for="option in STRATEGY_OPTIONS" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+            <button
+              type="button"
+              class="creator-primary-button knowledge-search-submit"
+              :disabled="searching || !searchQuery.trim()"
+              @click="submitSearch()"
+            >
+              {{ searching ? '检索中…' : '检索' }}
+            </button>
+          </div>
 
-      <div class="knowledge-block">
-        <div class="creator-section-head"><h3>找灵感</h3></div>
-        <p class="creator-inline-note">
-          可以输入“开场如何留住观众”“标题怎么更像教程”等问题，系统会找出更接近的案例和观众原话。
-        </p>
-        <div class="knowledge-toolbar">
-          <input
-            v-model="searchQuery"
-            type="text"
-            class="knowledge-search-input"
-            placeholder="想参考什么？例如：美食视频封面怎么做更吸引人"
-            :disabled="searching"
-            @keyup.enter="submitSearch()"
-          />
-          <select v-model="searchTier" :disabled="searching">
-            <option value="">全部层级</option>
-            <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-          <input
-            v-model="searchCategory"
-            type="text"
-            placeholder="按分区筛选（可选）"
-            :disabled="searching"
-            @keyup.enter="submitSearch()"
-          />
-          <select
-            v-if="developerMode"
-            v-model="searchStrategy"
-            :disabled="searching"
-            title="查询增强策略"
-          >
-            <option v-for="option in STRATEGY_OPTIONS" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-          <button
-            type="button"
-            class="creator-primary-button"
-            :disabled="searching || !searchQuery.trim()"
-            @click="submitSearch()"
-          >
-            {{ searching ? '检索中…' : '检索' }}
-          </button>
-        </div>
-
-        <div v-if="searchError" class="creator-alert error-alert">
-          <strong>检索失败</strong>
-          <span>{{ searchError }}</span>
-        </div>
-        <div v-if="analysisError" class="creator-alert error-alert">
-          <strong>上下文加载失败</strong>
-          <span>{{ analysisError }}</span>
-        </div>
         <template v-if="!searchError && searchResult">
           <div class="creator-chip-list">
             <b v-if="developerMode">检索模式 {{ searchModeLabel(searchResult.mode) }}</b>
@@ -569,11 +616,15 @@ onMounted(() => {
           </div>
         </template>
       </div>
+      </div>
 
       <div class="knowledge-block">
-        <div class="creator-section-head">
-          <h3>案例列表</h3>
-          <div class="knowledge-toolbar">
+        <div class="creator-section-head knowledge-list-head">
+          <div class="knowledge-list-title">
+            <h3>案例列表</h3>
+            <span v-if="total">共 {{ total }} 条，每页 {{ PAGE_SIZE }} 条</span>
+          </div>
+          <div class="knowledge-toolbar knowledge-list-toolbar">
             <select v-model="filterTier" @change="applyFilters">
               <option value="">全部层级</option>
               <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
@@ -593,14 +644,10 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="listError" class="creator-alert error-alert">
-          <strong>列表加载失败</strong>
-          <span>{{ listError }}</span>
-        </div>
-        <p v-else-if="!items.length && !listLoading" class="creator-muted">
+        <p v-if="!items.length && !listLoading && !listError" class="creator-muted">
           还没有案例，先在上方输入一个 BV 采集试试。
         </p>
-        <div v-else class="knowledge-card-list">
+        <div v-else-if="!listError" class="knowledge-card-list">
           <article v-for="item in items" :key="item.id" class="knowledge-card">
             <strong>{{ item.title }}</strong>
             <div class="creator-chip-list">
@@ -635,25 +682,41 @@ onMounted(() => {
           </article>
         </div>
 
-        <div v-if="total > PAGE_SIZE" class="knowledge-pager">
-          <button
-            type="button"
-            class="creator-secondary-action"
-            :disabled="page <= 1 || listLoading"
-            @click="changePage(-1)"
-          >
-            上一页
-          </button>
-          <span>第 {{ page }} / {{ totalPages }} 页 · 共 {{ total }} 条</span>
-          <button
-            type="button"
-            class="creator-secondary-action"
-            :disabled="page >= totalPages || listLoading"
-            @click="changePage(1)"
-          >
-            下一页
-          </button>
-        </div>
+        <nav v-if="total > 0" class="knowledge-pagination" aria-label="案例列表分页">
+          <span class="knowledge-pagination-summary">第 {{ page }} / {{ totalPages }} 页</span>
+          <div class="knowledge-pagination-controls">
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="page <= 1 || listLoading"
+              @click="changePage(-1)"
+            >
+              上一页
+            </button>
+            <template v-for="pageItem in visiblePages" :key="pageItem.key">
+              <span v-if="pageItem.page === null" class="knowledge-pagination-ellipsis" aria-hidden="true">...</span>
+              <button
+                v-else
+                type="button"
+                class="creator-secondary-action knowledge-page-button"
+                :class="{ 'is-current': pageItem.page === page }"
+                :aria-current="pageItem.page === page ? 'page' : undefined"
+                :disabled="listLoading"
+                @click="goToPage(pageItem.page)"
+              >
+                {{ pageItem.page }}
+              </button>
+            </template>
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="page >= totalPages || listLoading"
+              @click="changePage(1)"
+            >
+              下一页
+            </button>
+          </div>
+        </nav>
       </div>
     </section>
 
@@ -682,7 +745,36 @@ onMounted(() => {
   gap: var(--s3);
 }
 
+/* 两个高频入口并列，减少创作者在导入和检索之间的页面滚动。 */
+.knowledge-top-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  align-items: start;
+  gap: var(--s4);
+}
+
+.knowledge-top-grid > .knowledge-block {
+  min-width: 0;
+}
+
+/* 导入属于低频补充动作，收紧留白后让检索和案例列表优先占据首屏。 */
+.knowledge-import-block {
+  gap: var(--s2);
+}
+
 .knowledge-block + .knowledge-block {
+  padding-top: var(--s4);
+  border-top: 1px solid var(--border);
+}
+
+.knowledge-top-grid > .knowledge-block + .knowledge-block {
+  padding-top: 0;
+  padding-left: var(--s4);
+  border-top: 0;
+  border-left: 1px solid var(--border);
+}
+
+.knowledge-top-grid + .knowledge-block {
   padding-top: var(--s4);
   border-top: 1px solid var(--border);
 }
@@ -693,14 +785,17 @@ onMounted(() => {
   border-bottom: 0;
 }
 
-.creator-inline-note {
-  max-width: 880px;
-}
-
 .knowledge-form {
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(160px, 220px) minmax(220px, 0.55fr);
-  gap: var(--s4);
+  grid-template-columns: minmax(280px, 1.35fr) minmax(136px, 168px) minmax(180px, 0.65fr) auto;
+  align-items: end;
+  max-width: 1120px;
+  gap: var(--s3);
+}
+
+.knowledge-top-grid .knowledge-form {
+  grid-template-columns: minmax(190px, 1.35fr) minmax(116px, 138px) minmax(130px, 0.65fr) auto;
+  gap: var(--s2);
 }
 
 .knowledge-form label {
@@ -720,7 +815,7 @@ onMounted(() => {
 .knowledge-toolbar input,
 .knowledge-toolbar select {
   width: 100%;
-  min-height: 40px;
+  min-height: 36px;
   padding: 0 var(--s3);
   color: var(--ink);
   background: var(--surface);
@@ -749,14 +844,78 @@ onMounted(() => {
 .knowledge-toolbar input,
 .knowledge-toolbar select {
   width: auto;
-  min-height: 38px;
+  min-height: 36px;
   padding: 0 10px;
 }
 
-/* 检索框是该工具栏的主输入，让它拉伸占据主要宽度，过滤项与按钮跟随其后 */
+.knowledge-import-submit {
+  align-self: end;
+  min-width: 112px;
+  white-space: nowrap;
+}
+
+.knowledge-search-toolbar {
+  max-width: 1180px;
+}
+
+.knowledge-top-grid .knowledge-search-toolbar {
+  max-width: none;
+}
+
+/* 右侧检索工具栏需要容纳开发策略，限制各控件宽度后可稳定保持单行。 */
 .knowledge-search-input {
-  flex: 1 1 360px;
-  min-width: 280px;
+  flex: 1 1 190px;
+  min-width: 190px;
+}
+
+.knowledge-search-tier {
+  flex: 0 0 112px;
+  width: 112px;
+}
+
+.knowledge-search-category {
+  flex: 0 1 134px;
+  width: 134px;
+  min-width: 112px;
+}
+
+.knowledge-search-strategy {
+  flex: 0 0 146px;
+  width: 146px;
+}
+
+.knowledge-search-submit {
+  flex: 0 0 auto;
+  min-width: 58px;
+}
+
+.knowledge-list-head {
+  justify-content: space-between;
+}
+
+.knowledge-list-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.knowledge-list-title > span {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.knowledge-list-toolbar {
+  margin-left: auto;
+}
+
+.knowledge-list-toolbar select {
+  width: 126px;
+}
+
+.knowledge-list-toolbar input {
+  width: 180px;
 }
 
 /* 扩展查询回显：让 LLM 实际扩出的查询可见，便于核对增强是否合理 */
@@ -987,6 +1146,68 @@ onMounted(() => {
   font-size: 13px;
 }
 
+.knowledge-pagination {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
+  margin-top: var(--s2);
+  padding-top: var(--s3);
+  border-top: 1px solid rgba(23, 32, 51, 0.08);
+}
+
+.knowledge-pagination-summary {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.knowledge-pagination-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.knowledge-page-button {
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+}
+
+.knowledge-page-button.is-current {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.knowledge-page-button.is-current:hover:not(:disabled) {
+  color: #fff;
+  background: var(--accent-hover);
+}
+
+.knowledge-pagination-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  min-height: 36px;
+  color: var(--muted);
+}
+
+@media (max-width: 1280px) {
+  .knowledge-top-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-top-grid > .knowledge-block + .knowledge-block {
+    padding-top: var(--s4);
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
+
 @media (max-width: 820px) {
   .knowledge-workspace-section {
     width: 100%;
@@ -996,10 +1217,43 @@ onMounted(() => {
     grid-template-columns: 1fr;
   }
 
+  .knowledge-top-grid .knowledge-form {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-import-submit {
+    width: 100%;
+  }
+
   .knowledge-toolbar input,
   .knowledge-toolbar select,
   .knowledge-toolbar button {
     width: 100%;
+  }
+
+  .knowledge-search-input,
+  .knowledge-search-tier,
+  .knowledge-search-category,
+  .knowledge-search-strategy,
+  .knowledge-search-submit {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .knowledge-list-toolbar {
+    margin-left: 0;
+  }
+
+  .knowledge-pagination {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-pagination-summary {
+    text-align: center;
+  }
+
+  .knowledge-pagination-controls {
+    justify-content: center;
   }
 }
 </style>

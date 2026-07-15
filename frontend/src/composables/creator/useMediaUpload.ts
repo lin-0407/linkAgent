@@ -4,9 +4,7 @@ import {
   abortDraftVideoUpload,
   completeDraftVideoUpload,
   createDraftVideoUpload,
-  createMediaAccessSession,
   getDraftVideoUpload,
-  getMediaAccessSession,
   listDraftVideoUploadParts,
   putDraftVideoPart,
   registerDraftVideoUploadParts,
@@ -14,7 +12,6 @@ import {
 } from '@/api/media'
 import type {
   DraftVideo,
-  MediaAccessSession,
   MediaUpload,
   MediaUploadPart,
   StoredMediaUploadResume,
@@ -29,12 +26,10 @@ const UPLOAD_CONCURRENCY = 3
  * 页面刷新后只恢复服务端上传事实；出于浏览器安全限制，用户仍需重新选择同一个本地文件。
  */
 export function useMediaUpload() {
-  const accessSession = ref<MediaAccessSession>({ enabled: false, authenticated: false, expiresAt: null })
   const currentUpload = ref<MediaUpload | null>(null)
   const completedParts = ref<MediaUploadPart[]>([])
   const completedDraft = ref<DraftVideo | null>(null)
   const uploadedBytes = ref(0)
-  const isAuthenticating = ref(false)
   const isUploading = ref(false)
   const isPaused = ref(false)
   const errorMessage = ref('')
@@ -48,26 +43,6 @@ export function useMediaUpload() {
     if (total <= 0) return 0
     return Math.min(100, Math.round((uploadedBytes.value / total) * 1000) / 10)
   })
-
-  async function refreshAccessSession() {
-    accessSession.value = await getMediaAccessSession()
-    return accessSession.value
-  }
-
-  async function authenticate(accessCode: string) {
-    isAuthenticating.value = true
-    errorMessage.value = ''
-    try {
-      accessSession.value = await createMediaAccessSession(accessCode)
-      statusMessage.value = '私有媒体访问已解锁'
-      return true
-    } catch (error) {
-      errorMessage.value = toErrorMessage(error)
-      return false
-    } finally {
-      isAuthenticating.value = false
-    }
-  }
 
   async function restoreStoredUpload(taskId: string) {
     const generation = operationGeneration
@@ -117,9 +92,6 @@ export function useMediaUpload() {
       if (generation !== operationGeneration) return null
       if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
         clearStoredResume(taskId)
-      }
-      if (error instanceof ApiError && error.status === 401) {
-        accessSession.value = { enabled: true, authenticated: false, expiresAt: null }
       }
       return null
     }
@@ -252,9 +224,6 @@ export function useMediaUpload() {
           // 原始上传错误更有助于用户判断问题，回查失败时不覆盖它。
         }
       }
-      if (error instanceof ApiError && error.status === 401) {
-        accessSession.value = { enabled: true, authenticated: false, expiresAt: null }
-      }
       if (isAbortError(error)) {
         isPaused.value = true
         statusMessage.value = '上传已暂停，分片进度已经保留'
@@ -315,19 +284,15 @@ export function useMediaUpload() {
   }
 
   return {
-    accessSession,
     currentUpload,
     completedParts,
     completedDraft,
     uploadedBytes,
-    isAuthenticating,
     isUploading,
     isPaused,
     errorMessage,
     statusMessage,
     progressPercent,
-    refreshAccessSession,
-    authenticate,
     restoreStoredUpload,
     startOrResume,
     pauseUpload,

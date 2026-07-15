@@ -758,7 +758,7 @@ export type BindAccountPayload = {
 
 /** B站视频缓存信息，对应后端 creator_bilibili_video 表 + 任务关联信息 */
 export type BilibiliVideo = {
-  videoId: string
+  videoId: string | null
   bilibiliUid: string
   bvid: string
   aid: number | null
@@ -813,11 +813,15 @@ export type BindBvPayload = {
 /** B站视频同步结果 */
 export type SyncVideosResult = {
   bilibiliUid: string
+  /** 同步状态：SUCCESS=完整成功，PARTIAL=部分公开数据受限但可用结果已保存 */
+  syncStatus: 'SUCCESS' | 'PARTIAL'
   syncedCount: number
   linkedCount: number
   anomalyCount: number
   lastError: string | null
-  message?: string
+  warnings: string[]
+  hasMore: boolean
+  message: string
 }
 
 // ═══════════════════════════════════════════

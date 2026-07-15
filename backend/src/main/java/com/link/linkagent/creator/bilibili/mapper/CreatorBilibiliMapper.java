@@ -403,6 +403,31 @@ public interface CreatorBilibiliMapper {
     @ResultMap("TaskVideoBindingRecordMap")
     List<TaskVideoBindingRecord> listBindingsByUid(@Param("bilibiliUid") String bilibiliUid);
 
+    /**
+     * 列出当前平台用户的全部任务视频绑定。
+     *
+     * 同步时不能只按当前 UID 查询：用户修改 UID 后，旧绑定仍需要被标记为 UID_MISMATCH，
+     * 否则旧绑定会永远停留在 WAITING_VERIFY，用户也看不到具体原因。
+     */
+    @Select("""
+            SELECT id,
+                   binding_id,
+                   task_id,
+                   user_id,
+                   bilibili_uid,
+                   bvid,
+                   binding_status,
+                   verify_message,
+                   create_time,
+                   update_time
+            FROM creator_task_video_binding
+            WHERE user_id = #{userId}
+              AND is_deleted = 0
+            ORDER BY create_time DESC
+            """)
+    @ResultMap("TaskVideoBindingRecordMap")
+    List<TaskVideoBindingRecord> listBindingsByUserId(@Param("userId") String userId);
+
     // ══════════════════════════════════════════════════════════════
     // 视频分析报告（creator_video_analysis_report）
     // ══════════════════════════════════════════════════════════════

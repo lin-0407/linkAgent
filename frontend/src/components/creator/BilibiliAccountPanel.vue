@@ -6,10 +6,11 @@
  */
 import { ref, onMounted } from 'vue'
 import { getBilibiliAccount, bindBilibiliAccount, syncBilibiliVideos } from '@/api/creator'
-import type { BilibiliAccount } from '@/types/creator'
+import type { BilibiliAccount, SyncVideosResult } from '@/types/creator'
 
 const emit = defineEmits<{
   'accountReady': [account: BilibiliAccount | null]
+  'syncCompleted': [result: SyncVideosResult]
 }>()
 
 // 默认用户 ID — 和现有代码一致
@@ -20,6 +21,8 @@ const saving = ref(false)
 const syncing = ref(false)
 const error = ref('')
 const syncMessage = ref('')
+const syncTone = ref<'neutral' | 'success' | 'warning' | 'error'>('neutral')
+const syncResult = ref<SyncVideosResult | null>(null)
 const account = ref<BilibiliAccount | null>(null)
 
 // 输入
@@ -32,18 +35,22 @@ const statusLabels: Record<string, string> = {
   SYNC_FAILED: '同步失败',
 }
 
-onMounted(async () => {
-  loading.value = true
+/** 重新读取账号状态，让昵称、最近同步时间和错误状态与后端保持一致。 */
+async function loadAccount(showLoading = false) {
+  if (showLoading) loading.value = true
+  const previousAccount = account.value
   try {
     account.value = await getBilibiliAccount(DEFAULT_USER_ID)
   } catch {
-    // 未绑定是正常状态
-    account.value = null
+    // 首次加载的 404 表示未绑定；刷新时保留旧账号，避免一次瞬时网络错误把视频网格卸载。
+    if (!previousAccount) account.value = null
   } finally {
-    loading.value = false
+    if (showLoading) loading.value = false
     emit('accountReady', account.value)
   }
-})
+}
+
+onMounted(() => loadAccount(true))
 
 /** 绑定 B 站 UID */
 async function handleBind() {
@@ -68,11 +75,20 @@ async function handleBind() {
 async function handleSync() {
   syncing.value = true
   syncMessage.value = ''
+  syncResult.value = null
+  syncTone.value = 'neutral'
   try {
     const result = await syncBilibiliVideos(DEFAULT_USER_ID)
-    syncMessage.value = (result as any).message || '同步已触发'
+    syncResult.value = result
+    syncTone.value = result.syncStatus === 'SUCCESS' ? 'success' : 'warning'
+    const pageHint = result.hasMore ? '较早作品未展开，已绑定BV仍会单独校验。' : ''
+    syncMessage.value = `${result.message}：读取 ${result.syncedCount} 条，校验通过 ${result.linkedCount} 条，异常 ${result.anomalyCount} 条。${pageHint}`
+    await loadAccount()
+    emit('syncCompleted', result)
   } catch (e: any) {
     syncMessage.value = e?.message || '同步失败'
+    syncTone.value = 'error'
+    await loadAccount()
   } finally {
     syncing.value = false
   }
@@ -83,7 +99,14 @@ async function handleSync() {
   <div class="bilibili-account-panel">
     <div class="account-panel-header">
       <h3 class="account-panel-title">B站账号</h3>
-      <span v-if="account" class="account-status-tag" :class="{ 'is-active': account.bindStatus === 'ACTIVE' }">
+      <span
+        v-if="account"
+        class="account-status-tag"
+        :class="{
+          'is-active': account.bindStatus === 'ACTIVE',
+          'is-failed': account.bindStatus === 'SYNC_FAILED',
+        }"
+      >
         {{ statusLabels[account.bindStatus] || account.bindStatus }}
       </span>
     </div>
@@ -112,7 +135,23 @@ async function handleSync() {
           {{ syncing ? '同步中...' : '同步视频' }}
         </button>
       </div>
-      <p v-if="syncMessage" class="account-sync-message">{{ syncMessage }}</p>
+      <p
+        v-if="syncMessage"
+        class="account-sync-message"
+        :class="`is-${syncTone}`"
+      >
+        {{ syncMessage }}
+      </p>
+      <ul v-if="syncResult?.warnings.length" class="account-sync-warnings">
+        <li v-for="warning in syncResult.warnings" :key="warning">{{ warning }}</li>
+      </ul>
+      <p
+        v-else-if="account.lastSyncError && !syncMessage"
+        class="account-sync-message"
+        :class="account.bindStatus === 'SYNC_FAILED' ? 'is-error' : 'is-warning'"
+      >
+        {{ account.lastSyncError }}
+      </p>
     </div>
 
     <!-- 未绑定 -->
@@ -180,6 +219,11 @@ async function handleSync() {
   color: #248a3d;
 }
 
+.account-status-tag.is-failed {
+  background: rgba(255, 59, 48, 0.1);
+  color: #c93400;
+}
+
 .account-info {
   display: flex;
   flex-direction: column;
@@ -211,6 +255,27 @@ async function handleSync() {
   font-size: 13px;
   color: var(--creator-muted-ink, #86868b);
   margin: 4px 0 0;
+  line-height: 1.5;
+}
+
+.account-sync-message.is-success {
+  color: #248a3d;
+}
+
+.account-sync-message.is-warning {
+  color: #9a5b00;
+}
+
+.account-sync-message.is-error {
+  color: #c93400;
+}
+
+.account-sync-warnings {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #9a5b00;
 }
 
 .account-bind-form {

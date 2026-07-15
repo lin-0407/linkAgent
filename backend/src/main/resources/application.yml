@@ -100,6 +100,14 @@ spring:
           #     endpoint: /mcp
 
 agent:
+  tool:
+    web-search:
+      # 默认关闭，避免未配置搜索凭证时把不可用工具暴露给 Agent。
+      enabled: ${WEB_SEARCH_ENABLED:false}
+      base-url: ${WEB_SEARCH_BASE_URL:https://html.duckduckgo.com}
+    execution:
+      timeout-seconds: ${TOOL_EXECUTION_TIMEOUT_SECONDS:10}
+      max-retries: ${TOOL_EXECUTION_MAX_RETRIES:0}
   kernel:
     # 默认启用结构化 ReAct：每步输出 ReActStep 对象，减少对 Thought:/Action: 文本格式的依赖。
     structured:
@@ -108,10 +116,7 @@ agent:
     guard:
       enabled: ${LLM_GUARD_ENABLED:true}
       max-prompt-chars: ${LLM_GUARD_MAX_PROMPT_CHARS:30000}
-  tool:
-    execution:
-      timeout-seconds: ${TOOL_EXECUTION_TIMEOUT_SECONDS:10}
-      max-retries: ${TOOL_EXECUTION_MAX_RETRIES:0}
+
   memory:
     short-term:
       # memory：进程内 Map；redis：共享 Redis List
@@ -129,14 +134,11 @@ mybatis:
 
 creator:
   # ========== 阶段 7 P0：私有媒体能力 ==========
-  # 注意：媒体能力默认关闭。只有访问口令、Redis、OSS 和视频分析 Provider 全部配置完成后才显式开启，
-  # 避免未配置时启动即 5xx 或开放未受保护的大文件上传接口。
+  # 注意：媒体能力默认关闭。只有 OSS 和后续视频分析 Provider 配置完成后才显式开启，
+  # 避免未配置对象存储时暴露不可用的大文件上传入口。
   media:
     # 媒体链路总开关；设为 true 后才加载所有媒体相关 Bean（S3 客户端、Filter、Controller）。
     enabled: ${CREATOR_MEDIA_ENABLED:false}
-    # 共享访问口令；P0 单部署认证凭据，生产环境通过环境变量注入。
-    # 口令不可为空或仅空白字符，否则 validateEnabledConfiguration() 会拒绝。
-    access-code: ${CREATOR_MEDIA_ACCESS_CODE:}
     # 单文件字节数上限，默认 1.5GB = 1500000000 字节。
     # P0 前后端共享同一固定值，不对外开放环境变量调整，
     # 避免服务端和浏览器端的分片协议不一致导致上传失败。
@@ -144,19 +146,8 @@ creator:
     # 单视频时长上限毫秒，默认 1800000ms = 30 分钟。
     # P0-1 阶段 ffprobe 探测后生效；P0-0 阶段仅声明不校验。
     max-duration-ms: 1800000
-    # 媒体访问会话 Redis TTL；默认 12h，超时后需重新输入访问口令。
-    # 格式支持 Spring Boot Duration：12h、720m、43200s 等。
-    access-session-ttl: ${CREATOR_MEDIA_ACCESS_SESSION_TTL:12h}
     # 未发布成片及其派生媒体的保留天数，超期由定时任务清理原片对象。
     unpublished-retention-days: ${CREATOR_MEDIA_UNPUBLISHED_RETENTION_DAYS:30}
-    # ----- 访问控制子配置 -----
-    access:
-      # HttpOnly Cookie 名称；前端 JS 无法读取，仅浏览器自动携带。
-      cookie-name: ${CREATOR_MEDIA_ACCESS_COOKIE_NAME:LINKAGENT_MEDIA_SESSION}
-      # 同 IP 在失败窗口内的最大尝试次数；超限后返回 429 Too Many Requests。
-      max-failures: ${CREATOR_MEDIA_ACCESS_MAX_FAILURES:5}
-      # 失败计数滑动窗口；窗口过期后计数器自动清零。
-      failure-window: ${CREATOR_MEDIA_ACCESS_FAILURE_WINDOW:10m}
     # ----- 上传子配置 -----
     upload:
       # 单分片目标字节数，默认 16 MiB = 16777216。

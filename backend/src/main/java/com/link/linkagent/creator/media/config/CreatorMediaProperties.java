@@ -8,12 +8,12 @@ import java.time.Duration;
 /**
  * 阶段 7 私有媒体能力配置。
  * <p>
- * 总开关默认关闭，是为了避免作者尚未配置访问口令、Redis 和 OSS 时意外开放大文件接口。
- * 配置类本身不强制 accessCode 非空；只有真正开启媒体能力时才由业务服务执行完整性校验，
+ * 总开关默认关闭，是为了避免作者尚未配置 OSS 时意外开放大文件接口。
+ * 只有真正开启媒体能力时才由业务服务执行完整性校验，
  * 这样不会影响尚未启用阶段 7 的现有部署启动。
  * <p>
  * 所有配置项都支持环境变量覆盖，遵循 Spring Boot 的 relaxed binding 规则。
- * 例如 creator.media.access-code 对应环境变量 CREATOR_MEDIA_ACCESS_CODE。
+ * 例如 creator.media.upload.presign-ttl 对应环境变量 CREATOR_MEDIA_UPLOAD_PRESIGN_TTL。
  */
 @Component
 @ConfigurationProperties(prefix = "creator.media") // 绑定 application.yml 中 creator.media 下的所有配置
@@ -21,18 +21,12 @@ public class CreatorMediaProperties {
 
     /** 媒体能力总开关；默认关闭，避免未配置时意外开放 */
     private boolean enabled = false;
-    /** 共享访问口令；用于 P0 单部署认证，生产环境通过环境变量注入 */
-    private String accessCode = "";
     /** 单个媒体文件最大字节数；默认 1.5GB，与 OSS 分片上传 10000 片上限匹配 */
     private long maxFileBytes = 1_500_000_000L;
     /** 单个媒体文件最大时长毫秒；默认 30 分钟 */
     private long maxDurationMs = 1_800_000L;
-    /** 媒体访问会话有效期；默认 12 小时，过期后需重新输入口令 */
-    private Duration accessSessionTtl = Duration.ofHours(12);
     /** 未发布成片保留天数；超期自动清理原片对象 */
     private int unpublishedRetentionDays = 30;
-    /** 访问控制子配置（Cookie 名、限流参数） */
-    private final Access access = new Access();
     /** 上传子配置（分片大小、签名 TTL） */
     private final Upload upload = new Upload();
 
@@ -41,41 +35,27 @@ public class CreatorMediaProperties {
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
 
-    public String getAccessCode() { return accessCode; }
-    public void setAccessCode(String accessCode) { this.accessCode = accessCode; }
-
     public long getMaxFileBytes() { return maxFileBytes; }
     public void setMaxFileBytes(long maxFileBytes) { this.maxFileBytes = maxFileBytes; }
 
     public long getMaxDurationMs() { return maxDurationMs; }
     public void setMaxDurationMs(long maxDurationMs) { this.maxDurationMs = maxDurationMs; }
 
-    public Duration getAccessSessionTtl() { return accessSessionTtl; }
-    public void setAccessSessionTtl(Duration accessSessionTtl) { this.accessSessionTtl = accessSessionTtl; }
-
     public int getUnpublishedRetentionDays() { return unpublishedRetentionDays; }
     public void setUnpublishedRetentionDays(int unpublishedRetentionDays) { this.unpublishedRetentionDays = unpublishedRetentionDays; }
 
-    public Access getAccess() { return access; }
     public Upload getUpload() { return upload; }
 
     /**
      * 开启媒体能力时执行运行前校验。
      * <p>
-     * 错误信息只描述缺失项（如"访问口令未配置"），不回显任何密钥或口令内容。
+     * 错误信息只描述缺失项，不回显任何密钥内容。
      * 在校验中不检查存储配置（由 ObjectStorageProperties.validateConfigured 负责）。
      */
     public void validateEnabledConfiguration() {
         if (!enabled) {
             // 媒体能力未开启：不应调用此方法，但防御性检查
             throw new IllegalStateException("媒体能力尚未启用");
-        }
-        if (accessCode == null || accessCode.isBlank()) {
-            // 口令为空白意味着任何人都能访问，这在安全上等同于未配置
-            throw new IllegalStateException("媒体访问口令未配置");
-        }
-        if (accessSessionTtl == null || accessSessionTtl.isZero() || accessSessionTtl.isNegative()) {
-            throw new IllegalStateException("媒体访问会话有效期必须大于0");
         }
         if (maxFileBytes <= 0) {
             throw new IllegalStateException("媒体文件大小上限必须大于0");
@@ -97,42 +77,9 @@ public class CreatorMediaProperties {
         if (upload.abandonedTtl == null || upload.abandonedTtl.isZero() || upload.abandonedTtl.isNegative()) {
             throw new IllegalStateException("媒体上传会话有效期必须大于0");
         }
-        if (access.cookieName == null || access.cookieName.isBlank()) {
-            throw new IllegalStateException("媒体访问 Cookie 名称未配置");
-        }
-        if (access.maxFailures <= 0) {
-            throw new IllegalStateException("媒体访问失败次数上限必须大于0");
-        }
-        if (access.failureWindow == null || access.failureWindow.isZero() || access.failureWindow.isNegative()) {
-            throw new IllegalStateException("媒体访问失败统计窗口必须大于0");
-        }
         if (unpublishedRetentionDays <= 0) {
             throw new IllegalStateException("未发布媒体保留天数必须大于0");
         }
-    }
-
-    /**
-     * 访问控制子配置。
-     * <p>
-     * Spring Boot 会自动将 creator.media.access.* 绑定到此内部类的字段。
-     */
-    public static class Access {
-
-        /** HttpOnly Cookie 名称；默认 LINKAGENT_MEDIA_SESSION */
-        private String cookieName = "LINKAGENT_MEDIA_SESSION";
-        /** 同 IP 在时间窗口内最大失败次数；超限后锁定 */
-        private int maxFailures = 5;
-        /** 失败次数统计滑动窗口；默认 10 分钟 */
-        private Duration failureWindow = Duration.ofMinutes(10);
-
-        public String getCookieName() { return cookieName; }
-        public void setCookieName(String cookieName) { this.cookieName = cookieName; }
-
-        public int getMaxFailures() { return maxFailures; }
-        public void setMaxFailures(int maxFailures) { this.maxFailures = maxFailures; }
-
-        public Duration getFailureWindow() { return failureWindow; }
-        public void setFailureWindow(Duration failureWindow) { this.failureWindow = failureWindow; }
     }
 
     /**

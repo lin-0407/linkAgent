@@ -2,6 +2,7 @@ package com.link.linkagent.creator.bilibili.controller;
 
 import com.link.linkagent.creator.bilibili.model.BilibiliAccountResponse;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoResponse;
+import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncResponse;
 import com.link.linkagent.creator.bilibili.model.BindAccountRequest;
 import com.link.linkagent.creator.bilibili.model.BindBvRequest;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingResponse;
@@ -22,12 +23,11 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * B站账号绑定与任务视频绑定接口（P0-3）。
  * 独立于已有的 CreatorInteractiveController，路径前缀 /api/creator/bilibili。
- * 提供账号绑定、视频同步（占位）、BV 绑定和已绑定视频列表四个能力。
+ * 提供账号绑定、公开视频同步、BV 绑定校验和已绑定视频列表四个能力。
  * <p>
  * 所有入参使用 Jakarta Validation 校验。
  * 路径变量也加 @NotBlank + @Size，防止空值穿透到 Service 层。
@@ -71,12 +71,9 @@ public class CreatorBilibiliController {
         return account;
     }
 
-    /**
-     * 触发 B 站视频同步（P0-3 占位实现）。
-     * 第一版不实际调用 B 站 API，只更新同步时间。
-     */
+    /** 触发 B 站公开视频同步，并校验当前用户任务 BV 的视频归属。 */
     @PostMapping("/accounts/{userId}/sync")
-    public Map<String, Object> syncVideos(
+    public BilibiliVideoSyncResponse syncVideos(
             @PathVariable
             @NotBlank(message = "用户ID不能为空")
             @Size(max = 64, message = "用户ID长度不能超过64个字符")
@@ -97,14 +94,16 @@ public class CreatorBilibiliController {
             @Pattern(regexp = "^[0-9]+$", message = "B站UID只能包含数字")
             String bilibiliUid,
             @RequestParam(defaultValue = "default")
+            @NotBlank(message = "用户ID不能为空")
             @Size(max = 64, message = "用户ID长度不能超过64个字符")
+            @Pattern(regexp = "^[a-zA-Z0-9_-]+$", message = "用户ID格式不正确")
             String userId) {
         return bilibiliService.getLinkedVideos(bilibiliUid, userId);
     }
 
     /**
      * 将 BV 号绑定到创作任务。
-     * 绑定后任务进入"等待校验"状态，后续视频分析页才能展示该视频卡片。
+     * 已有可信缓存时直接完成校验，否则进入"等待校验"状态，后续同步后才能展示视频卡片。
      */
     @PostMapping("/tasks/{taskId}/video-binding")
     public TaskVideoBindingResponse bindBvToTask(

@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.bilibili.model;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -10,10 +11,12 @@ import jakarta.validation.constraints.Size;
 public record BindAccountRequest(
         @NotBlank(message = "用户ID不能为空")
         @Size(max = 64, message = "用户ID长度不能超过64个字符")
+        @Pattern(regexp = "^[a-zA-Z0-9_-]+$", message = "用户ID格式不正确")
         String userId,
 
         @NotBlank(message = "B站UID不能为空")
         @Size(max = 32, message = "B站UID长度不能超过32个字符")
+        @Pattern(regexp = "^[0-9]+$", message = "B站UID只能包含数字")
         String bilibiliUid
 ) {
 }

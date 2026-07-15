@@ -423,7 +423,7 @@ export function getBilibiliAccount(userId: string) {
   return get<BilibiliAccount>(`/creator/bilibili/accounts/${encodeURIComponent(userId)}`)
 }
 
-/** 触发B站视频同步（P0-3为占位实现，后续接入B站公开API） */
+/** 触发B站公开视频同步，并校验当前用户任务BV的归属 */
 export function syncBilibiliVideos(userId: string) {
   return post<SyncVideosResult>(`/creator/bilibili/accounts/${encodeURIComponent(userId)}/sync`)
 }

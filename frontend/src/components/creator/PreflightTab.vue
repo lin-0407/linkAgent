@@ -4,7 +4,6 @@ import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorksp
 import { useMediaUpload } from '@/composables/creator/useMediaUpload'
 
 const { selectedTaskId, selectedTask } = useCreatorWorkspaceShell()
-const accessCode = ref('')
 const versionName = ref('V1 初剪')
 const selectedFile = ref<File | null>(null)
 const localError = ref('')
@@ -14,17 +13,13 @@ let viewGeneration = 0
 
 const mediaUpload = useMediaUpload()
 const {
-  accessSession,
   currentUpload,
   completedDraft,
-  isAuthenticating,
   isUploading,
   isPaused,
   errorMessage,
   statusMessage,
   progressPercent,
-  refreshAccessSession,
-  authenticate,
   restoreStoredUpload,
   startOrResume,
   pauseUpload,
@@ -39,9 +34,6 @@ const fileSummary = computed(() => {
   return `${selectedFile.value.name} · ${formatBytes(selectedFile.value.size)}`
 })
 const visibleError = computed(() => localError.value || errorMessage.value)
-const sessionExpiryLabel = computed(() => accessSession.value.expiresAt
-  ? new Date(accessSession.value.expiresAt).toLocaleString()
-  : '未知')
 const completedPartRatio = computed(() => {
   const upload = currentUpload.value
   if (!upload || upload.totalParts <= 0) return '0 / 0'
@@ -55,12 +47,9 @@ const uploadActionLabel = computed(() => {
 
 onMounted(async () => {
   const generation = viewGeneration
+  if (!taskId.value) return
   try {
-    const session = await refreshAccessSession()
-    if (isDisposed || generation !== viewGeneration) return
-    if (session.authenticated && taskId.value) {
-      await restoreStoredUpload(taskId.value)
-    }
+    await restoreStoredUpload(taskId.value)
   } catch (error) {
     if (isDisposed || generation !== viewGeneration) return
     localError.value = toMessage(error)
@@ -72,7 +61,7 @@ watch(taskId, async (nextTaskId) => {
   resetForTaskChange()
   selectedFile.value = null
   localError.value = ''
-  if (accessSession.value.authenticated && nextTaskId) {
+  if (nextTaskId) {
     await restoreStoredUpload(nextTaskId)
   }
 })
@@ -82,19 +71,6 @@ onBeforeUnmount(() => {
   viewGeneration += 1
   disposeUpload()
 })
-
-async function submitAccessCode() {
-  localError.value = ''
-  if (!accessCode.value.trim()) {
-    localError.value = '请输入部署者配置的媒体访问口令'
-    return
-  }
-  const authenticated = await authenticate(accessCode.value)
-  if (authenticated) {
-    accessCode.value = ''
-    if (taskId.value) await restoreStoredUpload(taskId.value)
-  }
-}
 
 function selectFile() {
   fileInput.value?.click()
@@ -188,42 +164,12 @@ function toMessage(error: unknown) {
     </header>
 
     <div class="preflight-route" aria-label="媒体上传链路">
-      <span>选择成片</span><i aria-hidden="true"></i><span>安全上传</span><i aria-hidden="true"></i><span>发布前体检</span>
+      <span>选择成片</span><i aria-hidden="true"></i><span>分片上传</span><i aria-hidden="true"></i><span>发布前体检</span>
     </div>
 
-    <div v-if="!accessSession.authenticated" class="preflight-auth-card">
-      <div>
-        <span class="preflight-index">01</span>
-        <h4>解锁私有媒体通道</h4>
-        <p>当前部署需要先验证访问口令，未授权访客无法上传或读取你的成片。</p>
-      </div>
-      <form class="preflight-auth-form" @submit.prevent="submitAccessCode">
-        <label for="media-access-code">媒体访问口令</label>
-        <div>
-          <input
-            id="media-access-code"
-            v-model="accessCode"
-            type="password"
-            maxlength="256"
-            autocomplete="current-password"
-            placeholder="输入部署访问口令"
-          />
-          <button type="submit" :disabled="isAuthenticating">
-            {{ isAuthenticating ? '验证中' : '解锁' }}
-          </button>
-        </div>
-      </form>
-    </div>
-
-    <template v-else>
-      <div class="preflight-authenticated-line">
-        <span><i></i> 私有通道已认证</span>
-        <small>会话到期：{{ sessionExpiryLabel }}</small>
-      </div>
-
-      <div class="preflight-work-grid">
+    <div class="preflight-work-grid">
         <section class="preflight-file-card">
-          <span class="preflight-index">02</span>
+          <span class="preflight-index">01</span>
           <div class="preflight-card-head">
             <div>
               <h4>选择成片</h4>
@@ -256,7 +202,7 @@ function toMessage(error: unknown) {
         </section>
 
         <section class="preflight-meter-card">
-          <span class="preflight-index">03</span>
+          <span class="preflight-index">02</span>
           <div class="preflight-meter-head">
             <div>
               <h4>分片传输</h4>
@@ -297,11 +243,11 @@ function toMessage(error: unknown) {
               :disabled="isUploading || currentUpload.status === 'VERIFYING'"
               @click="cancelCurrentUpload"
             >
-              取消会话
+              取消上传
             </button>
           </div>
         </section>
-      </div>
+    </div>
 
       <div v-if="completedDraft || currentUpload?.status === 'COMPLETED'" class="preflight-complete-card">
         <span aria-hidden="true">✓</span>
@@ -314,8 +260,6 @@ function toMessage(error: unknown) {
         </div>
         <small>下一步：发布前画面与声音体检</small>
       </div>
-    </template>
-
     <p v-if="visibleError" class="preflight-error" role="alert">{{ visibleError }}</p>
 
     <footer class="preflight-privacy-note">
@@ -422,7 +366,6 @@ function toMessage(error: unknown) {
   background: linear-gradient(90deg, var(--border-strong), var(--lab-cyan));
 }
 
-.preflight-auth-card,
 .preflight-file-card,
 .preflight-meter-card {
   position: relative;
@@ -431,13 +374,6 @@ function toMessage(error: unknown) {
   border: 1px solid var(--border-strong);
   border-radius: var(--r);
   box-shadow: var(--sh-sm);
-}
-
-.preflight-auth-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.8fr);
-  align-items: end;
-  gap: var(--s7);
 }
 
 .preflight-index {
@@ -450,7 +386,6 @@ function toMessage(error: unknown) {
   font-weight: var(--fw-bold);
 }
 
-.preflight-auth-card h4,
 .preflight-file-card h4,
 .preflight-meter-card h4 {
   margin: 0 0 var(--s2);
@@ -458,7 +393,6 @@ function toMessage(error: unknown) {
   font-size: 19px;
 }
 
-.preflight-auth-card p,
 .preflight-card-head p,
 .preflight-meter-head p {
   margin: 0;
@@ -467,7 +401,6 @@ function toMessage(error: unknown) {
   line-height: 1.6;
 }
 
-.preflight-auth-form label,
 .preflight-version-field span {
   display: block;
   margin-bottom: var(--s2);
@@ -476,13 +409,6 @@ function toMessage(error: unknown) {
   font-weight: var(--fw-semibold);
 }
 
-.preflight-auth-form > div {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--s2);
-}
-
-.preflight-auth-form input,
 .preflight-version-field input {
   min-width: 0;
   padding: 11px 12px;
@@ -493,13 +419,11 @@ function toMessage(error: unknown) {
   outline: none;
 }
 
-.preflight-auth-form input:focus,
 .preflight-version-field input:focus {
   border-color: var(--lab-cyan);
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
-.preflight-auth-form button,
 .preflight-primary,
 .preflight-secondary,
 .preflight-ghost {
@@ -508,42 +432,10 @@ function toMessage(error: unknown) {
   cursor: pointer;
 }
 
-.preflight-auth-form button,
 .preflight-primary {
   color: #fff;
   background: var(--lab-ink);
   border: 1px solid var(--lab-ink);
-}
-
-.preflight-authenticated-line {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s4);
-  margin-bottom: var(--s4);
-  padding: 10px 14px;
-  background: rgba(22, 163, 74, 0.07);
-  border-left: 3px solid var(--ok);
-}
-
-.preflight-authenticated-line span {
-  color: #166534;
-  font-size: 13px;
-  font-weight: var(--fw-semibold);
-}
-
-.preflight-authenticated-line i {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 6px;
-  background: var(--ok);
-  border-radius: 50%;
-  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.12);
-}
-
-.preflight-authenticated-line small {
-  color: var(--muted);
 }
 
 .preflight-work-grid {
@@ -739,7 +631,6 @@ button:disabled {
 }
 
 @media (max-width: 860px) {
-  .preflight-auth-card,
   .preflight-work-grid {
     grid-template-columns: 1fr;
   }
@@ -769,8 +660,6 @@ button:disabled {
     margin-left: 20px;
   }
 
-  .preflight-auth-form > div,
-  .preflight-authenticated-line,
   .preflight-complete-card {
     align-items: stretch;
     grid-template-columns: 1fr;

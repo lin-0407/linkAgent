@@ -4,7 +4,21 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.link.linkagent.core.AgentExecutor;
+import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.creator.interactive.model.InteractiveSessionRecord;
+import com.link.linkagent.creator.interactive.tool.WebSearchTool;
+import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.memory.InMemoryShortTermMemoryStore;
+import com.link.linkagent.memory.LongTermMemory;
+import com.link.linkagent.memory.ShortTermMemory;
+import com.link.linkagent.memory.SummaryMemory;
+import com.link.linkagent.memory.SummaryMemoryProperties;
+import com.link.linkagent.prompt.StubPromptService;
+import com.link.linkagent.prompt.service.PromptService;
+import com.link.linkagent.tool.ToolExecutionProperties;
+import com.link.linkagent.tool.ToolExecutor;
+import com.link.linkagent.tool.ToolRegistry;
 import com.link.linkagent.util.LlmJsonUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -15,6 +29,7 @@ import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.ai.openai.api.ResponseFormat;
+import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -55,38 +70,18 @@ class CreativeIdeaManualEvaluationTest {
     private static final String PREFERENCE_ANALYSIS_MODEL = "deepseek-v4-pro";
     private static final String PREFERENCE_ANALYSIS_REASONING_EFFORT = "max";
     private static final String PREFERENCE_ANALYSIS_SYSTEM_PROMPT = """
-            你是B站内容创作者的选题策划助手。你的任务是把用户的一段自然语言创作想法，拆成3个可选创意方向（卡片），必须以JSON格式输出。
-            
-            【核心要求】
-            1. 忠实于用户原始想法，不编造故事，不假设用户职业、受众或技术水平。
-            2. 风格适配视频类型：游戏类可幽默短小、允许借助隐喻或适度玩梗；生活类注重情绪共鸣和真实感；知识/技术类强调清晰实用，避免术语轰炸；编程/项目类可体现技术深度但需具体。
-            3. 所有文本避免营销腔和AI生成套话，要用口语化、自然的中文表达。
-            
-            【标题指南】
-            - 简洁有力，直接体现视频核心看点或情绪，少用“：”分隔的模板格式，但也不要不用，在最适合的时候使用就行。
-            - 不主观夸大，但是可以作为吸引人的标题参考方向，游戏/生活类可带些许颜色幽默或前卫梗隐喻，但需保证点击前能猜出大致内容。
-            - 知识类标题应清晰传达范围或疑问，如“三个方法帮你…”“为什么…？”，但是不要只局限这些格式，可以充分发挥想象力。
-            【简介指南】
-            - 用1-2句自然描述视频内容和特点，可提及具体细节（如BGM风格、场景、数据），但严禁“评论区聊聊”“弹幕告诉我”等强行互动引导。
-            - 如需邀请互动，采用“如果你也有…”“你的…是什么？”等自然提问，且不要独占一行，可融入描述结尾。
-            - 杜绝AI风格描述（如“用XX场景告诉你”“就像XX一样”），力求直接、真诚。
-            【内容方向】
-            - 每张卡片需给出可执行的叙事角度（如对比、故事线、模块拆解），但必须结合用户想法具体化，不写通用套话。
-            - 对于非功能性内容（如游戏失误、生活日常），挖掘情绪价值或独特视角，不强行定义“意义”。
-            - 避免使用过时梗和观点假想化；如果用户未提供，不凭空编造详细参数或剧情。
-            【输出JSON格式】
-            {
-              "options": [
-                  {
-                  "optionName": "方向简短名称",
-                  "titleOutline": ["备选标题1", "备选标题2"],
-                  "descriptionOutline": ["简介句子", "关键词语", "互动邀请（可选，无则空字符串）"],
-                  "sellingPoints": ["卖点1", "卖点2"],
-                  "recommendReason": "推荐理由"
-                  }
-             ]
-            }
-            注意：所有数组字段必须是字符串数组，每张卡片都要具体到当前用户想法。只输出JSON，不要Markdown或额外解释。"
+            你是 AI 创意建议人工偏好分析 Agent，负责从作者的评分和逐卡意见中归纳稳定的风格偏好，
+            并提出可执行的想法扩展系统提示词优化建议。你不负责重新生成创意卡片。
+            你可以调用 web_search 工具核验当前模型能力、行业趋势或其他时效性事实；
+            如果结论涉及 2024 年之后可能变化的信息，必须先调用 web_search，再给出结论。
+            不能擅自修改作者评分，不能把相关性描述成确定因果，最终只输出任务要求的 JSON 对象。
+            """;
+    private static final String STANDALONE_REACT_SYSTEM_PROMPT = """
+            你是 LinkAgent 的 Agent Executor。请遵循 ReAct 模式：
+            需要工具时依次输出 Thought、Action、Action Input，等待 Observation 后再继续；
+            证据充分后输出 Final Answer。每次只能调用一个工具。
+            可用工具：
+            {toolList}
             """;
     private static final Path DOT_ENV_PATH_FROM_BACKEND = Path.of("..", ".env");
     private static final Path DOT_ENV_PATH_FROM_ROOT = Path.of(".env");
@@ -111,6 +106,7 @@ class CreativeIdeaManualEvaluationTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private ChatClient chatClient;
+    private ChatClient preferenceAnalysisChatClient;
     private ModelConfig modelConfig;
 
     /**
@@ -181,20 +177,10 @@ class CreativeIdeaManualEvaluationTest {
                 .isLessThanOrEqualTo(MAX_ANALYSIS_DATA_CHARS);
 
         String taskMessage = buildPreferenceAnalysisTask(creativeSystemPrompt, compactEvaluationData);
-        OpenAiChatOptions preferenceAnalysisOptions = OpenAiChatOptions.builder()
-                .model(PREFERENCE_ANALYSIS_MODEL)
-                .reasoningEffort(PREFERENCE_ANALYSIS_REASONING_EFFORT)
-                .responseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null))
-                .build();
-        log.info("创意偏好总结模型调用开始，model={}, reasoningEffort={}",
-                PREFERENCE_ANALYSIS_MODEL, PREFERENCE_ANALYSIS_REASONING_EFFORT);
-        String agentAnswer = chatClient.prompt()
-                .system(PREFERENCE_ANALYSIS_SYSTEM_PROMPT)
-                .user(taskMessage)
-                .options(preferenceAnalysisOptions)
-                .call()
-                .content();
-        log.info("创意偏好总结模型完整原始输出：\n{}", agentAnswer);
+        AgentChatResponse reactResponse = runPreferenceAnalysisWithReact(taskMessage);
+        String agentAnswer = reactResponse.finalAnswer();
+        log.info("创意偏好总结 ReAct 完成，steps={}, stopReason={}，完整最终输出：\n{}",
+                reactResponse.totalSteps(), reactResponse.stopReason(), agentAnswer);
         assertThat(agentAnswer).as("偏好总结 Agent 没有返回最终答案").isNotBlank();
 
         JsonNode parsedSummary = tryParseJson(agentAnswer);
@@ -344,6 +330,70 @@ class CreativeIdeaManualEvaluationTest {
                 .defaultOptions(options)
                 .build();
         chatClient = ChatClient.create(chatModel);
+
+        OpenAiChatOptions preferenceAnalysisOptions = OpenAiChatOptions.builder()
+                .model(PREFERENCE_ANALYSIS_MODEL)
+                .reasoningEffort(PREFERENCE_ANALYSIS_REASONING_EFFORT)
+                .responseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null))
+                .build();
+        preferenceAnalysisChatClient = ChatClient.create(OpenAiChatModel.builder()
+                .openAiApi(openAiApi)
+                .defaultOptions(preferenceAnalysisOptions)
+                .build());
+    }
+
+    /**
+     * 使用项目现有 ReAct 执行器完成偏好总结。
+     *
+     * 这里手动组装最小依赖图，只包含 LLM、联网搜索工具、内存级短期存储和工具执行器；
+     * 任务模式本身不读写记忆，因此不创建 MySQL、Redis、Milvus 或运行期设置服务。
+     */
+    private AgentChatResponse runPreferenceAnalysisWithReact(String taskMessage) throws IOException {
+        Map<String, String> dotEnv = readDotEnv();
+        String webSearchBaseUrl = dotEnv.getOrDefault("WEB_SEARCH_BASE_URL", "https://html.duckduckgo.com");
+        WebSearchTool webSearchTool = new WebSearchTool(
+                RestClient.builder().baseUrl(webSearchBaseUrl).build(), objectMapper);
+        ToolRegistry toolRegistry = new ToolRegistry(List.of(webSearchTool));
+        toolRegistry.init();
+        ToolExecutor toolExecutor = new ToolExecutor(toolRegistry, new ToolExecutionProperties(20, 1));
+        PromptService reactPromptService = new StubPromptService() {
+            @Override
+            public String get(String key) {
+                if ("agent_executor.system".equals(key)) {
+                    return STANDALONE_REACT_SYSTEM_PROMPT;
+                }
+                return super.get(key);
+            }
+        };
+
+        LLMService reactLlmService = new LLMService() {
+            @Override
+            public String chat(String systemPrompt, String userMessage) {
+                String response = preferenceAnalysisChatClient.prompt()
+                        .system(systemPrompt)
+                        .user(userMessage)
+                        .call()
+                        .content();
+                log.info("偏好总结 ReAct 模型完整原始输出：\n{}", response);
+                return response;
+            }
+        };
+        AgentExecutor agentExecutor = new AgentExecutor(
+                reactLlmService,
+                toolRegistry,
+                toolExecutor,
+                new ShortTermMemory(new InMemoryShortTermMemoryStore()),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2),
+                        prompt -> new org.springframework.ai.chat.model.ChatResponse(List.of()),
+                        new StubPromptService()),
+                new LongTermMemory(null),
+                null,
+                reactPromptService
+        );
+        log.info("创意偏好总结 ReAct 开始，model={}, reasoningEffort={}, tools={}",
+                PREFERENCE_ANALYSIS_MODEL, PREFERENCE_ANALYSIS_REASONING_EFFORT,
+                toolRegistry.getAllTools().stream().map(tool -> tool.getName()).toList());
+        return agentExecutor.runTask(PREFERENCE_ANALYSIS_SYSTEM_PROMPT + "\n\n" + taskMessage);
     }
 
     /**
@@ -537,7 +587,8 @@ class CreativeIdeaManualEvaluationTest {
     private String buildPreferenceAnalysisTask(String creativeSystemPrompt,
                                                String compactEvaluationData) {
         return """
-                这是一次人工偏好分析任务，不需要调用任何工具。
+                这是一次人工偏好分析任务。评测数据本身不需要搜索；但凡涉及当前模型能力、行业趋势或
+                其他可能随时间变化的事实，必须先调用 web_search 获取最新资料，再继续分析。
 
                 下面是当前想法扩展 Agent 的系统提示词：
                 <creative_system_prompt>

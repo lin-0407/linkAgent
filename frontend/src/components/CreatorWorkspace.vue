@@ -39,7 +39,7 @@ import {
   startPrePublishWorkflow,
   updateCreatorTask,
 } from '@/api/creator'
-import { getMediaAccessSession } from '@/api/media'
+import { getMediaFeatureStatus } from '@/api/media'
 import MessageBubble from '@/components/MessageBubble.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
 import AiCreationConsole from '@/components/creator/AiCreationConsole.vue'
@@ -779,8 +779,8 @@ onMounted(() => {
 
 async function refreshMediaFeatureAvailability() {
   try {
-    const session = await getMediaAccessSession()
-    isMediaFeatureEnabled.value = session.enabled
+    const status = await getMediaFeatureStatus()
+    isMediaFeatureEnabled.value = status.enabled
   } catch {
     // 能力探测失败时隐藏新入口，保留旧创作流程可用，不把可选媒体链路变成主工作台阻塞项。
     isMediaFeatureEnabled.value = false

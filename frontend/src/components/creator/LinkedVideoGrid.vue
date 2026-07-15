@@ -39,6 +39,9 @@ async function loadVideos() {
 // UID 变化时自动重新加载
 watch(() => props.bilibiliUid, loadVideos)
 onMounted(loadVideos)
+
+// 同步按钮位于兄弟组件中，由页面壳在同步完成后显式刷新列表。
+defineExpose({ refresh: loadVideos })
 </script>
 
 <template>
@@ -62,7 +65,7 @@ onMounted(loadVideos)
         还没有绑定视频的任务。
       </p>
       <p class="grid-empty-hint">
-        发布视频后，在创作任务的发布前优化阶段填回 BV 号，即可在这里看到视频数据。
+        请先在创作任务中填回已发布视频的 BV 号，再点击上方“同步视频”完成归属校验。
       </p>
     </div>
 

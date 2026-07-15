@@ -1,10 +1,3 @@
-/** 阶段 7 P0 单部署媒体访问会话。 */
-export type MediaAccessSession = {
-  enabled: boolean
-  authenticated: boolean
-  expiresAt: string | null
-}
-
 export type CreateMediaUploadPayload = {
   versionName: string
   fileName: string
