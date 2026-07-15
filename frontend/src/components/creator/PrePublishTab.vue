@@ -661,8 +661,8 @@ watch(
 
 .creator-ai-support-details {
   min-height: 0;
-  max-height: 286px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
 }
 
 .creator-ai-result-panel {
@@ -696,6 +696,48 @@ watch(
     min-height: 560px;
     max-height: 800px;
   }
+
+  .creator-ai-support-details {
+    max-height: 286px;
+    overflow: auto;
+  }
+}
+
+/* 左侧协作栏本身只有 320 至 380px，内部布局必须按真实可用宽度收拢，不能只依赖浏览器视口。 */
+@media (min-width: 821px) {
+  .creator-ai-collaboration-panel {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 760px) {
+    .creator-ai-support-grid,
+    .creator-ai-preference-form {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .creator-ai-support-grid .creator-preference-panel {
+      margin-bottom: 0;
+    }
+
+    .creator-ai-support-grid .creator-preference-tags span {
+      max-width: 100%;
+      align-items: flex-start;
+      padding-block: 6px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+  }
+
+  @container (max-width: 480px) {
+    .creator-ai-support-grid .creator-preference-modes {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .creator-ai-support-grid .creator-preference-modes button:last-child {
+      grid-column: 1 / -1;
+    }
+  }
 }
 
 @media (min-width: 981px) and (max-width: 1279px) {
@@ -711,6 +753,11 @@ watch(
   .creator-ai-prepublish-layout.is-tabbed .creator-ai-collaboration-panel,
   .creator-ai-prepublish-layout.is-tabbed .creator-ai-result-panel {
     overflow: hidden;
+  }
+
+  .creator-ai-prepublish-layout.is-tabbed .creator-ai-support-details {
+    max-height: 286px;
+    overflow: auto;
   }
 }
 
