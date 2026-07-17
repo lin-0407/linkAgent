@@ -395,11 +395,25 @@ const compactWorkflowStatus = computed(() => {
   }
 }
 
-@media (max-width: 1279px), (min-width: 1280px) and (max-height: 759px) {
+/* 宽度不足时才收为单列，确保发布方案在中等屏幕仍有足够的阅读宽度。 */
+@media (max-width: 1279px) {
   .creator-ai-prepublish-layout {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .creator-ai-preference-workspace,
+  .creator-ai-result-panel {
+    min-height: auto;
+    overflow: visible;
+  }
+
+  .creator-ai-preference-workspace-body {
+    overflow: visible;
+  }
+}
+
+/* 低高度桌面保留双栏，把超出的内容交给页面滚动，避免缩放后工作区突然切换布局。 */
+@media (min-width: 1280px) and (max-height: 759px) {
   .creator-ai-preference-workspace,
   .creator-ai-result-panel {
     min-height: auto;

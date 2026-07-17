@@ -80,8 +80,11 @@ public class AgentExecutor {
      * 格式错误时的标准 Observation 文本。当 LLM 未按 Thought/Action/Action Input 格式输出时，
      * 将此文本作为 Observation 回灌到对话中，让 LLM 看到错误后自行修正下一步输出。
      */
-    private static final String FORMAT_ERROR_OBSERVATION =
-            "LLM 本轮输出未遵守 ReAct 文本格式，已回传格式错误提示并要求模型重试。";
+    private static final String FORMAT_ERROR_OBSERVATION = """
+            LLM 本轮输出存在 ReAct 文本格式错误，已回传原始输出并要求模型重试。
+            调用工具时必须输出：Thought: ...、Action: 工具名、Action Input: 参数。
+            结束任务时必须输出：Final Answer: 最终内容。即使最终内容是 JSON，也不能省略 Final Answer: 前缀。
+            """.trim();
 
     /**
      * 匹配 "Final Answer: 正文" 整行，捕获冒号后的所有文本（跨行）。
@@ -317,7 +320,7 @@ public class AgentExecutor {
                     persistAgentStep(persistenceContext, iteration, "observation",
                             "未解析到 Thought，模型可能没有按提示词要求输出。",
                             null, null, FORMAT_ERROR_OBSERVATION, stepTokenCount);
-                    conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                    appendFormatCorrection(conversation, llmAnswer);
                     continue;
                 }
                 log.info("第{}轮解析到 Thought: {}", iteration, thought);
@@ -332,7 +335,7 @@ public class AgentExecutor {
                     log.warn("第{}轮未解析到合法 Action，rawResponse={}", iteration, llmAnswer);
                     steps.add(new AgentStep(iteration, thought, null, null, null));
                     persistAgentStep(persistenceContext, iteration, "thought", thought, null, null, null, stepTokenCount);
-                    conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                    appendFormatCorrection(conversation, llmAnswer);
                     continue;
                 }
                 log.info("第{}轮解析到 Action: {}, Action Input: {}", iteration, action.name(), action.arguments());
@@ -433,7 +436,7 @@ public class AgentExecutor {
                 // 既无 Final Answer 也无合法 Thought：回喂格式错误让 LLM 重试（与 run 处理一致）
                 steps.add(new AgentStep(iteration, "未解析到 Thought，模型可能没有按提示词要求输出。", null, null,
                         FORMAT_ERROR_OBSERVATION));
-                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                appendFormatCorrection(conversation, llmAnswer);
                 continue;
             }
 
@@ -441,7 +444,7 @@ public class AgentExecutor {
             if (action == null) {
                 // 无合法 Action：回喂格式错误让 LLM 重试
                 steps.add(new AgentStep(iteration, thought, null, null, null));
-                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                appendFormatCorrection(conversation, llmAnswer);
                 continue;
             }
 
@@ -988,6 +991,17 @@ public class AgentExecutor {
     }
 
     /**
+     * 把模型的错误输出和精确格式要求一并写回对话，让下一轮知道自己错在哪里。
+     *
+     * 只追加笼统 ERROR 会丢失上一轮 AI 回复，模型容易在相同上下文中重复输出裸 JSON；
+     * 保留原文符合正常多轮对话语义，也不会额外写入日志。
+     */
+    private void appendFormatCorrection(StringBuilder conversation, String llmAnswer) {
+        conversation.append("AI:\n").append(llmAnswer).append("\n")
+                .append("Observation:\n").append(FORMAT_ERROR_OBSERVATION).append("\n\n");
+    }
+
+    /**
      * 构建文本路 ReAct 的系统提示词（含 Thought/Action/Action Input/Final Answer 格式约定）。
      * <p>
      * 工具描述通过 {@link AgentToolPromptFormatter#format} 统一格式化；提示词模板从 promptService
@@ -1226,7 +1240,7 @@ public class AgentExecutor {
                 persistAgentStep(persistenceContext, iteration, "observation",
                         "未解析到 Thought，模型可能没有按提示词要求输出。",
                         null, null, FORMAT_ERROR_OBSERVATION, stepTokenCount);
-                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                appendFormatCorrection(conversation, llmAnswer);
                 continue;
             }
 
@@ -1236,7 +1250,7 @@ public class AgentExecutor {
                 // 无合法 Action：回喂格式错误
                 sendSseEvent(emitter, "step", new AgentStep(iteration, thought, null, null, null));
                 persistAgentStep(persistenceContext, iteration, "thought", thought, null, null, null, stepTokenCount);
-                conversation.append("ERROR：输出格式错误，请严格按照格式输出！\n\n");
+                appendFormatCorrection(conversation, llmAnswer);
                 continue;
             }
 

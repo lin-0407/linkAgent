@@ -123,6 +123,38 @@ class AgentExecutorLongTermMemoryTest {
         assertThat(step.thought()).contains("未解析到 Thought");
         assertThat(step.observation()).contains("格式错误");
         assertThat(llmService.callCount).isEqualTo(2);
+        assertThat(llmService.lastUserMessage)
+                .contains("AI:\n我直接给你一个没有 ReAct 标记的回答")
+                .contains("即使最终内容是 JSON，也不能省略 Final Answer: 前缀");
+    }
+
+    /** 验证任务模式会针对裸 JSON 给出精确纠错，并在下一轮取得合法 Final Answer。 */
+    @Test
+    void shouldCorrectBareJsonInTaskMode() {
+        SequencedLlmService llmService = new SequencedLlmService(
+                "{\"options\":[]}",
+                "Final Answer: {\"options\":[]}"
+        );
+        AgentExecutor executor = new AgentExecutor(
+                llmService,
+                new ToolRegistry(List.of()),
+                emptyToolExecutor(),
+                new ShortTermMemory(new InMemoryShortTermMemoryStore()),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2),
+                        prompt -> new ChatResponse(List.of()), new StubPromptService()),
+                new LongTermMemory(new FakeLongTermMemoryMapper()),
+                new NoopLongTermMemoryExtractor(),
+                new StubPromptService()
+        );
+
+        var response = executor.runTask("生成 JSON");
+
+        assertThat(response.finalAnswer()).isEqualTo("{\"options\":[]}");
+        assertThat(response.steps()).hasSize(1);
+        assertThat(llmService.callCount).isEqualTo(2);
+        assertThat(llmService.lastUserMessage)
+                .contains("AI:\n{\"options\":[]}")
+                .contains("Final Answer: 最终内容");
     }
 
     @Test
@@ -181,6 +213,7 @@ class AgentExecutorLongTermMemoryTest {
 
         private final List<String> responses;
         private int callCount;
+        private String lastUserMessage;
 
         SequencedLlmService(String... responses) {
             super();
@@ -189,6 +222,7 @@ class AgentExecutorLongTermMemoryTest {
 
         @Override
         public String chat(String systemPrompt, String userMessage) {
+            lastUserMessage = userMessage;
             String response = responses.get(Math.min(callCount, responses.size() - 1));
             callCount++;
             return response;

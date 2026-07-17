@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.interactive.tool;
 
 import com.link.linkagent.tool.Tool;
+import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -62,17 +63,43 @@ public class WebSearchTool implements Tool {
     private static final int MAX_RESPONSE_LENGTH = 60000;
     private static final int REQUEST_TIMEOUT_SECONDS = 12;
     private static final int CHARSET_SNIFF_LENGTH = 8192;
+    private static final int LONG_PAGE_COMPRESSION_THRESHOLD = 2000;
+    private static final int COMPRESSION_INPUT_MAX_LENGTH = 24000;
+    private static final int COMPRESSION_OUTPUT_MAX_LENGTH = 6000;
+    private static final String COMPRESSION_SYSTEM_PROMPT = """
+            你是联网资料压缩助手。请只压缩输入中的网页正文，不补充外部知识，不推测原文没有的信息。
+            必须按来源编号分别总结，保留与搜索问题相关的事实、日期、数字、案例、结论和不确定性。
+            删除导航、样式、重复段落和无关内容。每个来源控制在 1000 字以内，并保留“来源编号：N”标题。
+            """;
     private static final Pattern HTML_META_CHARSET_PATTERN = Pattern.compile(
             "(?i)<meta\\b[^>]*\\bcharset\\s*=\\s*[\\\"']?\\s*([^\\s\\\"'/>;]+)");
 
     private final RestClient pageClient;
     private final List<SearchSource> searchSources;
+    private final ContentCompressor contentCompressor;
 
     /** Spring 生产构造器：Bing RSS 为主源，DuckDuckGo HTML 为备用源。 */
     @Autowired
     public WebSearchTool(
             @Value("${agent.tool.web-search.bing-base-url:https://cn.bing.com}") String bingBaseUrl,
-            @Value("${agent.tool.web-search.duckduckgo-base-url:https://html.duckduckgo.com}") String duckDuckGoBaseUrl) {
+            @Value("${agent.tool.web-search.duckduckgo-base-url:https://html.duckduckgo.com}") String duckDuckGoBaseUrl,
+            @Value("${agent.tool.web-search.compression-enabled:true}") boolean compressionEnabled,
+            @Value("${agent.tool.web-search.compression-model:${LLM_MODEL}}") String compressionModel,
+            LLMService llmService) {
+        this(bingBaseUrl, duckDuckGoBaseUrl,
+                compressionEnabled
+                        ? (systemPrompt, userMessage) -> llmService.chatWithModel(
+                                compressionModel, systemPrompt, userMessage)
+                        : null);
+    }
+
+    /** 不启用正文压缩的构造器，供只验证网络连通性和解析逻辑的测试使用。 */
+    public WebSearchTool(String bingBaseUrl, String duckDuckGoBaseUrl) {
+        this(bingBaseUrl, duckDuckGoBaseUrl, null);
+    }
+
+    /** 可注入轻量模型调用函数的构造器，供独立评测在不启动 Spring 容器时启用正文压缩。 */
+    public WebSearchTool(String bingBaseUrl, String duckDuckGoBaseUrl, ContentCompressor contentCompressor) {
         RestClient bingClient = buildClient(bingBaseUrl);
         RestClient duckDuckGoClient = buildClient(duckDuckGoBaseUrl);
         this.pageClient = buildClient(null);
@@ -80,18 +107,26 @@ public class WebSearchTool implements Tool {
                 new SearchSource("bing-rss", query -> requestBingResults(bingClient, query)),
                 new SearchSource("duckduckgo-html", query -> requestDuckDuckGoResults(duckDuckGoClient, query))
         );
+        this.contentCompressor = contentCompressor;
     }
 
     /** 可注入 HTTP 客户端的构造器，供不启动 Spring 容器的测试复用解析逻辑。 */
     public WebSearchTool(RestClient restClient) {
         this.pageClient = restClient;
         this.searchSources = List.of();
+        this.contentCompressor = null;
     }
 
     /** 可注入搜索源的构造器，供本地测试验证主源失败后的回退顺序。 */
     WebSearchTool(RestClient pageClient, List<SearchSource> searchSources) {
+        this(pageClient, searchSources, null);
+    }
+
+    /** 可同时注入搜索源和压缩函数的构造器，用于不访问真实网络的压缩流程测试。 */
+    WebSearchTool(RestClient pageClient, List<SearchSource> searchSources, ContentCompressor contentCompressor) {
         this.pageClient = pageClient;
         this.searchSources = List.copyOf(searchSources);
+        this.contentCompressor = contentCompressor;
     }
 
     /** 为搜索页和目标网页设置统一连接/读取超时，避免一次搜索长期占用 ReAct 线程。 */
@@ -242,30 +277,90 @@ public class WebSearchTool implements Tool {
 
     /** 抓取公开结果页面，并在每个页面完成正文清洗后再拼接 Observation。 */
     private String fetchAndFormatPages(List<SearchResult> results) {
-        StringBuilder output = new StringBuilder("联网搜索结果：\n");
-        int index = 1;
+        List<FetchedPage> pages = new ArrayList<>();
         for (SearchResult result : results) {
-            output.append(index++).append(". ").append(result.title()).append("\n")
-                    .append("   来源：").append(result.url()).append("\n");
             try {
                 String pageHtml = fetchPublicPage(result.url());
                 String cleanedText = cleanHtmlToText(pageHtml);
                 if (TextUtil.hasText(cleanedText)) {
-                    output.append("   正文：").append(TextUtil.abbreviate(cleanedText, PAGE_MAX_LENGTH)).append("\n");
+                    pages.add(new FetchedPage(result, TextUtil.abbreviate(cleanedText, PAGE_MAX_LENGTH), true));
                 } else if (TextUtil.hasText(result.snippet())) {
-                    output.append("   搜索摘要：").append(result.snippet()).append("\n");
+                    pages.add(new FetchedPage(result, result.snippet(), false));
+                } else {
+                    pages.add(new FetchedPage(result, "", false));
                 }
             } catch (Exception exception) {
                 // 单个网页不可访问时保留搜索摘要，避免一个站点失败导致整个搜索 Observation 丢失。
-                if (TextUtil.hasText(result.snippet())) {
-                    output.append("   搜索摘要：").append(result.snippet()).append("\n");
-                }
-            }
-            if (output.length() >= MAX_RESPONSE_LENGTH) {
-                break;
+                pages.add(new FetchedPage(result, TextUtil.trimToDefault(result.snippet(), ""), false));
             }
         }
+        return formatFetchedPages(pages);
+    }
+
+    /**
+     * 将已抓取页面格式化为 Observation；多个长页面合并为一次轻量模型压缩调用。
+     *
+     * 压缩只替换超过阈值的完整正文，搜索摘要和短页面保持原文，避免对本就精简的信息再次改写。
+     */
+    String formatFetchedPages(List<FetchedPage> pages) {
+        List<Integer> longPageIndexes = new ArrayList<>();
+        for (int index = 0; index < pages.size(); index++) {
+            FetchedPage page = pages.get(index);
+            if (page.fullPage() && page.content().length() > LONG_PAGE_COMPRESSION_THRESHOLD) {
+                longPageIndexes.add(index);
+            }
+        }
+        String compressedContent = compressLongPages(pages, longPageIndexes);
+        boolean compressionSucceeded = TextUtil.hasText(compressedContent);
+        StringBuilder output = new StringBuilder("联网搜索结果：\n");
+        for (int index = 0; index < pages.size(); index++) {
+            FetchedPage page = pages.get(index);
+            output.append(index + 1).append(". ").append(page.result().title()).append("\n")
+                    .append("   来源：").append(page.result().url()).append("\n");
+            boolean compressedLongPage = compressionSucceeded && longPageIndexes.contains(index);
+            if (!compressedLongPage && TextUtil.hasText(page.content())) {
+                output.append(page.fullPage() ? "   正文：" : "   搜索摘要：")
+                        .append(page.content()).append("\n");
+            }
+        }
+        if (compressionSucceeded) {
+            output.append("长页面压缩摘要（来源编号对应上方搜索结果）：\n")
+                    .append(TextUtil.abbreviate(compressedContent, COMPRESSION_OUTPUT_MAX_LENGTH)).append("\n");
+        }
         return TextUtil.abbreviate(output.toString().trim(), MAX_RESPONSE_LENGTH);
+    }
+
+    /** 一次性压缩所有长页面；模型失败时返回空字符串，由调用方自动保留原正文。 */
+    private String compressLongPages(List<FetchedPage> pages, List<Integer> longPageIndexes) {
+        if (contentCompressor == null || longPageIndexes.isEmpty()) {
+            return null;
+        }
+        int perPageInputLimit = Math.max(1, COMPRESSION_INPUT_MAX_LENGTH / longPageIndexes.size());
+        StringBuilder input = new StringBuilder("搜索到的长页面如下，请按来源编号分别压缩：\n\n");
+        for (Integer pageIndex : longPageIndexes) {
+            FetchedPage page = pages.get(pageIndex);
+            input.append("<source id=\"").append(pageIndex + 1).append("\">\n")
+                    .append("标题：").append(page.result().title()).append("\n")
+                    .append("URL：").append(page.result().url()).append("\n")
+                    .append("正文：\n")
+                    .append(TextUtil.abbreviate(page.content(), perPageInputLimit)).append("\n")
+                    .append("</source>\n\n");
+        }
+        try {
+            log.info("联网搜索长正文压缩开始，pageCount={}, inputChars={}",
+                    longPageIndexes.size(), input.length());
+            String compressed = contentCompressor.compress(COMPRESSION_SYSTEM_PROMPT, input.toString());
+            if (TextUtil.isBlank(compressed)) {
+                log.warn("联网搜索长正文压缩返回空内容，已回退原正文");
+                return null;
+            }
+            log.info("联网搜索长正文压缩完成，pageCount={}, outputChars={}，完整输出：\n{}",
+                    longPageIndexes.size(), compressed.length(), compressed);
+            return compressed;
+        } catch (RuntimeException exception) {
+            log.warn("联网搜索长正文压缩失败，已回退原正文，error={}", resolveErrorMessage(exception));
+            return null;
+        }
     }
 
     /** 只允许公开 HTTP(S) 页面，拒绝 localhost、环回地址、内网地址和非 HTTP 协议。 */
@@ -412,6 +507,16 @@ public class WebSearchTool implements Tool {
 
     /** 一个可命名的搜索源；名称只用于可用性日志，不包含搜索词。 */
     record SearchSource(String name, Function<String, List<SearchResult>> search) {
+    }
+
+    /** 已抓取页面的最小结构，用 fullPage 区分完整正文和搜索引擎摘要。 */
+    record FetchedPage(SearchResult result, String content, boolean fullPage) {
+    }
+
+    /** 隔离具体模型客户端，让生产环境和独立评测复用同一套压缩流程。 */
+    @FunctionalInterface
+    public interface ContentCompressor {
+        String compress(String systemPrompt, String userMessage);
     }
 
     /** 从 DuckDuckGo 搜索 HTML 中提取 result__a 和 result__snippet 文本。 */
