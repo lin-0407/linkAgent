@@ -27,7 +27,7 @@ type SuggestionCardItem = {
 const { feedbackEvent } = useCreatorWorkspaceContext()
 const {
   suggestion,
-  hasFullScriptMaterial,
+  hasPrePublishScriptMaterial,
   hasConfirmedPrePublish,
   canRunPrePublishAnalyze,
   isAnalyzingPrePublish,
@@ -101,7 +101,7 @@ const panelStatus = computed(() => {
   if (suggestion.value) {
     return '待采用'
   }
-  if (!hasFullScriptMaterial.value) {
+  if (!hasPrePublishScriptMaterial.value) {
     return '缺少完整文稿'
   }
   return isAnalyzingPrePublish.value ? '正在生成' : '等待生成'
@@ -228,7 +228,7 @@ function saveSuggestionContext(
     </header>
 
     <div ref="suggestionPanelBodyRef" class="suggestion-panel-body">
-      <section v-if="!suggestion && !hasFullScriptMaterial" class="suggestion-empty-state">
+      <section v-if="!suggestion && !hasPrePublishScriptMaterial" class="suggestion-empty-state">
         <div>
           <strong>还缺完整文稿或字幕</strong>
           <p>补齐可分析的内容后，标题、简介和标签建议才能贴合视频本身。</p>
@@ -278,7 +278,7 @@ function saveSuggestionContext(
       <section v-else-if="!suggestion" class="suggestion-empty-state">
         <div>
           <strong>材料已就绪</strong>
-          <p>AI 会结合当前材料、偏好记忆和协作区中的补充要求生成发布方案。</p>
+          <p>AI 会结合当前材料、偏好记忆和消息流中的补充要求生成发布方案。</p>
         </div>
         <button
           type="button"

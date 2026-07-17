@@ -26,7 +26,6 @@ export interface CreatorWorkspaceContext {
   openResultModal: (target: ResultModalTarget) => void
   closeResultModal: () => void
   openWorkflowMessageModal: () => void
-  openWorkflowProcessModal: () => void
   openFeedbackChatDrawer: () => void
   closeFeedbackChatDrawer: () => void
   toggleFeedbackChatDrawer: () => void

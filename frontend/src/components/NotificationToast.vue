@@ -104,37 +104,40 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <Transition name="notification-toast">
-    <div
-      v-if="message"
-      class="notification-toast"
-      :class="`notification-toast--${type}`"
-      role="alert"
-      :aria-live="type === 'error' ? 'assertive' : 'polite'"
-    >
-      <div class="notification-toast__body">
-        <strong class="notification-toast__title">{{ resolvedTitle }}</strong>
-        <span class="notification-toast__message">{{ message }}</span>
-      </div>
-      <button
-        type="button"
-        class="notification-toast__close"
-        :aria-label="`关闭${resolvedTitle}`"
-        @click="handleClose"
+  <!-- 通知脱离工作区的层叠上下文，避免被吸顶顶栏或局部 overflow 裁切。 -->
+  <Teleport to="body">
+    <Transition name="notification-toast">
+      <div
+        v-if="message"
+        class="notification-toast"
+        :class="`notification-toast--${type}`"
+        role="alert"
+        :aria-live="type === 'error' ? 'assertive' : 'polite'"
       >
-        ×
-      </button>
-    </div>
-  </Transition>
+        <div class="notification-toast__body">
+          <strong class="notification-toast__title">{{ resolvedTitle }}</strong>
+          <span class="notification-toast__message">{{ message }}</span>
+        </div>
+        <button
+          type="button"
+          class="notification-toast__close"
+          :aria-label="`关闭${resolvedTitle}`"
+          @click="handleClose"
+        >
+          ×
+        </button>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <style scoped>
 /* ===== 容器：固定右上角，复用现有 toast 定位策略 ===== */
 .notification-toast {
   position: fixed;
-  top: 22px;
+  top: calc(var(--surface-topbar-height, 0px) + 16px);
   right: 22px;
-  z-index: 90;
+  z-index: 2200;
   display: flex;
   align-items: flex-start;
   gap: 12px;

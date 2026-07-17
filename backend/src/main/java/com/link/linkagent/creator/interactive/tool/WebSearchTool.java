@@ -11,7 +11,15 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 
+import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilderFactory;
 import javax.swing.text.MutableAttributeSet;
 import javax.swing.text.html.HTML;
 import javax.swing.text.html.HTMLEditorKit;
@@ -21,10 +29,16 @@ import java.io.StringReader;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URLDecoder;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 面向 ReAct Agent 的无密钥联网搜索工具。
@@ -36,6 +50,7 @@ import java.util.List;
 @ConditionalOnProperty(name = "agent.tool.web-search.enabled", havingValue = "true")
 public class WebSearchTool implements Tool {
 
+    private static final Logger log = LoggerFactory.getLogger(WebSearchTool.class);
     private static final String TOOL_NAME = "web_search";
     private static final String DEFAULT_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -46,19 +61,37 @@ public class WebSearchTool implements Tool {
     private static final int PAGE_DOWNLOAD_MAX_LENGTH = 1_000_000;
     private static final int MAX_RESPONSE_LENGTH = 60000;
     private static final int REQUEST_TIMEOUT_SECONDS = 12;
+    private static final int CHARSET_SNIFF_LENGTH = 8192;
+    private static final Pattern HTML_META_CHARSET_PATTERN = Pattern.compile(
+            "(?i)<meta\\b[^>]*\\bcharset\\s*=\\s*[\\\"']?\\s*([^\\s\\\"'/>;]+)");
 
-    private final RestClient restClient;
+    private final RestClient pageClient;
+    private final List<SearchSource> searchSources;
 
-    /** Spring 生产构造器：搜索地址可替换为自建的兼容搜索入口。 */
+    /** Spring 生产构造器：Bing RSS 为主源，DuckDuckGo HTML 为备用源。 */
     @Autowired
     public WebSearchTool(
-            @Value("${agent.tool.web-search.base-url:https://html.duckduckgo.com}") String baseUrl) {
-        this(RestClient.builder().baseUrl(baseUrl).requestFactory(defaultRequestFactory()).build());
+            @Value("${agent.tool.web-search.bing-base-url:https://cn.bing.com}") String bingBaseUrl,
+            @Value("${agent.tool.web-search.duckduckgo-base-url:https://html.duckduckgo.com}") String duckDuckGoBaseUrl) {
+        RestClient bingClient = buildClient(bingBaseUrl);
+        RestClient duckDuckGoClient = buildClient(duckDuckGoBaseUrl);
+        this.pageClient = buildClient(null);
+        this.searchSources = List.of(
+                new SearchSource("bing-rss", query -> requestBingResults(bingClient, query)),
+                new SearchSource("duckduckgo-html", query -> requestDuckDuckGoResults(duckDuckGoClient, query))
+        );
     }
 
     /** 可注入 HTTP 客户端的构造器，供不启动 Spring 容器的测试复用解析逻辑。 */
     public WebSearchTool(RestClient restClient) {
-        this.restClient = restClient;
+        this.pageClient = restClient;
+        this.searchSources = List.of();
+    }
+
+    /** 可注入搜索源的构造器，供本地测试验证主源失败后的回退顺序。 */
+    WebSearchTool(RestClient pageClient, List<SearchSource> searchSources) {
+        this.pageClient = pageClient;
+        this.searchSources = List.copyOf(searchSources);
     }
 
     /** 为搜索页和目标网页设置统一连接/读取超时，避免一次搜索长期占用 ReAct 线程。 */
@@ -67,6 +100,12 @@ public class WebSearchTool implements Tool {
         requestFactory.setConnectTimeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS));
         requestFactory.setReadTimeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS));
         return requestFactory;
+    }
+
+    /** 创建统一超时的 HTTP 客户端；baseUrl 为空时用于访问搜索结果中的绝对 URL。 */
+    private static RestClient buildClient(String baseUrl) {
+        RestClient.Builder builder = RestClient.builder().requestFactory(defaultRequestFactory());
+        return TextUtil.hasText(baseUrl) ? builder.baseUrl(baseUrl).build() : builder.build();
     }
 
     @Override
@@ -88,35 +127,117 @@ public class WebSearchTool implements Tool {
             return "联网搜索失败：请提供具体搜索问题。";
         }
         try {
-            String searchHtml = requestSearchPage(TextUtil.abbreviate(query, QUERY_MAX_LENGTH));
-            List<SearchResult> results = parseSearchResults(searchHtml);
-            if (results.isEmpty()) {
-                return "联网搜索未找到公开网页结果。";
-            }
+            List<SearchResult> results = searchWithFallback(TextUtil.abbreviate(query, QUERY_MAX_LENGTH));
             return fetchAndFormatPages(results);
         } catch (Exception exception) {
             return "联网搜索失败：" + resolveErrorMessage(exception);
         }
     }
 
-    /** 请求搜索页面时只使用不包含用户身份的常见浏览器头，不转发用户 Cookie。 */
-    private String requestSearchPage(String query) {
-        return restClient.get()
+    /** 按配置顺序尝试搜索源，超时、请求失败或零结果都会自动切换到下一个源。 */
+    List<SearchResult> searchWithFallback(String query) {
+        List<String> failures = new ArrayList<>();
+        for (SearchSource source : searchSources) {
+            try {
+                List<SearchResult> results = normalizeSearchResults(source.search().apply(query));
+                if (!results.isEmpty()) {
+                    log.info("联网搜索源调用成功，source={}, resultCount={}", source.name(), results.size());
+                    return results;
+                }
+                failures.add(source.name() + "=零结果");
+                log.warn("联网搜索源未返回结果，source={}", source.name());
+            } catch (RuntimeException exception) {
+                String error = resolveErrorMessage(exception);
+                failures.add(source.name() + "=" + error);
+                log.warn("联网搜索源调用失败，source={}, error={}", source.name(), error);
+            }
+        }
+        throw new IllegalStateException("所有联网搜索源均不可用：" + String.join("；", failures));
+    }
+
+    /** 请求 DuckDuckGo 搜索页面时只使用不包含用户身份的常见浏览器头。 */
+    private List<SearchResult> requestDuckDuckGoResults(RestClient client, String query) {
+        String searchHtml = client.get()
                 .uri(uriBuilder -> uriBuilder.path("/html/").queryParam("q", query).build())
                 .headers(this::applyBrowserLikeHeaders)
                 .retrieve()
                 .body(String.class);
+        return parseSearchResults(searchHtml);
+    }
+
+    /** Bing 的 RSS 输出结构稳定且无需解析搜索页脚本，作为默认主搜索源。 */
+    private List<SearchResult> requestBingResults(RestClient client, String query) {
+        String rss = client.get()
+                .uri(uriBuilder -> uriBuilder.path("/search")
+                        .queryParam("q", query)
+                        .queryParam("format", "rss")
+                        .queryParam("setlang", "zh-cn")
+                        .build())
+                .headers(this::applyBrowserLikeHeaders)
+                .retrieve()
+                .body(String.class);
+        return parseBingRssResults(rss);
+    }
+
+    /** 使用禁用外部实体的 XML 解析器读取 Bing RSS，避免用字符串规则拆 XML。 */
+    List<SearchResult> parseBingRssResults(String rss) {
+        if (TextUtil.isBlank(rss)) {
+            return List.of();
+        }
+        Document document = parseBingRssDocument(rss);
+        NodeList items = document.getElementsByTagName("item");
+        List<SearchResult> results = new ArrayList<>();
+        for (int index = 0; index < items.getLength(); index++) {
+            Element item = (Element) items.item(index);
+            String title = childText(item, "title");
+            String url = childText(item, "link");
+            String snippet = cleanHtmlToText(childText(item, "description"));
+            if (TextUtil.hasText(url)) {
+                results.add(new SearchResult(title, url, snippet));
+            }
+        }
+        return results;
+    }
+
+    /** 单独解析 RSS 文档，以便区分 XML 解析失败和后续摘要清洗失败。 */
+    private Document parseBingRssDocument(String rss) {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            // 当前运行时 XML Provider 不支持 ACCESS_EXTERNAL_* 属性；直接禁止 DOCTYPE 同样阻断外部实体声明。
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            return factory.newDocumentBuilder().parse(new InputSource(new StringReader(rss)));
+        } catch (Exception exception) {
+            throw new IllegalArgumentException(
+                    "Bing RSS 响应解析失败：" + describeException(exception), exception);
+        }
+    }
+
+    /** 读取 RSS item 的直接子字段；不存在时返回空字符串，交由后续过滤。 */
+    private String childText(Element parent, String tagName) {
+        NodeList nodes = parent.getElementsByTagName(tagName);
+        return nodes.getLength() == 0 ? "" : TextUtil.trimToDefault(nodes.item(0).getTextContent(), "");
+    }
+
+    /** 搜索源结果统一去重和限量，保证故障转移前后输出契约一致。 */
+    private List<SearchResult> normalizeSearchResults(List<SearchResult> results) {
+        if (results == null) {
+            return List.of();
+        }
+        Map<String, SearchResult> uniqueByUrl = new LinkedHashMap<>();
+        for (SearchResult result : results) {
+            if (result != null && TextUtil.hasText(result.url())) {
+                uniqueByUrl.putIfAbsent(result.url(), result);
+            }
+        }
+        return uniqueByUrl.values().stream().limit(MAX_SEARCH_RESULTS).toList();
     }
 
     /** 从搜索 HTML 提取前几条结果，避免把整个搜索页面塞进 Agent 上下文。 */
     List<SearchResult> parseSearchResults(String html) {
         SearchResultCollector collector = new SearchResultCollector();
         parseHtml(html, collector);
-        return collector.results.stream()
-                .filter(result -> TextUtil.hasText(result.url()))
-                .distinct()
-                .limit(MAX_SEARCH_RESULTS)
-                .toList();
+        return normalizeSearchResults(collector.results);
     }
 
     /** 抓取公开结果页面，并在每个页面完成正文清洗后再拼接 Observation。 */
@@ -150,22 +271,47 @@ public class WebSearchTool implements Tool {
     /** 只允许公开 HTTP(S) 页面，拒绝 localhost、环回地址、内网地址和非 HTTP 协议。 */
     private String fetchPublicPage(String rawUrl) {
         URI uri = resolvePublicUri(rawUrl);
-        ResponseEntity<String> response = restClient.get()
+        ResponseEntity<byte[]> response = pageClient.get()
                 .uri(uri)
                 .headers(this::applyBrowserLikeHeaders)
                 .retrieve()
-                .toEntity(String.class);
+                .toEntity(byte[].class);
         MediaType contentType = response.getHeaders().getContentType();
         if (contentType != null
                 && !MediaType.TEXT_HTML.isCompatibleWith(contentType)
                 && !MediaType.TEXT_PLAIN.isCompatibleWith(contentType)) {
             throw new IllegalArgumentException("搜索结果不是 HTML 或纯文本页面");
         }
-        String body = response.getBody();
-        if (body != null && body.length() > PAGE_DOWNLOAD_MAX_LENGTH) {
-            return body.substring(0, PAGE_DOWNLOAD_MAX_LENGTH);
+        return decodePageBody(response.getBody(), contentType);
+    }
+
+    /** 先按响应头、再按 HTML meta 识别编码，避免无 charset 响应被错误地按 ISO-8859-1 解码。 */
+    String decodePageBody(byte[] body, MediaType contentType) {
+        if (body == null) {
+            return null;
         }
-        return body;
+        int bodyLength = Math.min(body.length, PAGE_DOWNLOAD_MAX_LENGTH);
+        Charset charset = resolvePageCharset(body, bodyLength, contentType);
+        return new String(body, 0, bodyLength, charset);
+    }
+
+    /** HTTP 响应头优先级高于页面声明；两者都缺失时按现代网页通用的 UTF-8 处理。 */
+    private Charset resolvePageCharset(byte[] body, int bodyLength, MediaType contentType) {
+        Charset responseCharset = contentType == null ? null : contentType.getCharset();
+        if (responseCharset != null) {
+            return responseCharset;
+        }
+        int sniffLength = Math.min(bodyLength, CHARSET_SNIFF_LENGTH);
+        String htmlPrefix = new String(body, 0, sniffLength, StandardCharsets.ISO_8859_1);
+        Matcher matcher = HTML_META_CHARSET_PATTERN.matcher(htmlPrefix);
+        if (matcher.find()) {
+            try {
+                return Charset.forName(matcher.group(1));
+            } catch (IllegalArgumentException ignored) {
+                // 网页声明未知字符集时回退 UTF-8，避免单个错误 meta 让整页抓取失败。
+            }
+        }
+        return StandardCharsets.UTF_8;
     }
 
     /** 校验 URL 并解析搜索引擎的跳转链接。 */
@@ -218,7 +364,8 @@ public class WebSearchTool implements Tool {
     /** 设置通用请求头，不包含 Cookie、Authorization 等用户身份信息。 */
     private void applyBrowserLikeHeaders(HttpHeaders headers) {
         headers.set(HttpHeaders.USER_AGENT, DEFAULT_USER_AGENT);
-        headers.set(HttpHeaders.ACCEPT, MediaType.TEXT_HTML_VALUE + ",application/xhtml+xml");
+        headers.set(HttpHeaders.ACCEPT,
+                MediaType.TEXT_HTML_VALUE + ",application/xhtml+xml,application/rss+xml,application/xml,text/plain");
         headers.set(HttpHeaders.ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8");
         headers.set(HttpHeaders.CONNECTION, "close");
     }
@@ -248,8 +395,23 @@ public class WebSearchTool implements Tool {
         return TextUtil.isBlank(message) ? exception.getClass().getSimpleName() : message;
     }
 
+    /** 保留最底层异常类型和消息，让外部响应解析问题可以依据真实原因继续排查。 */
+    private String describeException(Exception exception) {
+        Throwable rootCause = exception;
+        while (rootCause.getCause() != null && rootCause.getCause() != rootCause) {
+            rootCause = rootCause.getCause();
+        }
+        String message = rootCause.getMessage();
+        return rootCause.getClass().getSimpleName()
+                + (TextUtil.isBlank(message) ? "" : "：" + message);
+    }
+
     /** 搜索结果的最小结构，只保留 Agent 后续推理需要的字段。 */
     record SearchResult(String title, String url, String snippet) {
+    }
+
+    /** 一个可命名的搜索源；名称只用于可用性日志，不包含搜索词。 */
+    record SearchSource(String name, Function<String, List<SearchResult>> search) {
     }
 
     /** 从 DuckDuckGo 搜索 HTML 中提取 result__a 和 result__snippet 文本。 */

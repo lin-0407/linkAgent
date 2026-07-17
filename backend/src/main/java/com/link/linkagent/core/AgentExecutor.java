@@ -424,6 +424,7 @@ public class AgentExecutor {
             // 全程不写任何记忆（这是与 run 文本路的核心区别），因为任务推理是一次性中间步骤
             finalAnswer = parseFinalAnswer(llmAnswer);
             if (TextUtil.hasText(finalAnswer)) {
+                log.info("任务模式 ReAct 第{}轮生成最终答案，本次共执行{}次工具调用", iteration, steps.size());
                 return new AgentChatResponse(null, finalAnswer, null, steps.size(), steps);
             }
 
@@ -444,7 +445,11 @@ public class AgentExecutor {
                 continue;
             }
 
+            // 只记录工具名，不记录 Action Input，避免把搜索词或任务材料重复写入日志。
+            log.info("任务模式 ReAct 第{}轮准备调用工具，tool={}", iteration, action.name());
             Observation observation = toolExecutor.execute(action);
+            log.info("任务模式 ReAct 第{}轮工具执行完成，tool={}，完整Observation：\n{}",
+                    iteration, observation.toolName(), observation.result());
             steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
 
             // 将本轮 Thought/Action/Observation 拼回对话，供下一轮参考（拼接格式与 run 一致）

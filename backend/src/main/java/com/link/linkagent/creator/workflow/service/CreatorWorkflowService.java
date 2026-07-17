@@ -102,6 +102,13 @@ public class CreatorWorkflowService {
      */
     private static final int FULL_SCRIPT_MIN_LENGTH = 800;
     /**
+     * AI 补稿写入材料后的稳定前缀。
+     * <p>
+     * 短创意方向不能被误判为完整文稿，但已成功保存的 AI 草稿可以继续进入发布方案生成；
+     * 因此用该前缀在不改动现有表结构的前提下区分两种材料来源。
+     */
+    private static final String AI_MANUSCRIPT_DRAFT_PREFIX = "【AI 可编辑文稿草稿】";
+    /**
      * 文稿草稿保存时的最大字符数。
      * LLM 生成的长文稿截断到此上限后写入 material 表，
      * 防止单条材料过大（MySQL 字段长度约束 + Token 成本考虑）。
@@ -571,8 +578,8 @@ public class CreatorWorkflowService {
         if (materials.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "创作任务缺少可扩写材料");
         }
-        if (hasFullScriptMaterial(materials)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前任务已有较完整文稿或字幕，请直接生成发布方案");
+        if (hasFullScriptMaterial(materials) || hasGeneratedManuscriptDraft(materials)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前任务已有可用文稿或 AI 草稿，请直接生成发布方案");
         }
 
         sessionRecord = claimPrePublishExecution(sessionRecord);
@@ -979,7 +986,7 @@ public class CreatorWorkflowService {
             if (draftContent == null) {
                 throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "AI 未返回可用文稿草稿");
             }
-            String markedDraftContent = "【AI 可编辑文稿草稿】\n" + draftContent;
+            String markedDraftContent = AI_MANUSCRIPT_DRAFT_PREFIX + "\n" + draftContent;
             return TextUtil.abbreviateWithSuffix(
                     markedDraftContent,
                     DRAFT_MATERIAL_MAX_LENGTH,
@@ -1416,6 +1423,20 @@ public class CreatorWorkflowService {
                 .map(CreatorMaterialRecord::getContent)
                 .filter(TextUtil::hasText)
                 .anyMatch(content -> content.trim().length() >= FULL_SCRIPT_MIN_LENGTH);
+    }
+
+    /**
+     * 判断任务是否已经保存过本工作流生成的文稿草稿。
+     * <p>
+     * AI 草稿可能短于完整文稿阈值，但它已经是一次明确成功的补稿结果；继续重复生成只会覆盖
+     * 上一版草稿，并让前端始终停留在“缺少完整文稿”的错误状态。
+     */
+    private boolean hasGeneratedManuscriptDraft(List<CreatorMaterialRecord> materials) {
+        return materials.stream()
+                .filter(material -> CreatorMaterialType.MANUSCRIPT.name().equals(material.getMaterialType()))
+                .map(CreatorMaterialRecord::getContent)
+                .filter(TextUtil::hasText)
+                .anyMatch(content -> content.trim().startsWith(AI_MANUSCRIPT_DRAFT_PREFIX));
     }
 
     private boolean shouldResumeLatest(CreatorWorkflowStartRequest request) {

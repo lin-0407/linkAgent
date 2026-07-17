@@ -156,6 +156,63 @@ class CreatorWorkflowServiceTest {
     }
 
     @Test
+    void shouldRejectRepeatedDraftGenerationWhenShortAiDraftIsAlreadySaved() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        PrePublishSuggestionService suggestionService = mock(PrePublishSuggestionService.class);
+        CreatorWorkflowEventPublisher eventPublisher = mock(CreatorWorkflowEventPublisher.class);
+        LlmApiUsageService usageService = mock(LlmApiUsageService.class);
+        LLMService llmService = mock(LLMService.class);
+        RuntimeSettingService runtimeSettingService = mock(RuntimeSettingService.class);
+        CreatorPreferenceService preferenceService = mock(CreatorPreferenceService.class);
+        CreatorProfileService profileService = mock(CreatorProfileService.class);
+        CreatorWorkflowService service = new CreatorWorkflowService(
+                taskMapper,
+                suggestionMapper,
+                workflowMapper,
+                suggestionService,
+                eventPublisher,
+                usageService,
+                llmService,
+                runtimeSettingService,
+                preferenceService,
+                profileService
+        );
+
+        CreatorTaskRecord taskRecord = new CreatorTaskRecord();
+        taskRecord.setTaskId("task-1");
+        CreatorWorkflowSessionRecord sessionRecord = new CreatorWorkflowSessionRecord();
+        sessionRecord.setSessionId("session-1");
+        sessionRecord.setTaskId("task-1");
+        sessionRecord.setStage(CreatorWorkflowStage.PRE_PUBLISH.name());
+        sessionRecord.setStatus(CreatorWorkflowStatus.WAITING_USER_INPUT.name());
+        CreatorMaterialRecord draftMaterial = new CreatorMaterialRecord();
+        draftMaterial.setTaskId("task-1");
+        draftMaterial.setMaterialType("MANUSCRIPT");
+        // 故意短于 800 字，验证已保存的 AI 草稿不会再被误判为缺少完整文稿。
+        draftMaterial.setContent("【AI 可编辑文稿草稿】\n这是可继续生成发布方案的短草稿。");
+
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(taskRecord));
+        when(workflowMapper.findSession("task-1", "session-1")).thenReturn(Optional.of(sessionRecord));
+        when(taskMapper.listMaterialsByTaskId("task-1")).thenReturn(List.of(draftMaterial));
+
+        assertThatThrownBy(() -> service.generatePrePublishManuscriptDraft(
+                "task-1",
+                "session-1",
+                new com.link.linkagent.creator.workflow.model.PrePublishDraftRequest(null)
+        )).isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        // 拒绝应发生在会话抢占和模型调用之前，避免重复补稿覆盖现有草稿并产生额外成本。
+        verify(workflowMapper, never()).claimPrePublishExecution(
+                "session-1",
+                CreatorWorkflowStatus.RUNNING.name()
+        );
+        verifyNoInteractions(llmService);
+    }
+
+    @Test
     void shouldRejectSupplementAfterExecutionClaimHasChangedSessionToRunning() {
         CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
         CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);

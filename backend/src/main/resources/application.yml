@@ -102,9 +102,10 @@ spring:
 agent:
   tool:
     web-search:
-      # 默认关闭，避免未配置搜索凭证时把不可用工具暴露给 Agent。
+      # 默认关闭；开启后先尝试 Bing RSS，失败时自动回退 DuckDuckGo HTML。
       enabled: ${WEB_SEARCH_ENABLED:false}
-      base-url: ${WEB_SEARCH_BASE_URL:https://html.duckduckgo.com}
+      bing-base-url: ${WEB_SEARCH_BING_BASE_URL:https://cn.bing.com}
+      duckduckgo-base-url: ${WEB_SEARCH_DUCKDUCKGO_BASE_URL:https://html.duckduckgo.com}
     execution:
       timeout-seconds: ${TOOL_EXECUTION_TIMEOUT_SECONDS:10}
       max-retries: ${TOOL_EXECUTION_MAX_RETRIES:0}
