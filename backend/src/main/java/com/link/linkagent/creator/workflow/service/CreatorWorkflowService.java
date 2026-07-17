@@ -1,5 +1,6 @@
 package com.link.linkagent.creator.workflow.service;
 
+import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.profile.service.CreatorProfileService;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
@@ -142,6 +143,8 @@ public class CreatorWorkflowService {
     private final CreatorPreferenceService creatorPreferenceService;
     /** 创作者画像服务，维护和更新创作者个性化画像 */
     private final CreatorProfileService creatorProfileService;
+    /** 媒体能力总开关，确认后必须进入试映链路，不能回退到旧反馈链路 */
+    private final CreatorMediaProperties creatorMediaProperties;
 
     public CreatorWorkflowService(CreatorTaskMapper creatorTaskMapper,
                                   CreatorSuggestionMapper creatorSuggestionMapper,
@@ -152,7 +155,8 @@ public class CreatorWorkflowService {
                                   LLMService llmService,
                                   RuntimeSettingService runtimeSettingService,
                                   CreatorPreferenceService creatorPreferenceService,
-                                  CreatorProfileService creatorProfileService) {
+                                  CreatorProfileService creatorProfileService,
+                                  CreatorMediaProperties creatorMediaProperties) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorWorkflowMapper = creatorWorkflowMapper;
@@ -162,6 +166,7 @@ public class CreatorWorkflowService {
         this.llmService = llmService;
         this.runtimeSettingService = runtimeSettingService;
         this.creatorPreferenceService = creatorPreferenceService;
+        this.creatorMediaProperties = creatorMediaProperties;
         this.creatorProfileService = creatorProfileService;
     }
 
@@ -715,6 +720,13 @@ public class CreatorWorkflowService {
     public CreatorWorkflowSessionResponse confirmPrePublishSuggestion(String taskId,
                                                                       String sessionId,
                                                                       CreatorWorkflowConfirmRequest request) {
+        if (!creatorMediaProperties.isEnabled()) {
+            // 确认会推进任务主状态，必须先阻止未启用试映时跳入旧的反馈链路。
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "发布前试映能力未启用，不能确认发布方案。"
+            );
+        }
         CreatorWorkflowSessionRecord sessionRecord = getSessionRecordForUpdate(taskId, sessionId);
         CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findBySuggestionId(request.suggestionId().trim())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "发布前优化建议不存在"));
@@ -749,7 +761,7 @@ public class CreatorWorkflowService {
                 sessionRecord.getTaskId(),
                 sessionRecord.getSessionId(),
                 CreatorWorkflowMessageRole.SYSTEM,
-                "已采用本轮发布前优化建议，后续可以进入评论弹幕分析阶段。",
+                "已采用本轮发布前优化建议，可以进入成片试映阶段。",
                 CreatorWorkflowMessageContentType.TEXT,
                 null,
                 null

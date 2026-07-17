@@ -1,5 +1,6 @@
 package com.link.linkagent.creator.workflow.service;
 
+import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.profile.service.CreatorProfileService;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
@@ -38,6 +39,57 @@ import static org.mockito.Mockito.when;
  * 这样可以只验证“抢占失败后不得继续调用模型”的并发边界，避免真实 LLM 调用让测试变慢或产生费用。
  */
 class CreatorWorkflowServiceTest {
+    @Test
+    void shouldRejectConfirmationBeforeAnyStateChangeWhenMediaFeatureIsDisabled() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        PrePublishSuggestionService suggestionService = mock(PrePublishSuggestionService.class);
+        CreatorWorkflowEventPublisher eventPublisher = mock(CreatorWorkflowEventPublisher.class);
+        LlmApiUsageService usageService = mock(LlmApiUsageService.class);
+        LLMService llmService = mock(LLMService.class);
+        RuntimeSettingService runtimeSettingService = mock(RuntimeSettingService.class);
+        CreatorPreferenceService preferenceService = mock(CreatorPreferenceService.class);
+        CreatorProfileService profileService = mock(CreatorProfileService.class);
+        CreatorMediaProperties mediaProperties = new CreatorMediaProperties();
+        mediaProperties.setEnabled(false);
+        CreatorWorkflowService service = new CreatorWorkflowService(
+                taskMapper,
+                suggestionMapper,
+                workflowMapper,
+                suggestionService,
+                eventPublisher,
+                usageService,
+                llmService,
+                runtimeSettingService,
+                preferenceService,
+                profileService,
+                mediaProperties
+        );
+
+        // 媒体能力关闭时，确认动作不能把任务推进到旧的反馈链路。
+        assertThatThrownBy(() -> service.confirmPrePublishSuggestion(
+                "task-1",
+                "session-1",
+                new com.link.linkagent.creator.workflow.model.CreatorWorkflowConfirmRequest("suggestion-1")
+        )).isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        // 门禁必须在读取会话、建议和写入任务状态前执行，才能保证任务仍停留在发布方案阶段。
+        verifyNoInteractions(
+                taskMapper,
+                suggestionMapper,
+                workflowMapper,
+                suggestionService,
+                eventPublisher,
+                usageService,
+                llmService,
+                runtimeSettingService,
+                preferenceService,
+                profileService
+        );
+    }
+
 
     @Test
     void shouldRejectAnalysisBeforeCallingModelWhenAnotherRequestHasClaimedSession() {
@@ -62,7 +114,8 @@ class CreatorWorkflowServiceTest {
                 llmService,
                 runtimeSettingService,
                 preferenceService,
-                profileService
+                profileService,
+                enabledMediaProperties()
         );
 
         // 构造一个已具备材料、处于等待用户输入状态的正常发布前会话，
@@ -124,7 +177,8 @@ class CreatorWorkflowServiceTest {
                 llmService,
                 runtimeSettingService,
                 preferenceService,
-                profileService
+                profileService,
+                enabledMediaProperties()
         );
 
         CreatorTaskRecord taskRecord = new CreatorTaskRecord();
@@ -177,7 +231,8 @@ class CreatorWorkflowServiceTest {
                 llmService,
                 runtimeSettingService,
                 preferenceService,
-                profileService
+                profileService,
+                enabledMediaProperties()
         );
 
         CreatorTaskRecord taskRecord = new CreatorTaskRecord();
@@ -234,7 +289,8 @@ class CreatorWorkflowServiceTest {
                 llmService,
                 runtimeSettingService,
                 preferenceService,
-                profileService
+                profileService,
+                enabledMediaProperties()
         );
 
         CreatorTaskRecord taskRecord = new CreatorTaskRecord();
@@ -258,5 +314,11 @@ class CreatorWorkflowServiceTest {
                 .hasMessageContaining("不可继续发送消息");
 
         verify(workflowMapper, never()).insertMessage(org.mockito.ArgumentMatchers.any());
+    }
+
+    private static CreatorMediaProperties enabledMediaProperties() {
+        CreatorMediaProperties mediaProperties = new CreatorMediaProperties();
+        mediaProperties.setEnabled(true);
+        return mediaProperties;
     }
 }

@@ -3,6 +3,7 @@ package com.link.linkagent.creator.feedback.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackChatRequest;
@@ -146,6 +147,8 @@ public class CreatorFeedbackService {
     private final CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService;
     /** 提示词模板服务，管理 feedback_analyze 和 feedback_chat 的 system/user 提示词 */
     private final PromptService promptService;
+    /** 媒体能力总开关，关闭时不得绕过试映直接写入反馈阶段数据 */
+    private final CreatorMediaProperties creatorMediaProperties;
 
     public CreatorFeedbackService(CreatorTaskMapper creatorTaskMapper,
                                   CreatorFeedbackMapper creatorFeedbackMapper,
@@ -153,7 +156,8 @@ public class CreatorFeedbackService {
                                   ObjectMapper objectMapper,
                                   TransactionTemplate transactionTemplate,
                                   CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService,
-                                  PromptService promptService) {
+                                  PromptService promptService,
+                                  CreatorMediaProperties creatorMediaProperties) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.llmService = llmService;
@@ -161,6 +165,7 @@ public class CreatorFeedbackService {
         this.transactionTemplate = transactionTemplate;
         this.evidenceRetrievalService = evidenceRetrievalService;
         this.promptService = promptService;
+        this.creatorMediaProperties = creatorMediaProperties;
     }
 
     /**
@@ -176,6 +181,7 @@ public class CreatorFeedbackService {
      */
     @Transactional
     public CreatorFeedbackResponse saveFeedback(String taskId, CreatorFeedbackSaveRequest request) {
+        ensurePreflightFeatureEnabled();
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         CreatorFeedbackRecord record = new CreatorFeedbackRecord();
         record.setFeedbackId(UUID.randomUUID().toString());
@@ -225,6 +231,7 @@ public class CreatorFeedbackService {
      */
     @Transactional
     public CreatorFeedbackReportResponse analyze(String taskId, CreatorFeedbackAnalyzeRequest request) {
+        ensurePreflightFeatureEnabled();
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         CreatorFeedbackRecord feedbackRecord = creatorFeedbackMapper.findFeedbackByTaskId(taskRecord.getTaskId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先提交评论或弹幕样例"));
@@ -267,6 +274,7 @@ public class CreatorFeedbackService {
      */
     @Transactional
     public CreatorFeedbackImportResponse importFeedback(String taskId, MultipartFile file) {
+        ensurePreflightFeatureEnabled();
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         validateImportFile(file);
         String fileName = normalizeFileName(file.getOriginalFilename());
@@ -288,6 +296,7 @@ public class CreatorFeedbackService {
      * @throws ResponseStatusException 400 BV号无效，502 脚本执行失败，504 脚本超时
      */
     public CreatorFeedbackFetchResponse fetchFeedback(String taskId, CreatorFeedbackFetchRequest request) {
+        ensurePreflightFeatureEnabled();
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         String bvid = extractBvid(request.bvInput());
         Path projectRoot = resolveProjectRoot();
@@ -693,6 +702,18 @@ public class CreatorFeedbackService {
         }
         String normalized = scriptOutput.replaceAll("\\s+", " ").trim();
         return TextUtil.abbreviateWithSuffix(normalized, 500, "...");
+    }
+
+    /**
+     * 阶段 7 未启用时阻止反馈入口绕过成片试映。
+     *
+     * 反馈导入和分析会写入下游数据，分析还会推进任务状态；必须在读取任务、运行脚本或调用模型前拒绝，
+     * 才能保证任务停留在发布方案阶段，不产生无法回退的状态混杂。
+     */
+    private void ensurePreflightFeatureEnabled() {
+        if (!creatorMediaProperties.isEnabled()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "发布前试映能力未启用，不能进入观众反馈阶段。");
+        }
     }
 
     private CreatorTaskRecord getTaskRecord(String taskId) {

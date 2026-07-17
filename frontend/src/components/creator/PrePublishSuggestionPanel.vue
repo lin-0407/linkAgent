@@ -511,8 +511,8 @@ function saveSuggestionContext(
 }
 
 .suggestion-panel-head {
-  min-height: 72px;
-  padding: 14px 16px;
+  min-height: 65px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -570,8 +570,28 @@ function saveSuggestionContext(
 
 .suggestion-panel-body {
   min-height: 0;
-  padding: 0 16px 116px;
-  overflow: auto;
+  padding: 0 14px 104px;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(104, 117, 136, 0.5) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.suggestion-panel-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.suggestion-panel-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.suggestion-panel-body::-webkit-scrollbar-thumb {
+  background: rgba(104, 117, 136, 0.5);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: var(--r-pill);
 }
 
 .suggestion-empty-state,
@@ -658,8 +678,8 @@ function saveSuggestionContext(
 
 .suggestion-content-section {
   display: grid;
-  gap: 12px;
-  padding: 18px 0;
+  gap: 10px;
+  padding: 16px 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -673,7 +693,7 @@ function saveSuggestionContext(
 .suggestion-card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .suggestion-card-grid-tags {
@@ -681,7 +701,7 @@ function saveSuggestionContext(
 }
 
 .suggestion-disclosure {
-  padding: 16px 0;
+  padding: 14px 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -749,8 +769,8 @@ function saveSuggestionContext(
 .suggestion-panel-actions {
   position: sticky;
   bottom: 0;
-  min-height: 72px;
-  padding: 12px 16px;
+  min-height: 65px;
+  padding: 10px 14px;
   background: var(--surface);
   border-top: 1px solid var(--border);
   box-shadow: 0 -8px 18px rgba(23, 32, 51, 0.04);

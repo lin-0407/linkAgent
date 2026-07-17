@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.link.linkagent.core.AgentExecutor;
+import com.link.linkagent.core.AgentStep;
 import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.creator.interactive.model.InteractiveSessionRecord;
 import com.link.linkagent.creator.interactive.tool.WebSearchTool;
@@ -28,8 +29,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
-import org.springframework.ai.openai.api.ResponseFormat;
-import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -69,17 +68,23 @@ class CreativeIdeaManualEvaluationTest {
     // 偏好总结需要更强的归纳能力，因此只在第二阶段显式覆盖模型和推理强度，不影响创意样本生成。
     private static final String PREFERENCE_ANALYSIS_MODEL = "deepseek-v4-pro";
     private static final String PREFERENCE_ANALYSIS_REASONING_EFFORT = "max";
+    private static final String DEFAULT_WEB_SEARCH_COMPRESSION_MODEL = "deepseek-v4-flash";
     private static final String PREFERENCE_ANALYSIS_SYSTEM_PROMPT = """
             你是 AI 创意建议人工偏好分析 Agent，负责从作者的评分和逐卡意见中归纳稳定的风格偏好，
             并提出可执行的想法扩展系统提示词优化建议。你不负责重新生成创意卡片。
-            你可以调用 web_search 工具核验当前模型能力、行业趋势或其他时效性事实；
+            本次评测必须至少调用一次 web_search 工具，核验当前模型能力、行业趋势或其他时效性事实；
             如果结论涉及 2024 年之后可能变化的信息，必须先调用 web_search，再给出结论。
             不能擅自修改作者评分，不能把相关性描述成确定因果，最终只输出任务要求的 JSON 对象。
             """;
     private static final String STANDALONE_REACT_SYSTEM_PROMPT = """
             你是 LinkAgent 的 Agent Executor。请遵循 ReAct 模式：
-            需要工具时依次输出 Thought、Action、Action Input，等待 Observation 后再继续；
-            证据充分后输出 Final Answer。每次只能调用一个工具。
+            需要工具时严格输出三行：
+            Thought: 说明为什么调用工具
+            Action: web_search
+            Action Input: 简单查询可直接写搜索问题并默认取3条；需要控制证据范围时使用单行JSON，
+            格式为 {"query":"搜索问题","maxResults":1到8之间的整数}，由你根据任务复杂度选择数量。
+            等待 Observation 后再继续。证据充分后严格输出：Final Answer: 最终内容。
+            如果最终内容是 JSON，仍必须保留 Final Answer: 前缀，不能只输出裸 JSON。每次只能调用一个工具。
             可用工具：
             {toolList}
             """;
@@ -105,8 +110,10 @@ class CreativeIdeaManualEvaluationTest {
     );
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
-    private ChatClient chatClient;
+    private ChatClient creativeReactChatClient;
     private ChatClient preferenceAnalysisChatClient;
+    private AgentExecutor creativeIdeaAgentExecutor;
+    private AgentExecutor preferenceAnalysisAgentExecutor;
     private ModelConfig modelConfig;
 
     /**
@@ -179,8 +186,12 @@ class CreativeIdeaManualEvaluationTest {
         String taskMessage = buildPreferenceAnalysisTask(creativeSystemPrompt, compactEvaluationData);
         AgentChatResponse reactResponse = runPreferenceAnalysisWithReact(taskMessage);
         String agentAnswer = reactResponse.finalAnswer();
-        log.info("创意偏好总结 ReAct 完成，steps={}, stopReason={}，完整最终输出：\n{}",
+        reactResponse.steps().forEach(step -> logReactStep("偏好总结", null, null, step));
+        log.info("偏好总结 Agent 完成，steps={}, stopReason={}，摘要内容：\n{}",
                 reactResponse.totalSteps(), reactResponse.stopReason(), agentAnswer);
+        assertThat(hasSuccessfulWebSearch(reactResponse))
+                .as("偏好总结 Agent 必须至少获得一次成功的 web_search Observation")
+                .isTrue();
         assertThat(agentAnswer).as("偏好总结 Agent 没有返回最终答案").isNotBlank();
 
         JsonNode parsedSummary = tryParseJson(agentAnswer);
@@ -238,9 +249,9 @@ class CreativeIdeaManualEvaluationTest {
     }
 
     /**
-     * 调用真实模型并保存结构化回答、模型信息和耗时。
+     * 通过创意生成 ReAct Agent 调用真实模型，并保存最终结构化回答、模型信息和耗时。
      *
-     * 模型偶尔会返回语法错误 JSON 或少于 3 个方向，因此单份回答最多尝试 3 次。
+     * 每次 ReAct 必须实际调用 web_search；模型偶尔会返回语法错误 JSON 或少于 3 个方向，因此单份回答最多尝试 3 次。
      * 全部尝试失败时不会向外抛出，而是转换成带 error 和 rawOutput 的回答记录，
      * 这样整批结果仍能落盘，作者可以直接看到最后一次失败模型实际返回了什么。
      */
@@ -256,16 +267,31 @@ class CreativeIdeaManualEvaluationTest {
             lastRawOutput = null;
             lastResponse = null;
             try {
-                log.info("创意建议模型调用开始，questionId={}, answerVersion={}, attempt={}, model={}",
+                log.info("创意建议 Agent 开始，questionId={}, answerVersion={}, attempt={}, model={}",
                         questionId, answerVersion, attempt, modelConfig.modelName());
-                lastRawOutput = callModel(creativeSystemPrompt, userPrompt);
-                log.info("创意建议模型完整原始输出，questionId={}, answerVersion={}, attempt={}：\n{}",
-                        questionId, answerVersion, attempt, lastRawOutput);
+                AgentChatResponse reactResponse = creativeIdeaAgentExecutor.runTask(
+                        buildCreativeReactTask(creativeSystemPrompt, userPrompt)
+                );
+                reactResponse.steps().forEach(step -> logReactStep(
+                        "创意建议", questionId, answerVersion, step));
+                lastRawOutput = reactResponse.finalAnswer();
+                if (!hasSuccessfulWebSearch(reactResponse)) {
+                    lastError = "创意建议 ReAct 没有获得成功的 web_search Observation，拒绝把无联网证据的回答当作有效样本";
+                    log.warn("创意建议 ReAct 联网搜索未成功，questionId={}, answerVersion={}, attempt={}",
+                            questionId, answerVersion, attempt);
+                    continue;
+                }
+                if (lastRawOutput == null || lastRawOutput.isBlank()) {
+                    lastError = "创意建议 ReAct 未生成 Final Answer，stopReason=" + reactResponse.stopReason();
+                    log.warn("创意建议 ReAct 最终答案为空，questionId={}, answerVersion={}, attempt={}, stopReason={}",
+                            questionId, answerVersion, attempt, reactResponse.stopReason());
+                    continue;
+                }
                 lastResponse = objectMapper.readTree(LlmJsonUtil.extractJsonObject(lastRawOutput));
                 lastResponse = attachManualReviewFields(lastResponse);
                 lastError = validateCreativeResponse(lastResponse);
                 if (lastError == null) {
-                    log.info("创意建议模型调用完成，questionId={}, answerVersion={}, attempt={}, elapsedMs={}, status=success",
+                    log.info("创意建议 Agent 完成，questionId={}, answerVersion={}, attempt={}, elapsedMs={}, status=success",
                             questionId, answerVersion, attempt, elapsedMillis(startNanos));
                     return new AnswerEvaluation(
                             answerVersion,
@@ -275,7 +301,7 @@ class CreativeIdeaManualEvaluationTest {
                             lastResponse,
                             null,
                             null,
-                        null
+                            null
                     );
                 }
                 log.warn("创意建议模型输出结构校验失败，questionId={}, answerVersion={}, attempt={}, error={}",
@@ -308,7 +334,7 @@ class CreativeIdeaManualEvaluationTest {
      * 测试只复用项目已经锁定版本的 Spring AI 客户端发起 HTTP 请求。
      */
     private void initializeStandaloneClient() throws IOException {
-        if (chatClient != null) {
+        if (creativeIdeaAgentExecutor != null && preferenceAnalysisAgentExecutor != null) {
             return;
         }
         Map<String, String> dotEnv = readDotEnv();
@@ -321,41 +347,82 @@ class CreativeIdeaManualEvaluationTest {
                 .apiKey(modelConfig.apiKey())
                 .baseUrl(modelConfig.baseUrl())
                 .build();
-        OpenAiChatOptions options = OpenAiChatOptions.builder()
+        OpenAiChatOptions creativeReactOptions = OpenAiChatOptions.builder()
                 .model(modelConfig.modelName())
-                .responseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null))
                 .build();
-        OpenAiChatModel chatModel = OpenAiChatModel.builder()
+        creativeReactChatClient = ChatClient.create(OpenAiChatModel.builder()
                 .openAiApi(openAiApi)
-                .defaultOptions(options)
-                .build();
-        chatClient = ChatClient.create(chatModel);
+                .defaultOptions(creativeReactOptions)
+                .build());
 
         OpenAiChatOptions preferenceAnalysisOptions = OpenAiChatOptions.builder()
                 .model(PREFERENCE_ANALYSIS_MODEL)
                 .reasoningEffort(PREFERENCE_ANALYSIS_REASONING_EFFORT)
-                .responseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null))
                 .build();
         preferenceAnalysisChatClient = ChatClient.create(OpenAiChatModel.builder()
                 .openAiApi(openAiApi)
                 .defaultOptions(preferenceAnalysisOptions)
                 .build());
+        creativeIdeaAgentExecutor = createStandaloneReactAgent(creativeReactChatClient, "创意建议");
+        preferenceAnalysisAgentExecutor = createStandaloneReactAgent(preferenceAnalysisChatClient, "偏好总结");
     }
 
     /**
-     * 使用项目现有 ReAct 执行器完成偏好总结。
-     *
-     * 这里手动组装最小依赖图，只包含 LLM、联网搜索工具、内存级短期存储和工具执行器；
-     * 任务模式本身不读写记忆，因此不创建 MySQL、Redis、Milvus 或运行期设置服务。
+     * 组装创意生成阶段的 ReAct 任务，要求模型先搜索最新公开资料，再输出最终创意卡片 JSON。
      */
-    private AgentChatResponse runPreferenceAnalysisWithReact(String taskMessage) throws IOException {
+    private String buildCreativeReactTask(String creativeSystemPrompt, String userPrompt) {
+        return creativeSystemPrompt + "\n\n" + userPrompt + "\n\n"
+                + "本次生成必须先调用一次 web_search，查询与当前选题相关的最新公开趋势、案例或事实；"
+                + "拿到 Observation 后再生成创意卡片。最终只能在 Final Answer 中输出符合上述 JSON 结构的对象，"
+                + "不要把 Thought、Action 或搜索结果混入 JSON。";
+    }
+
+    /**
+     * 创建不依赖 Spring 容器的最小文本 ReAct Agent。
+     *
+     * 客户端不设置 responseFormat(JSON_OBJECT)，因为 ReAct 中间轮次必须输出 Thought/Action 文本；
+     * 最终答案仍由调用方使用 Jackson 单独解析为 JSON。
+     */
+    private AgentExecutor createStandaloneReactAgent(ChatClient agentChatClient, String agentLabel) throws IOException {
         Map<String, String> dotEnv = readDotEnv();
-        String webSearchBaseUrl = dotEnv.getOrDefault("WEB_SEARCH_BASE_URL", "https://html.duckduckgo.com");
+        String bingBaseUrl = dotEnv.getOrDefault("WEB_SEARCH_BING_BASE_URL", "https://cn.bing.com");
+        String duckDuckGoBaseUrl = dotEnv.getOrDefault(
+                "WEB_SEARCH_DUCKDUCKGO_BASE_URL", "https://html.duckduckgo.com");
+        String processCompressionModel = System.getenv("WEB_SEARCH_COMPRESSION_MODEL");
+        String compressionModel = processCompressionModel == null || processCompressionModel.isBlank()
+                ? dotEnv.getOrDefault("WEB_SEARCH_COMPRESSION_MODEL", DEFAULT_WEB_SEARCH_COMPRESSION_MODEL)
+                : processCompressionModel.trim();
+        if (compressionModel.isBlank()) {
+            compressionModel = DEFAULT_WEB_SEARCH_COMPRESSION_MODEL;
+        }
+        String processCompressionEnabled = System.getenv("WEB_SEARCH_COMPRESSION_ENABLED");
+        boolean compressionEnabled = Boolean.parseBoolean(
+                processCompressionEnabled == null || processCompressionEnabled.isBlank()
+                        ? dotEnv.getOrDefault("WEB_SEARCH_COMPRESSION_ENABLED", "true")
+                        : processCompressionEnabled
+        );
+        // compressionModel 经过空值回退后可能被重新赋值，复制为不可变变量供压缩 lambda 安全捕获。
+        String resolvedCompressionModel = compressionModel;
+        WebSearchTool.ContentCompressor contentCompressor = compressionEnabled
+                ? (systemPrompt, userMessage) -> {
+                    log.info("联网搜索摘要 Agent 模型调用，model={}", resolvedCompressionModel);
+                    return agentChatClient.prompt()
+                            .system(systemPrompt)
+                            .user(userMessage)
+                            .options(OpenAiChatOptions.builder().model(resolvedCompressionModel).build())
+                            .call()
+                            .content();
+                }
+                : null;
         WebSearchTool webSearchTool = new WebSearchTool(
-                RestClient.builder().baseUrl(webSearchBaseUrl).build());
+                bingBaseUrl,
+                duckDuckGoBaseUrl,
+                contentCompressor);
         ToolRegistry toolRegistry = new ToolRegistry(List.of(webSearchTool));
         toolRegistry.init();
-        ToolExecutor toolExecutor = new ToolExecutor(toolRegistry, new ToolExecutionProperties(20, 1));
+        // Agent 最多可选择 8 个目标网页，长正文还会增加一次 Flash 压缩调用；
+        // 180 秒为完整链路留出余量，工具内部失败会降级，因此外层不重复整次搜索。
+        ToolExecutor toolExecutor = new ToolExecutor(toolRegistry, new ToolExecutionProperties(180, 0));
         PromptService reactPromptService = new StubPromptService() {
             @Override
             public String get(String key) {
@@ -365,16 +432,14 @@ class CreativeIdeaManualEvaluationTest {
                 return super.get(key);
             }
         };
-
         LLMService reactLlmService = new LLMService() {
             @Override
             public String chat(String systemPrompt, String userMessage) {
-                String response = preferenceAnalysisChatClient.prompt()
+                String response = agentChatClient.prompt()
                         .system(systemPrompt)
                         .user(userMessage)
                         .call()
                         .content();
-                log.info("偏好总结 ReAct 模型完整原始输出：\n{}", response);
                 return response;
             }
         };
@@ -390,23 +455,53 @@ class CreativeIdeaManualEvaluationTest {
                 null,
                 reactPromptService
         );
-        log.info("创意偏好总结 ReAct 开始，model={}, reasoningEffort={}, tools={}",
-                PREFERENCE_ANALYSIS_MODEL, PREFERENCE_ANALYSIS_REASONING_EFFORT,
+        log.info("{} ReAct Agent 初始化完成，tools={}", agentLabel,
                 toolRegistry.getAllTools().stream().map(tool -> tool.getName()).toList());
-        return agentExecutor.runTask(PREFERENCE_ANALYSIS_SYSTEM_PROMPT + "\n\n" + taskMessage);
+        return agentExecutor;
     }
 
     /**
-     * 使用独立 ChatClient 调用一次模型 API。
+     * 使用项目现有 ReAct 执行器完成偏好总结。
      *
-     * 生成阶段和偏好总结阶段共用同一调用边界，确保它们都不经过数据库或运行期设置服务。
+     * 这里手动组装最小依赖图，只包含 LLM、联网搜索工具、内存级短期存储和工具执行器；
+     * 任务模式本身不读写记忆，因此不创建 MySQL、Redis、Milvus 或运行期设置服务。
      */
-    private String callModel(String systemPrompt, String userPrompt) {
-        return chatClient.prompt()
-                .system(systemPrompt)
-                .user(userPrompt)
-                .call()
-                .content();
+    private AgentChatResponse runPreferenceAnalysisWithReact(String taskMessage) throws IOException {
+        log.info("偏好总结 Agent 开始，model={}, reasoningEffort={}",
+                PREFERENCE_ANALYSIS_MODEL, PREFERENCE_ANALYSIS_REASONING_EFFORT);
+        return preferenceAnalysisAgentExecutor.runTask(PREFERENCE_ANALYSIS_SYSTEM_PROMPT + "\n\n" + taskMessage);
+    }
+
+    /**
+     * 只记录 Agent 步骤元数据，不输出 Thought、Action Input 或 Observation 正文。
+     *
+     * 工具返回仍保留在 AgentStep 中供联网成功校验使用，但不会写入控制台日志。
+     */
+    private void logReactStep(String agentName, String questionId, Integer answerVersion, AgentStep step) {
+        String status;
+        if (step.action() != null) {
+            status = "tool";
+        } else if (step.observation() != null) {
+            status = "format_error";
+        } else {
+            status = "reasoning";
+        }
+        if (questionId == null) {
+            log.info("{} Agent 步骤，stepNumber={}, status={}, action={}",
+                    agentName, step.stepNumber(), status, step.action());
+            return;
+        }
+        log.info("{} Agent 步骤，questionId={}, answerVersion={}, stepNumber={}, status={}, action={}",
+                agentName, questionId, answerVersion, step.stepNumber(), status, step.action());
+    }
+
+    /**
+     * 判断 ReAct 是否真正获得联网结果，而不是只产生了 web_search Action 或失败 Observation。
+     */
+    private boolean hasSuccessfulWebSearch(AgentChatResponse response) {
+        return response.steps().stream().anyMatch(step -> "web_search".equals(step.action())
+                && step.observation() != null
+                && step.observation().startsWith("联网搜索结果："));
     }
 
     /**
@@ -587,8 +682,8 @@ class CreativeIdeaManualEvaluationTest {
     private String buildPreferenceAnalysisTask(String creativeSystemPrompt,
                                                String compactEvaluationData) {
         return """
-                这是一次人工偏好分析任务。评测数据本身不需要搜索；但凡涉及当前模型能力、行业趋势或
-                其他可能随时间变化的事实，必须先调用 web_search 获取最新资料，再继续分析。
+                这是一次人工偏好分析任务。开始分析前必须至少调用一次 web_search，查询 2026 年当前
+                B站内容创作、标题与简介表达或 AI 创意辅助的最新趋势，再结合搜索证据和评测数据继续分析。
 
                 下面是当前想法扩展 Agent 的系统提示词：
                 <creative_system_prompt>

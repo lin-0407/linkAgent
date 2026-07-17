@@ -28,7 +28,7 @@ const guideOpen = ref(false)
     :density="particleDensity"
   />
 
-  <div class="surface-root">
+  <div class="surface-root" :class="{ 'surface-root-creator': isCreatorRoute }">
     <header class="surface-topbar" :class="{ 'surface-topbar-creator': isCreatorRoute }">
       <div class="surface-topbar-left">
         <RouterLink to="/" class="surface-brand" aria-label="返回首页">

@@ -7,6 +7,8 @@ import org.springframework.web.client.RestClient;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -103,6 +105,28 @@ class WebSearchToolTest {
         assertThat(results.get(0).title()).isEqualTo("备用结果");
     }
 
+    /** 验证 Agent 可以按当前任务请求更多结果，而不是被固定限制为 3 条。 */
+    @Test
+    void shouldHonorAgentRequestedSearchResultCount() {
+        WebSearchTool tool = new WebSearchTool(null, List.of(
+                new WebSearchTool.SearchSource("test", query -> List.of(
+                        new WebSearchTool.SearchResult("结果1", "https://example.com/1", "摘要1"),
+                        new WebSearchTool.SearchResult("结果2", "https://example.com/2", "摘要2"),
+                        new WebSearchTool.SearchResult("结果3", "https://example.com/3", "摘要3"),
+                        new WebSearchTool.SearchResult("结果4", "https://example.com/4", "摘要4"),
+                        new WebSearchTool.SearchResult("结果5", "https://example.com/5", "摘要5"),
+                        new WebSearchTool.SearchResult("结果6", "https://example.com/6", "摘要6"),
+                        new WebSearchTool.SearchResult("结果7", "https://example.com/7", "摘要7")
+                ))
+        ));
+
+        String result = tool.execute("{\"query\":\"测试问题\",\"maxResults\":6}");
+
+        assertThat(result)
+                .contains("6. 结果6")
+                .doesNotContain("7. 结果7");
+    }
+
     /** 验证搜索页中的结果链接、标题和摘要可以被提取给后续网页抓取阶段。 */
     @Test
     void shouldParseSearchResultsFromHtml() {
@@ -163,6 +187,62 @@ class WebSearchToolTest {
         String decoded = tool.decodePageBody(body, MediaType.TEXT_HTML);
 
         assertThat(decoded).contains("什么是购买力平价");
+    }
+
+    /** 验证多个长页面会合并为一次压缩调用，短页面仍保留未经模型改写的原文。 */
+    @Test
+    void shouldCompressMultipleLongPagesInOneCall() {
+        AtomicInteger callCount = new AtomicInteger();
+        AtomicReference<String> capturedInput = new AtomicReference<>();
+        WebSearchTool tool = new WebSearchTool(null, List.of(), (systemPrompt, userMessage) -> {
+            callCount.incrementAndGet();
+            capturedInput.set(userMessage);
+            return "来源编号：1\n第一篇摘要\n来源编号：2\n第二篇摘要";
+        });
+        String firstLongContent = "甲".repeat(25000);
+        String secondLongContent = "乙".repeat(25000);
+
+        String result = tool.formatFetchedPages(List.of(
+                new WebSearchTool.FetchedPage(
+                        new WebSearchTool.SearchResult("长页面一", "https://example.com/one", ""),
+                        firstLongContent, true),
+                new WebSearchTool.FetchedPage(
+                        new WebSearchTool.SearchResult("长页面二", "https://example.com/two", ""),
+                        secondLongContent, true),
+                new WebSearchTool.FetchedPage(
+                        new WebSearchTool.SearchResult("短页面", "https://example.com/short", ""),
+                        "短页面正文", true)
+        ), "测试搜索问题");
+
+        assertThat(callCount.get()).isEqualTo(1);
+        assertThat(capturedInput.get())
+                .contains("搜索问题：测试搜索问题")
+                .contains("<source id=\"1\">")
+                .contains("<source id=\"2\">");
+        assertThat(capturedInput.get().length()).isLessThanOrEqualTo(24000);
+        assertThat(result)
+                .contains("第一篇摘要")
+                .contains("第二篇摘要")
+                .contains("短页面正文")
+                .doesNotContain(firstLongContent)
+                .doesNotContain(secondLongContent);
+    }
+
+    /** 验证轻量模型不可用时回退原正文，避免压缩优化反而破坏联网搜索可用性。 */
+    @Test
+    void shouldKeepOriginalLongPageWhenCompressionFails() {
+        WebSearchTool tool = new WebSearchTool(null, List.of(), (systemPrompt, userMessage) -> {
+            throw new IllegalStateException("模型暂时不可用");
+        });
+        String longContent = "原".repeat(2500);
+
+        String result = tool.formatFetchedPages(List.of(
+                new WebSearchTool.FetchedPage(
+                        new WebSearchTool.SearchResult("原始页面", "https://example.com/original", ""),
+                        longContent, true)
+        ), "测试搜索问题");
+
+        assertThat(result).contains(longContent);
     }
 
     /** 验证空查询在发起 HTTP 请求前被拦截。 */

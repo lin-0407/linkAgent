@@ -50,6 +50,7 @@ import PrePublishTab from '@/components/creator/PrePublishTab.vue'
 import ReportTab from '@/components/creator/ReportTab.vue'
 import TaskListPanel from '@/components/creator/TaskListPanel.vue'
 import UsageTab from '@/components/creator/UsageTab.vue'
+import { createPrePublishLayoutPreviewFixture } from '@/dev/prePublishLayoutPreview'
 import { useCreatorFeedbackEvent } from '@/composables/creator/useCreatorFeedbackEvent'
 import { provideCreatorWorkspace } from '@/composables/creator/useCreatorWorkspaceContext'
 import {
@@ -160,6 +161,11 @@ const props = withDefaults(
     developerMode: false,
   },
 )
+
+// 仅开发环境允许通过显式查询参数进入无后端布局预览，生产构建不会响应这个入口。
+const isLayoutPreviewMode =
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get('layoutPreview') === 'prepublish'
 
 // 指导词域迁移至 useCreatorGuidance（表单 + guidance 编辑 + localStorage 持久化）
 const guidance = useCreatorGuidance()
@@ -318,13 +324,23 @@ const workflowMessageDraft = ref('')
 const workflowMessageListRef = ref<HTMLDivElement | null>(null)
 // useWorkflowSSE 统一管理 EventSource 生命周期、连接状态、心跳检测和版本校验，
 // 组件层只需提供 handlers 处理业务数据，不再直接操作 EventSource 实例。
-const { connect: connectWorkflowEvents, disconnect: closeWorkflowEventSource, statusText: workflowSseText } = useWorkflowSSE()
+const {
+  connect: connectWorkflowEvents,
+  disconnect: closeWorkflowEventSource,
+  statusText: liveWorkflowSseText,
+} = useWorkflowSSE()
+const workflowSseText = computed(() =>
+  isLayoutPreviewMode ? '实时连接' : liveWorkflowSseText.value,
+)
 const workflowMessageModalOpen = ref(false)
 const selectedWorkflowMessageId = ref('')
 // activeStep / restoredTaskId 从 Pinia creatorStore 读取，替代原来的 localStorage + persistWorkspaceState 模式
 const creatorStore = useCreatorStore()
 const { activeStep, restoredTaskId } = storeToRefs(creatorStore)
 const isMediaFeatureEnabled = ref(false)
+const isMediaFeatureAvailabilityResolved = ref(false)
+const mediaFeatureUnavailableMessage =
+  '发布前试映未启用，任务不能进入观众反馈阶段。请先完成媒体配置并开启该能力。'
 type CreatorStepMeta = {
   key: CreatorStepKey
   label: string
@@ -577,6 +593,9 @@ const canAskFeedbackChat = computed(() =>
   ),
 )
 const isActiveStepReadOnly = computed(() => {
+  if (isLayoutPreviewMode) {
+    return true
+  }
   if (taskManageMode.value === 'edit') {
     return false
   }
@@ -735,23 +754,56 @@ const resultModalTitle = computed(() => {
 })
 onMounted(() => {
   loadGuidanceSettings()
+  if (isLayoutPreviewMode) {
+    loadPrePublishLayoutPreview()
+    window.addEventListener('keydown', handleWorkspaceKeydown)
+    return
+  }
   loadWorkspaceState()
   void refreshTasks()
   void refreshMediaFeatureAvailability()
   window.addEventListener('keydown', handleWorkspaceKeydown)
 })
 
+function loadPrePublishLayoutPreview() {
+  const fixture = createPrePublishLayoutPreviewFixture()
+  taskModule.tasks.value = [fixture.taskSummary]
+  taskModule.selectedTask.value = fixture.task
+  taskModule.fillTaskForm(fixture.task)
+  suggestion.value = fixture.suggestion
+  workflowMessages.value = fixture.workflowMessages
+  workflowSession.value = fixture.workflowSession
+  workflowSteps.value = fixture.workflowSteps
+  creatorPreferences.value = fixture.creatorPreferences
+  creatorContextTerms.value = fixture.creatorContextTerms
+  selectedWorkflowMessageId.value = fixture.workflowMessages[0]?.messageId ?? ''
+  prePublishForm.preferenceMode = 'USE_HISTORY'
+  taskManageMode.value = 'create'
+  isTaskComposerOpen.value = true
+  activeStep.value = 'prePublish'
+  errorMessage.value = ''
+}
+
 async function refreshMediaFeatureAvailability() {
   try {
     const status = await getMediaFeatureStatus()
     isMediaFeatureEnabled.value = status.enabled
   } catch {
-    // 能力探测失败时隐藏新入口，保留旧创作流程可用，不把可选媒体链路变成主工作台阻塞项。
+    // 探测失败同样视为不可用，避免未知状态下绕过发布前试映进入下游阶段。
     isMediaFeatureEnabled.value = false
+  } finally {
+    isMediaFeatureAvailabilityResolved.value = true
   }
-  if (!isMediaFeatureEnabled.value && activeStep.value === 'preflight') {
-    activeStep.value = selectedTask.value && hasConfirmedPrePublish.value ? 'feedback' : 'prePublish'
+  const task = selectedTask.value
+  if (!task || !requiresPreflight(task)) {
+    return
   }
+  if (!isMediaFeatureEnabled.value) {
+    activeStep.value = 'prePublish'
+    errorMessage.value = mediaFeatureUnavailableMessage
+    return
+  }
+  activeStep.value = 'preflight'
 }
 
 onBeforeUnmount(() => {
@@ -1079,12 +1131,24 @@ function canNavigateCreatorStep(stepKey: CreatorStepKey) {
     return isMediaFeatureEnabled.value && canEnterFeedback.value
   }
   if (stepKey === 'feedback') {
-    return canEnterFeedback.value
+    return (
+      canEnterFeedback.value &&
+      (!selectedTask.value || !requiresPreflight(selectedTask.value) || isMediaFeatureEnabled.value)
+    )
   }
   return Boolean(feedbackReport.value)
 }
 
 function navigateCreatorStep(stepKey: CreatorStepKey) {
+  if (
+    (stepKey === 'preflight' || stepKey === 'feedback' || stepKey === 'report') &&
+    selectedTask.value &&
+    requiresPreflight(selectedTask.value) &&
+    !isMediaFeatureEnabled.value
+  ) {
+    errorMessage.value = mediaFeatureUnavailableMessage
+    return
+  }
   if (!canNavigateCreatorStep(stepKey)) {
     return
   }
@@ -1158,6 +1222,9 @@ async function selectTask(taskId: string) {
   isTaskComposerOpen.value = true
   activeStep.value = resolveTaskEntryStep(task)
   resetPrePublishPreferenceMode()
+  if (requiresPreflight(task) && isMediaFeatureAvailabilityResolved.value && !isMediaFeatureEnabled.value) {
+    errorMessage.value = mediaFeatureUnavailableMessage
+  }
   restoredTaskId.value = task.taskId
   await Promise.all([
     loadCreatorPreferences(task.userId),
@@ -1470,7 +1537,7 @@ async function runPrePublishAnalyze() {
       status: 'WAITING_CONFIRMATION' as CreatorWorkflowStatus,
     }
     await refreshPrePublishWorkflowMessages()
-    successMessage.value = '发布前优化建议已生成，请确认采用后再进入评论弹幕分析。'
+    successMessage.value = '发布前优化建议已生成，请确认采用后进入成片试映。'
   } catch (error) {
     showError(error)
   } finally {
@@ -1497,8 +1564,12 @@ async function confirmPrePublishResult() {
     workflowMessages.value = workflowSession.value.messages ?? workflowMessages.value
     selectedTask.value = await getCreatorTask(selectedTaskId.value)
     syncWorkflowSelection()
-    activeStep.value = 'feedback'
-    successMessage.value = '已采用本轮发布前优化建议，可以继续导入评论弹幕样例。'
+    await refreshMediaFeatureAvailability()
+    if (!isMediaFeatureEnabled.value) {
+      return
+    }
+    activeStep.value = 'preflight'
+    successMessage.value = '已采用本轮发布前优化建议，请上传成片进行发布前试映。'
     await refreshTasks()
   } catch (error) {
     showError(error)
@@ -1735,13 +1806,16 @@ async function optionalRequest<T>(request: () => Promise<T>) {
   }
 }
 
+function requiresPreflight(task: Pick<CreatorTask, 'status'>) {
+  return hasPrePublishResult(task.status) && !hasFeedbackResult(task.status)
+}
+
 function resolveTaskEntryStep(task: Pick<CreatorTask, 'status'>): CreatorWorkStep {
   if (hasFeedbackResult(task.status)) {
     return 'report'
   }
-  if (hasPrePublishResult(task.status)) {
-    // P0-0 默认开关关闭，先保留旧任务进入观众反馈的行为；用户可手动进入成片试映做存储 Spike。
-    return 'feedback'
+  if (requiresPreflight(task)) {
+    return isMediaFeatureEnabled.value ? 'preflight' : 'prePublish'
   }
   return 'prePublish'
 }
@@ -1758,6 +1832,13 @@ function normalizeReturnStepForTask(
     return resolveTaskEntryStep(task)
   }
   if (targetStep === 'preflight' && !hasPrePublishResult(task.status)) {
+    return resolveTaskEntryStep(task)
+  }
+  if (
+    targetStep === 'feedback' &&
+    requiresPreflight(task) &&
+    !isMediaFeatureEnabled.value
+  ) {
     return resolveTaskEntryStep(task)
   }
   return targetStep
@@ -2953,12 +3034,11 @@ provideCreatorWorkspace({
 
             <section class="creator-workflow-detail" aria-label="工作流消息详情">
               <header class="creator-workflow-head">
-                <div>
-                  <h4>消息详情</h4>
-                </div>
-                <span v-if="selectedWorkflowMessage" class="creator-parse-status">
-                  {{ workflowContentTypeLabel(selectedWorkflowMessage.contentType) }}
-                </span>
+                <h4>
+                  消息详情<span v-if="selectedWorkflowMessage"
+                    >-{{ workflowContentTypeLabel(selectedWorkflowMessage.contentType) }}</span
+                  >
+                </h4>
               </header>
 
               <article v-if="selectedWorkflowMessage" class="creator-workflow-detail-body">
@@ -2966,12 +3046,8 @@ provideCreatorWorkspace({
                   {{ workflowRoleLabel(selectedWorkflowMessage.role) }} ·
                   {{ formatDate(selectedWorkflowMessage.createTime) }}
                 </small>
-                <strong>
-                  {{
-                    selectedWorkflowMaterial
-                      ? materialLabel(selectedWorkflowMaterial.materialType)
-                      : workflowContentTypeLabel(selectedWorkflowMessage.contentType)
-                  }}
+                <strong v-if="selectedWorkflowMaterial">
+                  {{ materialLabel(selectedWorkflowMaterial.materialType) }}
                 </strong>
                 <p v-if="selectedWorkflowMaterial">{{ selectedWorkflowMessage.content }}</p>
                 <pre>{{ selectedWorkflowMaterial?.content || selectedWorkflowMessage.content }}</pre>

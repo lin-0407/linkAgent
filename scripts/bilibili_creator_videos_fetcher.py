@@ -222,7 +222,16 @@ def fetch_recent_videos(
             "web_location": 1550101,
             "order_avoided": "true",
         })
-        data = ensure_bili_success(fetch_json(SPACE_ARCHIVE_API, params, timeout), "公开视频列表接口")
+        # 作品列表接口会校验来源页，使用当前创作者空间页可让公开、无登录态请求被正确识别。
+        data = ensure_bili_success(
+            fetch_json(
+                SPACE_ARCHIVE_API,
+                params,
+                timeout,
+                f"https://space.bilibili.com/{uid}/",
+            ),
+            "公开视频列表接口",
+        )
         if not isinstance(data, dict):
             raise BiliApiError("公开视频列表接口没有返回数据")
 
@@ -358,7 +367,12 @@ def sanitize_wbi_value(value: Any) -> str:
     return "".join(char for char in str(value) if char not in "!'()*")
 
 
-def fetch_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
+def fetch_json(
+    url: str,
+    params: dict[str, Any],
+    timeout: int,
+    referer: str = "https://space.bilibili.com/",
+) -> dict[str, Any]:
     full_url = f"{url}?{urlencode(params)}"
     request = Request(
         full_url,
@@ -368,7 +382,7 @@ def fetch_json(url: str, params: dict[str, Any], timeout: int) -> dict[str, Any]
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
             ),
             "Accept": "application/json, text/plain, */*",
-            "Referer": "https://space.bilibili.com/",
+            "Referer": referer,
         },
     )
     try:

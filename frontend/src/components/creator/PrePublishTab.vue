@@ -214,7 +214,7 @@ const compactWorkflowStatus = computed(() => {
 .creator-ai-prepublish-section {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 16px;
+  gap: 14px;
   min-width: 0;
 }
 
@@ -222,9 +222,9 @@ const compactWorkflowStatus = computed(() => {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: var(--surface-sub);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -272,8 +272,8 @@ const compactWorkflowStatus = computed(() => {
 
 .creator-ai-prepublish-layout {
   display: grid;
-  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(280px, 324px) minmax(0, 1fr);
+  gap: 14px;
   min-width: 0;
   min-height: 0;
 }
@@ -299,9 +299,9 @@ const compactWorkflowStatus = computed(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  min-height: 72px;
-  padding: 14px 16px;
+  gap: 10px;
+  min-height: 65px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -334,17 +334,37 @@ const compactWorkflowStatus = computed(() => {
 
 .creator-ai-preference-workspace-body {
   min-height: 0;
-  padding: 16px;
-  overflow: auto;
+  padding: 14px;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(104, 117, 136, 0.5) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.creator-ai-preference-workspace-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.creator-ai-preference-workspace-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.creator-ai-preference-workspace-body::-webkit-scrollbar-thumb {
+  background: rgba(104, 117, 136, 0.5);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: var(--r-pill);
 }
 
 .creator-ai-preference-workspace-body .creator-preference-panel:last-of-type {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .creator-ai-preference-form {
   grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
+  gap: 12px;
 }
 
 .creator-ai-preference-form .span-full {
@@ -363,7 +383,7 @@ const compactWorkflowStatus = computed(() => {
 }
 
 /* 宽屏把左右工具面板锁定在可视工作区，消息或方案变长只影响各自的内部滚动。 */
-@media (min-width: 1280px) and (min-height: 760px) {
+@media (min-width: 1280px) and (min-height: 680px) {
   .creator-ai-prepublish-section {
     height: calc(100dvh - var(--surface-topbar-height));
     overflow: hidden;
@@ -372,6 +392,13 @@ const compactWorkflowStatus = computed(() => {
   .creator-ai-prepublish-layout {
     height: 100%;
     overflow: hidden;
+  }
+
+  .creator-ai-preference-workspace,
+  .creator-ai-result-panel,
+  .creator-ai-result-panel > :deep(.pre-publish-suggestion-panel) {
+    height: 100%;
+    max-height: 100%;
   }
 }
 
@@ -413,7 +440,7 @@ const compactWorkflowStatus = computed(() => {
 }
 
 /* 低高度桌面保留双栏，把超出的内容交给页面滚动，避免缩放后工作区突然切换布局。 */
-@media (min-width: 1280px) and (max-height: 759px) {
+@media (min-width: 1280px) and (max-height: 679px) {
   .creator-ai-preference-workspace,
   .creator-ai-result-panel {
     min-height: auto;
