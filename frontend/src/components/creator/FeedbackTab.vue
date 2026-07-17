@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BvBindingPanel from '@/components/creator/BvBindingPanel.vue'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 
 const {
@@ -72,6 +73,12 @@ const {
         </button>
       </div>
     </div>
+
+    <BvBindingPanel
+      v-if="selectedTaskId"
+      :key="selectedTaskId"
+      :task-id="selectedTaskId"
+    />
 
     <div class="creator-form-grid creator-feedback-form-grid">
       <article class="span-full creator-script-panel">
