@@ -292,15 +292,13 @@ public class AgentExecutor {
                 String llmAnswer = llmResult.content();
                 int stepTokenCount = calculateTokenCount(llmResult.promptTokens(), llmResult.completionTokens(), llmResult.totalTokens());
                 persistenceContext.totalTokens += stepTokenCount;
-                log.info("第{}轮LLM原始响应:\n{}", iteration, llmAnswer);
-
                 // 2. 优先检测 Final Answer（即使同时存在 Action 也以 Final Answer 为准）
                 // 设计权衡：Final Answer 优先级最高，因为它是推理链的最终产物。
                 // 如果 LLM 同时输出了 Action 和 Final Answer，取 Final Answer 直接终止——宁可损失一步工具调用，
                 // 也不让用户在答案已经生成的情况下继续等待多余的推理轮次。
                 finalAnswer = parseFinalAnswer(llmAnswer);
                 if (TextUtil.hasText(finalAnswer)) {
-                    log.info("第{}轮解析结果: thought={}, finalAnswer={}", iteration, parseThought(llmAnswer), finalAnswer);
+                    log.info("ReAct 第{}轮生成最终答案", iteration);
                     // Final Answer 拿到即持久化：短期记忆写 Human + AI 对、按需触发摘要、抽取长期记忆
                     persistAgentStep(persistenceContext, iteration, "final", finalAnswer, null, null, null, stepTokenCount);
                     persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, finalAnswer, persistenceContext.totalTokens);
@@ -312,7 +310,7 @@ public class AgentExecutor {
                 String thought = parseThought(llmAnswer);
                 if (TextUtil.isBlank(thought)) {
                     // LLM 既未给出 Final Answer 也未给出合法 Thought：本轮输出完全不可用
-                    log.warn("第{}轮未解析到合法 Thought，rawResponse={}", iteration, llmAnswer);
+                    log.warn("ReAct 第{}轮未解析到合法 Thought，已进入格式纠错", iteration);
                     // 记录本轮为格式错误步骤：Thought 设为错误描述，Observation 设为标准格式错误提示
                     // 这样在步骤追踪中可以看到 LLM 在哪一轮输出了不合法内容
                     steps.add(new AgentStep(iteration, "未解析到 Thought，模型可能没有按提示词要求输出。", null, null,
@@ -323,7 +321,7 @@ public class AgentExecutor {
                     appendFormatCorrection(conversation, llmAnswer);
                     continue;
                 }
-                log.info("第{}轮解析到 Thought: {}", iteration, thought);
+                log.info("ReAct 第{}轮完成思考", iteration);
 
                 // 4. 尝试解析 Action + Action Input（两者必须同时存在才构成有效工具调用）
                 // 设计权衡：Action 和 Action Input 分开提取但要求同时非空。
@@ -332,18 +330,18 @@ public class AgentExecutor {
                 ToolCall action = parseAction(llmAnswer);
                 if(action == null){
                     // LLM 既未给出 Final Answer 也未给出合法 Action：本轮输出不完整，回喂错误让 LLM 重试
-                    log.warn("第{}轮未解析到合法 Action，rawResponse={}", iteration, llmAnswer);
+                    log.warn("ReAct 第{}轮未解析到合法 Action，已进入格式纠错", iteration);
                     steps.add(new AgentStep(iteration, thought, null, null, null));
                     persistAgentStep(persistenceContext, iteration, "thought", thought, null, null, null, stepTokenCount);
                     appendFormatCorrection(conversation, llmAnswer);
                     continue;
                 }
-                log.info("第{}轮解析到 Action: {}, Action Input: {}", iteration, action.name(), action.arguments());
+                log.info("ReAct 第{}轮准备调用工具，tool={}", iteration, action.name());
 
                 // 5. 执行工具，得到 Observation
                 // ToolExecutor 内部负责校验工具是否存在、参数是否合法，并捕获工具执行异常返回错误 Observation
                 Observation observation = toolExecutor.execute(action);
-                log.info("第{}轮工具执行结果: tool={}, observation={}", iteration, observation.toolName(), observation.result());
+                log.info("ReAct 第{}轮工具执行完成，tool={}", iteration, observation.toolName());
                 steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
                 persistAgentStep(persistenceContext, iteration, "action", thought,
                         action.name(), action.arguments(), observation.result(), stepTokenCount);
@@ -419,7 +417,7 @@ public class AgentExecutor {
             if (iteration > MAX_ITERATIONS) {
                 return new AgentChatResponse(null, finalAnswer, "迭代次数超过上限", steps.size(), steps);
             }
-            log.info("任务模式 ReAct 第{}轮迭代...", iteration);
+            log.debug("任务模式 ReAct 第{}轮迭代", iteration);
 
             String llmAnswer = llmService.chat(systemPrompt, conversation.toString());
 
@@ -449,10 +447,9 @@ public class AgentExecutor {
             }
 
             // 只记录工具名，不记录 Action Input，避免把搜索词或任务材料重复写入日志。
-            log.info("任务模式 ReAct 第{}轮准备调用工具，tool={}", iteration, action.name());
+            log.debug("任务模式 ReAct 第{}轮准备调用工具，tool={}", iteration, action.name());
             Observation observation = toolExecutor.execute(action);
-            log.info("任务模式 ReAct 第{}轮工具执行完成，tool={}，完整Observation：\n{}",
-                    iteration, observation.toolName(), observation.result());
+            log.debug("任务模式 ReAct 第{}轮工具执行完成，tool={}", iteration, observation.toolName());
             steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
 
             // 将本轮 Thought/Action/Observation 拼回对话，供下一轮参考（拼接格式与 run 一致）
@@ -1220,8 +1217,6 @@ public class AgentExecutor {
             String llmAnswer = llmResult.content();
             int stepTokenCount = calculateTokenCount(llmResult.promptTokens(), llmResult.completionTokens(), llmResult.totalTokens());
             persistenceContext.totalTokens += stepTokenCount;
-            log.info("流式-第{}轮LLM原始响应:\n{}", iteration, llmAnswer);
-
             // 2. 优先检测 Final Answer
             String finalAnswer = parseFinalAnswer(llmAnswer);
             if (TextUtil.hasText(finalAnswer)) {

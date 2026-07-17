@@ -106,6 +106,9 @@ agent:
       enabled: ${WEB_SEARCH_ENABLED:false}
       bing-base-url: ${WEB_SEARCH_BING_BASE_URL:https://cn.bing.com}
       duckduckgo-base-url: ${WEB_SEARCH_DUCKDUCKGO_BASE_URL:https://html.duckduckgo.com}
+      # 单页正文超过 2000 字时，合并为一次轻量模型调用压缩，失败后自动保留原文。
+      compression-enabled: ${WEB_SEARCH_COMPRESSION_ENABLED:true}
+      compression-model: ${WEB_SEARCH_COMPRESSION_MODEL:deepseek-v4-flash}
     execution:
       timeout-seconds: ${TOOL_EXECUTION_TIMEOUT_SECONDS:10}
       max-retries: ${TOOL_EXECUTION_MAX_RETRIES:0}
