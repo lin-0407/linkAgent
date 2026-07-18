@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   deleteCreatorTask,
@@ -41,15 +41,6 @@ import {
 import { getMediaFeatureStatus } from '@/api/media'
 import MessageBubble from '@/components/MessageBubble.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
-import AiCreationConsole from '@/components/creator/AiCreationConsole.vue'
-import GuidanceEditorModal from '@/components/creator/GuidanceEditorModal.vue'
-import FeedbackTab from '@/components/creator/FeedbackTab.vue'
-import MaterialsTab from '@/components/creator/MaterialsTab.vue'
-import PreflightTab from '@/components/creator/PreflightTab.vue'
-import PrePublishTab from '@/components/creator/PrePublishTab.vue'
-import ReportTab from '@/components/creator/ReportTab.vue'
-import TaskListPanel from '@/components/creator/TaskListPanel.vue'
-import UsageTab from '@/components/creator/UsageTab.vue'
 import { createPrePublishLayoutPreviewFixture } from '@/dev/prePublishLayoutPreview'
 import { useCreatorFeedbackEvent } from '@/composables/creator/useCreatorFeedbackEvent'
 import { provideCreatorWorkspace } from '@/composables/creator/useCreatorWorkspaceContext'
@@ -152,6 +143,16 @@ type ContextTermOption = {
   label: string
   polarity: CreatorContextPolarity
 }
+
+const AiCreationConsole = defineAsyncComponent(() => import('@/components/creator/AiCreationConsole.vue'))
+const FeedbackTab = defineAsyncComponent(() => import('@/components/creator/FeedbackTab.vue'))
+const GuidanceEditorModal = defineAsyncComponent(() => import('@/components/creator/GuidanceEditorModal.vue'))
+const MaterialsTab = defineAsyncComponent(() => import('@/components/creator/MaterialsTab.vue'))
+const PreflightTab = defineAsyncComponent(() => import('@/components/creator/PreflightTab.vue'))
+const PrePublishTab = defineAsyncComponent(() => import('@/components/creator/PrePublishTab.vue'))
+const ReportTab = defineAsyncComponent(() => import('@/components/creator/ReportTab.vue'))
+const TaskListPanel = defineAsyncComponent(() => import('@/components/creator/TaskListPanel.vue'))
+const UsageTab = defineAsyncComponent(() => import('@/components/creator/UsageTab.vue'))
 
 const props = withDefaults(
   defineProps<{

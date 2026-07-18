@@ -3,6 +3,7 @@ package com.link.linkagent.creator.bilibili.service;
 import com.link.linkagent.creator.bilibili.mapper.CreatorBilibiliMapper;
 import com.link.linkagent.creator.bilibili.model.BilibiliAccountRecord;
 import com.link.linkagent.creator.bilibili.model.BilibiliAccountResponse;
+import com.link.linkagent.creator.bilibili.model.BilibiliVideoRecord;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoResponse;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncResponse;
 import com.link.linkagent.creator.bilibili.model.BindAccountRequest;
@@ -20,8 +21,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * B站账号绑定与任务视频绑定服务（P0-3）。
@@ -369,9 +373,25 @@ public class CreatorBilibiliService {
         var tasks = bilibiliMapper.findTasksByTaskIds(taskIds);
         // 转为 Map 以便 O(1) 查找
         var taskMap = tasks.stream()
-                .collect(java.util.stream.Collectors.toMap(
+                .collect(Collectors.toMap(
                         com.link.linkagent.creator.task.model.CreatorTaskRecord::getTaskId,
                         com.link.linkagent.creator.task.model.CreatorTaskRecord::getTaskName,
+                        (a, b) -> a
+                ));
+        List<String> bvids = bindings.stream()
+                .filter(binding -> "BOUND".equals(binding.getBindingStatus()))
+                .filter(binding -> userId.equals(binding.getUserId()))
+                .map(TaskVideoBindingRecord::getBvid)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<String, BilibiliVideoRecord> videoMap = bvids.isEmpty()
+                ? Map.of()
+                : bilibiliMapper.listVideosByBvidsAndUid(bvids, bilibiliUid)
+                .stream()
+                .collect(Collectors.toMap(
+                        BilibiliVideoRecord::getBvid,
+                        Function.identity(),
                         (a, b) -> a
                 ));
 
@@ -388,10 +408,9 @@ public class CreatorBilibiliService {
 
             String taskName = taskMap.getOrDefault(binding.getTaskId(), null);
 
-            // 查找视频缓存
-            var video = bilibiliMapper.findVideoByBvidAndUid(binding.getBvid(), bilibiliUid);
-            if (video.isPresent()) {
-                var v = video.get();
+            // 视频缓存已批量查好，循环内只做内存映射，避免绑定越多 SQL 越多。
+            var v = videoMap.get(binding.getBvid());
+            if (v != null) {
                 result.add(new BilibiliVideoResponse(
                         v.getVideoId(), v.getBilibiliUid(), v.getBvid(), v.getAid(),
                         v.getTitle(), v.getCoverUrl(), v.getPublishTime(),

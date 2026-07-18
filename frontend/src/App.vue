@@ -12,9 +12,9 @@ import { useAppStore } from '@/stores/appStore'
 const appStore = useAppStore()
 const { settingsOpen, developerMode } = storeToRefs(appStore)
 
-// 粒子背景全局启用；创作台降低密度，既保留动态氛围，又不干扰表单阅读。
+// 粒子背景只在首页启用，避免工作台和分析页被全屏 Canvas 持续占用帧预算。
 const route = useRoute()
-const particleEnabled = computed(() => true)
+const particleEnabled = computed(() => route.path === '/')
 const particleDensity = computed(() => route.path === '/' ? 12000 : 22000)
 const isCreatorRoute = computed(() => route.path === '/creator')
 const guideOpen = ref(false)

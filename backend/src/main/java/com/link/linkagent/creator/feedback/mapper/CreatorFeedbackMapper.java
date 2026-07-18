@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.feedback.mapper;
 
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackRecord;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackDashboardStatRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackMetricRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
@@ -388,6 +389,60 @@ public interface CreatorFeedbackMapper {
             """)
     @ResultMap("CreatorFeedbackStatRecordMap")
     List<CreatorFeedbackStatRecord> countSentimentStats(@Param("taskId") String taskId);
+
+    /**
+     * 一次返回仪表盘需要的主要聚合统计。
+     * 多个 UNION 分支仍保持统计语义清晰，但只发生一次 Mapper 调用，减少页面打开时的 SQL 往返。
+     */
+    @Select("""
+            SELECT 'SOURCE' AS stat_scope,
+                   source_type AS name,
+                   COUNT(1) AS count
+            FROM creator_feedback_item
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            GROUP BY source_type
+            UNION ALL
+            SELECT 'NOISE' AS stat_scope,
+                   'NOISE' AS name,
+                   COUNT(1) AS count
+            FROM creator_feedback_item
+            WHERE task_id = #{taskId}
+              AND is_noise = 1
+              AND is_deleted = 0
+            UNION ALL
+            SELECT 'COMMENT_CATEGORY' AS stat_scope,
+                   category AS name,
+                   COUNT(1) AS count
+            FROM creator_feedback_item
+            WHERE task_id = #{taskId}
+              AND source_type = 'COMMENT'
+              AND is_deleted = 0
+            GROUP BY category
+            UNION ALL
+            SELECT 'DANMAKU_CATEGORY' AS stat_scope,
+                   category AS name,
+                   COUNT(1) AS count
+            FROM creator_feedback_item
+            WHERE task_id = #{taskId}
+              AND source_type = 'DANMAKU'
+              AND is_deleted = 0
+            GROUP BY category
+            UNION ALL
+            SELECT 'SENTIMENT' AS stat_scope,
+                   sentiment AS name,
+                   COUNT(1) AS count
+            FROM creator_feedback_item
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            GROUP BY sentiment
+            """)
+    @Results(id = "CreatorFeedbackDashboardStatRecordMap", value = {
+            @Result(column = "stat_scope", property = "statScope"),
+            @Result(column = "name", property = "name"),
+            @Result(column = "count", property = "count")
+    })
+    List<CreatorFeedbackDashboardStatRecord> listDashboardStats(@Param("taskId") String taskId);
 
     @Select("""
             SELECT id,

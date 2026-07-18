@@ -277,6 +277,43 @@ public interface CreatorBilibiliMapper {
     @ResultMap("BilibiliVideoRecordMap")
     List<BilibiliVideoRecord> listVideosByUid(@Param("bilibiliUid") String bilibiliUid);
 
+    /**
+     * 批量查询指定 UID 下的一组 BV 视频缓存。
+     * 用于已绑定视频列表组装，避免每条绑定单独查一次视频缓存造成 N+1 查询。
+     */
+    @Select("""
+            <script>
+            SELECT id,
+                   video_id,
+                   bilibili_uid,
+                   bvid,
+                   aid,
+                   title,
+                   cover_url,
+                   publish_time,
+                   view_count,
+                   like_count,
+                   coin_count,
+                   favorite_count,
+                   share_count,
+                   sync_status,
+                   last_sync_time,
+                   raw_snapshot,
+                   create_time,
+                   update_time
+            FROM creator_bilibili_video
+            WHERE bilibili_uid = #{bilibiliUid}
+              AND is_deleted = 0
+              AND bvid IN
+              <foreach collection="bvids" item="bvid" open="(" separator="," close=")">
+                  #{bvid}
+              </foreach>
+            </script>
+            """)
+    @ResultMap("BilibiliVideoRecordMap")
+    List<BilibiliVideoRecord> listVideosByBvidsAndUid(@Param("bvids") List<String> bvids,
+                                                       @Param("bilibiliUid") String bilibiliUid);
+
     // ══════════════════════════════════════════════════════════════
     // 任务视频绑定（creator_task_video_binding）
     // ══════════════════════════════════════════════════════════════

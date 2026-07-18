@@ -933,6 +933,7 @@ textarea:focus {
   border-radius: 8px;
   box-shadow: var(--sh-lg);
   backdrop-filter: blur(18px);
+  will-change: left, top, width, height;
 }
 
 .agent-floating-window.minimized {
@@ -942,6 +943,7 @@ textarea:focus {
 .agent-floating-window.dragging,
 .agent-floating-window.resizing {
   user-select: none;
+  contain: layout paint;
 }
 
 .agent-floating-head {

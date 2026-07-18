@@ -94,6 +94,10 @@ let dragState: DragState | null = null
 let resizeState: ResizeState | null = null
 let activePointerElement: HTMLElement | null = null
 let activePointerId: number | null = null
+let pendingDragEvent: PointerEvent | null = null
+let pendingResizeEvent: PointerEvent | null = null
+let dragFrameId = 0
+let resizeFrameId = 0
 
 const {
   activeSessionLabel,
@@ -280,6 +284,20 @@ function handleDrag(event: PointerEvent) {
     return
   }
 
+  pendingDragEvent = event
+  if (dragFrameId === 0) {
+    dragFrameId = requestAnimationFrame(applyPendingDrag)
+  }
+}
+
+function applyPendingDrag() {
+  dragFrameId = 0
+  const event = pendingDragEvent
+  pendingDragEvent = null
+  if (!dragState || !event || event.pointerId !== dragState.pointerId) {
+    return
+  }
+
   windowRect.value = constrainRect({
     ...windowRect.value,
     left: event.clientX - dragState.offsetX,
@@ -294,6 +312,11 @@ function stopDrag(event?: PointerEvent) {
 
   isDragging.value = false
   dragState = null
+  pendingDragEvent = null
+  if (dragFrameId !== 0) {
+    cancelAnimationFrame(dragFrameId)
+    dragFrameId = 0
+  }
   releasePointer()
   window.removeEventListener('pointermove', handleDrag)
   window.removeEventListener('pointerup', stopDrag)
@@ -329,6 +352,20 @@ function handleResize(event: PointerEvent) {
     return
   }
 
+  pendingResizeEvent = event
+  if (resizeFrameId === 0) {
+    resizeFrameId = requestAnimationFrame(applyPendingResize)
+  }
+}
+
+function applyPendingResize() {
+  resizeFrameId = 0
+  const event = pendingResizeEvent
+  pendingResizeEvent = null
+  if (!resizeState || !event || event.pointerId !== resizeState.pointerId) {
+    return
+  }
+
   windowRect.value = constrainResizeRect(resizeState, event)
 }
 
@@ -339,6 +376,11 @@ function stopResize(event?: PointerEvent) {
 
   isResizing.value = false
   resizeState = null
+  pendingResizeEvent = null
+  if (resizeFrameId !== 0) {
+    cancelAnimationFrame(resizeFrameId)
+    resizeFrameId = 0
+  }
   releasePointer()
   window.removeEventListener('pointermove', handleResize)
   window.removeEventListener('pointerup', stopResize)

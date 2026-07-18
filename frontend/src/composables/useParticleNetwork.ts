@@ -102,6 +102,10 @@ export function useParticleNetwork(
   let connections = new Map<string, Connection>()
   let mouse: MouseState = { x: -9999, y: -9999, active: false, settled: false }
   let mouseSettleTimer: ReturnType<typeof setTimeout> | null = null
+  let mounted = false
+  let hidden = typeof document !== 'undefined' ? document.hidden : false
+  let reduceMotionQuery: MediaQueryList | null = null
+  let accentColor = '#00aeec'
 
   // ---- 从 CSS 变量读取项目配色 ----
   function getAccentColor(): string {
@@ -217,6 +221,7 @@ export function useParticleNetwork(
   function updateConnections() {
     const len = particles.length
     const seenKeys = new Set<string>()
+    const linkDistSq = opts.linkDist * opts.linkDist
 
     for (let i = 0; i < len; i++) {
       const a = particles[i]
@@ -226,9 +231,15 @@ export function useParticleNetwork(
         if (!b) continue
         const dx = a.x - b.x
         const dy = a.y - b.y
-        const dist = Math.sqrt(dx * dx + dy * dy)
+        const distSq = dx * dx + dy * dy
         const key = pairKey(i, j)
+        const existing = connections.get(key)
+        if (distSq >= linkDistSq && !existing) {
+          continue
+        }
         seenKeys.add(key)
+
+        const dist = Math.sqrt(distSq)
 
         const targetOpacity = dist < opts.linkDist
           ? Math.pow(1 - dist / opts.linkDist, 1.5) * 0.55
@@ -236,7 +247,7 @@ export function useParticleNetwork(
 
         // 显式标注类型：connections.get 返回 Connection | undefined，
         // 赋值分支后 conn 必为 Connection，但 TS 无法自动收窄 let 变量，需手动标注
-        let conn: Connection | undefined = connections.get(key)
+        let conn: Connection | undefined = existing
         if (!conn) {
           conn = {
             from: a,
@@ -258,6 +269,10 @@ export function useParticleNetwork(
           c.opacity += (targetOpacity - c.opacity) * LINK_FADE_IN_SPEED
         } else {
           c.opacity += (targetOpacity - c.opacity) * LINK_FADE_OUT_SPEED
+        }
+        if (targetOpacity === 0 && c.opacity < 0.003) {
+          connections.delete(key)
+          continue
         }
 
         // 出生检测
@@ -348,7 +363,7 @@ export function useParticleNetwork(
   // ---- 渲染 ----
   function draw() {
     if (!ctx) return
-    const accent = getAccentColor()
+    const accent = accentColor
 
     ctx.clearRect(0, 0, W, H)
     // Canvas 背景透明，由 body/html 的 --canvas 底色透过即可
@@ -468,8 +483,8 @@ export function useParticleNetwork(
 
   // ---- 主循环 ----
   function loop() {
-    if (!enabled.value) {
-      rafId = requestAnimationFrame(loop)
+    if (!mounted || !enabled.value || hidden) {
+      rafId = 0
       return
     }
     updateParticles()
@@ -478,6 +493,12 @@ export function useParticleNetwork(
     updateRipples()
     draw()
     rafId = requestAnimationFrame(loop)
+  }
+
+  function scheduleLoop() {
+    if (rafId === 0 && mounted && enabled.value && !hidden) {
+      rafId = requestAnimationFrame(loop)
+    }
   }
 
   // ---- 事件处理 ----
@@ -512,39 +533,56 @@ export function useParticleNetwork(
     W = canvas.width = window.innerWidth
     H = canvas.height = window.innerHeight
     createParticles()
+    accentColor = getAccentColor()
   }
 
   // ---- 可见性变化时暂停/恢复（节省资源） ----
   function onVisibilityChange() {
-    // 不暂停动画循环本身，只是 enabled 控制是否渲染粒子更新
-    // 隐藏时粒子保持位置，回来时继续
+    hidden = document.hidden
+    if (hidden && rafId !== 0) {
+      cancelAnimationFrame(rafId)
+      rafId = 0
+      return
+    }
+    scheduleLoop()
   }
 
   // ---- 公开方法 ----
   function mount() {
     const canvas = canvasRef.value
     if (!canvas) return
+    mounted = true
+
+    reduceMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    if (reduceMotionQuery.matches) {
+      enabled.value = false
+    }
 
     ctx = canvas.getContext('2d')
     if (!ctx) return
 
     W = canvas.width = window.innerWidth
     H = canvas.height = window.innerHeight
+    accentColor = getAccentColor()
 
     createParticles()
 
     // Canvas 需要 pointer-events: none 才不挡住页面操作，所以交互事件挂到 window。
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseleave', onMouseLeave)
-    window.addEventListener('click', onClick)
+    window.addEventListener('mousemove', onMouseMove, { passive: true })
+    window.addEventListener('mouseleave', onMouseLeave, { passive: true })
+    window.addEventListener('click', onClick, { passive: true })
     window.addEventListener('resize', onResize)
     document.addEventListener('visibilitychange', onVisibilityChange)
 
-    rafId = requestAnimationFrame(loop)
+    scheduleLoop()
   }
 
   function unmount() {
-    cancelAnimationFrame(rafId)
+    mounted = false
+    if (rafId !== 0) {
+      cancelAnimationFrame(rafId)
+      rafId = 0
+    }
     if (mouseSettleTimer) clearTimeout(mouseSettleTimer)
 
     window.removeEventListener('mousemove', onMouseMove)
@@ -561,7 +599,13 @@ export function useParticleNetwork(
   }
 
   function setEnabled(val: boolean) {
-    enabled.value = val
+    enabled.value = val && !(reduceMotionQuery?.matches ?? false)
+    if (!enabled.value && rafId !== 0) {
+      cancelAnimationFrame(rafId)
+      rafId = 0
+      return
+    }
+    scheduleLoop()
   }
 
   return { mount, unmount, setEnabled, enabled }

@@ -9,6 +9,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackChatRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackChatResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackDashboardResponse;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackDashboardStatRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackEvidenceRetrievalResult;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackFetchRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackFetchResponse;
@@ -55,6 +56,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -371,15 +373,17 @@ public class CreatorFeedbackService {
                 .map(this::toItemResponse)
                 .toList();
 
+        List<CreatorFeedbackDashboardStatRecord> dashboardStats = creatorFeedbackMapper.listDashboardStats(taskId.trim());
+
         return new CreatorFeedbackDashboardResponse(
                 taskId.trim(),
-                creatorFeedbackMapper.countItemsBySourceType(taskId.trim(), "COMMENT"),
-                creatorFeedbackMapper.countItemsBySourceType(taskId.trim(), "DANMAKU"),
-                creatorFeedbackMapper.countNoiseItems(taskId.trim()),
+                countDashboardStat(dashboardStats, "SOURCE", "COMMENT"),
+                countDashboardStat(dashboardStats, "SOURCE", "DANMAKU"),
+                countDashboardStat(dashboardStats, "NOISE", "NOISE"),
                 metric,
-                toStatResponses(creatorFeedbackMapper.countCategoryStats(taskId.trim(), "COMMENT")),
-                toStatResponses(creatorFeedbackMapper.countCategoryStats(taskId.trim(), "DANMAKU")),
-                toStatResponses(creatorFeedbackMapper.countSentimentStats(taskId.trim())),
+                toStatResponses(dashboardStatsByScope(dashboardStats, "COMMENT_CATEGORY")),
+                toStatResponses(dashboardStatsByScope(dashboardStats, "DANMAKU_CATEGORY")),
+                toStatResponses(dashboardStatsByScope(dashboardStats, "SENTIMENT")),
                 buildKeywordStats(items),
                 buildDanmakuTimeline(items),
                 topCommentItems,
@@ -1370,6 +1374,35 @@ public class CreatorFeedbackService {
                         labelFor(record.getName()),
                         record.getCount() == null ? 0 : record.getCount()
                 ))
+                .toList();
+    }
+
+    private long countDashboardStat(List<CreatorFeedbackDashboardStatRecord> records, String scope, String name) {
+        return records.stream()
+                .filter(record -> scope.equals(record.getStatScope()))
+                .filter(record -> name.equals(record.getName()))
+                .map(CreatorFeedbackDashboardStatRecord::getCount)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(0L);
+    }
+
+    private List<CreatorFeedbackStatRecord> dashboardStatsByScope(
+            List<CreatorFeedbackDashboardStatRecord> records,
+            String scope
+    ) {
+        return records.stream()
+                .filter(record -> scope.equals(record.getStatScope()))
+                .sorted(Comparator
+                        .comparing((CreatorFeedbackDashboardStatRecord record) -> record.getCount() == null ? 0L : record.getCount())
+                        .reversed()
+                        .thenComparing(record -> TextUtil.trimToDefault(record.getName(), "")))
+                .map(record -> {
+                    CreatorFeedbackStatRecord statRecord = new CreatorFeedbackStatRecord();
+                    statRecord.setName(record.getName());
+                    statRecord.setCount(record.getCount());
+                    return statRecord;
+                })
                 .toList();
     }
 
