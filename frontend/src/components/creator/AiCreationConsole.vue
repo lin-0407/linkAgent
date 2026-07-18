@@ -44,6 +44,7 @@ const isGenerating = ref(false)
 const isRegenerating = ref(false)
 const isConfirming = ref(false)
 const isUploading = ref(false)
+const activePanel = ref<'idea' | 'context' | 'direction'>('idea')
 
 // ═══════════════════════════════════════════
 // 文件上传
@@ -131,6 +132,7 @@ async function submitIdea() {
       idea: form.idea.trim(),
       videoType: form.videoType || undefined,
     })
+    activePanel.value = 'context'
   } catch (error) {
     showError(error)
   } finally {
@@ -183,6 +185,7 @@ async function submitUnderstanding() {
   errorMessage.value = ''
   try {
     interactiveTask.value = await triggerUnderstanding(interactiveTask.value.taskId)
+    activePanel.value = 'direction'
   } catch (error) {
     showError(error)
   } finally {
@@ -200,6 +203,7 @@ async function submitGenerateOptions() {
     interactiveTask.value = await generateCreativeOptions(interactiveTask.value.taskId, {
       extraRequirement: form.extraRequirement.trim() || undefined,
     })
+    activePanel.value = 'direction'
   } catch (error) {
     showError(error)
   } finally {
@@ -301,164 +305,169 @@ function onDrop(event: DragEvent) {
       <span class="ai-creation-status">{{ statusText }}</span>
     </div>
 
-    <!-- ═══════════ Step 1: 创作想法输入 + 创建任务 ═══════════ -->
-    <form class="ai-creation-composer" @submit.prevent="submitIdea">
-      <label class="ai-creation-field ai-creation-field-main">
-        <span>创作想法</span>
-        <textarea
-          v-model="form.idea"
-          rows="5"
-          maxlength="3000"
-          :disabled="interactiveTask !== null"
-          placeholder="例如：对 linkagent 项目进行视频演示，目的是分享自己的开源项目，让更多开发者了解并使用"
-        />
-      </label>
-      <label class="ai-creation-field">
-        <span>视频类型</span>
-        <select v-model="form.videoType" :disabled="interactiveTask !== null">
-          <option v-for="option in videoTypeOptions" :key="option" :value="option">
-            {{ option }}
-          </option>
-        </select>
-      </label>
+    <nav class="ai-creation-tabs" aria-label="创作准备步骤" role="tablist">
       <button
-        v-if="!interactiveTask"
-        type="submit"
-        class="creator-primary-button"
-        :disabled="!canSubmitIdea"
+        type="button"
+        role="tab"
+        :aria-selected="activePanel === 'idea'"
+        :class="{ active: activePanel === 'idea' }"
+        @click="activePanel = 'idea'"
       >
-        {{ isCreating ? '创建任务中...' : '提交想法' }}
+        创作输入
       </button>
-    </form>
-
-    <p v-if="errorMessage" class="ai-creation-error" role="alert">{{ errorMessage }}</p>
-
-    <!-- ═══════════ 任务创建后：补充背景 + AI理解 → 生成方向卡 ═══════════ -->
-    <template v-if="interactiveTask && !hasOptions">
-
-      <!-- Step 2: 上传补充背景文档 -->
-      <div
-        class="ai-creation-upload-zone"
-        :class="{ dragging: isDragging }"
-        @dragover="onDragOver"
-        @dragleave="onDragLeave"
-        @drop="onDrop"
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="activePanel === 'context'"
+        :class="{ active: activePanel === 'context' }"
+        @click="activePanel = 'context'"
       >
-        <div class="upload-zone-header">
-          <span>📎 补充背景资料（可选）</span>
-          <span class="upload-hint">上传项目文档、竞品分析等，让 AI 更准确理解你的创作背景</span>
-        </div>
-        <label class="upload-zone-body">
-          <input
-            ref="fileInputRef"
-            type="file"
-            multiple
-            accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.md,.markdown,.html,.htm,.rtf,.odt,.epub"
-            :disabled="isUploading"
-            @change="onFileInputChange"
+        补充资料
+      </button>
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="activePanel === 'direction'"
+        :class="{ active: activePanel === 'direction' }"
+        @click="activePanel = 'direction'"
+      >
+        创作方向
+      </button>
+    </nav>
+
+    <div class="ai-creation-panel" role="tabpanel">
+      <form v-if="activePanel === 'idea'" class="ai-creation-composer" @submit.prevent="submitIdea">
+        <label class="ai-creation-field ai-creation-field-main">
+          <span>创作想法</span>
+          <textarea
+            v-model="form.idea"
+            rows="3"
+            maxlength="3000"
+            :disabled="interactiveTask !== null"
+            placeholder="例如：演示 LinkAgent 项目，让更多开发者了解并使用"
           />
-          <span v-if="isUploading">⏳ 正在解析文档...</span>
-          <span v-else>点击或拖拽上传文档（支持 PDF / DOCX / TXT / MD 等）</span>
         </label>
-
-        <!-- 已上传文件列表 -->
-        <ul v-if="uploadedFiles.length > 0" class="uploaded-file-list">
-          <li v-for="(file, index) in uploadedFiles" :key="`${file.name}-${index}`">
-            <span class="file-icon">📄</span>
-            <button
-              type="button"
-              class="file-name-btn"
-              :disabled="!hasBackgroundContext"
-              :title="hasBackgroundContext ? '点击预览提取内容' : '暂无提取内容'"
-              @click="openPreview(file.name)"
-            >
-              {{ file.name }}
-            </button>
-            <span class="file-size">{{ formatFileSize(file.size) }}</span>
-            <button
-              type="button"
-              class="file-remove-btn"
-              title="移除"
-              :disabled="isUploading"
-              @click="removeFile(index)"
-            >
-              ✕
-            </button>
-          </li>
-        </ul>
-      </div>
-
-      <!-- Step 3: AI 理解确认 -->
-      <div class="ai-creation-understanding">
-        <button
-          type="button"
-          class="creator-primary-button"
-          :disabled="isUnderstanding || (understandingReady && !isUnderstanding)"
-          @click="submitUnderstanding"
-        >
-          <template v-if="isUnderstanding">AI 正在理解...</template>
-          <template v-else-if="understandingReady">✓ AI 已理解，可重新理解</template>
-          <template v-else>AI 理解确认</template>
+        <label class="ai-creation-field">
+          <span>视频类型</span>
+          <select v-model="form.videoType" :disabled="interactiveTask !== null">
+            <option v-for="option in videoTypeOptions" :key="option" :value="option">{{ option }}</option>
+          </select>
+        </label>
+        <button v-if="!interactiveTask" type="submit" class="creator-primary-button" :disabled="!canSubmitIdea">
+          {{ isCreating ? '创建任务中...' : '提交想法' }}
         </button>
+        <button v-else type="button" class="creator-secondary-action" @click="activePanel = 'context'">
+          继续补充资料
+        </button>
+      </form>
 
-        <!-- AI 理解结果展示 -->
-        <div v-if="understandingReady && interactiveTask?.understandingSummary" class="understanding-result">
-          <div class="understanding-result-header">
-            <span>💡 AI 对你的想法的理解：</span>
-            <button type="button" class="creator-secondary-action" :disabled="isUnderstanding" @click="submitUnderstanding">
-              重新理解
+      <div v-else-if="activePanel === 'context'" class="ai-creation-context-panel">
+        <div v-if="!interactiveTask" class="ai-creation-empty-panel">
+          <strong>补充资料</strong>
+          <p>提交创作想法后，可在这里上传项目文档和背景资料。</p>
+          <button type="button" class="creator-secondary-action" @click="activePanel = 'idea'">填写创作想法</button>
+        </div>
+        <template v-else>
+          <div
+            class="ai-creation-upload-zone"
+            :class="{ dragging: isDragging }"
+            @dragover="onDragOver"
+            @dragleave="onDragLeave"
+            @drop="onDrop"
+          >
+            <div class="upload-zone-header">
+              <span>补充背景资料（可选）</span>
+              <span class="upload-hint">项目文档、竞品分析或其它创作背景</span>
+            </div>
+            <label class="upload-zone-body">
+              <input
+                ref="fileInputRef"
+                type="file"
+                multiple
+                accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.md,.markdown,.html,.htm,.rtf,.odt,.epub"
+                :disabled="isUploading"
+                @change="onFileInputChange"
+              />
+              <span>{{ isUploading ? '正在解析文档...' : '点击或拖拽上传文档' }}</span>
+            </label>
+            <ul v-if="uploadedFiles.length > 0" class="uploaded-file-list">
+              <li v-for="(file, index) in uploadedFiles" :key="`${file.name}-${index}`">
+                <button
+                  type="button"
+                  class="file-name-btn"
+                  :disabled="!hasBackgroundContext"
+                  :title="hasBackgroundContext ? '点击预览提取内容' : '暂无提取内容'"
+                  @click="openPreview(file.name)"
+                >
+                  {{ file.name }}
+                </button>
+                <span class="file-size">{{ formatFileSize(file.size) }}</span>
+                <button type="button" class="file-remove-btn" title="移除" :disabled="isUploading" @click="removeFile(index)">
+                  移除
+                </button>
+              </li>
+            </ul>
+          </div>
+          <div class="ai-creation-understanding">
+            <button type="button" class="creator-primary-button" :disabled="isUnderstanding" @click="submitUnderstanding">
+              {{ isUnderstanding ? 'AI 正在理解...' : understandingReady ? '重新理解' : '让 AI 理解' }}
+            </button>
+            <button v-if="understandingReady" type="button" class="creator-secondary-action" @click="activePanel = 'direction'">
+              查看创作方向
             </button>
           </div>
-          <pre class="understanding-content">{{ interactiveTask.understandingSummary }}</pre>
+          <div v-if="isUnderstanding" class="ai-creation-loading" aria-live="polite">
+            <span />
+            <p>AI 正在阅读想法和补充资料。</p>
+          </div>
+        </template>
+      </div>
+
+      <div v-else class="ai-creation-direction-panel">
+        <div v-if="!understandingReady" class="ai-creation-empty-panel">
+          <strong>创作方向</strong>
+          <p>{{ interactiveTask ? '先让 AI 理解想法，再生成可选方向。' : '提交想法后，这里会承接 AI 的理解和创作方向。' }}</p>
+          <button type="button" class="creator-secondary-action" @click="activePanel = interactiveTask ? 'context' : 'idea'">
+            {{ interactiveTask ? '前往 AI 理解' : '填写创作想法' }}
+          </button>
         </div>
+        <template v-else>
+          <div v-if="interactiveTask?.understandingSummary" class="understanding-result">
+            <div class="understanding-result-header"><span>AI 理解摘要</span></div>
+            <pre class="understanding-content">{{ interactiveTask.understandingSummary }}</pre>
+          </div>
+          <div v-if="!hasOptions" class="ai-creation-generate">
+            <label class="ai-creation-field">
+              <span>微调要求（可选）</span>
+              <input v-model="form.extraRequirement" maxlength="2000" placeholder="例如：更适合新手，标题别太像教程课" />
+            </label>
+            <button type="button" class="creator-primary-button" :disabled="!canGenerate" @click="submitGenerateOptions">
+              {{ isGenerating ? '生成中...' : '生成 3 个方向' }}
+            </button>
+          </div>
+          <div v-if="isGenerating" class="ai-creation-loading" aria-live="polite">
+            <span />
+            <p>AI 正在整理标题、内容和简介方向。</p>
+          </div>
+        </template>
       </div>
 
-      <!-- Step 3 进行中的加载态 -->
-      <div v-if="isUnderstanding" class="ai-creation-loading" aria-live="polite">
-        <span />
-        <p>AI 正在阅读你的想法和补充资料，生成理解摘要...</p>
-      </div>
-
-      <!-- Step 4: 生成方向卡（仅理解完成后可用） -->
-      <div v-if="understandingReady" class="ai-creation-generate">
-        <label class="ai-creation-field">
-          <span>微调要求（可选）</span>
-          <input
-            v-model="form.extraRequirement"
-            maxlength="2000"
-            placeholder="例如：更适合新手，标题别太像教程课"
-          />
-        </label>
-        <button
-          type="button"
-          class="creator-primary-button"
-          :disabled="!canGenerate"
-          @click="submitGenerateOptions"
-        >
-          {{ isGenerating ? '生成中...' : '确认理解，生成 3 个方向' }}
-        </button>
-      </div>
-
-      <!-- 方向卡生成中的加载态 -->
-      <div v-if="isGenerating" class="ai-creation-loading" aria-live="polite">
-        <span />
-        <p>AI 正在整理标题大纲、内容大纲和简介大纲。</p>
-      </div>
-    </template>
-
-    <!-- ═══════════ 方向卡展示 ═══════════ -->
-    <div v-if="hasOptions" class="ai-creation-options" aria-label="AI 创意卡片">
-      <article
-        v-for="(option, index) in options"
-        :key="option.optionId"
-        class="ai-creation-option"
-        :class="{ selected: option.selected || selectedOptionId === option.optionId }"
+      <div
+        v-if="activePanel === 'direction' && hasOptions"
+        class="ai-creation-options"
+        aria-label="AI 创意卡片"
       >
-        <header>
-          <span>方向 {{ index + 1 }}</span>
-          <h4>{{ option.optionName }}</h4>
-          <p>{{ option.targetAudience || '适合对这个主题感兴趣的观众' }}</p>
-        </header>
+        <article
+          v-for="(option, index) in options"
+          :key="option.optionId"
+          class="ai-creation-option"
+          :class="{ selected: option.selected || selectedOptionId === option.optionId }"
+        >
+          <header>
+            <span>方向 {{ index + 1 }}</span>
+            <h4>{{ option.optionName }}</h4>
+            <p>{{ option.targetAudience || '适合对这个主题感兴趣的观众' }}</p>
+          </header>
 
         <div class="ai-creation-section">
           <strong>标题大纲</strong>
@@ -517,28 +526,31 @@ function onDrop(event: DragEvent) {
         >
           {{ isConfirming && selectedOptionId === option.optionId ? '确认中...' : '选择这个方向' }}
         </button>
-      </article>
+        </article>
+      </div>
+
+      <!-- 方向卡微调 -->
+      <div v-if="activePanel === 'direction' && hasOptions" class="ai-creation-regenerate">
+        <label class="ai-creation-field">
+          <span>让 AI 微调</span>
+          <input
+            v-model="form.extraRequirement"
+            maxlength="2000"
+            placeholder="例如：更适合新手，标题别太像教程课"
+          />
+        </label>
+        <button
+          type="button"
+          class="creator-secondary-action"
+          :disabled="isRegenerating || isConfirming"
+          @click="regenerateOptions"
+        >
+          {{ isRegenerating ? '调整中...' : '重新生成' }}
+        </button>
+      </div>
     </div>
 
-    <!-- 方向卡微调 -->
-    <div v-if="hasOptions" class="ai-creation-regenerate">
-      <label class="ai-creation-field">
-        <span>让 AI 微调</span>
-        <input
-          v-model="form.extraRequirement"
-          maxlength="2000"
-          placeholder="例如：更适合新手，标题别太像教程课"
-        />
-      </label>
-      <button
-        type="button"
-        class="creator-secondary-action"
-        :disabled="isRegenerating || isConfirming"
-        @click="regenerateOptions"
-      >
-        {{ isRegenerating ? '调整中...' : '重新生成' }}
-      </button>
-    </div>
+    <p v-if="errorMessage" class="ai-creation-error" role="alert">{{ errorMessage }}</p>
 
     <!-- ═══════════ 文档内容预览弹窗 ═══════════ -->
     <Teleport to="body">

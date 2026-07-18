@@ -6777,6 +6777,76 @@ body {
   align-self: start;
 }
 
+.ai-creation-composer > .creator-secondary-action {
+  grid-area: submit;
+  width: 100%;
+  align-self: start;
+}
+
+.ai-creation-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(23, 32, 51, 0.05);
+  border: 1px solid rgba(23, 32, 51, 0.07);
+  border-radius: 8px;
+}
+
+.ai-creation-tabs button {
+  min-height: 36px;
+  padding: 0 14px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ai-creation-tabs button.active {
+  color: var(--text);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(23, 32, 51, 0.12);
+}
+
+.ai-creation-panel {
+  display: grid;
+  gap: 14px;
+  min-height: 196px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(23, 32, 51, 0.08);
+  border-radius: 8px;
+}
+
+.ai-creation-context-panel,
+.ai-creation-direction-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-creation-empty-panel {
+  display: grid;
+  place-items: center;
+  min-height: 162px;
+  align-content: center;
+  gap: 8px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ai-creation-empty-panel strong {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.ai-creation-empty-panel p {
+  max-width: 480px;
+  margin: 0;
+  line-height: 1.55;
+}
+
 .ai-creation-regenerate {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -6813,7 +6883,8 @@ body {
 }
 
 .ai-creation-field textarea {
-  min-height: 286px;
+  min-height: 112px;
+  max-height: 220px;
 }
 
 .ai-creation-field textarea:focus,
@@ -7968,7 +8039,8 @@ body {
 
   .ai-creation-composer > .ai-creation-field-main,
   .ai-creation-composer > .ai-creation-field:not(.ai-creation-field-main),
-  .ai-creation-composer > .creator-primary-button {
+  .ai-creation-composer > .creator-primary-button,
+  .ai-creation-composer > .creator-secondary-action {
     grid-area: auto;
   }
 
@@ -7978,7 +8050,20 @@ body {
   }
 
   .ai-creation-field textarea {
+    min-height: 104px;
+  }
+
+  .ai-creation-tabs {
+    overflow-x: auto;
+  }
+
+  .ai-creation-tabs button {
+    flex: 1 0 auto;
+  }
+
+  .ai-creation-panel {
     min-height: 180px;
+    padding: 12px;
   }
 
   .ai-creation-options {
