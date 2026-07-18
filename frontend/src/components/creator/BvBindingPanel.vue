@@ -1,14 +1,14 @@
 <script setup lang="ts">
 /**
  * BV 绑定面板 — P0-3 核心组件。
- * 在用户确认发布方案后展示，让用户填写已发布视频的 BV 号。
+ * 在视频分析页展示，让用户把已发布视频的 BV 号关联到创作任务。
  * 绑定后视频分析页才能展示该视频卡片。
  */
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { getTaskVideoBinding, bindBvToTask } from '@/api/creator'
 import type { TaskVideoBinding } from '@/types/creator'
 
-const props = defineProps<{ taskId: string }>()
+const props = defineProps<{ taskId: string; bilibiliUid?: string | null }>()
 const emit = defineEmits<{ bound: [binding: TaskVideoBinding] }>()
 
 // 组件状态
@@ -22,6 +22,7 @@ const editing = ref(false)
 const uidInput = ref('')
 const bvInput = ref('')
 const bvError = ref('')
+const effectiveUid = computed(() => props.bilibiliUid?.trim() || uidInput.value.trim())
 
 // BV 格式校验：B 站 BV 号为 BV + 10 位字母数字
 const BV_REGEX = /^BV[0-9A-Za-z]{10}$/
@@ -39,8 +40,8 @@ onMounted(async () => {
   loading.value = true
   try {
     binding.value = await getTaskVideoBinding(props.taskId)
-    // 先预填已有值，用户打开修正入口时只需修改出错字段。
-    uidInput.value = binding.value.bilibiliUid || ''
+    // 视频分析页已经绑定账号 UID，优先沿用页面 UID，避免用户重复填写造成归属不一致。
+    uidInput.value = props.bilibiliUid || binding.value.bilibiliUid || ''
     bvInput.value = binding.value.bvid
   } catch {
     // 404 表示还没有绑定，正常流程，不报错
@@ -64,7 +65,7 @@ async function handleBind() {
   try {
     const result = await bindBvToTask(props.taskId, {
       userId: 'default', // 和现有代码一致，第一版统一使用 default 用户
-      bilibiliUid: uidInput.value.trim(),
+      bilibiliUid: effectiveUid.value,
       bvid: bvInput.value.trim(),
     })
     binding.value = result
@@ -80,7 +81,7 @@ async function handleBind() {
 /** 只有未通过校验的绑定允许编辑，BOUND 状态继续保持不可覆盖。 */
 function startEdit() {
   if (!binding.value || binding.value.bindingStatus === 'BOUND') return
-  uidInput.value = binding.value.bilibiliUid || ''
+  uidInput.value = props.bilibiliUid || binding.value.bilibiliUid || ''
   bvInput.value = binding.value.bvid
   bvError.value = ''
   error.value = ''
@@ -99,7 +100,7 @@ function cancelEdit() {
   <div class="creator-bv-binding-panel">
     <h3 class="creator-section-title">绑定已发布视频</h3>
     <p class="creator-section-desc">
-      发布后把视频的 BV 号填回来，后续即可在视频分析页查看数据。
+      发布后把视频的 BV 号填回来，后续即可在视频分析页同步校验并查看数据。
     </p>
 
     <!-- 已绑定状态 -->
@@ -134,9 +135,13 @@ function cancelEdit() {
     <!-- 绑定输入区：首次绑定或修正异常绑定时展示。 -->
     <div v-else-if="!loading" class="bv-binding-form">
       <p v-if="binding" class="bv-binding-edit-hint">
-        当前绑定未通过校验，请修正 UID 或 BV 号后重新提交。
+        当前绑定未通过校验，请修正 BV 号后重新提交。
       </p>
-      <label class="bv-binding-field" for="bv-binding-uid">
+      <div v-if="bilibiliUid" class="bv-binding-status-row">
+        <span class="bv-binding-label">B站 UID</span>
+        <span class="bv-binding-message">{{ bilibiliUid }}</span>
+      </div>
+      <label v-else class="bv-binding-field" for="bv-binding-uid">
         <span class="bv-binding-field-label">B站 UID</span>
         <input
           id="bv-binding-uid"
@@ -162,7 +167,7 @@ function cancelEdit() {
       <button
         type="button"
         class="creator-btn creator-btn-primary"
-        :disabled="!bvInput.trim() || !uidInput.trim() || saving"
+        :disabled="!bvInput.trim() || !effectiveUid || saving"
         @click="handleBind"
       >
         {{ saving ? '绑定中...' : '绑定 BV' }}

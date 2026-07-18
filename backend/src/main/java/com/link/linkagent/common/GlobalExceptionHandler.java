@@ -5,7 +5,9 @@ import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
@@ -13,7 +15,10 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
+import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.util.Collection;
 
 /**
  * 全局异常处理器 —— Spring MVC 统一异常翻译层。
@@ -49,13 +54,16 @@ public class GlobalExceptionHandler {
      * @return 状态码与异常一致、body 包含 reason 或标准状态短语的错误响应
      */
     @ExceptionHandler(ResponseStatusException.class)
-    public ResponseEntity<ApiErrorResponse> handleResponseStatusException(ResponseStatusException exception,
-                                                                         HttpServletRequest request) {
+    public ResponseEntity<?> handleResponseStatusException(ResponseStatusException exception,
+                                                           HttpServletRequest request) {
         HttpStatus status = HttpStatus.valueOf(exception.getStatusCode().value());
         // reason 为 null 时回退到 HTTP 标准状态短语（如 404 → "Not Found"），保证前端始终有文本可展示
         String message = exception.getReason() == null ? status.getReasonPhrase() : exception.getReason();
         if (status.is5xxServerError()) {
             log.warn("业务接口返回服务端错误: path={}, message={}", request.getRequestURI(), message, exception);
+        }
+        if (isEventStreamRequest(request)) {
+            return ResponseEntity.status(status).build();
         }
         return ResponseEntity.status(status)
                 .body(new ApiErrorResponse(status.value(), message, request.getRequestURI()));
@@ -75,11 +83,14 @@ public class GlobalExceptionHandler {
      * @return 400 + 第一个字段的错误描述
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ApiErrorResponse> handleMethodArgumentNotValid(MethodArgumentNotValidException exception,
-                                                                        HttpServletRequest request) {
+    public ResponseEntity<?> handleMethodArgumentNotValid(MethodArgumentNotValidException exception,
+                                                          HttpServletRequest request) {
         FieldError fieldError = exception.getBindingResult().getFieldError();
         // 理论上不会为 null，但防御性编程以防 BindingResult 为空
         String message = fieldError == null ? "请求参数不合法" : fieldError.getDefaultMessage();
+        if (isEventStreamRequest(request)) {
+            return ResponseEntity.badRequest().build();
+        }
         return ResponseEntity.badRequest()
                 .body(new ApiErrorResponse(HttpStatus.BAD_REQUEST.value(), message, request.getRequestURI()));
     }
@@ -99,8 +110,11 @@ public class GlobalExceptionHandler {
      * @return 400 + 校验失败详情
      */
     @ExceptionHandler(ConstraintViolationException.class)
-    public ResponseEntity<ApiErrorResponse> handleConstraintViolation(ConstraintViolationException exception,
-                                                                     HttpServletRequest request) {
+    public ResponseEntity<?> handleConstraintViolation(ConstraintViolationException exception,
+                                                       HttpServletRequest request) {
+        if (isEventStreamRequest(request)) {
+            return ResponseEntity.badRequest().build();
+        }
         return ResponseEntity.badRequest()
                 .body(new ApiErrorResponse(
                         HttpStatus.BAD_REQUEST.value(),
@@ -125,10 +139,13 @@ public class GlobalExceptionHandler {
      * @return 400 + 格式修正指引
      */
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ApiErrorResponse> handleHttpMessageNotReadable(HttpMessageNotReadableException exception,
-                                                                         HttpServletRequest request) {
+    public ResponseEntity<?> handleHttpMessageNotReadable(HttpMessageNotReadableException exception,
+                                                          HttpServletRequest request) {
         // 请求体解析失败通常是调用方 JSON 写法或 Content-Type 不正确，返回 400 能让前端明确这是入参问题。
         log.warn("请求体解析失败: path={}, message={}", request.getRequestURI(), exception.getMessage());
+        if (isEventStreamRequest(request)) {
+            return ResponseEntity.badRequest().build();
+        }
         return ResponseEntity.badRequest()
                 .body(new ApiErrorResponse(
                         HttpStatus.BAD_REQUEST.value(),
@@ -150,10 +167,13 @@ public class GlobalExceptionHandler {
      * @return 500 + 数据库排查指引
      */
     @ExceptionHandler(DataAccessException.class)
-    public ResponseEntity<ApiErrorResponse> handleDataAccess(DataAccessException exception,
-                                                            HttpServletRequest request) {
+    public ResponseEntity<?> handleDataAccess(DataAccessException exception,
+                                              HttpServletRequest request) {
         // 前端不回显底层 SQL 和堆栈，避免把内部实现暴露到页面；具体根因保留在后端日志中。
         log.error("数据库访问失败: path={}", request.getRequestURI(), exception);
+        if (isEventStreamRequest(request)) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new ApiErrorResponse(
                         HttpStatus.INTERNAL_SERVER_ERROR.value(),
@@ -194,13 +214,35 @@ public class GlobalExceptionHandler {
      * @return 500 + 通用错误提示
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiErrorResponse> handleException(Exception exception, HttpServletRequest request) {
+    public ResponseEntity<?> handleException(Exception exception, HttpServletRequest request) {
         log.error("未处理的服务端异常: path={}", request.getRequestURI(), exception);
+        if (isEventStreamRequest(request)) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new ApiErrorResponse(
                         HttpStatus.INTERNAL_SERVER_ERROR.value(),
                         "服务内部异常，请查看后端日志定位具体原因。",
                         request.getRequestURI()
                 ));
+    }
+
+    /**
+     * SSE 接口在异常分派时仍可能保留 text/event-stream 响应类型，不能再写 JSON 错误体。
+     * 这里同时检查 Spring MVC 匹配出的 produces 和请求头，避免 @ExceptionHandler 二次序列化失败。
+     */
+    private static boolean isEventStreamRequest(HttpServletRequest request) {
+        Object producibleMediaTypes = request.getAttribute(HandlerMapping.PRODUCIBLE_MEDIA_TYPES_ATTRIBUTE);
+        if (producibleMediaTypes instanceof Collection<?> mediaTypes) {
+            boolean producesEventStream = mediaTypes.stream()
+                    .filter(MediaType.class::isInstance)
+                    .map(MediaType.class::cast)
+                    .anyMatch(mediaType -> mediaType.isCompatibleWith(MediaType.TEXT_EVENT_STREAM));
+            if (producesEventStream) {
+                return true;
+            }
+        }
+        String acceptHeader = request.getHeader(HttpHeaders.ACCEPT);
+        return acceptHeader != null && acceptHeader.contains(MediaType.TEXT_EVENT_STREAM_VALUE);
     }
 }

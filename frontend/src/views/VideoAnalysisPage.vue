@@ -5,10 +5,12 @@
  * 顶部展示 B 站账号绑定状态，主体展示已绑定任务的视频卡片网格。
  * P0-3 为页壳，P0-4 补全点击卡片后的完整分析报告和追问能力。
  */
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { listCreatorTasks } from '@/api/creator'
 import BilibiliAccountPanel from '@/components/creator/BilibiliAccountPanel.vue'
+import BvBindingPanel from '@/components/creator/BvBindingPanel.vue'
 import LinkedVideoGrid from '@/components/creator/LinkedVideoGrid.vue'
-import type { BilibiliAccount, BilibiliVideo } from '@/types/creator'
+import type { BilibiliAccount, BilibiliVideo, CreatorTaskSummary, TaskVideoBinding } from '@/types/creator'
 
 // 当前绑定的 B 站 UID — 账号加载成功后设置
 const currentUid = ref<string | null>(null)
@@ -16,6 +18,27 @@ const currentUid = ref<string | null>(null)
 const videoGrid = ref<InstanceType<typeof LinkedVideoGrid> | null>(null)
 // 用户选中的视频 — P0-4 展示完整分析
 const selectedVideo = ref<BilibiliVideo | null>(null)
+const tasks = ref<CreatorTaskSummary[]>([])
+const selectedBindTaskId = ref('')
+const loadingTasks = ref(false)
+const taskError = ref('')
+
+const bindableTasks = computed(() => tasks.value.filter((task) => task.status !== 'DRAFT'))
+
+onMounted(loadTasks)
+
+async function loadTasks() {
+  loadingTasks.value = true
+  taskError.value = ''
+  try {
+    tasks.value = await listCreatorTasks(50)
+    selectedBindTaskId.value = bindableTasks.value[0]?.taskId ?? ''
+  } catch (e: any) {
+    taskError.value = e?.message || '读取任务列表失败'
+  } finally {
+    loadingTasks.value = false
+  }
+}
 
 /** 账号就绪回调 */
 function onAccountReady(account: BilibiliAccount | null) {
@@ -29,6 +52,10 @@ function onSelectVideo(video: BilibiliVideo) {
 
 /** 同步完成后立即刷新卡片，避免用户手动刷新浏览器。 */
 function onSyncCompleted() {
+  void videoGrid.value?.refresh()
+}
+
+function onVideoBound(_binding: TaskVideoBinding) {
   void videoGrid.value?.refresh()
 }
 </script>
@@ -46,6 +73,47 @@ function onSyncCompleted() {
       @account-ready="onAccountReady"
       @sync-completed="onSyncCompleted"
     />
+
+    <section v-if="currentUid" class="video-binding-section">
+      <header class="video-binding-header">
+        <div>
+          <h3>发布后绑定视频</h3>
+          <p>选择已完成发布方案的任务，填入公开视频 BV；UID 直接沿用上方已绑定账号。</p>
+        </div>
+        <button
+          type="button"
+          class="creator-btn creator-btn-secondary"
+          :disabled="loadingTasks"
+          @click="loadTasks"
+        >
+          {{ loadingTasks ? '读取中...' : '刷新任务' }}
+        </button>
+      </header>
+
+      <p v-if="taskError" class="video-binding-error">{{ taskError }}</p>
+
+      <template v-else-if="bindableTasks.length > 0">
+        <label class="video-binding-task-field" for="video-binding-task">
+          <span>关联任务</span>
+          <select id="video-binding-task" v-model="selectedBindTaskId">
+            <option v-for="task in bindableTasks" :key="task.taskId" :value="task.taskId">
+              {{ task.taskName || '未命名任务' }} · {{ task.status }}
+            </option>
+          </select>
+        </label>
+        <BvBindingPanel
+          v-if="selectedBindTaskId"
+          :key="selectedBindTaskId"
+          :task-id="selectedBindTaskId"
+          :bilibili-uid="currentUid"
+          @bound="onVideoBound"
+        />
+      </template>
+
+      <p v-else class="video-binding-empty">
+        暂无可绑定任务，请先在创作台确认发布方案并完成发布前试映。
+      </p>
+    </section>
 
     <LinkedVideoGrid
       v-if="currentUid"
@@ -96,6 +164,69 @@ function onSyncCompleted() {
   font-size: 14px;
   color: var(--creator-muted-ink, #86868b);
   line-height: 1.5;
+}
+
+.video-binding-section {
+  background: var(--creator-panel);
+  border: 1px solid var(--creator-line);
+  border-radius: 12px;
+  margin-bottom: 20px;
+  padding: 16px 20px 4px;
+}
+
+.video-binding-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.video-binding-header h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--creator-text, #1d1d1f);
+}
+
+.video-binding-header p,
+.video-binding-empty,
+.video-binding-error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--creator-muted-ink, #86868b);
+}
+
+.video-binding-error {
+  color: #c93400;
+  margin-bottom: 12px;
+}
+
+.video-binding-task-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.video-binding-task-field span {
+  font-size: 13px;
+  color: var(--creator-muted-ink, #86868b);
+}
+
+.video-binding-task-field select {
+  border: 1px solid var(--creator-line);
+  border-radius: 8px;
+  background: var(--creator-surface, #fff);
+  color: var(--creator-text, #1d1d1f);
+  font-size: 14px;
+  min-height: 38px;
+  padding: 0 12px;
+}
+
+.video-binding-empty {
+  padding-bottom: 16px;
 }
 
 /* 未绑定账号提示 */
@@ -155,6 +286,10 @@ function onSyncCompleted() {
 
   .video-analysis-header h2 {
     font-size: 20px;
+  }
+
+  .video-binding-header {
+    flex-direction: column;
   }
 }
 </style>

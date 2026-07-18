@@ -70,7 +70,7 @@ defineExpose({ refresh: loadVideos })
         还没有绑定视频的任务。
       </p>
       <p class="grid-empty-hint">
-        请先在创作任务中填回已发布视频的 BV 号，再点击上方“同步视频”完成归属校验。
+        请先在本页“发布后绑定视频”区域关联任务和 BV，再点击上方“同步视频”完成归属校验。
       </p>
     </div>
 

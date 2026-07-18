@@ -1,0 +1,42 @@
+package com.link.linkagent.common;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.servlet.HandlerMapping;
+
+import java.util.Set;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class GlobalExceptionHandlerTest {
+
+    private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
+
+    @Test
+    void shouldNotWriteJsonErrorBodyForEventStreamRequest() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/creator/tasks/task-1/workflow/sessions/session-1/events");
+        request.setAttribute(HandlerMapping.PRODUCIBLE_MEDIA_TYPES_ATTRIBUTE, Set.of(MediaType.TEXT_EVENT_STREAM));
+
+        ResponseEntity<?> response = handler.handleException(new RuntimeException("boom"), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody()).isNull();
+    }
+
+    @Test
+    void shouldKeepJsonErrorBodyForNormalApiRequest() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/agent/sessions");
+
+        ResponseEntity<?> response = handler.handleException(new RuntimeException("boom"), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody()).isEqualTo(new ApiErrorResponse(
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                "服务内部异常，请查看后端日志定位具体原因。",
+                "/api/agent/sessions"
+        ));
+    }
+}

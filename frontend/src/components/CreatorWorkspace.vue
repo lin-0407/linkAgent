@@ -42,7 +42,6 @@ import { getMediaFeatureStatus } from '@/api/media'
 import MessageBubble from '@/components/MessageBubble.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
 import AiCreationConsole from '@/components/creator/AiCreationConsole.vue'
-import BvBindingPanel from '@/components/creator/BvBindingPanel.vue'
 import GuidanceEditorModal from '@/components/creator/GuidanceEditorModal.vue'
 import FeedbackTab from '@/components/creator/FeedbackTab.vue'
 import MaterialsTab from '@/components/creator/MaterialsTab.vue'
@@ -135,7 +134,7 @@ import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
 type TaskManageMode = 'create' | 'edit'
-type CreatorWorkStep = 'prePublish' | 'videoBinding' | 'preflight' | 'feedback' | 'report'
+type CreatorWorkStep = 'prePublish' | 'preflight' | 'feedback' | 'report'
 type CreatorStepKey = 'task' | CreatorWorkStep
 type FeedbackChatTurn = {
   id: string
@@ -352,7 +351,6 @@ const creatorStepMetas = computed<CreatorStepMeta[]>(() => {
   const steps: CreatorStepMeta[] = [
     { key: 'task', label: '视频资料', shortLabel: '资料', description: '填写视频基础信息' },
     { key: 'prePublish', label: '发布方案', shortLabel: '发布', description: '生成发布计划与方案' },
-    { key: 'videoBinding', label: '视频绑定', shortLabel: '绑定', description: '绑定已发布视频 BV' },
   ]
   if (isMediaFeatureEnabled.value) {
     steps.push({ key: 'preflight', label: '成片试映', shortLabel: '试映', description: '上传成片并完成发布前体检' })
@@ -1118,9 +1116,6 @@ function isCreatorStepCompleted(stepKey: CreatorStepKey) {
   if (stepKey === 'preflight') {
     return false
   }
-  if (stepKey === 'videoBinding') {
-    return false
-  }
   const index = creatorStepIndex(stepKey)
   return index >= 0 && index < currentTaskProgressIndex.value
 }
@@ -1130,9 +1125,6 @@ function canNavigateCreatorStep(stepKey: CreatorStepKey) {
     return Boolean(selectedTask.value || isTaskComposerOpen.value)
   }
   if (stepKey === 'prePublish') {
-    return hasSelectedTask.value
-  }
-  if (stepKey === 'videoBinding') {
     return hasSelectedTask.value
   }
   if (stepKey === 'preflight') {
@@ -1823,9 +1815,6 @@ function resolveTaskEntryStep(task: Pick<CreatorTask, 'status'>): CreatorWorkSte
     return 'report'
   }
   if (hasPrePublishResult(task.status)) {
-    return 'videoBinding'
-  }
-  if (requiresPreflight(task)) {
     return isMediaFeatureEnabled.value ? 'preflight' : 'prePublish'
   }
   return 'prePublish'
@@ -1840,9 +1829,6 @@ function normalizeReturnStepForTask(
     return resolveTaskEntryStep(task)
   }
   if (targetStep === 'feedback' && !hasPrePublishResult(task.status)) {
-    return resolveTaskEntryStep(task)
-  }
-  if (targetStep === 'videoBinding' && !hasPrePublishResult(task.status)) {
     return resolveTaskEntryStep(task)
   }
   if (targetStep === 'preflight' && !hasPrePublishResult(task.status)) {
@@ -1861,7 +1847,6 @@ function normalizeReturnStepForTask(
 function resolveCurrentEditReturnStep(): CreatorWorkStep {
   if (
     activeStep.value === 'prePublish' ||
-    activeStep.value === 'videoBinding' ||
     activeStep.value === 'preflight' ||
     activeStep.value === 'feedback' ||
     activeStep.value === 'report'
@@ -1926,6 +1911,10 @@ function resetSelectedWorkspace() {
 // 从 Pinia creatorStore 恢复上次选中的任务 ID，替代原来的 localStorage 直接读取。
 // Pinia persist 插件在 store 初始化时已自动从 localStorage 反序列化 selectedTaskId。
 function loadWorkspaceState() {
+  if (activeStep.value === 'videoBinding') {
+    // 旧版本把发布后 BV 绑定放在创作台主流程里；现在确认发布方案后应回到发布前试映链路。
+    activeStep.value = 'prePublish'
+  }
   if (creatorStore.selectedTaskId) {
     restoredTaskId.value = creatorStore.selectedTaskId
   }
@@ -2249,7 +2238,6 @@ provideCreatorWorkspace({
           <span :class="{ active: Boolean(selectedTask) }">视频资料</span>
           <span :class="{ active: Boolean(suggestion) }">发布方案</span>
           <span v-if="isMediaFeatureEnabled" :class="{ active: activeStep === 'preflight' }">成片试映</span>
-          <span :class="{ active: activeStep === 'videoBinding' }">视频绑定</span>
           <span :class="{ active: Boolean(feedback || feedbackDashboard) }">观众反馈</span>
           <span :class="{ active: Boolean(feedbackReport) }">复盘报告</span>
         </div>
@@ -2548,29 +2536,6 @@ provideCreatorWorkspace({
             </button>
             <button
               type="button"
-              :disabled="!canNavigateCreatorStep('videoBinding')"
-              :class="{
-                active: activeStep === 'videoBinding',
-                completed: isCreatorStepCompleted('videoBinding'),
-              }"
-              :aria-current="activeStep === 'videoBinding' ? 'step' : undefined"
-              @click="navigateCreatorStep('videoBinding')"
-            >
-              <span class="creator-step-count">{{ isMediaFeatureEnabled ? 4 : 3 }}</span>
-              <span class="creator-step-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M7 7h10v10h-10z" />
-                  <path d="M9.5 12h5M12 9.5v5" />
-                  <path d="M5 12h2M17 12h2" />
-                </svg>
-              </span>
-              <span class="creator-step-text">
-                <strong>视频绑定</strong>
-                <small>绑定已发布 BV</small>
-              </span>
-            </button>
-            <button
-              type="button"
               :disabled="!canNavigateCreatorStep('feedback')"
               :class="{
                 active: activeStep === 'feedback',
@@ -2579,7 +2544,7 @@ provideCreatorWorkspace({
               :aria-current="activeStep === 'feedback' ? 'step' : undefined"
               @click="navigateCreatorStep('feedback')"
             >
-              <span class="creator-step-count">{{ isMediaFeatureEnabled ? 5 : 4 }}</span>
+              <span class="creator-step-count">{{ isMediaFeatureEnabled ? 4 : 3 }}</span>
               <span class="creator-step-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
                   <path d="M5 6.5h14v8.5h-8l-4 3v-3h-2z" />
@@ -2598,7 +2563,7 @@ provideCreatorWorkspace({
               :aria-current="activeStep === 'report' ? 'step' : undefined"
               @click="navigateCreatorStep('report')"
             >
-              <span class="creator-step-count">{{ isMediaFeatureEnabled ? 6 : 5 }}</span>
+              <span class="creator-step-count">{{ isMediaFeatureEnabled ? 5 : 4 }}</span>
               <span class="creator-step-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
                   <path d="M6 4.5h12v15h-12z" />
@@ -2993,15 +2958,6 @@ provideCreatorWorkspace({
         <PrePublishTab v-if="activeStep === 'prePublish'" />
 
         <PreflightTab v-if="isMediaFeatureEnabled && activeStep === 'preflight'" />
-
-        <section v-if="activeStep === 'videoBinding'" class="creator-section">
-          <header class="creator-section-head">
-            <div>
-              <h3>视频绑定</h3>
-            </div>
-          </header>
-          <BvBindingPanel v-if="selectedTaskId" :key="selectedTaskId" :task-id="selectedTaskId" />
-        </section>
 
         <FeedbackTab v-if="activeStep === 'feedback'" />
 
