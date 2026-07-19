@@ -4,7 +4,9 @@ import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.config.ObjectStorageProperties;
 import com.link.linkagent.creator.media.storage.ObjectStorageService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
+import com.link.linkagent.creator.media.upload.model.CreateMediaUploadRequest;
 import com.link.linkagent.creator.media.upload.model.MediaUploadRecord;
+import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -15,6 +17,8 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -93,7 +97,8 @@ class MediaUploadServiceTest {
                 new ObjectStorageProperties(),
                 mock(ObjectStorageService.class), // OSS 操作在此测试场景不会被调用
                 mapper,
-                persistenceService
+                persistenceService,
+                mock(CreatorMediaWorkflowGateService.class)
         );
 
         // 调用 abortUpload，预期被拦截抛异常
@@ -106,7 +111,58 @@ class MediaUploadServiceTest {
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
 
         // 确认持久化层的 Abort 操作从未被调用
-        verify(persistenceService, never()).markUploadAborted(upload("VERIFYING"));
+        verify(persistenceService, never()).markUploadAborted(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void shouldRejectUploadBeforeCreatingStorageSessionWhenPrePublishIsNotConfirmed() {
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        ObjectStorageService storageService = mock(ObjectStorageService.class);
+        MediaUploadPersistenceService persistenceService = mock(MediaUploadPersistenceService.class);
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
+        CreatorMediaProperties mediaProperties = new CreatorMediaProperties();
+        mediaProperties.setEnabled(true);
+        ObjectStorageProperties storageProperties = configuredStorageProperties();
+        when(mapper.countTaskByOwner("task-1", "default")).thenReturn(1);
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "请先确认发布方案"))
+                .when(mediaWorkflowGateService)
+                .ensurePrePublishConfirmed("task-1", "default", "成片试映");
+        MediaUploadService service = new MediaUploadService(
+                mediaProperties,
+                storageProperties,
+                storageService,
+                mapper,
+                persistenceService,
+                mediaWorkflowGateService
+        );
+
+        ResponseStatusException exception = catchThrowableOfType(
+                () -> service.createUpload(
+                        "default",
+                        "task-1",
+                        "idempotency-1",
+                        new CreateMediaUploadRequest("V1 初剪", "source.mp4", 1024L, "video/mp4", 1L)
+                ),
+                ResponseStatusException.class
+        );
+
+        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        verify(storageService, never()).createMultipartUpload(anyString(), anyString());
+        verify(mapper, never()).findUploadByIdempotency(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void shouldRestoreCurrentUploadFromServerState() {
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        when(mapper.findCurrentUpload("task-1", "default"))
+                .thenReturn(Optional.of(upload("UPLOADING")));
+        when(mapper.listParts("upload-1")).thenReturn(List.of());
+
+        var response = service(mapper).getCurrentUpload("default", "task-1");
+
+        assertThat(response.uploadSessionId()).isEqualTo("upload-1");
+        assertThat(response.idempotencyKey()).isEqualTo("idempotency-1");
+        assertThat(response.status()).isEqualTo("UPLOADING");
     }
 
     /**
@@ -122,8 +178,17 @@ class MediaUploadServiceTest {
                 new ObjectStorageProperties(),       // 使用默认属性（凭证为空，但测试不触发 OSS 调用）
                 mock(ObjectStorageService.class),    // Mock OSS 服务（测试不涉及 OSS 调用）
                 mapper,                              // 可控制的 Mapper Mock
-                mock(MediaUploadPersistenceService.class) // Mock 持久化服务
+                mock(MediaUploadPersistenceService.class), // Mock 持久化服务
+                mock(CreatorMediaWorkflowGateService.class)
         );
+    }
+
+    private ObjectStorageProperties configuredStorageProperties() {
+        ObjectStorageProperties properties = new ObjectStorageProperties();
+        properties.setAccessKey("test-access-key");
+        properties.setSecretKey("test-secret-key");
+        properties.setBucket("test-media-bucket");
+        return properties;
     }
 
     /**

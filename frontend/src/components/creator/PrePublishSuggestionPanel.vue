@@ -141,8 +141,10 @@ async function generateDraft() {
   if (isActiveStepReadOnly.value) {
     return
   }
-  await generatePrePublishManuscriptDraftForCurrentTask(draftRequirement.value)
-  draftRequirement.value = ''
+  const generated = await generatePrePublishManuscriptDraftForCurrentTask(draftRequirement.value)
+  if (generated) {
+    draftRequirement.value = ''
+  }
 }
 
 async function generatePlan() {

@@ -554,6 +554,18 @@ export type CreatorFeedbackChatResult = {
   createTime: string
 }
 
+/**
+ * 反馈追问的单轮状态由结果弹窗和抽屉共同展示。
+ * 提取为共享类型，避免组件拆分后分别维护不一致的加载与失败状态。
+ */
+export type CreatorFeedbackChatTurn = {
+  id: string
+  question: string
+  result: CreatorFeedbackChatResult | null
+  status: 'PENDING' | 'DONE' | 'FAILED'
+  errorMessage?: string
+}
+
 // 阶段 4.13：重建证据索引入参。两个字段都可空，为空时后端回落到 creator.feedback.rag 配置默认值。
 export type CreatorFeedbackEvidenceIndexPayload = {
   maxItems?: number | null

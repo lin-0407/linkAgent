@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import type { Ref } from 'vue' // eslint-disable-line @typescript-eslint/no-unused-vars
+import type { Ref } from 'vue'
 import { getTaskLlmUsageSummary, listTaskLlmApiCalls } from '@/api/creator'
 import type { LlmApiCallPage, LlmApiModelCategory, LlmApiUsageSummary } from '@/types/creator'
 
@@ -7,6 +7,8 @@ export function useCreatorUsage(
   getSelectedTaskId: () => string,
   errorRef: Ref<string>,
 ) {
+  let usageRequestVersion = 0
+
   // ── 状态 ──
   const usageSummary = ref<LlmApiUsageSummary | null>(null)
   const usageCallPage = ref<LlmApiCallPage | null>(null)
@@ -48,9 +50,12 @@ export function useCreatorUsage(
   }
 
   async function refreshUsageStats(page = usageCurrentPage.value, reportError = true) {
-    if (!getSelectedTaskId()) {
+    const taskId = getSelectedTaskId()
+    const version = ++usageRequestVersion
+    if (!taskId) {
       usageSummary.value = null
       usageCallPage.value = null
+      isLoadingUsageStats.value = false
       return
     }
     isLoadingUsageStats.value = true
@@ -58,16 +63,19 @@ export function useCreatorUsage(
       const modelCategory =
         usageCategoryFilter.value === 'ALL' ? undefined : usageCategoryFilter.value
       const [summary, callPage] = await Promise.all([
-        getTaskLlmUsageSummary(getSelectedTaskId()),
-        listTaskLlmApiCalls(getSelectedTaskId(), page, 20, modelCategory),
+        getTaskLlmUsageSummary(taskId),
+        listTaskLlmApiCalls(taskId, page, 20, modelCategory),
       ])
+      if (version !== usageRequestVersion || getSelectedTaskId() !== taskId) return
       usageSummary.value = summary
       usageCallPage.value = callPage
       usageCurrentPage.value = callPage.page
     } catch (error) {
-      if (reportError) showError(error)
+      if (reportError && version === usageRequestVersion && getSelectedTaskId() === taskId) {
+        showError(error)
+      }
     } finally {
-      isLoadingUsageStats.value = false
+      if (version === usageRequestVersion) isLoadingUsageStats.value = false
     }
   }
 

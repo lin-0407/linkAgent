@@ -13,6 +13,7 @@ import java.util.List;
  * <ol>
  *   <li>createMultipartUpload — 创建分片上传，获取 Upload ID</li>
  *   <li>presignUploadPart — 为指定分片生成短时预签名 PUT URL</li>
+ *   <li>presignGetObject — 为探测或 Provider 生成短时预签名 GET URL</li>
  *   <li>completeMultipartUpload — 提交所有分片 ETag 合并为完整对象</li>
  *   <li>abortMultipartUpload — 取消上传，释放未合并分片</li>
  *   <li>headObject — 获取对象元数据（大小、类型、ETag）</li>
@@ -37,6 +38,7 @@ public interface ObjectStorageService {
      * <p>
      * 生成的 URL 含认证签名，浏览器可直接 PUT 分片数据而不经过本服务。
      *
+     * @param bucketName       对象所在 Bucket；历史记录必须使用持久化事实，不能依赖当前部署配置
      * @param objectKey         对象键
      * @param uploadId          Multipart Upload ID
      * @param partNumber        分片序号（1-based，范围 1–10000）
@@ -44,9 +46,21 @@ public interface ObjectStorageService {
      * @return 预签名结果（含上传 URL 和过期时间）
      */
     PresignedUploadPart presignUploadPart(String objectKey,
-                                          String uploadId,
-                                          int partNumber,
-                                          Duration signatureDuration);
+                                           String uploadId,
+                                           int partNumber,
+                                           Duration signatureDuration);
+
+    /**
+     * 为私有对象生成短时 GET URL。
+     * <p>
+     * 用于 ffprobe 读取媒体元信息，以及后续 Qwen/ASR 等云端 Provider 回源读取代理媒体。
+     * 返回的 URL 含签名，调用方不得记录到日志或持久化。
+     *
+     * @param objectKey         对象键
+     * @param signatureDuration 签名有效期
+     * @return 预签名读取结果
+     */
+    PresignedObjectRead presignGetObject(String bucketName, String objectKey, Duration signatureDuration);
 
     /**
      * 提交所有分片 ETag，完成 Multipart Upload。

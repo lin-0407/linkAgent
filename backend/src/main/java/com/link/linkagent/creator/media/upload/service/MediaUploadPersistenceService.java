@@ -52,7 +52,7 @@ public class MediaUploadPersistenceService {
             // 场景 1：该任务首次创建成片，直接 INSERT
             draftRows = mediaUploadMapper.insertDraftVideo(draftVideo);
         } else {
-            // 场景 2：已有成片记录需要重置（上次尝试失败或取消）
+            // 场景 2：已有成片记录需要重置（上传失败、取消或媒体探测失败）
             // 先对旧上传会话加行级锁，防止并发覆盖
             replacedUpload = mediaUploadMapper.lockUploadByObjectKey(
                             draftVideo.versionId(),
@@ -63,9 +63,9 @@ public class MediaUploadPersistenceService {
                     .orElseThrow(() -> new IllegalStateException("原上传会话不存在，不能创建新的上传会话"));
 
             // 根据旧会话状态决定是否允许替换
-            if ("FAILED".equals(replacedUpload.status())) {
-                // 失败会话：先标记为 SUPERSEDED（已被替代），再创建新会话
-                if (mediaUploadMapper.supersedeFailedUpload(
+            if ("FAILED".equals(replacedUpload.status()) || "COMPLETED".equals(replacedUpload.status())) {
+                // 失败会话或探测失败后的完整会话先标记为已替代，防止旧会话继续返回错误对象事实。
+                if (mediaUploadMapper.supersedeReplacedUpload(
                         replacedUpload.taskId(),
                         replacedUpload.ownerId(),
                         replacedUpload.uploadSessionId()
@@ -77,6 +77,8 @@ public class MediaUploadPersistenceService {
                 // VERIFYING 可能正在完成 OSS 对象，必须拒绝替换，避免两个成片同时争用当前版本
                 throw new IllegalStateException("原上传会话仍在处理，不能创建新的上传会话");
             }
+            // COMPLETED 只会在上层已确认成片为 PROBE_FAILED 时到达这里；原片已完整上传，
+            // 但不能进入试映，允许用新的对象键替换而不让无效视频卡死在当前任务中。
 
             // 更新成片记录：对象键、版本名等字段替换为新值，状态重置为 UPLOADING
             draftRows = mediaUploadMapper.resetDraftVideoForUpload(draftVideo, previousObjectKey);
@@ -200,7 +202,7 @@ public class MediaUploadPersistenceService {
             return false; // CAS 失败，状态已被其他操作修改
         }
         // 步 2：标记成片为 UPLOAD_ABORTED
-        mediaUploadMapper.updateDraftVideoStatus(
+        if (mediaUploadMapper.updateDraftVideoStatus(
                 upload.taskId(),
                 upload.ownerId(),
                 upload.versionId(),
@@ -208,7 +210,9 @@ public class MediaUploadPersistenceService {
                 "UPLOAD_ABORTED",
                 upload.contentType(),
                 upload.expectedSize()
-        );
+        ) != 1) {
+            throw new IllegalStateException("成片取消状态保存失败");
+        }
         // 步 3：清理已登记分片记录（取消后无保留价值，释放存储空间）
         mediaUploadMapper.deleteParts(upload.uploadSessionId());
         return true;
@@ -231,7 +235,7 @@ public class MediaUploadPersistenceService {
             return false; // CAS 失败，可能尚未过期或状态已变化
         }
         // 步 2：标记成片为 UPLOAD_FAILED
-        mediaUploadMapper.updateDraftVideoStatus(
+        if (mediaUploadMapper.updateDraftVideoStatus(
                 upload.taskId(),
                 upload.ownerId(),
                 upload.versionId(),
@@ -239,7 +243,9 @@ public class MediaUploadPersistenceService {
                 "UPLOAD_FAILED",
                 upload.contentType(),
                 upload.expectedSize()
-        );
+        ) != 1) {
+            throw new IllegalStateException("成片过期状态保存失败");
+        }
         return true;
     }
 }

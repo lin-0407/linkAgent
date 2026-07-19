@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
  * @param status            当前会话状态
  * @param expectedSize      文件预期总字节数
  * @param fileFingerprint   文件指纹（续传对账用）
+ * @param idempotencyKey    创建会话的幂等键，浏览器丢失本地指针后用于恢复同一会话
  * @param partSize          单分片大小
  * @param totalParts        总分片数
  * @param completedPartCount 已完成分片数（前端据此计算进度百分比）
@@ -28,6 +29,7 @@ public record MediaUploadResponse(
         String status,
         long expectedSize,
         String fileFingerprint,
+        String idempotencyKey,
         int partSize,
         int totalParts,
         int completedPartCount,

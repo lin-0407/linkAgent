@@ -9,6 +9,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackEvidenceRetrieva
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord;
 import com.link.linkagent.creator.feedback.util.CreatorFeedbackLabelUtil;
+import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.llm.usage.LlmUsageContext;
@@ -100,17 +101,21 @@ public class CreatorFeedbackEvidenceIndexService {
     private final ObjectProvider<VectorStore> vectorStoreProvider;
     /** 运行期设置服务，控制 RAG 业务开关（creator.feedback.rag.enabled） */
     private final RuntimeSettingService runtimeSettingService;
+    /** 发布后流程门禁，避免历史反馈明细在未完成试映时继续触发 Embedding 写入。 */
+    private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
 
     public CreatorFeedbackEvidenceIndexService(CreatorFeedbackRagProperties ragProperties,
                                                CreatorTaskMapper creatorTaskMapper,
                                                CreatorFeedbackMapper creatorFeedbackMapper,
                                                ObjectProvider<VectorStore> vectorStoreProvider,
-                                               RuntimeSettingService runtimeSettingService) {
+                                               RuntimeSettingService runtimeSettingService,
+                                               CreatorMediaWorkflowGateService mediaWorkflowGateService) {
         this.ragProperties = ragProperties;
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.vectorStoreProvider = vectorStoreProvider;
         this.runtimeSettingService = runtimeSettingService;
+        this.mediaWorkflowGateService = mediaWorkflowGateService;
     }
 
     /**
@@ -131,6 +136,7 @@ public class CreatorFeedbackEvidenceIndexService {
      * 异常约定：
      * <ul>
      *   <li>任务不存在：404</li>
+     *   <li>成片未通过媒体探测：409</li>
      *   <li>RAG 业务开关未启用 / Milvus 未就绪 / 无明细：400</li>
      *   <li>Embedding 或 Milvus 部分失败：不报错，写入 failedCount + warnings</li>
      * </ul>
@@ -142,7 +148,7 @@ public class CreatorFeedbackEvidenceIndexService {
      * @return 索引结果响应（含成功数、失败数、警告列表）
      */
     public CreatorFeedbackEvidenceIndexResponse rebuild(String taskId, CreatorFeedbackEvidenceIndexRequest request) {
-        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        CreatorTaskRecord taskRecord = getTaskReadyForFeedback(taskId);
         if (!runtimeSettingService.isCreatorFeedbackRagEnabled()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "反馈追问 RAG 业务开关未启用，请先在设置面板打开 creator.feedback.rag.enabled");
@@ -391,5 +397,19 @@ public class CreatorFeedbackEvidenceIndexService {
     private CreatorTaskRecord getTaskRecord(String taskId) {
         return creatorTaskMapper.findTaskByTaskId(taskId.trim())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+    }
+
+    /**
+     * 索引重建会调用 Embedding 并回写明细状态，因此属于新的反馈处理，不是历史结果查询。
+     */
+    private CreatorTaskRecord getTaskReadyForFeedback(String taskId) {
+        mediaWorkflowGateService.ensureMediaEnabled("观众反馈");
+        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        mediaWorkflowGateService.ensureReadyForPostPublish(
+                taskRecord.getTaskId(),
+                taskRecord.getUserId(),
+                "观众反馈"
+        );
+        return taskRecord;
     }
 }

@@ -29,6 +29,8 @@ public class CreatorMediaProperties {
     private int unpublishedRetentionDays = 30;
     /** 上传子配置（分片大小、签名 TTL） */
     private final Upload upload = new Upload();
+    /** 媒体处理子配置（ffprobe 路径、超时、Provider 短签 TTL） */
+    private final Processing processing = new Processing();
 
     // ===== 顶层 getter/setter =====
 
@@ -45,6 +47,8 @@ public class CreatorMediaProperties {
     public void setUnpublishedRetentionDays(int unpublishedRetentionDays) { this.unpublishedRetentionDays = unpublishedRetentionDays; }
 
     public Upload getUpload() { return upload; }
+
+    public Processing getProcessing() { return processing; }
 
     /**
      * 开启媒体能力时执行运行前校验。
@@ -80,6 +84,18 @@ public class CreatorMediaProperties {
         if (unpublishedRetentionDays <= 0) {
             throw new IllegalStateException("未发布媒体保留天数必须大于0");
         }
+        if (processing.ffprobePath == null || processing.ffprobePath.isBlank()) {
+            throw new IllegalStateException("ffprobe 命令路径不能为空");
+        }
+        if (processing.probeTimeout == null || processing.probeTimeout.isZero() || processing.probeTimeout.isNegative()) {
+            throw new IllegalStateException("媒体探测超时时间必须大于0");
+        }
+        if (processing.providerReadTtl == null || processing.providerReadTtl.isZero() || processing.providerReadTtl.isNegative()) {
+            throw new IllegalStateException("Provider 媒体读取短签有效期必须大于0");
+        }
+        if (processing.providerReadTtl.compareTo(processing.probeTimeout.plusSeconds(5)) <= 0) {
+            throw new IllegalStateException("Provider 媒体读取短签有效期必须大于媒体探测超时时间");
+        }
     }
 
     /**
@@ -109,5 +125,29 @@ public class CreatorMediaProperties {
 
         public Duration getAbandonedTtl() { return abandonedTtl; }
         public void setAbandonedTtl(Duration abandonedTtl) { this.abandonedTtl = abandonedTtl; }
+    }
+
+    /**
+     * 媒体处理配置。
+     * <p>
+     * Spring Boot 会自动将 creator.media.processing.* 绑定到此内部类的字段。
+     */
+    public static class Processing {
+
+        /** ffprobe 可执行文件路径；默认从 PATH 查找 */
+        private String ffprobePath = "ffprobe";
+        /** 单次 ffprobe 探测超时时间 */
+        private Duration probeTimeout = Duration.ofSeconds(30);
+        /** Provider 读取媒体对象的短签 GET URL 有效期 */
+        private Duration providerReadTtl = Duration.ofMinutes(5);
+
+        public String getFfprobePath() { return ffprobePath; }
+        public void setFfprobePath(String ffprobePath) { this.ffprobePath = ffprobePath; }
+
+        public Duration getProbeTimeout() { return probeTimeout; }
+        public void setProbeTimeout(Duration probeTimeout) { this.probeTimeout = probeTimeout; }
+
+        public Duration getProviderReadTtl() { return providerReadTtl; }
+        public void setProviderReadTtl(Duration providerReadTtl) { this.providerReadTtl = providerReadTtl; }
     }
 }

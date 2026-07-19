@@ -30,6 +30,35 @@ const normalizeOptionalNumber = (v: unknown) => {
   return undefined
 }
 
+/**
+ * 评测结果草稿由工作台和开发者弹窗共同编辑。
+ * 单独导出类型可以让弹窗通过受控 props/emits 更新，避免拆分后直接改写注入对象里的状态。
+ */
+export type CreatorEvaluationResultDraft = {
+  taskId: string
+  workflowSessionId: string
+  targetStage: CreatorWorkflowStage
+  modelName: string
+  promptVersion: string
+  promptHash: string
+  promptSnapshot: string
+  outputSummary: string
+  rawOutput: string
+  elapsedMs: number | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  failureReason: string
+  readabilityScore: number
+  relevanceScore: number
+  completenessScore: number
+  accuracyScore: number
+  stabilityScore: number
+  costScore: number
+  explainabilityScore: number
+  reviewerNote: string
+}
+
 export function useCreatorEvaluation(errorRef: Ref<string>) {
   // ── 状态 ──
   const evalCases = ref<CreatorEvalCase[]>([])
@@ -42,7 +71,7 @@ export function useCreatorEvaluation(errorRef: Ref<string>) {
   const isLoadingEvalResults = ref(false)
   const isRecordingEvalResult = ref(false)
 
-  const evalResultDraft = reactive({
+  const evalResultDraft = reactive<CreatorEvaluationResultDraft>({
     taskId: '',
     workflowSessionId: '',
     targetStage: 'PRE_PUBLISH' as CreatorWorkflowStage,

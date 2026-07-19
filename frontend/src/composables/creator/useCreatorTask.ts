@@ -19,6 +19,7 @@ type TaskManageMode = 'create' | 'edit'
 
 export function useCreatorTask(errorRef: Ref<string>) {
   const creatorStore = useCreatorStore()
+  let taskLoadVersion = 0
 
   // ── 状态 ──
   const tasks = ref<CreatorTaskSummary[]>([])
@@ -236,13 +237,15 @@ export function useCreatorTask(errorRef: Ref<string>) {
 
   /** 选中已有任务并加载完整数据，返回任务对象供编排层加载关联数据 */
   async function loadTask(taskId: string): Promise<CreatorTask | null> {
+    const version = ++taskLoadVersion
     try {
       const task = await getCreatorTask(taskId)
+      if (version !== taskLoadVersion) return null
       selectedTask.value = task
       creatorStore.selectedTaskId = task.taskId
       return task
     } catch (error) {
-      showError(error)
+      if (version === taskLoadVersion) showError(error)
       return null
     }
   }

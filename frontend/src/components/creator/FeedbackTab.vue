@@ -87,7 +87,10 @@ const {
               isActiveStepReadOnly ||
               !canEnterFeedback ||
               !feedbackScriptBv ||
-              isFetchingFeedback
+              isFetchingFeedback ||
+              isImportingFeedback ||
+              isSavingFeedback ||
+              isAnalyzingFeedback
             "
             @click="fetchFeedbackByBv"
           >
@@ -160,7 +163,14 @@ const {
             type="file"
             accept=".json,.txt,application/json,text/plain"
             aria-label="上传评论或弹幕文件"
-            :disabled="isActiveStepReadOnly || !canEnterFeedback || isImportingFeedback || isFetchingFeedback"
+            :disabled="
+              isActiveStepReadOnly ||
+              !canEnterFeedback ||
+              isImportingFeedback ||
+              isFetchingFeedback ||
+              isSavingFeedback ||
+              isAnalyzingFeedback
+            "
             @change="handleFeedbackFileChange"
           />
         </label>
@@ -172,7 +182,9 @@ const {
             !canEnterFeedback ||
             !feedbackImportFile ||
             isImportingFeedback ||
-            isFetchingFeedback
+            isFetchingFeedback ||
+            isSavingFeedback ||
+            isAnalyzingFeedback
           "
           @click="importFeedbackFile"
         >
@@ -229,7 +241,9 @@ const {
               !canEnterFeedback ||
               !hasFeedbackSampleInput ||
               isSavingFeedback ||
-              isFetchingFeedback
+              isFetchingFeedback ||
+              isImportingFeedback ||
+              isAnalyzingFeedback
             "
             @click="submitFeedback"
           >

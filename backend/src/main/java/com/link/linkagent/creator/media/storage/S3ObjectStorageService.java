@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.media.storage;
 
 import com.link.linkagent.creator.media.config.ObjectStorageProperties;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.exception.SdkException;
@@ -12,11 +13,14 @@ import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.CreateMultipartUploadRequest;
 import software.amazon.awssdk.services.s3.model.CreateMultipartUploadResponse;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchUploadException;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedUploadPartRequest;
 import software.amazon.awssdk.services.s3.presigner.model.UploadPartPresignRequest;
 
@@ -46,15 +50,19 @@ public class S3ObjectStorageService implements ObjectStorageService {
     // S3Client：后端控制面操作（CreateMultipartUpload、Complete、Abort、Head、Delete）
     private final S3Client s3Client;
     // S3Presigner：生成浏览器直传 OSS 的短时签名 URL（上传分片不经过本服务）
-    private final S3Presigner s3Presigner;
+    private final S3Presigner uploadPartPresigner;
+    // S3Presigner：生成 Provider/ffprobe 读取私有对象的短时签名 URL
+    private final S3Presigner providerReadPresigner;
     // 对象存储配置（Bucket、Region 等）
     private final ObjectStorageProperties properties;
 
     public S3ObjectStorageService(S3Client s3Client,
-                                  S3Presigner s3Presigner,
-                                  ObjectStorageProperties properties) {
+                                   @Qualifier("mediaS3Presigner") S3Presigner uploadPartPresigner,
+                                   @Qualifier("mediaProviderS3Presigner") S3Presigner providerReadPresigner,
+                                   ObjectStorageProperties properties) {
         this.s3Client = s3Client;
-        this.s3Presigner = s3Presigner;
+        this.uploadPartPresigner = uploadPartPresigner;
+        this.providerReadPresigner = providerReadPresigner;
         this.properties = properties;
     }
 
@@ -93,6 +101,7 @@ public class S3ObjectStorageService implements ObjectStorageService {
      * 预签名 URL 包含认证签名，浏览器拿到后可直接 PUT 数据到 OSS，
      * 不经过本服务中转。URL 有效期由 signatureDuration 控制（默认 15 分钟）。
      *
+     * @param bucketName       对象所在 Bucket
      * @param objectKey         对象键
      * @param uploadId          Multipart Upload ID
      * @param partNumber        分片序号（1-based）
@@ -118,7 +127,7 @@ public class S3ObjectStorageService implements ObjectStorageService {
                     .uploadPartRequest(uploadPartRequest)
                     .build();
             // 调用 Presigner 生成预签名 URL
-            PresignedUploadPartRequest signedRequest = s3Presigner.presignUploadPart(presignRequest);
+            PresignedUploadPartRequest signedRequest = uploadPartPresigner.presignUploadPart(presignRequest);
             return new PresignedUploadPart(
                     partNumber,
                     signedRequest.url().toString(), // 含签名的完整 URL
@@ -126,6 +135,38 @@ public class S3ObjectStorageService implements ObjectStorageService {
             );
         } catch (SdkException exception) {
             throw storageFailure("生成媒体分片上传签名失败", exception);
+        }
+    }
+
+    /**
+     * 为私有媒体对象生成短时 GET URL。
+     * <p>
+     * 该 URL 后续会交给 ffprobe 或云端 Provider 读取，不能持久化，也不能写日志。
+     *
+     * @param objectKey         对象键
+     * @param signatureDuration 签名有效期
+     * @return 短时读取签名结果
+     */
+    @Override
+    public PresignedObjectRead presignGetObject(String bucketName,
+                                                String objectKey,
+                                                Duration signatureDuration) {
+        try {
+            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(objectKey)
+                    .build();
+            GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
+                    .signatureDuration(signatureDuration)
+                    .getObjectRequest(getObjectRequest)
+                    .build();
+            PresignedGetObjectRequest signedRequest = providerReadPresigner.presignGetObject(presignRequest);
+            return new PresignedObjectRead(
+                    signedRequest.url().toString(),
+                    Instant.now().plus(signatureDuration)
+            );
+        } catch (SdkException exception) {
+            throw storageFailure("生成媒体读取签名失败", exception);
         }
     }
 

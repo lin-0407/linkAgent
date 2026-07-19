@@ -99,6 +99,15 @@ public class MediaUploadController {
     }
 
     /**
+     * 查询任务当前活跃上传会话，浏览器本地续传指针丢失时仍可恢复服务端状态。
+     */
+    @GetMapping("/current")
+    public MediaUploadResponse getCurrentUpload(
+            @PathVariable @Pattern(regexp = SAFE_ID_PATTERN, message = "任务ID格式不正确") String taskId) {
+        return mediaUploadService.getCurrentUpload(DEFAULT_OWNER_ID, taskId);
+    }
+
+    /**
      * 列出已登记的分片列表，供前端续传时判断哪些分片已完成。
      * <p>
      * GET /api/creator/tasks/{taskId}/draft-video/uploads/{uploadSessionId}/parts

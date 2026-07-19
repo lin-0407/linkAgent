@@ -27,6 +27,12 @@ export function getDraftVideoUpload(taskId: string, uploadSessionId: string) {
   return get<MediaUpload>(uploadUrl(taskId, uploadSessionId))
 }
 
+export function getCurrentDraftVideoUpload(taskId: string) {
+  return get<MediaUpload>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/draft-video/uploads/current`,
+  )
+}
+
 export function listDraftVideoUploadParts(taskId: string, uploadSessionId: string) {
   return get<MediaUploadPart[]>(`${uploadUrl(taskId, uploadSessionId)}/parts`)
 }
@@ -55,6 +61,22 @@ export function registerDraftVideoUploadParts(
 
 export function completeDraftVideoUpload(taskId: string, uploadSessionId: string) {
   return post<DraftVideo>(`${uploadUrl(taskId, uploadSessionId)}:complete`)
+}
+
+export function getCurrentDraftVideo(taskId: string) {
+  return get<DraftVideo>(`/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/current`)
+}
+
+export function getDraftVideo(taskId: string, versionId: string) {
+  return get<DraftVideo>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}`,
+  )
+}
+
+export function probeDraftVideo(taskId: string, versionId: string) {
+  return post<DraftVideo>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}:probe`,
+  )
 }
 
 export function abortDraftVideoUpload(taskId: string, uploadSessionId: string) {

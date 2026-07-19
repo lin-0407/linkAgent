@@ -7,6 +7,7 @@ import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportRecord;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorSampleRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord;
+import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.creator.preference.mapper.CreatorPreferenceMapper;
 import com.link.linkagent.creator.preference.model.CreatorPreferenceRecord;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
@@ -23,6 +24,7 @@ import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.prompt.StubPromptService;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
@@ -31,6 +33,9 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class CreatorReportServiceTest {
 
@@ -62,7 +67,8 @@ class CreatorReportServiceTest {
                         {"contentSummary":"本期内容总结","coreSellingPoints":["卖点1"],"titleDescriptionReview":{"titleConclusion":"标题合适","descriptionConclusion":"简介清楚","tagAndPartitionConclusion":"分区准确","riskReminder":"注意风险"},"audienceFeedbackSummary":"反馈不错","competitorComparison":{"benchmarkConclusion":"对标清楚","ownAdvantages":["优势"],"ownDisadvantages":["短板"],"differentiationStrategy":"做差异化"},"controversyAndMisunderstanding":[{"point":"争议点","impact":"中等","action":"继续解释"}],"nextActionSuggestions":[{"suggestion":"做下一期","reason":"观众想看","priority":"HIGH"}],"creatorPreferenceInsight":["偏好干货表达"],"overallConclusion":"适合继续做"}
                         """),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new StubPromptService());
+                new StubPromptService(),
+                mock(CreatorMediaWorkflowGateService.class));
 
         CreatorReportResponse response = service.analyze(
                 "task-1",
@@ -100,7 +106,8 @@ class CreatorReportServiceTest {
                 new CreatorPreferenceService(new FakeCreatorPreferenceMapper()),
                 new FixedLlmService("{}"),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new StubPromptService());
+                new StubPromptService(),
+                mock(CreatorMediaWorkflowGateService.class));
 
         assertThatThrownBy(() -> service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null)))
                 .isInstanceOf(ResponseStatusException.class)
@@ -128,7 +135,8 @@ class CreatorReportServiceTest {
                 new CreatorPreferenceService(new FakeCreatorPreferenceMapper()),
                 new FixedLlmService("{}"),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new StubPromptService());
+                new StubPromptService(),
+                mock(CreatorMediaWorkflowGateService.class));
 
         assertThatThrownBy(() -> service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null)))
                 .isInstanceOf(ResponseStatusException.class)
@@ -161,13 +169,45 @@ class CreatorReportServiceTest {
                 new CreatorPreferenceService(preferenceMapper),
                 new FixedLlmService("不是 JSON"),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new StubPromptService());
+                new StubPromptService(),
+                mock(CreatorMediaWorkflowGateService.class));
 
         CreatorReportResponse response = service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
 
         assertThat(response.parseStatus()).isEqualTo("RAW_ONLY");
         assertThat(response.rawOutput()).isEqualTo("不是 JSON");
         assertThat(preferenceMapper.savedRecord).isNull();
+    }
+
+    @Test
+    void shouldRejectReportGenerationBeforeReadingPrerequisitesWhenMediaGateRejects() {
+        FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
+        taskMapper.taskRecord = createTaskRecord();
+        FakeCreatorReportMapper reportMapper = new FakeCreatorReportMapper();
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "成片尚未通过媒体探测"))
+                .when(mediaWorkflowGateService)
+                .ensureReadyForPostPublish("task-1", "default", "创作复盘");
+        CreatorReportService service = new CreatorReportService(
+                taskMapper,
+                new FakeCreatorSuggestionMapper(),
+                new FakeCreatorFeedbackMapper(),
+                new FakeCreatorCompetitorMapper(),
+                reportMapper,
+                new CreatorPreferenceService(new FakeCreatorPreferenceMapper()),
+                new FixedLlmService("{}"),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new StubPromptService(),
+                mediaWorkflowGateService
+        );
+
+        assertThatThrownBy(() -> service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null)))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        verify(mediaWorkflowGateService).ensureMediaEnabled("创作复盘");
+        assertThat(reportMapper.savedRecord).isNull();
+        assertThat(taskMapper.updatedStatus).isNull();
     }
 
     private CreatorTaskRecord createTaskRecord() {
@@ -299,7 +339,7 @@ class CreatorReportServiceTest {
 
         @Override
         public List<com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord> listTasksByUser(String userId, int limit) {
-            throw new UnsupportedOperationException();
+            return List.of();
         }
 
         @Override

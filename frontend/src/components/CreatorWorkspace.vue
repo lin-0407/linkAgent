@@ -1,139 +1,66 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { ApiError } from '@/api/http'
 import {
-  deleteCreatorTask,
-  analyzeCreatorFeedback,
-  analyzePrePublishWorkflow,
-  chatCreatorFeedback,
-  confirmWorkflowPrePublishSuggestion,
-  createCreatorTask,
-  exportCreatorReportMarkdown,
-  getCreatorFeedback,
-  getCreatorFeedbackDashboard,
-  getCreatorFeedbackEvidenceIndexStatus,
-  getCreatorFeedbackReport,
   getCreatorTask,
-  getTaskLlmUsageSummary,
-  getPrePublishSuggestion,
-  fetchCreatorFeedbackByBv,
-  generatePrePublishManuscriptDraft,
-  importCreatorFeedbackFile,
   disableCreatorContextTerm,
-  listCreatorContextTerms,
-  listCreatorEvalCases,
-  listCreatorEvalPromptVersionStats,
-  listCreatorEvalResults,
-  listTaskLlmApiCalls,
-  listCreatorPreferences,
-  listCreatorTasks,
-  listWorkflowMessages,
-  listWorkflowSteps,
   recordCreatorContextTermFeedback,
-  recordCreatorEvalResult,
-  rebuildCreatorFeedbackEvidenceIndex,
   saveCreatorContextTerm,
-  saveCreatorFeedback,
-  sendWorkflowMessage,
-  startPrePublishWorkflow,
-  updateCreatorTask,
 } from '@/api/creator'
-import { getMediaFeatureStatus } from '@/api/media'
-import MessageBubble from '@/components/MessageBubble.vue'
+import { getCurrentDraftVideo, getMediaFeatureStatus } from '@/api/media'
 import NotificationToast from '@/components/NotificationToast.vue'
+import CreatorDeleteConfirmModal from '@/components/creator/CreatorDeleteConfirmModal.vue'
+import CreatorDevTestModal from '@/components/creator/CreatorDevTestModal.vue'
+import CreatorResultModal from '@/components/creator/CreatorResultModal.vue'
+import CreatorTaskManagerModal from '@/components/creator/CreatorTaskManagerModal.vue'
+import CreatorWorkflowMessageModal from '@/components/creator/CreatorWorkflowMessageModal.vue'
 import { createPrePublishLayoutPreviewFixture } from '@/dev/prePublishLayoutPreview'
 import { useCreatorFeedbackEvent } from '@/composables/creator/useCreatorFeedbackEvent'
 import { provideCreatorWorkspace } from '@/composables/creator/useCreatorWorkspaceContext'
 import {
-  clampScriptNumber,
   contextTermPolarity,
-  contextTermSourceLabel,
   contextTermTypeLabel,
-  evalResultStatusLabel,
-  evalStageLabel,
-  extractBvid,
   formatDate,
+  formatDuration,
   formatInputCount,
-  formatMetric,
-  formatPercent,
-  formatValue,
-  getRecordText,
+  formatUsageToken,
   hasFeedbackResult,
   hasPrePublishResult,
   hasText,
-  isPrePublishSuggestionVisible,
-  isRecord,
-  isWorkflowStatus,
-  materialLabel,
   normalizeContextTermText,
   parseJsonArray,
   preferenceItemText,
   preferenceModeNoteByMode,
-  previewWorkflowMessage,
-  retrievalModeLabel,
   shortId,
-  statBarWidth,
   statusLabel,
   usageCategoryLabel,
   usageStatusClass,
   usageStatusLabel,
-  workflowContentTypeLabel,
-  workflowRoleLabel,
-  workflowSessionLabel,
 } from '@/composables/creator/creatorWorkspaceUtils'
 import type {
-  CreatorFeedback,
-  CreatorFeedbackChatResult,
-  CreatorFeedbackDashboard,
-  CreatorFeedbackEvidenceIndexStatus,
-  CreatorFeedbackFetchResult,
-  CreatorFeedbackReport,
-  CreatorEvalCase,
-  CreatorEvalPromptVersionStats,
-  CreatorEvalResult,
   CreatorContextPolarity,
   CreatorContextTerm,
   CreatorContextTermPayload,
   CreatorContextTermType,
-  CreatorPreference,
   CreatorPreferenceMode,
-  CreatorSuggestion,
   CreatorTask,
   CreatorTaskSummary,
-  CreatorTaskUpdatePayload,
-  CreatorWorkflowMessage,
-  CreatorWorkflowSession,
-  CreatorWorkflowStatus,
-  CreatorWorkflowStep,
   CreatorWorkflowStage,
-  LlmApiCallPage,
-  LlmApiCallRecord,
   LlmApiModelCategory,
-  LlmApiUsageCategorySummary,
-  LlmApiUsageSummary,
   ResultModalTarget,
 } from '@/types/creator'
-import type { ChatMessage } from '@/types/agent'
-import { useWorkflowSSE } from '@/composables/useWorkflowSSE'
+import type { DraftVideo } from '@/types/media'
 import { useCreatorStore } from '@/stores/creatorStore'
-import { useCreatorEvaluation } from '@/composables/creator/useCreatorEvaluation'
+import { useCreatorEvaluation, type CreatorEvaluationResultDraft } from '@/composables/creator/useCreatorEvaluation'
 import { useCreatorUsage } from '@/composables/creator/useCreatorUsage'
 import { useCreatorContext } from '@/composables/creator/useCreatorContext'
 import { useCreatorGuidance } from '@/composables/creator/useCreatorGuidance'
 import { useCreatorTask } from '@/composables/creator/useCreatorTask'
 import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
-type GuidanceEditorTarget = 'prePublish' | 'feedback'
-type TaskManageMode = 'create' | 'edit'
 type CreatorWorkStep = 'prePublish' | 'preflight' | 'feedback' | 'report'
 type CreatorStepKey = 'task' | CreatorWorkStep
-type FeedbackChatTurn = {
-  id: string
-  question: string
-  result: CreatorFeedbackChatResult | null
-  status: 'PENDING' | 'DONE' | 'FAILED'
-  errorMessage?: string
-}
 type PreferenceChip = {
   text: string
   sourceTaskId: string
@@ -145,6 +72,10 @@ type ContextTermOption = {
 }
 
 const AiCreationConsole = defineAsyncComponent(() => import('@/components/creator/AiCreationConsole.vue'))
+const CreatorContextLibraryModal = defineAsyncComponent(
+  () => import('@/components/creator/CreatorContextLibraryModal.vue'),
+)
+const CreatorFlowNav = defineAsyncComponent(() => import('@/components/creator/CreatorFlowNav.vue'))
 const FeedbackTab = defineAsyncComponent(() => import('@/components/creator/FeedbackTab.vue'))
 const GuidanceEditorModal = defineAsyncComponent(() => import('@/components/creator/GuidanceEditorModal.vue'))
 const MaterialsTab = defineAsyncComponent(() => import('@/components/creator/MaterialsTab.vue'))
@@ -173,7 +104,6 @@ const guidance = useCreatorGuidance()
 const {
   prePublishForm, feedbackAnalyzeForm,
   guidanceEditorTarget, lastPrePublishPreferenceMode, hasPrePublishPreferenceModeSnapshot,
-  defaultPrePublishGuidance, defaultFeedbackGuidance,
   loadGuidanceSettings, openGuidanceEditor, closeGuidanceEditor,
   resetCurrentGuidance, resetPrePublishPreferenceMode,
 } = guidance
@@ -198,28 +128,6 @@ const preferenceModeOptions: Array<{
     description: '新要求优先',
   },
 ]
-const taskStatusOptions: Array<{
-  value: 'ALL' | CreatorTaskSummary['status']
-  label: string
-}> = [
-  { value: 'ALL', label: '全部状态' },
-  { value: 'DRAFT', label: '草稿' },
-  { value: 'PRE_PUBLISH_ANALYZED', label: '发布前完成' },
-  { value: 'FEEDBACK_ANALYZED', label: '反馈分析完成' },
-  { value: 'COMPETITOR_ANALYZED', label: '竞品分析完成' },
-  { value: 'ANALYZED', label: '复盘完成' },
-]
-const videoTypeOptions = [
-  '未分类',
-  'GLOBAL',
-  '知识科普',
-  '游戏实况',
-  '游戏攻略',
-  '数码测评',
-  '影视杂谈',
-  '生活记录',
-  '鬼畜娱乐',
-]
 // 短文稿在 P0-1 中可能只是“已确认创意方向”，不能当成完整成片文稿来阻断 AI 补稿。
 const fullScriptMinLength = 800
 // 后端保存 AI 补稿时会写入该前缀。它让短创意和已经可用于生成发布方案的草稿保持可区分。
@@ -232,16 +140,6 @@ const contextTermOptions: ContextTermOption[] = [
   { value: 'AUDIENCE_CONCERN', label: '观众关注点', polarity: 'POSITIVE' },
   { value: 'TABOO', label: '慎用表达', polarity: 'NEGATIVE' },
 ]
-const evalStageOptions: Array<{
-  value: 'ALL' | CreatorWorkflowStage
-  label: string
-}> = [
-  { value: 'ALL', label: '全部样例' },
-  { value: 'PRE_PUBLISH', label: '发布前优化' },
-  { value: 'FEEDBACK', label: '评论弹幕' },
-  { value: 'REPORT', label: '复盘报告' },
-]
-const evalScoreOptions = [1, 2, 3, 4, 5]
 const usageCategoryOptions: Array<{
   value: 'ALL' | LlmApiModelCategory
   label: string
@@ -257,15 +155,20 @@ const usageCategoryOptions: Array<{
 
 // feedbackChatForm / feedbackScriptForm 统一来源：见 Adapter Layer → feedbackModule
 
-const tasks = ref<CreatorTaskSummary[]>([])
-const selectedTask = ref<CreatorTask | null>(null)
-const taskManageMode = ref<TaskManageMode>('create')
-const taskSearchQuery = ref('')
-const taskStatusFilter = ref<'ALL' | CreatorTaskSummary['status']>('ALL')
-// 任务列表是导航型信息，默认收进弹窗，避免持续挤占创作主流程空间。
 const errorMessage = ref('')
 const successMessage = ref('')
+const taskModule = useCreatorTask(errorMessage)
+const {
+  tasks, selectedTask, taskManageMode, taskSearchQuery, taskStatusFilter,
+  taskForm, pendingDeleteTask,
+  isLoadingTasks, isCreatingTask, isUpdatingTask, isDeletingTask,
+  selectedTaskId, hasSelectedTask, hasSelectedTaskMaterials, hasTaskMaterialInput,
+  filteredTasks, taskSummaryStats, taskSubmitLabel, taskFormTitle, taskFormHint,
+  materialPreview, currentVideoType,
+  taskStatusOptions, videoTypeOptions,
+} = taskModule
 
+// 任务列表是导航型信息，默认收进弹窗，避免持续挤占创作主流程空间。
 const isTaskManagerOpen = ref(false)
 const isTaskComposerOpen = ref(false)
 // 任务编辑会临时进入资料页，记录编辑前阶段，避免取消或保存后把用户困在第一阶段。
@@ -273,27 +176,15 @@ const editReturnStep = ref<CreatorWorkStep>('prePublish')
 // 评测域状态迁移至 useCreatorEvaluation
 const evaluationModule = useCreatorEvaluation(errorMessage)
 const {
-  evalCases, selectedEvalCaseId, selectedEvalResultId, evalStageFilter,
+  evalCases, selectedEvalResultId, evalStageFilter,
   evalResults, evalPromptVersionStats, evalResultDraft,
   isLoadingEvalCases, isLoadingEvalResults, isRecordingEvalResult,
   filteredEvalCases, selectedEvalCase, selectedEvalResult, canRecordEvalResult,
-  loadEvaluationCases, refreshEvaluationCases, refreshEvaluationResults,
+  loadEvaluationCases, refreshEvaluationResults,
   selectEvalCase, submitEvalResult,
 } = evaluationModule
 const isDeveloperTestOpen = ref(false)
-const isResultModalBackdropPointerDown = ref(false)
 const isGuidanceBackdropPointerDown = ref(false)
-const suggestion = ref<CreatorSuggestion | null>(null)
-const feedback = ref<CreatorFeedback | null>(null)
-const feedbackReport = ref<CreatorFeedbackReport | null>(null)
-const feedbackChatResult = ref<CreatorFeedbackChatResult | null>(null)
-const feedbackChatTurns = ref<FeedbackChatTurn[]>([])
-const feedbackChatThreadRef = ref<HTMLElement | null>(null)
-// 阶段 4.13：证据索引状态与重建结果提示。状态在打开反馈报告弹窗时按需加载，避免每次切任务都多发请求。
-const feedbackEvidenceIndexStatus = ref<CreatorFeedbackEvidenceIndexStatus | null>(null)
-const feedbackEvidenceIndexWarnings = ref<string[]>([])
-const feedbackDashboard = ref<CreatorFeedbackDashboard | null>(null)
-const feedbackFetchResult = ref<CreatorFeedbackFetchResult | null>(null)
 // 语境库域迁移至 useCreatorContext（saveContextTerm 作为编排函数留在组件）
 const contextModule = useCreatorContext(errorMessage)
 const {
@@ -308,40 +199,49 @@ const contextTermForm = reactive({
   termType: 'KEYWORD' as CreatorContextTermType,
   evidenceText: '',
 })
-// feedbackImportFile → see Adapter Layer
-const feedbackImportWarnings = ref<string[]>([])
 // 开销统计域迁移至 useCreatorUsage
-const usageModule = useCreatorUsage(() => selectedTask.value?.taskId ?? '', errorMessage)
+const usageModule = useCreatorUsage(() => selectedTaskId.value, errorMessage)
 const {
   usageSummary, usageCallPage, usageCategoryFilter, usageCurrentPage,
   isLoadingUsageStats,
   usageCategorySummaries, usageTotalPages,
   refreshUsageStats, changeUsageCategoryFilter, changeUsagePage,
 } = usageModule
-const workflowSession = ref<CreatorWorkflowSession | null>(null)
-const workflowMessages = ref<CreatorWorkflowMessage[]>([])
-const workflowSteps = ref<CreatorWorkflowStep[]>([])
-const workflowMessageDraft = ref('')
-const workflowMessageListRef = ref<HTMLDivElement | null>(null)
-// useWorkflowSSE 统一管理 EventSource 生命周期、连接状态、心跳检测和版本校验，
-// 组件层只需提供 handlers 处理业务数据，不再直接操作 EventSource 实例。
+const workflowModule = useCreatorWorkflow(
+  selectedTaskId,
+  hasSelectedTaskMaterials,
+  errorMessage,
+  () => { void refreshUsageStats(1, false) },
+)
 const {
-  connect: connectWorkflowEvents,
+  workflowSession, workflowMessages, workflowSteps, workflowMessageDraft,
+  selectedWorkflowMessageId, suggestion, workflowMessageModalOpen,
+  isAnalyzingPrePublish, isConfirmingPrePublish, isGeneratingPrePublishDraft,
+  isLoadingWorkflow, isSendingWorkflowMessage,
+  canSendWorkflowMessage, canRunPrePublishAnalyze, canConfirmPrePublish,
+  selectedWorkflowMessage, workflowStatusText,
+  workflowSseText: liveWorkflowSseText,
   disconnect: closeWorkflowEventSource,
-  statusText: liveWorkflowSseText,
-} = useWorkflowSSE()
+} = workflowModule
+const workflowMessageListRef = ref<HTMLDivElement | null>(null)
 const workflowSseText = computed(() =>
   isLayoutPreviewMode ? '实时连接' : liveWorkflowSseText.value,
 )
-const workflowMessageModalOpen = ref(false)
-const selectedWorkflowMessageId = ref('')
+const hasConfirmedPrePublish = computed(() => {
+  return workflowSession.value?.status === 'CONFIRMED'
+    && Boolean(workflowSession.value.confirmedResultId)
+})
 // activeStep / restoredTaskId 从 Pinia creatorStore 读取，替代原来的 localStorage + persistWorkspaceState 模式
 const creatorStore = useCreatorStore()
 const { activeStep, restoredTaskId } = storeToRefs(creatorStore)
 const isMediaFeatureEnabled = ref(false)
 const isMediaFeatureAvailabilityResolved = ref(false)
+const currentDraftVideo = ref<DraftVideo | null>(null)
+let currentDraftRefreshGeneration = 0
 const mediaFeatureUnavailableMessage =
   '发布前试映未启用，任务不能进入观众反馈阶段。请先完成媒体配置并开启该能力。'
+const mediaPreflightRequiredMessage =
+  '请先在成片试映完成媒体探测后，再进入观众反馈阶段。'
 type CreatorStepMeta = {
   key: CreatorStepKey
   label: string
@@ -383,134 +283,15 @@ const currentTaskProgressIndex = computed(() => {
 })
 // 当前任务详情默认折叠，让发布前优化和复盘区域成为页面第一视觉重点。
 const isCurrentTaskExpanded = ref(false)
-const isLoadingTasks = ref(false)
-const isCreatingTask = ref(false)
-const isUpdatingTask = ref(false)
-const isDeletingTask = ref(false)
-const isAnalyzingPrePublish = ref(false)
-const isGeneratingPrePublishDraft = ref(false)
-const isConfirmingPrePublish = ref(false)
-const isLoadingWorkflow = ref(false)
-const isSendingWorkflowMessage = ref(false)
-const isSavingFeedback = ref(false)
-const isImportingFeedback = ref(false)
-const isFetchingFeedback = ref(false)
-const isAnalyzingFeedback = ref(false)
-const isAskingFeedbackChat = ref(false)
-const isRebuildingFeedbackEvidenceIndex = ref(false)
-const isLoadingFeedbackEvidenceIndexStatus = ref(false)
-const isExportingReportMarkdown = ref(false)
 const isContextLibraryOpen = ref(false)
 const resultModalTarget = ref<ResultModalTarget | null>(null)
-const isFeedbackChatDrawerOpen = ref(false)
-const isDeveloperTestBackdropPointerDown = ref(false)
-
-
-// ═══════════════════════════════════════════
-// Phase 5.8 Adapter Layer — 桥接模式
-// composable 持有真实状态，旧 ref/函数逐步改为转发到 module
-// ═══════════════════════════════════════════
-
-const taskModule = useCreatorTask(errorMessage)
-const workflowModule = useCreatorWorkflow(
-  taskModule.selectedTaskId,
-  taskModule.hasSelectedTaskMaterials,
-  errorMessage,
-)
-const feedbackModule = useCreatorFeedback(
-  taskModule.selectedTaskId,
-  workflowModule.hasConfirmedPrePublish,
-  errorMessage,
-  successMessage,
-)
-
-// ═══════════════════════════════════════════
-
-// taskForm 统一来源：模块持有真实 reactive，组件通过此引用读写
-const taskForm = taskModule.taskForm
-const pendingDeleteTask = taskModule.pendingDeleteTask
-const pendingDeleteTaskName = taskModule.pendingDeleteTaskName
-// feedback 表单统一来源：feedbackModule 持有真实 reactive
-const feedbackForm = feedbackModule.feedbackForm
-const feedbackChatForm = feedbackModule.feedbackChatForm
-const feedbackScriptForm = feedbackModule.feedbackScriptForm
-const feedbackImportFile = feedbackModule.feedbackImportFile
 
 // 建议卡片反馈事件上报：复用已有的 successMessage/errorMessage toast 通道，
 // 点击"采纳/不太好"后由这里统一写 creator_event 表，触发画像增量更新
 const feedbackEvent = useCreatorFeedbackEvent(successMessage, errorMessage)
 
-const selectedTaskId = computed(() => selectedTask.value?.taskId ?? '')
-const hasSelectedTask = computed(() => selectedTaskId.value.length > 0)
 const hasTaskHistory = computed(() => tasks.value.length > 0)
-const hasSelectedTaskMaterials = computed(() => (selectedTask.value?.materials.length ?? 0) > 0)
 const showDeveloperTools = computed(() => props.developerMode)
-const hasTaskMaterialInput = computed(
-  () =>
-    hasText(taskForm.titleDraft) ||
-    hasText(taskForm.descriptionDraft) ||
-    hasText(taskForm.manuscript) ||
-    hasText(taskForm.subtitle),
-)
-const filteredTasks = computed(() => {
-  const keyword = taskSearchQuery.value.trim().toLowerCase()
-  return tasks.value.filter((task) => {
-    const matchStatus = taskStatusFilter.value === 'ALL' || task.status === taskStatusFilter.value
-    if (!matchStatus) {
-      return false
-    }
-    if (!keyword) {
-      return true
-    }
-    const searchableText = [task.taskName, task.videoType, task.taskId, statusLabel(task.status)]
-      .join(' ')
-      .toLowerCase()
-    return searchableText.includes(keyword)
-  })
-})
-const taskSummaryStats = computed(() => {
-  const stats = {
-    total: tasks.value.length,
-    draft: 0,
-    inProgress: 0,
-    done: 0,
-  }
-  for (const task of tasks.value) {
-    if (task.status === 'DRAFT') {
-      stats.draft += 1
-      continue
-    }
-    if (task.status === 'ANALYZED') {
-      stats.done += 1
-      continue
-    }
-    stats.inProgress += 1
-  }
-  return stats
-})
-const taskSubmitLabel = computed(() => {
-  if (taskManageMode.value === 'edit') {
-    return isUpdatingTask.value ? '保存中...' : '保存视频资料'
-  }
-  return isCreatingTask.value ? '保存中...' : '保存视频资料'
-})
-const taskFormTitle = computed(() =>
-  taskManageMode.value === 'edit' ? '编辑视频资料' : '填写视频资料',
-)
-const taskFormHint = computed(() =>
-  taskManageMode.value === 'edit'
-    ? '编辑当前任务后，旧材料会被覆盖，后续分析请重新生成。'
-    : '先放入这期视频已有的标题、简介和文稿，后续会基于这些资料生成发布方案。',
-)
-const hasFeedbackSampleInput = computed(
-  () => hasText(feedbackForm.commentSamples) || hasText(feedbackForm.danmakuSamples),
-)
-const hasConfirmedPrePublish = computed(() => {
-  if (workflowSession.value?.status === 'CONFIRMED') {
-    return true
-  }
-  return selectedTask.value ? hasPrePublishResult(selectedTask.value.status) : false
-})
 const hasFullScriptMaterial = computed(() =>
   Boolean(
     selectedTask.value?.materials.some(
@@ -535,16 +316,39 @@ const hasGeneratedPrePublishDraft = computed(() =>
 const hasPrePublishScriptMaterial = computed(
   () => hasFullScriptMaterial.value || hasGeneratedPrePublishDraft.value,
 )
-const canEnterFeedback = computed(() => hasSelectedTask.value && hasConfirmedPrePublish.value)
-const canSendWorkflowMessage = computed(() => {
-  const status = workflowSession.value?.status
-  return Boolean(
-    workflowSession.value &&
-    status !== 'RUNNING' &&
-    status !== 'CONFIRMED' &&
-      status !== 'CANCELLED',
-  )
-})
+const canEnterPreflight = computed(() =>
+  hasSelectedTask.value && hasConfirmedPrePublish.value && isMediaFeatureEnabled.value,
+)
+const hasReadyPreflightDraft = computed(() => currentDraftVideo.value?.status === 'READY_FOR_REVIEW')
+const canEnterFeedback = computed(() =>
+  Boolean(
+    selectedTask.value
+      && (hasFeedbackResult(selectedTask.value.status)
+        || (hasConfirmedPrePublish.value
+          && isMediaFeatureEnabled.value
+          && hasReadyPreflightDraft.value)),
+  ),
+)
+const feedbackModule = useCreatorFeedback(
+  selectedTaskId,
+  canEnterFeedback,
+  errorMessage,
+  successMessage,
+)
+const {
+  feedback, feedbackDashboard, feedbackReport,
+  feedbackChatResult, feedbackChatTurns, feedbackFetchResult,
+  feedbackImportFile,
+  feedbackEvidenceIndexStatus, feedbackEvidenceIndexWarnings,
+  feedbackForm, feedbackChatForm, feedbackScriptForm,
+  isFeedbackChatDrawerOpen,
+  isSavingFeedback, isImportingFeedback, isFetchingFeedback,
+  isAnalyzingFeedback, isAskingFeedbackChat,
+  isRebuildingFeedbackEvidenceIndex, isLoadingFeedbackEvidenceIndexStatus,
+  isExportingReportMarkdown,
+  hasFeedbackSampleInput, canRunFeedbackAnalyze, canAskFeedbackChat,
+  feedbackDashboardWarnings, feedbackScriptBv,
+} = feedbackModule
 const canGeneratePrePublishDraft = computed(() => {
   const status = workflowSession.value?.status
   return Boolean(
@@ -552,47 +356,15 @@ const canGeneratePrePublishDraft = computed(() => {
       hasSelectedTaskMaterials.value &&
       workflowSession.value &&
       !hasPrePublishScriptMaterial.value &&
+      !isSendingWorkflowMessage.value &&
+      !isAnalyzingPrePublish.value &&
+      !isConfirmingPrePublish.value &&
+      !isGeneratingPrePublishDraft.value &&
       status !== 'RUNNING' &&
       status !== 'CONFIRMED' &&
       status !== 'CANCELLED',
   )
 })
-const canRunPrePublishAnalyze = computed(() => {
-  const status = workflowSession.value?.status
-  return Boolean(
-    hasSelectedTask.value &&
-    hasSelectedTaskMaterials.value &&
-    workflowSession.value &&
-    status !== 'RUNNING' &&
-    status !== 'CONFIRMED' &&
-    status !== 'CANCELLED',
-  )
-})
-const canConfirmPrePublish = computed(
-  () =>
-    Boolean(suggestion.value?.suggestionId) &&
-    workflowSession.value?.status === 'WAITING_CONFIRMATION' &&
-    !isConfirmingPrePublish.value,
-)
-const canRunFeedbackAnalyze = computed(() =>
-  Boolean(
-    // LLM 分析必须基于已经保存或导入到后端的样例，避免用户改了输入框却误以为未保存内容也参与分析。
-    canEnterFeedback.value &&
-      !isFetchingFeedback.value &&
-      !isAnalyzingFeedback.value &&
-      (feedback.value ||
-        (feedbackDashboard.value &&
-          feedbackDashboard.value.commentCount + feedbackDashboard.value.danmakuCount > 0)),
-  ),
-)
-const canAskFeedbackChat = computed(() =>
-  Boolean(
-    selectedTaskId.value &&
-      feedbackReport.value &&
-      hasText(feedbackChatForm.question) &&
-      !isAskingFeedbackChat.value,
-  ),
-)
 const isActiveStepReadOnly = computed(() => {
   if (isLayoutPreviewMode) {
     return true
@@ -603,39 +375,6 @@ const isActiveStepReadOnly = computed(() => {
   const matchedIndex = creatorStepMetas.value.findIndex((step) => step.key === activeStep.value)
   return matchedIndex >= 0 && matchedIndex < currentTaskProgressIndex.value
 })
-const hasFeedbackChatTurns = computed(() => feedbackChatTurns.value.length > 0)
-const feedbackDashboardWarnings = computed(() => {
-  const warnings = [...feedbackImportWarnings.value, ...(feedbackDashboard.value?.warnings ?? [])]
-  return Array.from(new Set(warnings))
-})
-const feedbackScriptBv = computed(() => extractBvid(feedbackScriptForm.bvInput))
-const materialPreview = computed(() => {
-  if (!selectedTask.value) {
-    return []
-  }
-  return selectedTask.value.materials.map((item) => ({
-    ...item,
-    label: materialLabel(item.materialType),
-  }))
-})
-
-const hotTopics = computed(() => parseJsonArray(feedbackReport.value?.hotTopics))
-const controversyPoints = computed(() => parseJsonArray(feedbackReport.value?.controversyPoints))
-const misunderstandingPoints = computed(() =>
-  parseJsonArray(feedbackReport.value?.misunderstandingPoints),
-)
-const nextContentSuggestions = computed(() =>
-  parseJsonArray(feedbackReport.value?.nextContentSuggestions),
-)
-const interactionSuggestions = computed(() =>
-  parseJsonArray(feedbackReport.value?.interactionSuggestions),
-)
-const misunderstandingSourceAnalysis = computed(() =>
-  parseJsonArray(feedbackReport.value?.misunderstandingSourceAnalysis),
-)
-const feedbackActionPlan = computed(() =>
-  parseJsonArray(feedbackReport.value?.feedbackActionPlan),
-)
 const historicalPreferenceChips = computed<PreferenceChip[]>(() =>
   creatorPreferences.value
     .flatMap((record) =>
@@ -647,12 +386,6 @@ const historicalPreferenceChips = computed<PreferenceChip[]>(() =>
     .filter((item) => item.text.length > 0)
     .slice(0, 8),
 )
-const currentVideoType = computed(() => {
-  if (selectedTask.value?.videoType) {
-    return selectedTask.value.videoType
-  }
-  return taskForm.videoType || '未分类'
-})
 const activeContextTerms = computed(() => creatorContextTerms.value.filter((term) => term.enabled))
 const contextTermChips = computed(() =>
   activeContextTerms.value
@@ -686,16 +419,6 @@ const lastPreferenceModeNote = computed(() =>
     historicalPreferenceChips.value.length,
   ),
 )
-const selectedWorkflowMessage = computed(() => {
-  if (workflowMessages.value.length === 0) {
-    return null
-  }
-  return (
-    workflowMessages.value.find((item) => item.messageId === selectedWorkflowMessageId.value) ??
-    workflowMessages.value[0] ??
-    null
-  )
-})
 const selectedWorkflowMaterial = computed(() => {
   const message = selectedWorkflowMessage.value
   if (
@@ -709,12 +432,6 @@ const selectedWorkflowMaterial = computed(() => {
   return (
     selectedTask.value.materials.find((item) => String(item.id) === message.detailRefId) ?? null
   )
-})
-const workflowStatusText = computed(() => {
-  if (!workflowSession.value) {
-    return '未创建'
-  }
-  return workflowSessionLabel(workflowSession.value.status)
 })
 const evalStats = computed(() => {
   const stats = {
@@ -804,6 +521,7 @@ async function refreshMediaFeatureAvailability() {
     errorMessage.value = mediaFeatureUnavailableMessage
     return
   }
+  void refreshCurrentDraftVideo(task.taskId)
   activeStep.value = 'preflight'
 }
 
@@ -832,16 +550,6 @@ watch(
     void scrollWorkflowMessagesToBottom()
   },
 )
-
-// ═══════════════════════════════════════════
-// Phase 5.8 Bridge Sync — 将 taskModule 状态单向同步到旧 ref，模板继续读旧变量
-// ═══════════════════════════════════════════
-watch(() => taskModule.tasks.value, (val) => { tasks.value = val }, { immediate: true })
-watch(() => taskModule.selectedTask.value, (val) => { selectedTask.value = val }, { immediate: true })
-watch(() => taskModule.isLoadingTasks.value, (val) => { isLoadingTasks.value = val })
-watch(() => taskModule.isCreatingTask.value, (val) => { isCreatingTask.value = val })
-watch(() => taskModule.isUpdatingTask.value, (val) => { isUpdatingTask.value = val })
-watch(() => taskModule.isDeletingTask.value, (val) => { isDeletingTask.value = val })
 
 function openTaskManager() {
   pendingDeleteTask.value = null
@@ -881,55 +589,6 @@ async function scrollWorkflowMessagesToBottom() {
   messageList.scrollTop = messageList.scrollHeight
 }
 
-async function scrollFeedbackChatToBottom() {
-  await nextTick()
-  const thread = feedbackChatThreadRef.value
-  if (!thread) {
-    return
-  }
-  thread.scrollTop = thread.scrollHeight
-}
-
-function clearFeedbackChatState(clearQuestion = true) {
-  feedbackChatResult.value = null
-  feedbackChatTurns.value = []
-  if (clearQuestion) {
-    feedbackChatForm.question = ''
-  }
-}
-
-function feedbackQuestionMessage(turn: FeedbackChatTurn, index: number): ChatMessage {
-  return {
-    id: index * 2 + 1,
-    role: 'user',
-    content: turn.question,
-  }
-}
-
-function feedbackAnswerMessage(turn: FeedbackChatTurn, index: number): ChatMessage {
-  return {
-    id: index * 2 + 2,
-    role: 'assistant',
-    content: feedbackAnswerContent(turn),
-  }
-}
-
-function feedbackAnswerContent(turn: FeedbackChatTurn) {
-  if (turn.result) {
-    return turn.result.answer
-  }
-  if (turn.status === 'FAILED') {
-    return `追问失败：${turn.errorMessage || '请稍后重试。'}`
-  }
-  return '正在基于当前反馈报告和评论弹幕证据生成回答...'
-}
-
-function updateFeedbackChatTurn(turnId: string, patch: Partial<FeedbackChatTurn>) {
-  feedbackChatTurns.value = feedbackChatTurns.value.map((turn) =>
-    turn.id === turnId ? { ...turn, ...patch } : turn,
-  )
-}
-
 /** 关闭成功通知（NotificationToast 组件通过 @close 事件触发，定时器由组件内部管理） */
 function closeSuccessToast() {
   successMessage.value = ''
@@ -960,38 +619,12 @@ function openDeveloperTest() {
   }
 }
 
-function openUsageStats() {
-  if (!showDeveloperTools.value) {
-    return
-  }
-  activeStep.value = 'usage'
-  void refreshUsageStats(1)
-}
-
 function resetTaskForm() { taskModule.resetTaskForm() }
-function fillTaskForm(task: CreatorTask) { taskModule.fillTaskForm(task) }
-function getMaterialContent(task: CreatorTask, materialType: string) { return taskModule.getMaterialContent(task, materialType) }
 function hasTaskAnalysisInputChanged(task: CreatorTask) { return taskModule.hasTaskAnalysisInputChanged(task) }
 
 function resetGeneratedTaskResults() {
-  closeWorkflowEventSource()
-  suggestion.value = null
-  feedback.value = null
-  feedbackReport.value = null
-  clearFeedbackChatState()
-  feedbackEvidenceIndexStatus.value = null
-  feedbackEvidenceIndexWarnings.value = []
-  isFeedbackChatDrawerOpen.value = false
-  feedbackDashboard.value = null
-  feedbackFetchResult.value = null
-  feedbackImportFile.value = null
-  feedbackImportWarnings.value = []
-  workflowSession.value = null
-  workflowMessages.value = []
-  workflowSteps.value = []
-  workflowMessageModalOpen.value = false
-  workflowMessageDraft.value = ''
-  selectedWorkflowMessageId.value = ''
+  workflowModule.resetWorkflowState()
+  feedbackModule.resetFeedbackData()
   resultModalTarget.value = null
   hasPrePublishPreferenceModeSnapshot.value = false
 }
@@ -1113,9 +746,9 @@ function creatorStepIndex(stepKey: CreatorStepKey) {
 }
 
 function isCreatorStepCompleted(stepKey: CreatorStepKey) {
-  // P0-0 还没有把成片完成状态聚合进任务快照，不能仅凭旧任务状态误标“成片试映已完成”。
+  // 成片状态独立于任务主状态，只有 FFprobe 探测通过才标记“成片试映”完成。
   if (stepKey === 'preflight') {
-    return false
+    return hasReadyPreflightDraft.value
   }
   const index = creatorStepIndex(stepKey)
   return index >= 0 && index < currentTaskProgressIndex.value
@@ -1129,13 +762,10 @@ function canNavigateCreatorStep(stepKey: CreatorStepKey) {
     return hasSelectedTask.value
   }
   if (stepKey === 'preflight') {
-    return isMediaFeatureEnabled.value && canEnterFeedback.value
+    return canEnterPreflight.value
   }
   if (stepKey === 'feedback') {
-    return (
-      canEnterFeedback.value &&
-      (!selectedTask.value || !requiresPreflight(selectedTask.value) || isMediaFeatureEnabled.value)
-    )
+    return canEnterFeedback.value
   }
   return Boolean(feedbackReport.value)
 }
@@ -1148,6 +778,16 @@ function navigateCreatorStep(stepKey: CreatorStepKey) {
     !isMediaFeatureEnabled.value
   ) {
     errorMessage.value = mediaFeatureUnavailableMessage
+    return
+  }
+  if (
+    stepKey === 'feedback' &&
+    selectedTask.value &&
+    requiresPreflight(selectedTask.value) &&
+    isMediaFeatureEnabled.value &&
+    !hasReadyPreflightDraft.value
+  ) {
+    errorMessage.value = mediaPreflightRequiredMessage
     return
   }
   if (!canNavigateCreatorStep(stepKey)) {
@@ -1216,9 +856,12 @@ async function selectTask(taskId: string) {
   pendingDeleteTask.value = null
   taskManageMode.value = 'create'
   taskModule.resetTaskForm()
+  currentDraftVideo.value = null
   // 委托 taskModule 加载完整任务（内部已处理 selectedTask / store）
   const task = await taskModule.loadTask(taskId)
   if (!task) return
+  workflowModule.resetWorkflowState()
+  feedbackModule.resetFeedbackData()
   // 编排层：跨域操作
   isTaskComposerOpen.value = true
   activeStep.value = resolveTaskEntryStep(task)
@@ -1230,11 +873,40 @@ async function selectTask(taskId: string) {
   await Promise.all([
     loadCreatorPreferences(task.userId),
     loadCreatorContextTerms(task.userId, task.videoType),
+    refreshCurrentDraftVideo(task.taskId),
   ])
+  if (selectedTaskId.value !== task.taskId) return
   await loadOptionalResults(task)
+  if (selectedTaskId.value !== task.taskId) return
   await loadPrePublishWorkflow(taskId)
+  if (selectedTaskId.value !== task.taskId) return
+  activeStep.value = resolveTaskEntryStep(task)
   await refreshUsageStats(1)
   closeTaskManager()
+}
+
+async function refreshCurrentDraftVideo(taskId = selectedTask.value?.taskId) {
+  const generation = ++currentDraftRefreshGeneration
+  if (!taskId || !isMediaFeatureEnabled.value) {
+    currentDraftVideo.value = null
+    return
+  }
+  try {
+    const draft = await getCurrentDraftVideo(taskId)
+    if (generation === currentDraftRefreshGeneration && selectedTask.value?.taskId === taskId) {
+      currentDraftVideo.value = draft
+    }
+  } catch (error) {
+    if (generation !== currentDraftRefreshGeneration || selectedTask.value?.taskId !== taskId) {
+      return
+    }
+    if (error instanceof ApiError && error.status === 404) {
+      currentDraftVideo.value = null
+      return
+    }
+    // 暂时读取失败时保留上一次服务端事实，避免把网络故障伪装成“没有成片”。
+    showError(error)
+  }
 }
 
 async function handleCreativeOptionConfirmed(taskId: string) {
@@ -1244,29 +916,13 @@ async function handleCreativeOptionConfirmed(taskId: string) {
 }
 
 async function loadOptionalResults(task: CreatorTask) {
-  suggestion.value = null
-  feedback.value = null
-  feedbackReport.value = null
-  clearFeedbackChatState()
-  feedbackEvidenceIndexStatus.value = null
-  feedbackEvidenceIndexWarnings.value = []
-  feedbackDashboard.value = null
-  feedbackFetchResult.value = null
-  feedbackImportFile.value = null
-  feedbackImportWarnings.value = []
   usageSummary.value = null
   usageCallPage.value = null
   usageCurrentPage.value = 1
   usageCategoryFilter.value = 'ALL'
 
   if (hasPrePublishResult(task.status)) {
-    suggestion.value = await optionalRequest(() => getPrePublishSuggestion(task.taskId))
-    feedback.value = await optionalRequest(() => getCreatorFeedback(task.taskId))
-    feedbackDashboard.value = await optionalRequest(() => getCreatorFeedbackDashboard(task.taskId))
-  }
-
-  if (hasFeedbackResult(task.status)) {
-    feedbackReport.value = await optionalRequest(() => getCreatorFeedbackReport(task.taskId))
+    await feedbackModule.loadFeedbackData(task.taskId, hasFeedbackResult(task.status))
   }
 }
 
@@ -1364,148 +1020,54 @@ async function feedbackContextTerm(term: CreatorContextTerm, accepted: boolean) 
 }
 
 async function loadPrePublishWorkflow(taskId: string, resumeLatest = true) {
-  isLoadingWorkflow.value = true
-  closeWorkflowEventSource()
-  workflowSession.value = null
-  workflowMessages.value = []
-  workflowSteps.value = []
-  workflowMessageDraft.value = ''
-  selectedWorkflowMessageId.value = ''
-  if (!hasSelectedTaskMaterials.value) {
-    errorMessage.value = '当前任务没有可加载材料，请重新创建包含标题、简介、文稿或字幕的任务。'
-    isLoadingWorkflow.value = false
-    return
-  }
-  try {
-    workflowSession.value = await startPrePublishWorkflow(taskId, {
-      userId: selectedTask.value?.userId,
-      resumeLatest,
-    })
-    workflowMessages.value = workflowSession.value.messages ?? []
-    workflowSteps.value =
-      (await optionalRequest(() => listWorkflowSteps(taskId, workflowSession.value!.sessionId))) ?? []
-    if (!suggestion.value && isPrePublishSuggestionVisible(workflowSession.value.status)) {
-      suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
-    }
-    syncWorkflowSelection()
-    connectWorkflowEvents(taskId, workflowSession.value.sessionId, {
-      onMessageCreated: (message) => {
-        upsertWorkflowMessage(message)
-        syncWorkflowSelection()
-      },
-      onSessionStatus: (status, confirmedResultId, errorMessage) => {
-        if (workflowSession.value) {
-          workflowSession.value = {
-            ...workflowSession.value,
-            status: (isWorkflowStatus(status ?? null) ? status : workflowSession.value.status) as CreatorWorkflowStatus,
-            confirmedResultId:
-              (confirmedResultId ?? workflowSession.value.confirmedResultId) ?? null,
-            errorMessage: errorMessage ?? null,
-          }
-        }
-        if (status === 'WAITING_CONFIRMATION' || status === 'CONFIRMED') {
-          void refreshWorkflowSuggestion(taskId)
-        }
-      },
-      onResultReady: (resultTaskId) => {
-        void refreshWorkflowSuggestion(resultTaskId)
-      },
-      onStepStarted: () => { void refreshPrePublishWorkflowSteps() },
-      onStepCompleted: () => { void refreshPrePublishWorkflowSteps() },
-      onStepFailed: () => { void refreshPrePublishWorkflowSteps() },
-    })
-  } catch (error) {
-    showError(error)
-  } finally {
-    isLoadingWorkflow.value = false
-  }
+  await workflowModule.loadWorkflow({
+    taskId,
+    userId: selectedTask.value?.userId,
+    resumeLatest,
+  })
 }
 
 async function refreshPrePublishWorkflowMessages() {
-  if (!selectedTaskId.value) {
-    return
-  }
+  if (!selectedTaskId.value) return
   if (!workflowSession.value) {
     await loadPrePublishWorkflow(selectedTaskId.value)
     return
   }
-
-  isLoadingWorkflow.value = true
-  errorMessage.value = ''
-  try {
-    workflowMessages.value = await listWorkflowMessages(
-      selectedTaskId.value,
-      workflowSession.value.sessionId,
-    )
-    workflowSteps.value =
-      (await optionalRequest(() =>
-        listWorkflowSteps(selectedTaskId.value, workflowSession.value!.sessionId),
-      )) ?? []
-    syncWorkflowSelection()
-  } catch (error) {
-    showError(error)
-  } finally {
-    isLoadingWorkflow.value = false
-  }
-}
-
-async function refreshPrePublishWorkflowSteps() {
-  if (!selectedTaskId.value || !workflowSession.value) {
-    return
-  }
-  try {
-    workflowSteps.value =
-      (await optionalRequest(() =>
-        listWorkflowSteps(selectedTaskId.value, workflowSession.value!.sessionId),
-      )) ?? []
-  } catch (error) {
-    showError(error)
-  }
+  await workflowModule.refreshWorkflow()
 }
 
 async function generatePrePublishManuscriptDraftForCurrentTask(extraRequirement = '') {
-  if (!selectedTaskId.value) {
-    return
-  }
+  if (!selectedTaskId.value) return false
   if (hasPrePublishScriptMaterial.value) {
     errorMessage.value = '当前任务已有可用文稿或 AI 草稿，可以直接生成发布方案。'
-    return
+    return false
   }
   if (!workflowSession.value) {
     await loadPrePublishWorkflow(selectedTaskId.value)
   }
   if (!workflowSession.value || !canGeneratePrePublishDraft.value) {
-    return
+    return false
   }
 
-  isGeneratingPrePublishDraft.value = true
-  errorMessage.value = ''
   successMessage.value = ''
+  const result = await workflowModule.generateDraft(extraRequirement)
+  if (!result) return false
   try {
-    const result = await generatePrePublishManuscriptDraft(
-      selectedTaskId.value,
-      workflowSession.value.sessionId,
-      { extraRequirement },
-    )
-    if (result.message) {
-      upsertWorkflowMessage(result.message)
-    }
-    selectedTask.value = await getCreatorTask(selectedTaskId.value)
-    await refreshPrePublishWorkflowMessages()
+    const task = await getCreatorTask(result.taskId)
+    if (selectedTaskId.value !== result.taskId) return false
+    selectedTask.value = task
     await refreshUsageStats(1, false)
     await scrollWorkflowMessagesToBottom()
     successMessage.value = 'AI 已补全文稿草稿，可以继续补充修改要求或生成发布方案。'
+    return true
   } catch (error) {
     showError(error)
-  } finally {
-    isGeneratingPrePublishDraft.value = false
+    return false
   }
 }
 
 async function runPrePublishAnalyze() {
-  if (!selectedTaskId.value) {
-    return
-  }
+  if (!selectedTaskId.value) return
   if (!hasSelectedTaskMaterials.value) {
     errorMessage.value = '当前任务没有可分析材料，请重新创建包含标题、简介、文稿或字幕的任务。'
     return
@@ -1516,212 +1078,93 @@ async function runPrePublishAnalyze() {
   if (!workflowSession.value || !canRunPrePublishAnalyze.value) {
     return
   }
-  isAnalyzingPrePublish.value = true
-  errorMessage.value = ''
   successMessage.value = ''
   try {
-    suggestion.value = await analyzePrePublishWorkflow(
-      selectedTaskId.value,
-      workflowSession.value.sessionId,
-      {
-        customGuidance: prePublishForm.customGuidance,
-        creatorPreference: prePublishForm.creatorPreference,
-        titleStyle: prePublishForm.titleStyle,
-        extraRequirement: prePublishForm.extraRequirement,
-        preferenceMode: prePublishForm.preferenceMode,
-      },
-    )
+    const result = await workflowModule.runAnalyze({
+      customGuidance: prePublishForm.customGuidance,
+      creatorPreference: prePublishForm.creatorPreference,
+      titleStyle: prePublishForm.titleStyle,
+      extraRequirement: prePublishForm.extraRequirement,
+      preferenceMode: prePublishForm.preferenceMode,
+    })
+    if (!result) return
     lastPrePublishPreferenceMode.value = prePublishForm.preferenceMode
     hasPrePublishPreferenceModeSnapshot.value = true
-    workflowSession.value = {
-      ...workflowSession.value,
-      status: 'WAITING_CONFIRMATION' as CreatorWorkflowStatus,
-    }
-    await refreshPrePublishWorkflowMessages()
     successMessage.value = '发布前优化建议已生成，请确认采用后进入成片试映。'
-  } catch (error) {
-    showError(error)
   } finally {
     await refreshUsageStats(1, false)
-    isAnalyzingPrePublish.value = false
   }
 }
 
 async function confirmPrePublishResult() {
-  if (!selectedTaskId.value || !workflowSession.value || !suggestion.value?.suggestionId) {
-    return
-  }
-  isConfirmingPrePublish.value = true
-  errorMessage.value = ''
+  if (!selectedTaskId.value || !canConfirmPrePublish.value) return
   successMessage.value = ''
+  const session = await workflowModule.confirmSuggestion()
+  if (!session) return
   try {
-    workflowSession.value = await confirmWorkflowPrePublishSuggestion(
-      selectedTaskId.value,
-      workflowSession.value.sessionId,
-      {
-        suggestionId: suggestion.value.suggestionId,
-      },
-    )
-    workflowMessages.value = workflowSession.value.messages ?? workflowMessages.value
-    selectedTask.value = await getCreatorTask(selectedTaskId.value)
-    syncWorkflowSelection()
+    const task = await getCreatorTask(session.taskId)
+    if (selectedTaskId.value !== session.taskId) return
+    selectedTask.value = task
     await refreshMediaFeatureAvailability()
-    if (!isMediaFeatureEnabled.value) {
-      return
-    }
+    if (!isMediaFeatureEnabled.value) return
     activeStep.value = 'preflight'
     successMessage.value = '已采用本轮发布前优化建议，请上传成片进行发布前试映。'
     await refreshTasks()
   } catch (error) {
     showError(error)
-  } finally {
-    isConfirmingPrePublish.value = false
   }
 }
 
 async function sendWorkflowSupplement() {
-  if (
-    !selectedTaskId.value ||
-    !workflowSession.value ||
-    !canSendWorkflowMessage.value ||
-    !hasText(workflowMessageDraft.value)
-  ) {
-    return
-  }
-  isSendingWorkflowMessage.value = true
-  errorMessage.value = ''
+  if (!canSendWorkflowMessage.value || !hasText(workflowMessageDraft.value)) return
   successMessage.value = ''
-  try {
-    const message = await sendWorkflowMessage(
-      selectedTaskId.value,
-      workflowSession.value.sessionId,
-      {
-        content: workflowMessageDraft.value,
-      },
-    )
-    upsertWorkflowMessage(message)
-    workflowMessageDraft.value = ''
-    syncWorkflowSelection(message.messageId)
-    await scrollWorkflowMessagesToBottom()
-    successMessage.value = '补充要求已写入工作流消息流。'
-  } catch (error) {
-    showError(error)
-  } finally {
-    isSendingWorkflowMessage.value = false
-  }
+  const message = await workflowModule.sendSupplement()
+  if (!message) return
+  await scrollWorkflowMessagesToBottom()
+  successMessage.value = '补充要求已写入工作流消息流。'
 }
 
 async function submitFeedback() {
-  if (!selectedTaskId.value || !canEnterFeedback.value) {
-    return
-  }
-  isSavingFeedback.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    feedback.value = await saveCreatorFeedback(selectedTaskId.value, {
-      commentSamples: feedbackForm.commentSamples,
-      danmakuSamples: feedbackForm.danmakuSamples,
-      extraContext: feedbackForm.extraContext,
-    })
-    feedbackReport.value = null
-    clearFeedbackChatState()
-    feedbackDashboard.value = null
-    feedbackFetchResult.value = null
-    feedbackImportWarnings.value = []
-    resultModalTarget.value = null
-    activeStep.value = 'feedback'
-    successMessage.value = '评论弹幕样例已保存，可以开始分析。'
-  } catch (error) {
-    showError(error)
-  } finally {
-    isSavingFeedback.value = false
-  }
+  const result = await feedbackModule.submitFeedback()
+  if (!result) return
+  resultModalTarget.value = null
+  activeStep.value = 'feedback'
+  successMessage.value = '评论弹幕样例已保存，可以开始分析。'
 }
 
 function handleFeedbackFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  feedbackImportFile.value = input.files?.[0] ?? null
-  feedbackImportWarnings.value = []
+  feedbackModule.handleFeedbackFileChange(event)
 }
 
 async function importFeedbackFile() {
-  if (!selectedTaskId.value || !canEnterFeedback.value || !feedbackImportFile.value) {
-    return
-  }
-  isImportingFeedback.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    const result = await importCreatorFeedbackFile(selectedTaskId.value, feedbackImportFile.value)
-    feedbackFetchResult.value = null
-    feedbackReport.value = null
-    clearFeedbackChatState()
-    feedbackImportWarnings.value = result.warnings ?? []
-    // 导入会回填旧样例表并生成明细表，前端立即重读后端状态，避免本地文件内容成为隐藏的数据源。
-    feedback.value = await optionalRequest(() => getCreatorFeedback(selectedTaskId.value))
-    feedbackDashboard.value = await optionalRequest(() => getCreatorFeedbackDashboard(selectedTaskId.value))
-    successMessage.value = `已导入 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，仪表盘已更新。`
-    openResultModal('feedbackDashboard')
-  } catch (error) {
-    showError(error)
-  } finally {
-    isImportingFeedback.value = false
-  }
+  const result = await feedbackModule.importFeedbackFile()
+  if (!result) return
+  successMessage.value = `已导入 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，仪表盘已更新。`
+  openResultModal('feedbackDashboard')
 }
 
 async function fetchFeedbackByBv() {
-  if (!selectedTaskId.value || !canEnterFeedback.value) {
-    return
-  }
-  if (!feedbackScriptBv.value) {
-    errorMessage.value = '请先输入有效 BV 号或视频链接。'
-    return
-  }
-  isFetchingFeedback.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    const result = await fetchCreatorFeedbackByBv(selectedTaskId.value, {
-      bvInput: feedbackScriptForm.bvInput,
-      maxComments: clampScriptNumber(feedbackScriptForm.maxComments, 0, 500),
-      maxRepliesPerComment: clampScriptNumber(feedbackScriptForm.maxRepliesPerComment, 0, 100),
-      maxDanmaku: clampScriptNumber(feedbackScriptForm.maxDanmaku, 0, 2000),
-      format: feedbackScriptForm.format,
-    })
-    feedbackFetchResult.value = result
-    feedbackReport.value = null
-    clearFeedbackChatState()
-    feedbackImportWarnings.value = result.warnings ?? []
-    // 后端已经完成脚本执行和入库，前端只刷新权威状态，避免页面表单成为第二份数据源。
-    feedback.value = await optionalRequest(() => getCreatorFeedback(selectedTaskId.value))
-    feedbackDashboard.value = await optionalRequest(() => getCreatorFeedbackDashboard(selectedTaskId.value))
-    successMessage.value = showDeveloperTools.value
-      ? `已读取 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，文件已保存到 ${result.outputDirectory}。`
-      : `已读取 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕。`
-    openResultModal('feedbackDashboard')
-  } catch (error) {
-    showError(error)
-  } finally {
-    isFetchingFeedback.value = false
-  }
+  const result = await feedbackModule.fetchFeedbackByBv()
+  if (!result) return
+  successMessage.value = showDeveloperTools.value
+    ? `已读取 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，文件已保存到 ${result.outputDirectory}。`
+    : `已读取 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕。`
+  openResultModal('feedbackDashboard')
 }
 
 async function runFeedbackAnalyze() {
-  if (!selectedTaskId.value || !canRunFeedbackAnalyze.value) {
-    return
-  }
-  isAnalyzingFeedback.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
+  if (!canRunFeedbackAnalyze.value) return
+  const taskId = selectedTaskId.value
   try {
-    feedbackReport.value = await analyzeCreatorFeedback(selectedTaskId.value, {
+    const report = await feedbackModule.runAnalyze({
       customGuidance: feedbackAnalyzeForm.customGuidance,
       analysisFocus: feedbackAnalyzeForm.analysisFocus,
       extraRequirement: feedbackAnalyzeForm.extraRequirement,
     })
-    clearFeedbackChatState()
-    selectedTask.value = await getCreatorTask(selectedTaskId.value)
+    if (!report || selectedTaskId.value !== taskId) return
+    const task = await getCreatorTask(report.taskId)
+    if (selectedTaskId.value !== report.taskId) return
+    selectedTask.value = task
     activeStep.value = 'report'
     successMessage.value = '评论弹幕分析完成，反馈报告已保存。'
     openResultModal('feedbackReport')
@@ -1729,82 +1172,36 @@ async function runFeedbackAnalyze() {
   } catch (error) {
     showError(error)
   } finally {
-    await refreshUsageStats(1, false)
-    isAnalyzingFeedback.value = false
+    if (selectedTaskId.value === taskId) {
+      await refreshUsageStats(1, false)
+    }
   }
 }
 
 async function askFeedbackChat() {
-  if (!selectedTaskId.value || !canAskFeedbackChat.value) {
-    return
-  }
-  const question = feedbackChatForm.question.trim()
-  const turnId = `feedback-chat-${Date.now()}-${feedbackChatTurns.value.length}`
-  feedbackChatTurns.value = [
-    ...feedbackChatTurns.value,
-    {
-      id: turnId,
-      question,
-      result: null,
-      status: 'PENDING',
-    },
-  ]
-  feedbackChatForm.question = ''
-  await scrollFeedbackChatToBottom()
-  isAskingFeedbackChat.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    const result = await chatCreatorFeedback(selectedTaskId.value, {
-      question,
-    })
-    feedbackChatResult.value = result
-    updateFeedbackChatTurn(turnId, {
-      result,
-      status: 'DONE',
-    })
+  if (!canAskFeedbackChat.value) return
+  const taskId = selectedTaskId.value
+  const result = await feedbackModule.askChat()
+  if (result) {
     successMessage.value = '反馈追问已生成，回答基于当前任务报告和评论弹幕证据。'
-  } catch (error) {
-    updateFeedbackChatTurn(turnId, {
-      status: 'FAILED',
-      errorMessage: error instanceof Error ? error.message : String(error),
-    })
-    showError(error)
-  } finally {
-    await scrollFeedbackChatToBottom()
+  }
+  if (selectedTaskId.value === taskId) {
     await refreshUsageStats(1, false)
-    isAskingFeedbackChat.value = false
   }
 }
 
-// 委托 feedbackModule：API 调用 + blob 下载 + 状态管理已在模块内闭环
 async function downloadReportMarkdown() {
-  if (!selectedTaskId.value || isExportingReportMarkdown.value) return
-  await feedbackModule.downloadReportMarkdown(selectedTaskId.value)
+  await feedbackModule.downloadReportMarkdown()
 }
 
-// 委托 feedbackModule 加载证据索引状态
 async function loadFeedbackEvidenceIndexStatus() {
-  if (!selectedTaskId.value || isLoadingFeedbackEvidenceIndexStatus.value) return
-  await feedbackModule.loadEvidenceIndexStatus(selectedTaskId.value)
+  await feedbackModule.loadEvidenceIndexStatus()
 }
 
-// 委托 feedbackModule 重建证据索引，补充组件级 UI 清理
 async function rebuildFeedbackEvidenceIndex() {
-  if (!selectedTaskId.value || isRebuildingFeedbackEvidenceIndex.value) return
-  await feedbackModule.rebuildEvidenceIndex(selectedTaskId.value)
-  clearFeedbackChatState(false)
+  const result = await feedbackModule.rebuildEvidenceIndex()
+  if (!result) return
   await refreshUsageStats(1, false)
-}
-
-// 把后端检索模式编码翻译成用户能看懂的中文，统一用于状态区和追问回答脚注。
-async function optionalRequest<T>(request: () => Promise<T>) {
-  try {
-    return await request()
-  } catch {
-    // 查询历史结果允许 404，因为新任务通常还没有分析产物。
-    return null
-  }
 }
 
 function requiresPreflight(task: Pick<CreatorTask, 'status'>) {
@@ -1815,7 +1212,7 @@ function resolveTaskEntryStep(task: Pick<CreatorTask, 'status'>): CreatorWorkSte
   if (hasFeedbackResult(task.status)) {
     return 'report'
   }
-  if (hasPrePublishResult(task.status)) {
+  if (hasPrePublishResult(task.status) && hasConfirmedPrePublish.value) {
     return isMediaFeatureEnabled.value ? 'preflight' : 'prePublish'
   }
   return 'prePublish'
@@ -1838,7 +1235,7 @@ function normalizeReturnStepForTask(
   if (
     targetStep === 'feedback' &&
     requiresPreflight(task) &&
-    !isMediaFeatureEnabled.value
+    (!isMediaFeatureEnabled.value || !hasReadyPreflightDraft.value)
   ) {
     return resolveTaskEntryStep(task)
   }
@@ -1874,36 +1271,21 @@ function resolveRefreshTargetTask() {
 }
 
 function resetSelectedWorkspace() {
-  closeWorkflowEventSource()
+  workflowModule.resetWorkflowState()
+  feedbackModule.resetFeedbackData()
   selectedTask.value = null
+  currentDraftVideo.value = null
   creatorStore.selectedTaskId = null
   taskManageMode.value = 'create'
   resetTaskForm()
-  suggestion.value = null
-  feedback.value = null
-  feedbackReport.value = null
-  clearFeedbackChatState()
-  feedbackEvidenceIndexStatus.value = null
-  feedbackEvidenceIndexWarnings.value = []
-  isFeedbackChatDrawerOpen.value = false
-  feedbackDashboard.value = null
-  feedbackFetchResult.value = null
   creatorPreferences.value = []
   creatorContextTerms.value = []
-  feedbackImportFile.value = null
-  feedbackImportWarnings.value = []
   usageSummary.value = null
   usageCallPage.value = null
   usageCurrentPage.value = 1
   usageCategoryFilter.value = 'ALL'
-  isFetchingFeedback.value = false
   resetPrePublishPreferenceMode()
   resultModalTarget.value = null
-  workflowMessageModalOpen.value = false
-  workflowSession.value = null
-  workflowMessages.value = []
-  workflowSteps.value = []
-  selectedWorkflowMessageId.value = ''
   isTaskComposerOpen.value = false
   activeStep.value = 'task'
   closeDeveloperTest()
@@ -1920,57 +1302,6 @@ function loadWorkspaceState() {
     restoredTaskId.value = creatorStore.selectedTaskId
   }
 }
-
-function trimToNull(value: string | undefined) {
-  const trimmed = value?.trim()
-  return trimmed ? trimmed : undefined
-}
-
-function normalizeOptionalNumber(value: unknown) {
-  if (value === null || value === undefined || value === '') {
-    return undefined
-  }
-  if (typeof value === 'string' && value.trim().length === 0) {
-    return undefined
-  }
-  const numericValue = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(numericValue) ? numericValue : undefined
-}
-
-function upsertWorkflowMessage(message: CreatorWorkflowMessage) {
-  const messageIndex = workflowMessages.value.findIndex(
-    (item) => item.messageId === message.messageId,
-  )
-  if (messageIndex >= 0) {
-    workflowMessages.value = workflowMessages.value.map((item, index) =>
-      index === messageIndex ? message : item,
-    )
-    return
-  }
-  workflowMessages.value = [...workflowMessages.value, message].sort(
-    (left, right) => left.sequenceNo - right.sequenceNo,
-  )
-}
-
-async function refreshWorkflowSuggestion(taskId: string) {
-  suggestion.value = await optionalRequest(() => getPrePublishSuggestion(taskId))
-  await refreshUsageStats(1, false)
-}
-
-function syncWorkflowSelection(messageId?: string) {
-  const selected = messageId
-    ? workflowMessages.value.find((item) => item.messageId === messageId)
-    : workflowMessages.value.find((item) => item.messageId === selectedWorkflowMessageId.value)
-
-  if (selected) {
-    selectedWorkflowMessageId.value = selected.messageId
-    return
-  }
-
-  selectedWorkflowMessageId.value = workflowMessages.value[0]?.messageId ?? ''
-}
-
-
 
 function openResultModal(target: ResultModalTarget) {
   if (target === 'feedbackDashboard' && !feedbackDashboard.value && !feedbackFetchResult.value) {
@@ -1992,7 +1323,6 @@ function openResultModal(target: ResultModalTarget) {
 
 function closeResultModal() {
   resultModalTarget.value = null
-  isResultModalBackdropPointerDown.value = false
   isFeedbackChatDrawerOpen.value = false
 }
 
@@ -2001,7 +1331,6 @@ function openWorkflowMessageModal() {
     return
   }
   workflowMessageModalOpen.value = true
-  syncWorkflowSelection()
   void scrollWorkflowMessagesToBottom()
 }
 
@@ -2032,7 +1361,6 @@ function toggleFeedbackChatDrawer() {
 
 function closeDeveloperTest() {
   isDeveloperTestOpen.value = false
-  isDeveloperTestBackdropPointerDown.value = false
 }
 
 function handleGuidanceBackdropPointerDown(event: PointerEvent) {
@@ -2047,66 +1375,48 @@ function handleGuidanceBackdropClick(event: MouseEvent) {
   isGuidanceBackdropPointerDown.value = false
 }
 
-function handleResultModalBackdropPointerDown(event: PointerEvent) {
-  isResultModalBackdropPointerDown.value = event.target === event.currentTarget
-}
-
-function handleResultModalBackdropClick(event: MouseEvent) {
-  if (isResultModalBackdropPointerDown.value && event.target === event.currentTarget) {
-    closeResultModal()
-    return
-  }
-  isResultModalBackdropPointerDown.value = false
-}
-
-function handleDeveloperTestBackdropPointerDown(event: PointerEvent) {
-  isDeveloperTestBackdropPointerDown.value = event.target === event.currentTarget
-}
-
-function handleDeveloperTestBackdropClick(event: MouseEvent) {
-  if (isDeveloperTestBackdropPointerDown.value && event.target === event.currentTarget) {
-    closeDeveloperTest()
-    return
-  }
-  isDeveloperTestBackdropPointerDown.value = false
-}
-
-
-
-
-
 function showError(error: unknown) {
   errorMessage.value = error instanceof Error ? error.message : '请求失败'
+}
+
+function updateWorkflowMessageSelection(messageId: string) {
+  selectedWorkflowMessageId.value = messageId
+}
+
+function updateWorkflowMessageDraft(draft: string) {
+  workflowMessageDraft.value = draft
+}
+
+function updateWorkflowMessageListRef(element: HTMLDivElement | null) {
+  workflowMessageListRef.value = element
+}
+
+function updateFeedbackChatQuestion(question: string) {
+  feedbackChatForm.question = question
+}
+
+function updateEvaluationStageFilter(stage: 'ALL' | CreatorWorkflowStage) {
+  evalStageFilter.value = stage
+  void loadEvaluationCases()
+}
+
+function updateEvaluationResultDraft(patch: Partial<CreatorEvaluationResultDraft>) {
+  Object.assign(evalResultDraft, patch)
+}
+
+function updateSelectedEvalResultId(resultId: string) {
+  selectedEvalResultId.value = resultId
 }
 
 // 子组件只负责承载下沉后的模板，核心编排仍由主壳统一持有，
 // 这样任务恢复、SSE 连接和跨 tab 结果弹窗不会因为拆分产生第二份状态。
 provideCreatorWorkspace({
-  taskModule,
-  workflowModule,
-  feedbackModule,
-  guidance,
-  contextModule,
-  usageModule,
-  evaluationModule,
   feedbackEvent,
-  showDeveloperTools,
-  successMessage,
-  errorMessage,
-  openResultModal,
-  closeResultModal,
-  openWorkflowMessageModal,
-  openFeedbackChatDrawer,
-  closeFeedbackChatDrawer,
-  toggleFeedbackChatDrawer,
-  openDeveloperTest,
-  openUsageStats,
-  openTaskManager,
   shell: {
     askDeleteSelectedTask,
     cancelEditTask,
-    canEnterFeedback,
     canConfirmPrePublish,
+    canEnterFeedback,
     canGeneratePrePublishDraft,
     canRunFeedbackAnalyze,
     canRunPrePublishAnalyze,
@@ -2115,6 +1425,7 @@ provideCreatorWorkspace({
     changeUsagePage,
     confirmPrePublishResult,
     contextTermChips,
+    currentDraftVideo,
     currentVideoType,
     downloadReportMarkdown,
     feedback,
@@ -2128,21 +1439,23 @@ provideCreatorWorkspace({
     feedbackScriptForm,
     fetchFeedbackByBv,
     formatDate,
+    formatDuration,
     formatInputCount,
+    formatUsageToken,
     hasConfirmedPrePublish,
-    hasPrePublishPreferenceModeSnapshot,
-    hasFullScriptMaterial,
-    hasPrePublishScriptMaterial,
     hasFeedbackSampleInput,
+    hasPrePublishPreferenceModeSnapshot,
+    hasPrePublishScriptMaterial,
     hasSelectedTask,
     hasTaskMaterialInput,
-    historicalPreferenceChips,
     generatePrePublishManuscriptDraftForCurrentTask,
+    handleFeedbackFileChange,
+    historicalPreferenceChips,
     importFeedbackFile,
+    isActiveStepReadOnly,
     isAnalyzingFeedback,
     isAnalyzingPrePublish,
-    isContextLibraryOpen,
-    openContextLibrary,
+    isConfirmingPrePublish,
     isCreatingTask,
     isCurrentTaskExpanded,
     isExportingReportMarkdown,
@@ -2152,15 +1465,14 @@ provideCreatorWorkspace({
     isLoadingCreatorContextTerms,
     isLoadingCreatorPreferences,
     isLoadingUsageStats,
-    isConfirmingPrePublish,
-    isActiveStepReadOnly,
-    isSendingWorkflowMessage,
     isSavingCreatorContextTerm,
     isSavingFeedback,
+    isSendingWorkflowMessage,
     isUpdatingTask,
     lastPreferenceModeLabel,
     lastPreferenceModeNote,
     materialPreview,
+    openContextLibrary,
     openGuidanceEditor,
     openResultModal,
     openTaskManager,
@@ -2182,6 +1494,7 @@ provideCreatorWorkspace({
     statusLabel,
     submitFeedback,
     submitTask,
+    suggestion,
     taskForm,
     taskFormHint,
     taskFormTitle,
@@ -2198,17 +1511,13 @@ provideCreatorWorkspace({
     usageSummary,
     usageTotalPages,
     videoTypeOptions,
-    workflowMessageDraft,
-    workflowMessages,
     workflowRunningStep,
     workflowSession,
     workflowSseText,
     workflowStatusText,
     workflowSteps,
-    sendWorkflowSupplement,
-    handleFeedbackFileChange,
     toggleCurrentTaskExpanded,
-    suggestion,
+    refreshCurrentDraftVideo,
   },
 })
 </script>
@@ -2261,167 +1570,33 @@ provideCreatorWorkspace({
       </div>
     </header>
 
-    <Teleport to="body">
-      <Transition name="creator-modal">
-        <div
-          v-if="isTaskManagerOpen"
-          class="creator-modal-backdrop creator-task-manager-backdrop"
-          @click.self="closeTaskManager"
-        >
-          <section
-            class="creator-task-manager-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="creator-task-manager-title"
-          >
-            <header class="creator-result-modal-head creator-task-manager-head">
-              <div>
-                <span>项目列表</span>
-                <h3 id="creator-task-manager-title">
-                  历史视频项目
-                </h3>
-                <p>{{ filteredTasks.length }} 个匹配项目，共 {{ taskSummaryStats.total }} 个项目</p>
-              </div>
-              <div class="creator-panel-actions">
-                <button type="button" class="creator-ghost-button" @click="startCreateTask">
-                  新建
-                </button>
-                <button type="button" class="creator-ghost-button" @click="refreshTasks">
-                  {{ isLoadingTasks ? '读取中' : '刷新' }}
-                </button>
-                <button type="button" class="creator-ghost-button" @click="closeTaskManager">
-                  关闭
-                </button>
-              </div>
-            </header>
+    <CreatorTaskManagerModal
+      :open="isTaskManagerOpen"
+      :tasks="tasks"
+      :filtered-tasks="filteredTasks"
+      :summary="taskSummaryStats"
+      :selected-task-id="selectedTaskId"
+      :loading="isLoadingTasks"
+      :search-query="taskSearchQuery"
+      :status-filter="taskStatusFilter"
+      :status-options="taskStatusOptions"
+      :can-edit-task="isTaskMaterialsEditable"
+      @close="closeTaskManager"
+      @create="startCreateTask"
+      @refresh="refreshTasks"
+      @select="selectTask"
+      @edit="startEditTask"
+      @delete="askDeleteTask"
+      @update:search-query="taskSearchQuery = $event"
+      @update:status-filter="taskStatusFilter = $event"
+    />
 
-            <div class="creator-task-manager-body">
-              <div class="creator-task-toolbar">
-                <label class="creator-task-search">
-                  <span>搜索</span>
-                <input v-model="taskSearchQuery" type="search" placeholder="名称 / 项目编号 / 状态" />
-                </label>
-                <label class="creator-task-filter">
-                  <span>状态</span>
-                  <select v-model="taskStatusFilter">
-                    <option
-                      v-for="option in taskStatusOptions"
-                      :key="option.value"
-                      :value="option.value"
-                    >
-                      {{ option.label }}
-                    </option>
-                  </select>
-                </label>
-              </div>
-
-              <div class="creator-task-overview" aria-label="项目概览">
-                <span><b>{{ taskSummaryStats.draft }}</b> 草稿</span>
-                <span><b>{{ taskSummaryStats.inProgress }}</b> 推进中</span>
-                <span><b>{{ taskSummaryStats.done }}</b> 已复盘</span>
-              </div>
-
-              <div class="creator-task-list creator-task-manager-list">
-                <article
-                  v-for="task in filteredTasks"
-                  :key="task.taskId"
-                  class="creator-task-item"
-                  :class="{ active: task.taskId === selectedTaskId }"
-                >
-                  <button type="button" class="creator-task-select" @click="selectTask(task.taskId)">
-                    <strong>{{ task.taskName }}</strong>
-                    <span>{{ task.videoType }} · {{ statusLabel(task.status) }} · {{ task.materialCount }} 份材料</span>
-                    <small>{{ shortId(task.taskId) }} · {{ formatDate(task.updateTime) }}</small>
-                  </button>
-                  <div class="creator-task-actions">
-                    <button
-                      type="button"
-                      class="creator-ghost-button creator-mini-button"
-                      @click="selectTask(task.taskId)"
-                    >
-                      查看
-                    </button>
-                    <button
-                      v-if="isTaskMaterialsEditable(task)"
-                      type="button"
-                      class="creator-secondary-action creator-mini-button"
-                      @click="startEditTask(task.taskId)"
-                    >
-                      编辑
-                    </button>
-                    <button
-                      type="button"
-                      class="creator-danger-action creator-mini-button"
-                      @click="askDeleteTask(task)"
-                    >
-                      删除
-                    </button>
-                  </div>
-                </article>
-                <div v-if="!isLoadingTasks && tasks.length === 0" class="creator-task-empty-state">
-                  <strong>还没有视频项目</strong>
-                  <span>先新建一条视频资料，后续发布方案和复盘报告都会沉淀在这里。</span>
-                  <button type="button" class="creator-primary-button creator-mini-button" @click="startCreateTask">
-                    新建项目
-                  </button>
-                </div>
-                <div
-                  v-else-if="!isLoadingTasks && filteredTasks.length === 0"
-                  class="creator-task-empty-state"
-                >
-                  <strong>没有匹配的项目</strong>
-                  <span>换一个关键词，或把状态筛选切回全部状态。</span>
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-      </Transition>
-    </Teleport>
-
-    <Teleport to="body">
-      <Transition name="creator-modal">
-        <div
-          v-if="pendingDeleteTask"
-          class="creator-modal-backdrop creator-delete-modal-backdrop"
-          @click.self="!isDeletingTask && cancelDeleteTask()"
-        >
-          <section
-            class="creator-delete-confirm-modal"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="creator-delete-confirm-title"
-            aria-describedby="creator-delete-confirm-desc"
-          >
-            <header>
-              <span>删除项目</span>
-              <h3 id="creator-delete-confirm-title">删除「{{ pendingDeleteTaskName }}」？</h3>
-            </header>
-            <p id="creator-delete-confirm-desc">
-              项目会从列表隐藏，历史分析产物保留在后端。这个操作完成后，当前列表会自动刷新。
-            </p>
-            <div class="creator-delete-actions">
-              <button
-                type="button"
-                class="creator-ghost-button"
-                :disabled="isDeletingTask"
-                @click="cancelDeleteTask"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                class="creator-danger-action"
-                :disabled="isDeletingTask"
-                @click="confirmDeleteTask"
-              >
-                {{ isDeletingTask ? '删除中...' : '确认删除' }}
-              </button>
-            </div>
-          </section>
-        </div>
-      </Transition>
-    </Teleport>
+    <CreatorDeleteConfirmModal
+      :pending-task="pendingDeleteTask"
+      :deleting="isDeletingTask"
+      @cancel="cancelDeleteTask"
+      @confirm="confirmDeleteTask"
+    />
 
     <section
       v-if="!selectedTask && !isTaskComposerOpen"
@@ -2446,139 +1621,16 @@ provideCreatorWorkspace({
 
     <div v-else class="creator-layout">
       <aside class="creator-task-rail">
-        <section class="creator-flow-card" aria-label="视频发布流程">
-          <header class="creator-flow-head">
-            <strong>视频发布流程</strong>
-            <span>完成以下步骤，高效发布视频</span>
-          </header>
-
-          <div
-            class="creator-mobile-progress"
-            aria-label="当前创作进度"
-            :style="{ '--creator-progress-percent': creatorProgressPercent }"
-          >
-            <div class="creator-mobile-progress-head">
-              <span>第 {{ activeCreatorStepIndex + 1 }} / {{ creatorStepMetas.length }} 步</span>
-              <strong>{{ activeCreatorStepMeta.label }}</strong>
-            </div>
-            <div class="creator-mobile-progress-track" aria-hidden="true">
-              <span></span>
-            </div>
-            <p>{{ activeCreatorStepMeta.description }}</p>
-          </div>
-
-          <nav class="creator-tabs creator-tabs-vertical" aria-label="创作步骤">
-            <button
-              type="button"
-              :disabled="!canNavigateCreatorStep('task')"
-              :class="{ active: activeStep === 'task', completed: isCreatorStepCompleted('task') }"
-              :aria-current="activeStep === 'task' ? 'step' : undefined"
-              @click="navigateCreatorStep('task')"
-            >
-              <span class="creator-step-count">1</span>
-              <span class="creator-step-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M7 3.5h7l3.5 3.5v13.5h-11v-17z" />
-                  <path d="M14 3.5v4h3.5" />
-                  <path d="M9 11h6M9 15h5" />
-                </svg>
-              </span>
-              <span class="creator-step-text">
-                <strong>视频资料</strong>
-                <small>填写视频基础信息</small>
-              </span>
-            </button>
-            <button
-              type="button"
-              :disabled="!canNavigateCreatorStep('prePublish')"
-              :class="{
-                active: activeStep === 'prePublish',
-                completed: isCreatorStepCompleted('prePublish'),
-              }"
-              :aria-current="activeStep === 'prePublish' ? 'step' : undefined"
-              @click="navigateCreatorStep('prePublish')"
-            >
-              <span class="creator-step-count">2</span>
-              <span class="creator-step-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M6 5.5h12v13h-12z" />
-                  <path d="M9 9h6M9 12.5h5M9 16h3.5" />
-                  <path d="M16.5 4v3M18 5.5h-3" />
-                </svg>
-              </span>
-              <span class="creator-step-text">
-                <strong>发布方案</strong>
-                <small>生成发布计划与方案</small>
-              </span>
-            </button>
-            <button
-              v-if="isMediaFeatureEnabled"
-              type="button"
-              :disabled="!canNavigateCreatorStep('preflight')"
-              :class="{
-                active: activeStep === 'preflight',
-                completed: isCreatorStepCompleted('preflight'),
-              }"
-              :aria-current="activeStep === 'preflight' ? 'step' : undefined"
-              @click="navigateCreatorStep('preflight')"
-            >
-              <span class="creator-step-count">3</span>
-              <span class="creator-step-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M4.5 6h15v11.5h-15z" />
-                  <path d="M9.5 9l5 2.75-5 2.75z" />
-                  <path d="M7 20h10" />
-                </svg>
-              </span>
-              <span class="creator-step-text">
-                <strong>成片试映</strong>
-                <small>上传成片并发布前体检</small>
-              </span>
-            </button>
-            <button
-              type="button"
-              :disabled="!canNavigateCreatorStep('feedback')"
-              :class="{
-                active: activeStep === 'feedback',
-                completed: isCreatorStepCompleted('feedback'),
-              }"
-              :aria-current="activeStep === 'feedback' ? 'step' : undefined"
-              @click="navigateCreatorStep('feedback')"
-            >
-              <span class="creator-step-count">{{ isMediaFeatureEnabled ? 4 : 3 }}</span>
-              <span class="creator-step-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M5 6.5h14v8.5h-8l-4 3v-3h-2z" />
-                  <path d="M8.5 10.5h7M8.5 13h4.5" />
-                </svg>
-              </span>
-              <span class="creator-step-text">
-                <strong>观众反馈</strong>
-                <small>收集观众意见与反馈</small>
-              </span>
-            </button>
-            <button
-              type="button"
-              :disabled="!canNavigateCreatorStep('report')"
-              :class="{ active: activeStep === 'report', completed: isCreatorStepCompleted('report') }"
-              :aria-current="activeStep === 'report' ? 'step' : undefined"
-              @click="navigateCreatorStep('report')"
-            >
-              <span class="creator-step-count">{{ isMediaFeatureEnabled ? 5 : 4 }}</span>
-              <span class="creator-step-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M6 4.5h12v15h-12z" />
-                  <path d="M9 16v-3M12 16v-6M15 16v-4" />
-                  <path d="M8.5 8h7" />
-                </svg>
-              </span>
-              <span class="creator-step-text">
-                <strong>复盘报告</strong>
-                <small>生成复盘总结报告</small>
-              </span>
-            </button>
-          </nav>
-        </section>
+        <CreatorFlowNav
+          :active-step="activeStep"
+          :steps="creatorStepMetas"
+          :active-step-index="activeCreatorStepIndex"
+          :active-step-meta="activeCreatorStepMeta"
+          :progress-percent="creatorProgressPercent"
+          :can-navigate="canNavigateCreatorStep"
+          :is-completed="isCreatorStepCompleted"
+          @navigate="navigateCreatorStep"
+        />
 
         <TaskListPanel />
       </aside>
@@ -2593,367 +1645,29 @@ provideCreatorWorkspace({
         <MaterialsTab v-if="activeStep === 'task'" />
 
         <Teleport to="body">
-          <div
-            v-if="isDeveloperTestOpen"
-            class="creator-modal-backdrop creator-dev-test-backdrop"
-            role="presentation"
-            @pointerdown="handleDeveloperTestBackdropPointerDown"
-            @click="handleDeveloperTestBackdropClick"
-          >
-            <section
-              class="creator-result-modal creator-dev-test-modal"
-              role="dialog"
-              aria-modal="true"
-              aria-label="开发者功能测试"
-            >
-              <header class="creator-result-modal-head creator-dev-test-head">
-                <div>
-                  <h3>开发者功能测试</h3>
-                </div>
-                <div class="creator-action-row">
-                  <label class="creator-eval-filter">
-                    <span>阶段</span>
-                    <select v-model="evalStageFilter" @change="loadEvaluationCases">
-                      <option
-                        v-for="option in evalStageOptions"
-                        :key="option.value"
-                        :value="option.value"
-                      >
-                        {{ option.label }}
-                      </option>
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    class="creator-secondary-action"
-                    :disabled="isLoadingEvalCases"
-                    @click="loadEvaluationCases"
-                  >
-                    {{ isLoadingEvalCases ? '读取中...' : '刷新样例' }}
-                  </button>
-                  <button type="button" class="creator-ghost-button" @click="closeDeveloperTest">
-                    关闭
-                  </button>
-                </div>
-              </header>
-
-              <div class="creator-result-modal-body creator-dev-test-body">
-                <div class="creator-eval-overview" aria-label="评测样例概览">
-            <span><b>{{ evalStats.total }}</b> 样例</span>
-            <span><b>{{ evalStats.prePublish }}</b> 发布前</span>
-            <span><b>{{ evalStats.feedback }}</b> 反馈</span>
-            <span><b>{{ evalStats.report }}</b> 复盘</span>
-          </div>
-
-          <div class="creator-eval-grid">
-            <section class="creator-eval-list-panel" aria-label="评测样例列表">
-              <header class="creator-workflow-head">
-                <div>
-                  <h4>样例列表</h4>
-                </div>
-                <span class="creator-parse-status">{{ filteredEvalCases.length }} 个</span>
-              </header>
-
-              <div class="creator-eval-case-list">
-                <button
-                  v-for="item in filteredEvalCases"
-                  :key="item.caseId"
-                  type="button"
-                  class="creator-eval-case"
-                  :class="{ active: item.caseId === selectedEvalCase?.caseId }"
-                  @click="selectEvalCase(item.caseId)"
-                >
-                  <small>{{ evalStageLabel(item.targetStage) }} · {{ item.status }}</small>
-                  <strong>{{ item.caseName }}</strong>
-                  <span>{{ item.taskId || '未绑定任务' }}</span>
-                </button>
-
-                <p v-if="!isLoadingEvalCases && filteredEvalCases.length === 0" class="creator-muted">
-                  当前筛选条件下没有评测样例。
-                </p>
-              </div>
-            </section>
-
-            <section v-if="selectedEvalCase" class="creator-eval-detail-panel" aria-label="评测样例详情">
-              <header class="creator-workflow-head">
-                <div>
-                  <h4>{{ selectedEvalCase.caseName }}</h4>
-                </div>
-                <span class="creator-parse-status">{{ selectedEvalCase.status }}</span>
-              </header>
-
-              <div class="creator-eval-snapshot">
-                <span>输入快照</span>
-                <pre>{{ selectedEvalCase.inputSnapshot }}</pre>
-                <span>期望要点</span>
-                <pre>{{ selectedEvalCase.expectedPoints || '未填写' }}</pre>
-                <span>评分说明</span>
-                <pre>{{ selectedEvalCase.scoringRubric || '未填写' }}</pre>
-              </div>
-
-              <form class="creator-eval-result-form" @submit.prevent="submitEvalResult">
-                <header>
-                  <div>
-                    <span>记录一次评测结果</span>
-                    <strong>{{ evalStageLabel(evalResultDraft.targetStage) }}</strong>
-                  </div>
-                  <button
-                    type="submit"
-                    class="creator-primary-button"
-                    :disabled="!canRecordEvalResult"
-                  >
-                    {{ isRecordingEvalResult ? '记录中...' : '记录结果' }}
-                  </button>
-                </header>
-
-                <div class="creator-form-grid">
-                  <label>
-                    <span>模型名称</span>
-                    <input v-model="evalResultDraft.modelName" type="text" maxlength="128" />
-                  </label>
-                  <label>
-                    <span>Prompt 版本</span>
-                    <input
-                      v-model="evalResultDraft.promptVersion"
-                      type="text"
-                      maxlength="64"
-                      placeholder="例如 prepublish-v2"
-                    />
-                  </label>
-                  <label>
-                    <span>Prompt 哈希</span>
-                    <input
-                      v-model="evalResultDraft.promptHash"
-                      type="text"
-                      maxlength="64"
-                      placeholder="可选，留空由后端根据快照计算"
-                    />
-                  </label>
-                  <label>
-                    <span>关联任务</span>
-                    <input
-                      v-model="evalResultDraft.taskId"
-                      type="text"
-                      maxlength="64"
-                      placeholder="可选"
-                    />
-                  </label>
-                  <label>
-                    <span>工作流会话</span>
-                    <input
-                      v-model="evalResultDraft.workflowSessionId"
-                      type="text"
-                      maxlength="64"
-                      placeholder="可选"
-                    />
-                  </label>
-                  <label>
-                    <span>耗时毫秒</span>
-                    <input v-model.number="evalResultDraft.elapsedMs" type="number" min="0" />
-                  </label>
-                  <label>
-                    <span>Prompt Token</span>
-                    <input v-model.number="evalResultDraft.promptTokens" type="number" min="1" />
-                  </label>
-                  <label>
-                    <span>Completion Token</span>
-                    <input
-                      v-model.number="evalResultDraft.completionTokens"
-                      type="number"
-                      min="1"
-                    />
-                  </label>
-                  <label class="span-full">
-                    <span>Prompt 快照</span>
-                    <textarea
-                      v-model="evalResultDraft.promptSnapshot"
-                      maxlength="20000"
-                      placeholder="粘贴本轮 system prompt 和 user prompt，后续用于复现和版本对比"
-                    ></textarea>
-                  </label>
-                  <label class="span-full">
-                    <span>输出摘要</span>
-                    <textarea
-                      v-model="evalResultDraft.outputSummary"
-                      maxlength="4000"
-                      placeholder="概括这次输出的主要结论"
-                    ></textarea>
-                  </label>
-                  <label class="span-full">
-                    <span>模型原始输出</span>
-                    <textarea
-                      v-model="evalResultDraft.rawOutput"
-                      maxlength="20000"
-                      placeholder="粘贴本轮模型输出；失败时可以留空并填写失败原因"
-                    ></textarea>
-                  </label>
-                  <label class="span-full">
-                    <span>失败原因</span>
-                    <textarea
-                      v-model="evalResultDraft.failureReason"
-                      maxlength="500"
-                      placeholder="成功时可留空"
-                    ></textarea>
-                  </label>
-                </div>
-
-                <div class="creator-eval-score-grid" aria-label="人工评分">
-                  <label>
-                    <span>可读性</span>
-                    <select v-model.number="evalResultDraft.readabilityScore">
-                      <option v-for="score in evalScoreOptions" :key="`read-${score}`" :value="score">
-                        {{ score }}
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>贴合度</span>
-                    <select v-model.number="evalResultDraft.relevanceScore">
-                      <option v-for="score in evalScoreOptions" :key="`rel-${score}`" :value="score">
-                        {{ score }}
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>完整性</span>
-                    <select v-model.number="evalResultDraft.completenessScore">
-                      <option v-for="score in evalScoreOptions" :key="`comp-${score}`" :value="score">
-                        {{ score }}
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>准确性</span>
-                    <select v-model.number="evalResultDraft.accuracyScore">
-                      <option v-for="score in evalScoreOptions" :key="`acc-${score}`" :value="score">
-                        {{ score }}
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>稳定性</span>
-                    <select v-model.number="evalResultDraft.stabilityScore">
-                      <option v-for="score in evalScoreOptions" :key="`sta-${score}`" :value="score">
-                        {{ score }}
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>成本</span>
-                    <select v-model.number="evalResultDraft.costScore">
-                      <option v-for="score in evalScoreOptions" :key="`cost-${score}`" :value="score">
-                        {{ score }}
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>可解释性</span>
-                    <select v-model.number="evalResultDraft.explainabilityScore">
-                      <option v-for="score in evalScoreOptions" :key="`exp-${score}`" :value="score">
-                        {{ score }}
-                      </option>
-                    </select>
-                  </label>
-                </div>
-
-                <label class="creator-eval-note-field">
-                  <span>人工备注</span>
-                  <textarea
-                    v-model="evalResultDraft.reviewerNote"
-                    maxlength="1000"
-                    placeholder="记录这次评分的判断依据"
-                  ></textarea>
-                </label>
-              </form>
-
-              <section class="creator-eval-results" aria-label="评测结果列表">
-                <header class="creator-workflow-head">
-                  <div>
-                    <h4>最近结果</h4>
-                  </div>
-                  <button
-                    type="button"
-                    class="creator-ghost-button"
-                    :disabled="isLoadingEvalResults"
-                    @click="refreshEvaluationResults(selectedEvalCase.caseId)"
-                  >
-                    {{ isLoadingEvalResults ? '读取中' : '刷新结果' }}
-                  </button>
-                </header>
-
-                <div class="creator-eval-result-list">
-                  <article
-                    v-if="evalPromptVersionStats.length > 0"
-                    class="creator-eval-prompt-stats"
-                    aria-label="Prompt版本对比"
-                  >
-                    <strong>Prompt 版本对比</strong>
-                    <div>
-                      <span v-for="item in evalPromptVersionStats" :key="item.promptVersion">
-                        {{ item.promptVersion }} · {{ item.resultCount }} 次 · 成功率
-                        {{ formatPercent(item.successRatePercent) }} · 均分
-                        {{ formatMetric(item.averageScore) }} · 准确
-                        {{ formatMetric(item.averageAccuracyScore) }} · Token
-                        {{ formatMetric(item.averageTotalTokens) }} · 覆盖
-                        {{ formatPercent(item.fullScoreCoverageRatePercent) }} · 波动
-                        {{ formatMetric(item.scoreStandardDeviation) }}
-                      </span>
-                    </div>
-                  </article>
-
-                  <button
-                    v-for="item in evalResults"
-                    :key="item.resultId"
-                    type="button"
-                    class="creator-eval-result-item"
-                    :class="{ active: item.resultId === selectedEvalResult?.resultId }"
-                    @click="selectedEvalResultId = item.resultId"
-                  >
-                    <small>
-                      {{ evalResultStatusLabel(item.runStatus) }} ·
-                      {{ item.modelName || '未记录模型' }} · {{ formatDate(item.updateTime) }}
-                    </small>
-                    <strong>{{ item.outputSummary || item.failureReason || '未填写摘要' }}</strong>
-                    <span>
-                      {{ item.promptVersion || '未记录Prompt版本' }} · Token
-                      {{ formatMetric(item.totalTokens) }} · {{ item.parseStatus }}
-                    </span>
-                  </button>
-
-                  <p v-if="evalResults.length === 0" class="creator-muted">
-                    当前样例还没有评测结果。
-                  </p>
-                </div>
-
-                <article v-if="selectedEvalResult" class="creator-eval-result-detail">
-                  <small>
-                    {{ evalResultStatusLabel(selectedEvalResult.runStatus) }} ·
-                    {{ selectedEvalResult.resultId }}
-                  </small>
-                  <strong>{{ selectedEvalResult.outputSummary || '未填写输出摘要' }}</strong>
-                  <p v-if="selectedEvalResult.failureReason">
-                    失败原因：{{ selectedEvalResult.failureReason }}
-                  </p>
-                  <p v-if="selectedEvalResult.promptVersion || selectedEvalResult.promptHash">
-                    Prompt：{{ selectedEvalResult.promptVersion || '未记录版本' }}
-                    <span v-if="selectedEvalResult.promptHash">
-                      · {{ selectedEvalResult.promptHash.slice(0, 12) }}
-                    </span>
-                  </p>
-                  <pre v-if="selectedEvalResult.promptSnapshot">{{ selectedEvalResult.promptSnapshot }}</pre>
-                  <pre>{{ selectedEvalResult.rawOutput }}</pre>
-                </article>
-              </section>
-            </section>
-
-            <article v-else class="creator-empty-result">
-              <strong>还没有评测样例</strong>
-              <span>请先执行数据库初始化脚本，导入阶段 4.6 内置样例。</span>
-            </article>
-                </div>
-              </div>
-            </section>
-          </div>
+          <CreatorDevTestModal
+            :open="isDeveloperTestOpen"
+            :stage-filter="evalStageFilter"
+            :stats="evalStats"
+            :filtered-cases="filteredEvalCases"
+            :selected-case="selectedEvalCase"
+            :results="evalResults"
+            :selected-result="selectedEvalResult"
+            :prompt-version-stats="evalPromptVersionStats"
+            :draft="evalResultDraft"
+            :loading-cases="isLoadingEvalCases"
+            :loading-results="isLoadingEvalResults"
+            :recording="isRecordingEvalResult"
+            :can-record="canRecordEvalResult"
+            @close="closeDeveloperTest"
+            @update:stage-filter="updateEvaluationStageFilter"
+            @update:selected-result-id="updateSelectedEvalResultId"
+            @update:draft="updateEvaluationResultDraft"
+            @reload-cases="loadEvaluationCases"
+            @select-case="selectEvalCase"
+            @submit-result="submitEvalResult"
+            @refresh-results="refreshEvaluationResults"
+          />
         </Teleport>
 
         <PrePublishTab v-if="activeStep === 'prePublish'" />
@@ -2968,804 +1682,72 @@ provideCreatorWorkspace({
       </section>
     </div>
 
-    <Teleport to="body">
-      <div
-        v-if="workflowMessageModalOpen"
-        class="creator-modal-backdrop"
-        role="presentation"
-        @click.self="closeWorkflowMessageModal"
-      >
-        <section
-          class="creator-message-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-label="发布前优化消息流"
-        >
-          <header class="creator-result-modal-head">
-            <div>
-              <p class="creator-kicker">材料与消息</p>
-              <h3>发布前优化消息流</h3>
-            </div>
-            <div class="creator-panel-actions">
-              <span>{{ workflowStatusText }}</span>
-              <span class="creator-sse-status" :class="{ active: workflowSseText === '实时连接' }">
-                {{ workflowSseText }}
-              </span>
-              <button
-                type="button"
-                class="creator-secondary-action"
-                :disabled="!hasSelectedTask || !hasSelectedTaskMaterials || isLoadingWorkflow"
-                @click="refreshPrePublishWorkflowMessages"
-              >
-                {{ isLoadingWorkflow ? '载入中' : '刷新消息' }}
-              </button>
-              <button type="button" class="creator-ghost-button" @click="closeWorkflowMessageModal">
-                关闭
-              </button>
-            </div>
-          </header>
-
-          <div class="creator-message-modal-body">
-            <section class="creator-workflow-stream" aria-label="发布前优化消息列表">
-              <div ref="workflowMessageListRef" class="creator-workflow-message-list">
-                <button
-                  v-for="message in workflowMessages"
-                  :key="message.messageId"
-                  type="button"
-                  class="creator-workflow-message"
-                  :class="[
-                    `role-${message.role.toLowerCase()}`,
-                    { active: message.messageId === selectedWorkflowMessage?.messageId },
-                  ]"
-                  @click="selectedWorkflowMessageId = message.messageId"
-                >
-                  <small>
-                    #{{ message.sequenceNo }} · {{ workflowRoleLabel(message.role) }} ·
-                    {{ formatDate(message.createTime) }}
-                  </small>
-                  <strong>{{ previewWorkflowMessage(message.content) }}</strong>
-                  <span>{{ workflowContentTypeLabel(message.contentType) }}</span>
-                </button>
-
-                <p v-if="!isLoadingWorkflow && workflowMessages.length === 0" class="creator-muted">
-                  {{
-                    hasSelectedTaskMaterials
-                      ? '还没有工作流消息，选择任务后会自动装载材料。'
-                      : '当前任务没有材料，无法装载发布前优化工作流。'
-                  }}
-                </p>
-              </div>
-            </section>
-
-            <section class="creator-workflow-detail" aria-label="工作流消息详情">
-              <header class="creator-workflow-head">
-                <h4>
-                  消息详情<span v-if="selectedWorkflowMessage"
-                    >-{{ workflowContentTypeLabel(selectedWorkflowMessage.contentType) }}</span
-                  >
-                </h4>
-              </header>
-
-              <article v-if="selectedWorkflowMessage" class="creator-workflow-detail-body">
-                <small>
-                  {{ workflowRoleLabel(selectedWorkflowMessage.role) }} ·
-                  {{ formatDate(selectedWorkflowMessage.createTime) }}
-                </small>
-                <strong v-if="selectedWorkflowMaterial">
-                  {{ materialLabel(selectedWorkflowMaterial.materialType) }}
-                </strong>
-                <p v-if="selectedWorkflowMaterial">{{ selectedWorkflowMessage.content }}</p>
-                <pre>{{ selectedWorkflowMaterial?.content || selectedWorkflowMessage.content }}</pre>
-              </article>
-
-              <article v-else class="creator-empty-result">
-                <strong>未选择消息</strong>
-                <span>点击左侧消息可以查看完整材料或过程内容。</span>
-              </article>
-            </section>
-
-            <form class="creator-workflow-composer" @submit.prevent="sendWorkflowSupplement">
-              <textarea
-                v-model="workflowMessageDraft"
-                maxlength="2000"
-                :disabled="!canSendWorkflowMessage || isSendingWorkflowMessage"
-                placeholder="补充发布前优化要求，例如：标题更适合 Java 后端学习者，不要标题党"
-              ></textarea>
-              <button
-                type="submit"
-                class="creator-primary-button"
-                :disabled="
-                  !canSendWorkflowMessage || !hasText(workflowMessageDraft) || isSendingWorkflowMessage
-                "
-              >
-                {{ isSendingWorkflowMessage ? '发送中...' : '发送消息' }}
-              </button>
-            </form>
-          </div>
-        </section>
-      </div>
-
-    <div
-      v-if="resultModalTarget"
-      class="creator-modal-backdrop"
-      role="presentation"
-      @pointerdown="handleResultModalBackdropPointerDown"
-      @click="handleResultModalBackdropClick"
-    >
-      <section
-        class="creator-result-modal"
-        :class="{
-          'with-feedback-drawer':
-            resultModalTarget === 'feedbackReport' && isFeedbackChatDrawerOpen,
-        }"
-        role="dialog"
-        aria-modal="true"
-        :aria-label="resultModalTitle"
-      >
-        <header class="creator-result-modal-head">
-          <div>
-            <p class="creator-kicker">阶段结果</p>
-            <h3>{{ resultModalTitle }}</h3>
-          </div>
-          <div class="creator-panel-actions">
-            <button
-              v-if="resultModalTarget === 'feedbackReport'"
-              type="button"
-              class="creator-secondary-action"
-              @click="toggleFeedbackChatDrawer"
-            >
-              {{ isFeedbackChatDrawerOpen ? '收起追问' : '追问报告' }}
-            </button>
-            <button type="button" class="creator-ghost-button" @click="closeResultModal">
-              关闭
-            </button>
-          </div>
-        </header>
-
-        <div class="creator-result-modal-body">
-          <template v-if="resultModalTarget === 'feedbackDashboard'">
-            <div class="creator-result-grid">
-              <article
-                v-if="showDeveloperTools && feedbackFetchResult"
-                class="creator-result-block span-full"
-              >
-                <span>脚本输出</span>
-                <div class="creator-script-output">
-                  <span>输出目录</span>
-                  <code>{{ feedbackFetchResult.outputDirectory }}</code>
-                  <span>生成文件</span>
-                  <ul>
-                    <li v-for="filePath in feedbackFetchResult.outputFiles" :key="filePath">
-                      {{ filePath }}
-                    </li>
-                  </ul>
-                </div>
-              </article>
-              <article
-                v-else-if="feedbackFetchResult && !feedbackDashboard"
-                class="creator-result-block span-full"
-              >
-                <span>读取完成</span>
-                <p>
-                  已读取 {{ feedbackFetchResult.commentCount }} 条评论、{{
-                    feedbackFetchResult.danmakuCount
-                  }} 条弹幕。导入明细暂时没有返回，可以稍后刷新或直接继续分析。
-                </p>
-              </article>
-
-              <template v-if="feedbackDashboard">
-                <article class="creator-result-block">
-                  <span>导入概览</span>
-                  <div class="creator-metric-grid">
-                    <section>
-                      <strong>{{ formatMetric(feedbackDashboard.commentCount) }}</strong>
-                      <small>评论</small>
-                    </section>
-                    <section>
-                      <strong>{{ formatMetric(feedbackDashboard.danmakuCount) }}</strong>
-                      <small>弹幕</small>
-                    </section>
-                    <section>
-                      <strong>{{ formatMetric(feedbackDashboard.noiseCount) }}</strong>
-                      <small>无意义/重复</small>
-                    </section>
-                  </div>
-                </article>
-
-                <article class="creator-result-block">
-                  <span>视频指标</span>
-                  <div v-if="feedbackDashboard.metric" class="creator-metric-grid">
-                    <section>
-                      <strong>{{ formatMetric(feedbackDashboard.metric.viewCount) }}</strong>
-                      <small>播放</small>
-                    </section>
-                    <section>
-                      <strong>{{ formatMetric(feedbackDashboard.metric.likeCount) }}</strong>
-                      <small>点赞</small>
-                    </section>
-                    <section>
-                      <strong>{{ formatMetric(feedbackDashboard.metric.coinCount) }}</strong>
-                      <small>投币</small>
-                    </section>
-                    <section>
-                      <strong>{{ formatMetric(feedbackDashboard.metric.favoriteCount) }}</strong>
-                      <small>收藏</small>
-                    </section>
-                  </div>
-                  <p v-else>当前文件没有视频指标，仪表盘只展示评论和弹幕明细。</p>
-                </article>
-
-                <article class="creator-result-block">
-                  <span>评论分类</span>
-                  <div class="creator-stat-bars">
-                    <section
-                      v-for="item in feedbackDashboard.commentCategoryStats"
-                      :key="`comment-${item.name}`"
-                    >
-                      <div>
-                        <strong>{{ item.label }}</strong>
-                        <small>{{ item.count }} 条</small>
-                      </div>
-                      <i
-                        :style="{
-                          width: statBarWidth(item.count, feedbackDashboard.commentCount),
-                        }"
-                      ></i>
-                    </section>
-                  </div>
-                </article>
-
-                <article class="creator-result-block">
-                  <span>弹幕分类</span>
-                  <div class="creator-stat-bars">
-                    <section
-                      v-for="item in feedbackDashboard.danmakuCategoryStats"
-                      :key="`danmaku-${item.name}`"
-                    >
-                      <div>
-                        <strong>{{ item.label }}</strong>
-                        <small>{{ item.count }} 条</small>
-                      </div>
-                      <i
-                        :style="{
-                          width: statBarWidth(item.count, feedbackDashboard.danmakuCount),
-                        }"
-                      ></i>
-                    </section>
-                  </div>
-                </article>
-
-                <article class="creator-result-block">
-                  <span>情绪分布</span>
-                  <div class="creator-stat-bars">
-                    <section
-                      v-for="item in feedbackDashboard.sentimentStats"
-                      :key="`sentiment-${item.name}`"
-                    >
-                      <div>
-                        <strong>{{ item.label }}</strong>
-                        <small>{{ item.count }} 条</small>
-                      </div>
-                      <i
-                        :style="{
-                          width: statBarWidth(
-                            item.count,
-                            feedbackDashboard.commentCount + feedbackDashboard.danmakuCount,
-                          ),
-                        }"
-                      ></i>
-                    </section>
-                  </div>
-                </article>
-
-                <article class="creator-result-block">
-                  <span>高频关键词</span>
-                  <div class="creator-chip-list">
-                    <b v-for="item in feedbackDashboard.keywords" :key="item.keyword">
-                      {{ item.keyword }} · {{ item.count }}
-                    </b>
-                    <p v-if="feedbackDashboard.keywords.length === 0">
-                      暂未识别出明显关键词，可以补充更多评论或弹幕后再分析。
-                    </p>
-                  </div>
-                </article>
-
-                <article class="creator-result-block span-full">
-                  <span>弹幕时间段热度</span>
-                  <div v-if="feedbackDashboard.danmakuTimeline.length" class="creator-stat-bars">
-                    <section
-                      v-for="item in feedbackDashboard.danmakuTimeline"
-                      :key="item.timeBucket"
-                    >
-                      <div>
-                        <strong>{{ item.timeBucket }}</strong>
-                        <small>{{ item.count }} 条</small>
-                      </div>
-                      <i
-                        :style="{
-                          width: statBarWidth(item.count, feedbackDashboard.danmakuCount),
-                        }"
-                      ></i>
-                    </section>
-                  </div>
-                  <p v-else>当前弹幕没有时间戳，暂不展示时间段热度。</p>
-                </article>
-
-                <article class="creator-result-block span-full">
-                  <span>高反馈评论</span>
-                  <div
-                    v-if="feedbackDashboard.topCommentItems.length"
-                    class="creator-feedback-item-list"
-                  >
-                    <section v-for="item in feedbackDashboard.topCommentItems" :key="item.itemId">
-                      <small>
-                        {{ item.categoryLabel }} · {{ item.sentimentLabel }}
-                        <template v-if="item.likeCount !== null">
-                          · 点赞 {{ formatMetric(item.likeCount) }}
-                        </template>
-                        <template v-if="item.replyCount !== null">
-                          · 回复 {{ formatMetric(item.replyCount) }}
-                        </template>
-                        <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
-                      </small>
-                      <p>{{ item.content }}</p>
-                    </section>
-                  </div>
-                  <p v-else>当前导入没有可排序的评论点赞数据。</p>
-                </article>
-
-                <article class="creator-result-block span-full">
-                  <span>最近导入明细</span>
-                  <div class="creator-feedback-item-list">
-                    <section v-for="item in feedbackDashboard.recentItems" :key="item.itemId">
-                      <small>
-                        {{ item.sourceLabel }} · {{ item.categoryLabel }} ·
-                        {{ item.sentimentLabel }}
-                        <template v-if="item.likeCount !== null">
-                          · 点赞 {{ formatMetric(item.likeCount) }}
-                        </template>
-                        <template v-if="item.replyCount !== null">
-                          · 回复 {{ formatMetric(item.replyCount) }}
-                        </template>
-                        <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
-                      </small>
-                      <p>{{ item.content }}</p>
-                    </section>
-                  </div>
-                </article>
-
-                <article
-                  v-if="feedbackDashboardWarnings.length"
-                  class="creator-result-block span-full"
-                >
-                  <span>导入提示</span>
-                  <ul>
-                    <li v-for="warning in feedbackDashboardWarnings" :key="warning">
-                      {{ warning }}
-                    </li>
-                  </ul>
-                </article>
-              </template>
-
-              <article v-else class="creator-empty-result span-full">
-                <strong>还没有可展示的导入仪表盘</strong>
-                <span>请先导入 JSON/TXT 文件，或通过单个 BV 显式触发限量样例采集。</span>
-              </article>
-            </div>
-          </template>
-
-          <template v-else-if="resultModalTarget === 'feedbackReport' && feedbackReport">
-            <div class="creator-report">
-              <section v-if="showDeveloperTools" class="creator-feedback-index-status">
-                <div class="creator-feedback-index-line">
-                  <div>
-                    <strong>证据索引</strong>
-                    <small>
-                      {{
-                        feedbackEvidenceIndexStatus
-                          ? retrievalModeLabel(feedbackEvidenceIndexStatus.retrievalMode)
-                          : isLoadingFeedbackEvidenceIndexStatus
-                            ? '读取中'
-                            : '未读取'
-                      }}
-                    </small>
-                  </div>
-                  <button
-                    type="button"
-                    class="creator-ghost-button creator-mini-button"
-                    :disabled="isRebuildingFeedbackEvidenceIndex"
-                    @click="rebuildFeedbackEvidenceIndex"
-                  >
-                    {{ isRebuildingFeedbackEvidenceIndex ? '索引中...' : '重建证据索引' }}
-                  </button>
-                </div>
-                <p v-if="feedbackEvidenceIndexStatus" class="creator-feedback-index-hint">
-                  <template
-                    v-if="
-                      feedbackEvidenceIndexStatus.ragEnabled &&
-                      feedbackEvidenceIndexStatus.vectorStoreReady
-                    "
-                  >
-                    已索引 {{ feedbackEvidenceIndexStatus.indexedCount }}/{{
-                      feedbackEvidenceIndexStatus.totalItems
-                    }} 条，待索引 {{ feedbackEvidenceIndexStatus.pendingCount }} 条，失败
-                    {{ feedbackEvidenceIndexStatus.failedCount }} 条。
-                  </template>
-                  <template v-else>
-                    当前使用 SQL 证据检索（{{
-                      feedbackEvidenceIndexStatus.ragEnabled ? 'Milvus 未就绪' : 'RAG 未启用'
-                    }}）。
-                  </template>
-                </p>
-                <p v-else class="creator-feedback-index-hint">
-                  {{
-                    isLoadingFeedbackEvidenceIndexStatus
-                      ? '正在读取证据索引状态...'
-                      : '暂未读取证据索引状态。'
-                  }}
-                </p>
-                <p v-if="feedbackChatResult" class="creator-feedback-index-hint">
-                  最近追问：{{ feedbackChatResult.reportUsed ? '含报告' : '仅明细' }} ·
-                  {{ retrievalModeLabel(feedbackChatResult.retrievalMode) }} ·
-                  {{ feedbackChatResult.modelName || '未记录模型' }} · Token
-                  {{ formatMetric(feedbackChatResult.totalTokens) }} ·
-                  {{ formatMetric(feedbackChatResult.elapsedMs) }} ms
-                </p>
-                <ul v-if="feedbackEvidenceIndexWarnings.length" class="creator-feedback-index-warnings">
-                  <li v-for="(warning, index) in feedbackEvidenceIndexWarnings" :key="index">
-                    {{ warning }}
-                  </li>
-                </ul>
-                <details
-                  v-if="feedbackChatResult && feedbackChatResult.evidenceItems.length > 0"
-                  class="creator-feedback-index-evidence"
-                >
-                  <summary>
-                    最近追问依据
-                    <small>{{ feedbackChatResult.evidenceItems.length }} 条证据</small>
-                  </summary>
-                  <div class="creator-feedback-evidence-list">
-                    <section
-                      v-for="(item, index) in feedbackChatResult.evidenceItems"
-                      :key="item.itemId"
-                    >
-                      <small>
-                        证据{{ index + 1 }} · {{ item.sourceLabel }} ·
-                        {{ item.categoryLabel }} · {{ item.sentimentLabel }}
-                        <template v-if="item.occurTimeText"> · {{ item.occurTimeText }}</template>
-                      </small>
-                      <p>{{ item.content }}</p>
-                    </section>
-                  </div>
-                </details>
-              </section>
-
-              <section class="creator-report-group">
-                <h4 class="creator-report-group-title">概览</h4>
-                <div class="creator-report-overview">
-                  <div class="creator-report-row">
-                    <span>整体反馈</span>
-                    <p>{{ feedbackReport.feedbackSummary || '未解析到整体反馈' }}</p>
-                  </div>
-                  <div class="creator-report-row">
-                    <span>创作者复盘困境</span>
-                    <p>{{ feedbackReport.creatorFeedbackDilemma || '未解析到创作者复盘困境' }}</p>
-                  </div>
-                  <div class="creator-report-row">
-                    <span>观众核心关注</span>
-                    <p>{{ feedbackReport.audienceCoreConcern || '未解析到观众核心关注' }}</p>
-                  </div>
-                  <div class="creator-report-row">
-                    <span>情绪倾向</span>
-                    <p>{{ feedbackReport.sentimentSummary || '未解析到情绪倾向' }}</p>
-                  </div>
-                </div>
-              </section>
-
-              <section class="creator-report-group">
-                <h4 class="creator-report-group-title">观众怎么想</h4>
-                <div class="creator-report-cards">
-                  <article class="creator-result-block">
-                    <span>高频观点</span>
-                    <div class="creator-list">
-                      <section v-for="(item, index) in hotTopics" :key="index">
-                        <strong>{{ getRecordText(item, 'topic') || formatValue(item) }}</strong>
-                        <p v-if="getRecordText(item, 'evidence')" class="creator-kv">
-                          <span>依据</span>{{ getRecordText(item, 'evidence') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'creatorDecision')" class="creator-kv">
-                          <span>判断</span>{{ getRecordText(item, 'creatorDecision') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'suggestion')" class="creator-kv">
-                          <span>建议</span>{{ getRecordText(item, 'suggestion') }}
-                        </p>
-                      </section>
-                    </div>
-                  </article>
-                  <article class="creator-result-block">
-                    <span>下一期内容建议</span>
-                    <div class="creator-list">
-                      <section v-for="(item, index) in nextContentSuggestions" :key="index">
-                        <strong>{{ getRecordText(item, 'topic') || formatValue(item) }}</strong>
-                        <p v-if="getRecordText(item, 'sourceSignal')" class="creator-kv">
-                          <span>信号</span>{{ getRecordText(item, 'sourceSignal') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'executionHint')" class="creator-kv">
-                          <span>做法</span>{{ getRecordText(item, 'executionHint') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'risk')" class="creator-kv">
-                          <span>注意</span>{{ getRecordText(item, 'risk') }}
-                        </p>
-                      </section>
-                    </div>
-                  </article>
-                </div>
-              </section>
-
-              <section class="creator-report-group">
-                <h4 class="creator-report-group-title">风险与误解</h4>
-                <div class="creator-report-cards">
-                  <article class="creator-result-block">
-                    <span>争议点</span>
-                    <div class="creator-list">
-                      <section v-for="(item, index) in controversyPoints" :key="index">
-                        <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
-                        <p v-if="getRecordText(item, 'risk')" class="creator-kv">
-                          <span>风险</span>{{ getRecordText(item, 'risk') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'responseBoundary')" class="creator-kv">
-                          <span>边界</span>{{ getRecordText(item, 'responseBoundary') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'responseAdvice')" class="creator-kv">
-                          <span>回应</span>{{ getRecordText(item, 'responseAdvice') }}
-                        </p>
-                      </section>
-                    </div>
-                  </article>
-                  <article class="creator-result-block">
-                    <span>误解点</span>
-                    <div class="creator-list">
-                      <section v-for="(item, index) in misunderstandingPoints" :key="index">
-                        <strong>{{ getRecordText(item, 'point') || formatValue(item) }}</strong>
-                        <p v-if="getRecordText(item, 'source')" class="creator-kv">
-                          <span>来源</span>{{ getRecordText(item, 'source') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'clarificationAdvice')" class="creator-kv">
-                          <span>澄清</span>{{ getRecordText(item, 'clarificationAdvice') }}
-                        </p>
-                      </section>
-                    </div>
-                  </article>
-                  <article class="creator-result-block">
-                    <span>误解来源分析</span>
-                    <div v-if="misunderstandingSourceAnalysis.length" class="creator-list">
-                      <section
-                        v-for="(item, index) in misunderstandingSourceAnalysis"
-                        :key="index"
-                      >
-                        <strong>{{ getRecordText(item, 'source') || formatValue(item) }}</strong>
-                        <p v-if="getRecordText(item, 'reason')" class="creator-kv">
-                          <span>成因</span>{{ getRecordText(item, 'reason') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'repairAction')" class="creator-kv">
-                          <span>修复</span>{{ getRecordText(item, 'repairAction') }}
-                        </p>
-                      </section>
-                    </div>
-                    <p v-else class="creator-report-empty">未解析到误解来源分析</p>
-                  </article>
-                </div>
-              </section>
-
-              <section class="creator-report-group">
-                <h4 class="creator-report-group-title">我该做什么</h4>
-                <div class="creator-report-cards">
-                  <article class="creator-result-block">
-                    <span>互动建议</span>
-                    <div class="creator-list">
-                      <section v-for="(item, index) in interactionSuggestions" :key="index">
-                        <strong>{{ getRecordText(item, 'channel') || formatValue(item) }}</strong>
-                        <p v-if="getRecordText(item, 'message')" class="creator-kv">
-                          <span>内容</span>{{ getRecordText(item, 'message') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'purpose')" class="creator-kv">
-                          <span>目的</span>{{ getRecordText(item, 'purpose') }}
-                        </p>
-                      </section>
-                    </div>
-                  </article>
-                  <article class="creator-result-block">
-                    <span>反馈行动计划</span>
-                    <div v-if="feedbackActionPlan.length" class="creator-list">
-                      <section v-for="(item, index) in feedbackActionPlan" :key="index">
-                        <strong>
-                          <span
-                            v-if="getRecordText(item, 'priority')"
-                            class="creator-badge"
-                          >{{ getRecordText(item, 'priority') }}</span>
-                          {{ getRecordText(item, 'action') || formatValue(item) }}
-                        </strong>
-                        <p v-if="getRecordText(item, 'reason')" class="creator-kv">
-                          <span>原因</span>{{ getRecordText(item, 'reason') }}
-                        </p>
-                        <p v-if="getRecordText(item, 'expectedResult')" class="creator-kv">
-                          <span>预期</span>{{ getRecordText(item, 'expectedResult') }}
-                        </p>
-                      </section>
-                    </div>
-                    <p v-else class="creator-report-empty">未解析到反馈行动计划</p>
-                  </article>
-                </div>
-              </section>
-
-            </div>
-          </template>
-        </div>
-
-        <aside
-          v-if="resultModalTarget === 'feedbackReport' && isFeedbackChatDrawerOpen"
-          class="creator-feedback-drawer"
-          aria-label="反馈追问"
-        >
-          <header class="creator-feedback-drawer-head">
-            <div>
-              <h3>反馈追问</h3>
-            </div>
-            <button type="button" class="creator-ghost-button" @click="closeFeedbackChatDrawer">
-              关闭
-            </button>
-          </header>
-
-          <div class="creator-feedback-drawer-body">
-            <section
-              ref="feedbackChatThreadRef"
-              class="message-list creator-feedback-chat-thread"
-              aria-label="反馈追问对话"
-            >
-              <template v-if="hasFeedbackChatTurns">
-                <template v-for="(turn, index) in feedbackChatTurns" :key="turn.id">
-                  <MessageBubble :message="feedbackQuestionMessage(turn, index)" />
-                  <MessageBubble :message="feedbackAnswerMessage(turn, index)" />
-                </template>
-              </template>
-              <div v-else class="creator-feedback-chat-empty">
-                <strong>还没有追问</strong>
-                <p>输入一个和本次反馈报告相关的问题，系统会结合报告与评论弹幕证据回答。</p>
-              </div>
-            </section>
-          </div>
-
-          <form class="creator-feedback-chat-composer" @submit.prevent="askFeedbackChat">
-            <textarea
-              v-model="feedbackChatForm.question"
-              maxlength="1000"
-              placeholder="向当前报告追问..."
-              @keydown.ctrl.enter.prevent="askFeedbackChat"
-            ></textarea>
-            <button
-              type="submit"
-              class="creator-primary-button"
-              :disabled="!canAskFeedbackChat"
-            >
-              {{ isAskingFeedbackChat ? '生成中...' : '追问' }}
-            </button>
-          </form>
-        </aside>
-      </section>
-    </div>
-
-    </Teleport>
+    <CreatorWorkflowMessageModal
+      :open="workflowMessageModalOpen"
+      :status-text="workflowStatusText"
+      :sse-text="workflowSseText"
+      :has-selected-task="hasSelectedTask"
+      :has-selected-task-materials="hasSelectedTaskMaterials"
+      :loading="isLoadingWorkflow"
+      :messages="workflowMessages"
+      :selected-message="selectedWorkflowMessage"
+      :selected-material="selectedWorkflowMaterial"
+      :draft="workflowMessageDraft"
+      :can-send="canSendWorkflowMessage"
+      :sending="isSendingWorkflowMessage"
+      @close="closeWorkflowMessageModal"
+      @refresh="refreshPrePublishWorkflowMessages"
+      @send="sendWorkflowSupplement"
+      @update:selected-message-id="updateWorkflowMessageSelection"
+      @update:draft="updateWorkflowMessageDraft"
+      @message-list-ref="updateWorkflowMessageListRef"
+    />
 
     <Teleport to="body">
-      <div v-if="isContextLibraryOpen" class="creator-modal-backdrop" role="presentation">
-        <section
-          class="creator-result-modal creator-context-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-label="类型语境库"
-        >
-          <header class="creator-result-modal-head">
-            <div>
-              <p class="creator-kicker">类型语境库</p>
-              <h3>{{ currentVideoType === 'GLOBAL' ? '全局通用' : currentVideoType }}</h3>
-            </div>
-            <button type="button" class="creator-ghost-button" @click="isContextLibraryOpen = false">
-              关闭
-            </button>
-          </header>
-
-          <div class="creator-result-modal-body">
-            <form class="creator-form-grid creator-context-form" @submit.prevent="saveManualContextTerm">
-              <label>
-                <span>词条</span>
-                <input
-                  v-model="contextTermForm.term"
-                  type="text"
-                  maxlength="128"
-                  placeholder="输入关键词、黑话、梗或慎用表达"
-                />
-              </label>
-              <label>
-                <span>类型</span>
-                <select v-model="contextTermForm.termType">
-                  <option
-                    v-for="option in contextTermOptions"
-                    :key="option.value"
-                    :value="option.value"
-                  >
-                    {{ option.label }}
-                  </option>
-                </select>
-              </label>
-              <label class="span-full">
-                <span>证据说明</span>
-                <textarea
-                  v-model="contextTermForm.evidenceText"
-                  maxlength="1000"
-                  placeholder="为什么这个词适合或不适合当前类型"
-                ></textarea>
-              </label>
-              <div class="creator-action-row span-full">
-                <button
-                  type="submit"
-                  class="creator-primary-button creator-mini-button"
-                  :disabled="!canSaveContextTerm"
-                >
-                  {{ isSavingCreatorContextTerm ? '保存中...' : '保存词条' }}
-                </button>
-                <button type="button" class="creator-ghost-button creator-mini-button" @click="resetContextTermForm">
-                  清空
-                </button>
-              </div>
-            </form>
-
-            <div class="creator-context-list">
-              <article
-                v-for="term in creatorContextTerms"
-                :key="term.termId"
-                class="creator-result-block"
-                :class="{ muted: !term.enabled }"
-              >
-                <span>{{ contextTermTypeLabel(term.termType) }}</span>
-                <strong>{{ term.term }}</strong>
-                <p v-if="term.evidenceText">{{ term.evidenceText }}</p>
-                <small>
-                  {{ contextTermSourceLabel(term.sourceType) }} · 权重 {{ term.weight }} ·
-                  接受 {{ term.acceptCount }} · 拒绝 {{ term.rejectCount }}
-                </small>
-                <div class="creator-action-row">
-                  <button
-                    type="button"
-                    class="creator-ghost-button creator-mini-button"
-                    @click="feedbackContextTerm(term, true)"
-                  >
-                    提高权重
-                  </button>
-                  <button
-                    type="button"
-                    class="creator-ghost-button creator-mini-button"
-                    @click="feedbackContextTerm(term, false)"
-                  >
-                    降低权重
-                  </button>
-                  <button
-                    v-if="term.enabled"
-                    type="button"
-                    class="creator-danger-action creator-mini-button"
-                    @click="disableContextTerm(term)"
-                  >
-                    禁用
-                  </button>
-                </div>
-              </article>
-              <p v-if="!isLoadingCreatorContextTerms && creatorContextTerms.length === 0" class="creator-muted">
-                当前类型还没有语境词条。
-              </p>
-            </div>
-          </div>
-        </section>
-      </div>
+      <CreatorResultModal
+        :target="resultModalTarget"
+        :title="resultModalTitle"
+        :show-developer-tools="showDeveloperTools"
+        :feedback-fetch-result="feedbackFetchResult"
+        :feedback-dashboard="feedbackDashboard"
+        :dashboard-warnings="feedbackDashboardWarnings"
+        :feedback-report="feedbackReport"
+        :feedback-evidence-index-status="feedbackEvidenceIndexStatus"
+        :loading-feedback-evidence-index-status="isLoadingFeedbackEvidenceIndexStatus"
+        :rebuilding-feedback-evidence-index="isRebuildingFeedbackEvidenceIndex"
+        :feedback-chat-result="feedbackChatResult"
+        :feedback-evidence-index-warnings="feedbackEvidenceIndexWarnings"
+        :feedback-drawer-open="isFeedbackChatDrawerOpen"
+        :feedback-chat-turns="feedbackChatTurns"
+        :feedback-chat-question="feedbackChatForm.question"
+        :can-ask-feedback-chat="canAskFeedbackChat"
+        :asking-feedback-chat="isAskingFeedbackChat"
+        @close="closeResultModal"
+        @toggle-feedback-drawer="toggleFeedbackChatDrawer"
+        @close-feedback-drawer="closeFeedbackChatDrawer"
+        @rebuild-evidence-index="rebuildFeedbackEvidenceIndex"
+        @update:feedback-question="updateFeedbackChatQuestion"
+        @ask-feedback-chat="askFeedbackChat"
+      />
     </Teleport>
+
+    <CreatorContextLibraryModal
+      :open="isContextLibraryOpen"
+      :video-type="currentVideoType"
+      :options="contextTermOptions"
+      :terms="creatorContextTerms"
+      :can-save="canSaveContextTerm"
+      :saving="isSavingCreatorContextTerm"
+      :loading="isLoadingCreatorContextTerms"
+      v-model:term="contextTermForm.term"
+      v-model:term-type="contextTermForm.termType"
+      v-model:evidence-text="contextTermForm.evidenceText"
+      @close="isContextLibraryOpen = false"
+      @save="saveManualContextTerm"
+      @reset="resetContextTermForm"
+      @feedback="feedbackContextTerm"
+      @disable="disableContextTerm"
+    />
 
     <GuidanceEditorModal
       :target="guidanceEditorTarget"

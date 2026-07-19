@@ -25,6 +25,7 @@ import java.net.URI;
  *   <li>StaticCredentialsProvider — 基于 AccessKey/SecretKey 的凭证提供者</li>
  *   <li>S3Client — 后端控制面 S3 客户端（使用 internalEndpoint）</li>
  *   <li>S3Presigner — 浏览器预签名生成器（使用 browserEndpoint）</li>
+ *   <li>S3Presigner — Provider 读取预签名生成器（使用 providerEndpoint）</li>
  * </ul>
  */
 @Configuration
@@ -96,11 +97,29 @@ public class ObjectStorageConfiguration {
      */
     @Bean
     public S3Presigner mediaS3Presigner(ObjectStorageProperties properties,
-                                       S3Configuration mediaS3Configuration,
-                                       StaticCredentialsProvider mediaS3CredentialsProvider) {
+                                        S3Configuration mediaS3Configuration,
+                                        StaticCredentialsProvider mediaS3CredentialsProvider) {
         return S3Presigner.builder()
                 // 预签名 URL 中的 host 使用 browserEndpoint（公网可达）
                 .endpointOverride(URI.create(properties.getBrowserEndpoint()))
+                .region(Region.of(properties.getRegion()))
+                .credentialsProvider(mediaS3CredentialsProvider)
+                .serviceConfiguration(mediaS3Configuration)
+                .build();
+    }
+
+    /**
+     * Provider 读取预签名生成器 Bean。
+     * <p>
+     * 用于生成给 ffprobe、Qwen 或 ASR 读取媒体对象的短时 GET URL。它使用 providerEndpoint，
+     * 避免把浏览器直传地址和云端模型回源地址强行绑定为同一个部署拓扑。
+     */
+    @Bean
+    public S3Presigner mediaProviderS3Presigner(ObjectStorageProperties properties,
+                                                S3Configuration mediaS3Configuration,
+                                                StaticCredentialsProvider mediaS3CredentialsProvider) {
+        return S3Presigner.builder()
+                .endpointOverride(URI.create(properties.getProviderEndpoint()))
                 .region(Region.of(properties.getRegion()))
                 .credentialsProvider(mediaS3CredentialsProvider)
                 .serviceConfiguration(mediaS3Configuration)

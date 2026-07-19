@@ -72,6 +72,14 @@ public interface MediaUploadMapper {
                    object_key,
                    content_type,
                    file_size,
+                   duration_ms,
+                   width,
+                   height,
+                   frame_rate,
+                   video_codec,
+                   audio_codec,
+                   has_audio,
+                   probe_attempt_id,
                    status,
                    create_time,
                    update_time
@@ -94,12 +102,59 @@ public interface MediaUploadMapper {
             @Result(column = "object_key", property = "objectKey"),
             @Result(column = "content_type", property = "contentType"),
             @Result(column = "file_size", property = "fileSize"),
+            @Result(column = "duration_ms", property = "durationMs"),
+            @Result(column = "width", property = "width"),
+            @Result(column = "height", property = "height"),
+            @Result(column = "frame_rate", property = "frameRate"),
+            @Result(column = "video_codec", property = "videoCodec"),
+            @Result(column = "audio_codec", property = "audioCodec"),
+            @Result(column = "has_audio", property = "hasAudio"),
+            @Result(column = "probe_attempt_id", property = "probeAttemptId"),
             @Result(column = "status", property = "status"),
             @Result(column = "create_time", property = "createTime"),
             @Result(column = "update_time", property = "updateTime")
     })
     Optional<DraftVideoRecord> findDraftVideo(@Param("taskId") String taskId,
-                                              @Param("ownerId") String ownerId);
+                                               @Param("ownerId") String ownerId);
+
+    /**
+     * 按 versionId + taskId + ownerId 查找成片记录。
+     * 用于媒体探测接口确认版本归属，避免只按 versionId 查询造成水平越权。
+     */
+    @Select("""
+            SELECT id,
+                   version_id,
+                   task_id,
+                   owner_id,
+                   version_no,
+                   version_name,
+                   original_file_name,
+                   bucket_name,
+                   object_key,
+                   content_type,
+                   file_size,
+                   duration_ms,
+                   width,
+                   height,
+                   frame_rate,
+                   video_codec,
+                   audio_codec,
+                   has_audio,
+                   probe_attempt_id,
+                   status,
+                   create_time,
+                   update_time
+            FROM creator_draft_video
+            WHERE version_id = #{versionId}
+              AND task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND is_deleted = 0
+            LIMIT 1
+            """)
+    @ResultMap("DraftVideoRecordMap")
+    Optional<DraftVideoRecord> findDraftVideoByVersion(@Param("taskId") String taskId,
+                                                       @Param("ownerId") String ownerId,
+                                                       @Param("versionId") String versionId);
 
     // ========== 上传会话（creator_media_upload） ==========
 
@@ -196,6 +251,43 @@ public interface MediaUploadMapper {
                                            @Param("uploadSessionId") String uploadSessionId);
 
     /**
+     * 查询任务当前仍需客户端处理的上传会话。
+     * <p>
+     * localStorage 只是便捷指针，不能成为唯一恢复来源；浏览器清理站点数据后仍应能找回服务端事实。
+     */
+    @Select("""
+            SELECT id,
+                   upload_session_id,
+                   version_id,
+                   task_id,
+                   owner_id,
+                   storage_upload_id,
+                   object_key,
+                   content_type,
+                   expected_size,
+                   file_fingerprint,
+                   part_size,
+                   total_parts,
+                   status,
+                   idempotency_key,
+                   failure_message,
+                   expires_at,
+                   completed_at,
+                   create_time,
+                   update_time
+            FROM creator_media_upload
+            WHERE task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND status IN ('CREATED', 'UPLOADING', 'VERIFYING')
+              AND is_deleted = 0
+            ORDER BY id DESC
+            LIMIT 1
+            """)
+    @ResultMap("MediaUploadRecordMap")
+    Optional<MediaUploadRecord> findCurrentUpload(@Param("taskId") String taskId,
+                                                  @Param("ownerId") String ownerId);
+
+    /**
      * 按对象键加行级锁（FOR UPDATE）查找上传会话。
      * <p>
      * 用于替换上传会话前的并发控制：锁定当前行，确保在判断旧状态→标记替代→创建新会话
@@ -281,7 +373,7 @@ public interface MediaUploadMapper {
      * CAS 条件：
      * <ul>
      *   <li>version_id + task_id + owner_id + object_key 匹配（精确定位当前行）</li>
-     *   <li>status IN ('UPLOAD_FAILED', 'UPLOAD_ABORTED')（只有失败/取消后才能重置）</li>
+     *   <li>status IN ('UPLOAD_FAILED', 'UPLOAD_ABORTED', 'PROBE_FAILED')（只有失败/取消后才能重置）</li>
      * </ul>
      * 重置时只更新对象键、文件名等可变字段，keep version_id 不变。
      *
@@ -297,13 +389,21 @@ public interface MediaUploadMapper {
                 bucket_name = #{record.bucketName},
                 content_type = #{record.contentType},
                 file_size = #{record.fileSize},
+                duration_ms = NULL,
+                width = NULL,
+                height = NULL,
+                frame_rate = NULL,
+                video_codec = NULL,
+                audio_codec = NULL,
+                has_audio = NULL,
+                probe_attempt_id = NULL,
                 status = 'UPLOADING',                       -- 状态重置为上传中
                 update_time = CURRENT_TIMESTAMP
             WHERE version_id = #{record.versionId}
               AND task_id = #{record.taskId}
               AND owner_id = #{record.ownerId}
               AND object_key = #{previousObjectKey}         -- 旧对象键精确匹配
-              AND status IN ('UPLOAD_FAILED', 'UPLOAD_ABORTED') -- CAS：仅允许从失败/取消状态重置
+              AND status IN ('UPLOAD_FAILED', 'UPLOAD_ABORTED', 'PROBE_FAILED') -- CAS：仅允许从失败/取消/探测失败状态重置
               AND is_deleted = 0
             """)
     int resetDraftVideoForUpload(@Param("record") DraftVideoRecord record,
@@ -537,8 +637,8 @@ public interface MediaUploadMapper {
                      @Param("uploadSessionId") String uploadSessionId);
 
     /**
-     * CAS：FAILED → SUPERSEDED（被新上传尝试替代）。
-     * 当用户在上次失败后重新上传时，旧会话标记为已被替代。
+     * CAS：FAILED / COMPLETED → SUPERSEDED（被新上传尝试替代）。
+     * COMPLETED 仅用于成片探测失败后的替换，避免旧会话继续声称其已删除对象仍然有效。
      */
     @Update("""
             UPDATE creator_media_upload
@@ -548,12 +648,12 @@ public interface MediaUploadMapper {
             WHERE upload_session_id = #{uploadSessionId}
               AND task_id = #{taskId}
               AND owner_id = #{ownerId}
-              AND status = 'FAILED'                     -- 只有失败的会话才可被替代
+              AND status IN ('FAILED', 'COMPLETED')      -- 上传失败或探测失败后的完整对象可被替代
               AND is_deleted = 0
             """)
-    int supersedeFailedUpload(@Param("taskId") String taskId,
-                              @Param("ownerId") String ownerId,
-                              @Param("uploadSessionId") String uploadSessionId);
+    int supersedeReplacedUpload(@Param("taskId") String taskId,
+                                @Param("ownerId") String ownerId,
+                                @Param("uploadSessionId") String uploadSessionId);
 
     /**
      * CAS：VERIFYING → COMPLETED（确认完成，最终成功态）。
@@ -604,6 +704,97 @@ public interface MediaUploadMapper {
                                @Param("status") String status,
                                @Param("contentType") String contentType,
                                @Param("fileSize") long fileSize);
+
+    /**
+     * 原子领取一次媒体探测。
+     * <p>
+     * 服务意外中断后的 PROBING 状态会在读取时先懒恢复为 PROBE_FAILED，再重新领取，
+     * 因此这里仅领取可立即开始的状态。
+     */
+    @Update("""
+            UPDATE creator_draft_video
+            SET status = 'PROBING',
+                probe_attempt_id = #{probeAttemptId},
+                duration_ms = NULL,
+                width = NULL,
+                height = NULL,
+                frame_rate = NULL,
+                video_codec = NULL,
+                audio_codec = NULL,
+                has_audio = NULL,
+                update_time = CURRENT_TIMESTAMP
+            WHERE version_id = #{versionId}
+              AND task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND status IN ('UPLOADED', 'PROBE_FAILED')
+              AND is_deleted = 0
+            """)
+    int claimDraftVideoProbe(@Param("taskId") String taskId,
+                             @Param("ownerId") String ownerId,
+                             @Param("versionId") String versionId,
+                             @Param("probeAttemptId") String probeAttemptId);
+
+    /**
+     * 懒恢复长时间未结束的媒体探测。
+     * <p>
+     * 探测没有独立 Worker 或租约，本切片通过读取时把超时 PROBING 收敛为 PROBE_FAILED，
+     * 让用户可以重试，而不是在服务重启后永久卡住。
+     */
+    @Update("""
+            UPDATE creator_draft_video
+            SET status = 'PROBE_FAILED',
+                probe_attempt_id = NULL,
+                update_time = CURRENT_TIMESTAMP
+            WHERE version_id = #{versionId}
+              AND task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND status = 'PROBING'
+              AND update_time < #{staleBefore}
+              AND is_deleted = 0
+            """)
+    int recoverStaleDraftVideoProbe(@Param("taskId") String taskId,
+                                    @Param("ownerId") String ownerId,
+                                    @Param("versionId") String versionId,
+                                    @Param("staleBefore") LocalDateTime staleBefore);
+
+    /**
+     * 写入 ffprobe 媒体探测结果。
+     * <p>
+     * 成功时写 READY_FOR_REVIEW 和完整元信息；失败时写 PROBE_FAILED 并保留空元信息。
+     * 只有已领取的 PROBING 状态可以写入最终结果，避免并发请求中的晚到结果覆盖已经写入的较新探测结果。
+     */
+    @Update("""
+            UPDATE creator_draft_video
+            SET status = #{status},
+                probe_attempt_id = NULL,
+                duration_ms = #{durationMs},
+                width = #{width},
+                height = #{height},
+                frame_rate = #{frameRate},
+                video_codec = #{videoCodec},
+                audio_codec = #{audioCodec},
+                has_audio = #{hasAudio},
+                update_time = CURRENT_TIMESTAMP
+            WHERE version_id = #{versionId}
+              AND task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND status = #{expectedStatus}
+              AND probe_attempt_id = #{probeAttemptId}
+              AND is_deleted = 0
+            """)
+    int updateDraftVideoProbeResult(@Param("taskId") String taskId,
+                                    @Param("ownerId") String ownerId,
+                                    @Param("versionId") String versionId,
+                                    @Param("expectedStatus") String expectedStatus,
+                                    @Param("probeAttemptId") String probeAttemptId,
+                                    @Param("status") String status,
+                                    @Param("durationMs") Long durationMs,
+                                    @Param("width") Integer width,
+                                    @Param("height") Integer height,
+                                    @Param("frameRate") java.math.BigDecimal frameRate,
+                                    @Param("videoCodec") String videoCodec,
+                                    @Param("audioCodec") String audioCodec,
+                                    @Param("hasAudio") Boolean hasAudio);
 
     /**
      * 删除指定上传会话的所有分片记录。

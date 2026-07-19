@@ -1,5 +1,6 @@
 package com.link.linkagent.creator.media.upload.model;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -15,7 +16,14 @@ import java.time.LocalDateTime;
  * @param originalFileName 用户原文件名（仅展示用）
  * @param contentType      媒体类型（以对象存储实际记录为准）
  * @param fileSize         文件字节数（以对象存储实际记录为准）
- * @param status           成片状态（UPLOADED 表示可用）
+ * @param durationMs       ffprobe 探测的视频时长毫秒，未探测时为空
+ * @param width            视频宽度，未探测时为空
+ * @param height           视频高度，未探测时为空
+ * @param frameRate        平均帧率，未探测时为空
+ * @param videoCodec       视频编码，未探测时为空
+ * @param audioCodec       音频编码，无音轨时为空
+ * @param hasAudio         是否存在音轨，未探测时为空
+ * @param status           成片状态（READY_FOR_REVIEW 表示可进入后续试映）
  * @param createTime       创建时间
  * @param updateTime       最后更新时间
  */
@@ -27,6 +35,13 @@ public record DraftVideoResponse(
         String originalFileName,
         String contentType,
         long fileSize,
+        Long durationMs,
+        Integer width,
+        Integer height,
+        BigDecimal frameRate,
+        String videoCodec,
+        String audioCodec,
+        Boolean hasAudio,
         String status,
         LocalDateTime createTime,
         LocalDateTime updateTime

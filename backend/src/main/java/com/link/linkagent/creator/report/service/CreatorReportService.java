@@ -7,6 +7,7 @@ import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportRecord;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
+import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.report.mapper.CreatorReportMapper;
 import com.link.linkagent.creator.report.model.CreatorReportAnalyzeRequest;
@@ -95,6 +96,8 @@ public class CreatorReportService {
     private final ObjectMapper objectMapper;
     /** 提示词模板服务，管理系统提示词和用户提示词模板 */
     private final PromptService promptService;
+    /** 发布后流程门禁，避免存量前置数据绕过成片试映重新生成复盘报告。 */
+    private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
 
     public CreatorReportService(CreatorTaskMapper creatorTaskMapper,
                                 CreatorSuggestionMapper creatorSuggestionMapper,
@@ -102,9 +105,10 @@ public class CreatorReportService {
                                 CreatorCompetitorMapper creatorCompetitorMapper,
                                 CreatorReportMapper creatorReportMapper,
                                 CreatorPreferenceService creatorPreferenceService,
-                                LLMService llmService,
-                                ObjectMapper objectMapper,
-                                PromptService promptService) {
+                                 LLMService llmService,
+                                 ObjectMapper objectMapper,
+                                 PromptService promptService,
+                                 CreatorMediaWorkflowGateService mediaWorkflowGateService) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
@@ -114,6 +118,7 @@ public class CreatorReportService {
         this.llmService = llmService;
         this.objectMapper = objectMapper;
         this.promptService = promptService;
+        this.mediaWorkflowGateService = mediaWorkflowGateService;
     }
 
     /**
@@ -142,7 +147,7 @@ public class CreatorReportService {
      */
     @Transactional
     public CreatorReportResponse analyze(String taskId, CreatorReportAnalyzeRequest request) {
-        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        CreatorTaskRecord taskRecord = getTaskReadyForReport(taskId);
         // 三道前序关口强制校验：缺一不可，保证复盘报告的综合性和客观性
         CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先生成发布前优化建议"));
@@ -202,6 +207,20 @@ public class CreatorReportService {
     private CreatorTaskRecord getTaskRecord(String taskId) {
         return creatorTaskMapper.findTaskByTaskId(taskId.trim())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+    }
+
+    /**
+     * 复盘生成会调用模型并覆盖报告、偏好和任务状态，因此不能把它当作历史结果查询绕过试映。
+     */
+    private CreatorTaskRecord getTaskReadyForReport(String taskId) {
+        mediaWorkflowGateService.ensureMediaEnabled("创作复盘");
+        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        mediaWorkflowGateService.ensureReadyForPostPublish(
+                taskRecord.getTaskId(),
+                taskRecord.getUserId(),
+                "创作复盘"
+        );
+        return taskRecord;
     }
 
     /** 按任务 ID 查复盘报告记录，不存在抛 404 */

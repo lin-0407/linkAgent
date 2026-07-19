@@ -165,6 +165,14 @@ creator:
       presign-ttl: ${CREATOR_MEDIA_UPLOAD_PRESIGN_TTL:15m}
       # 上传会话最大存活时间；默认 24h，超时未完成则自动标记 EXPIRED。
       abandoned-ttl: ${CREATOR_MEDIA_UPLOAD_ABANDONED_TTL:24h}
+    # ----- 媒体处理子配置 -----
+    processing:
+      # ffprobe 用于读取成片元信息，不修改视频文件；容器镜像通过 ffmpeg 包提供该命令。
+      ffprobe-path: ${CREATOR_MEDIA_FFPROBE_PATH:ffprobe}
+      # 探测只读取媒体元信息，超时通常说明对象存储回源或文件结构异常。
+      probe-timeout: ${CREATOR_MEDIA_PROBE_TIMEOUT:30s}
+      # Provider 读取原片/代理媒体的短签 GET URL 有效期，避免生成长期公开视频地址。
+      provider-read-ttl: ${CREATOR_MEDIA_PROVIDER_READ_TTL:5m}
   pre-publish:
     # 默认启用发布前优化 Agent 链路；演示或排障时可通过 PRE_PUBLISH_AGENT_ENABLED=false 回退旧直连 LLM 链路。
     agent:

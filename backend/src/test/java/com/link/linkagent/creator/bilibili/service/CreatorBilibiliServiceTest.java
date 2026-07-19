@@ -13,18 +13,25 @@ import com.link.linkagent.creator.bilibili.model.BindAccountRequest;
 import com.link.linkagent.creator.bilibili.model.BindBvRequest;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingResponse;
+import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
+import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -55,7 +62,8 @@ class CreatorBilibiliServiceTest {
         when(syncProvider.fetch("27058248", List.of("BV1xx411c7mD"))).thenReturn(payload);
         when(persistenceService.persist(account, payload, List.of(binding))).thenReturn(expected);
         CreatorBilibiliService service = new CreatorBilibiliService(
-                bilibiliMapper, taskMapper, syncProvider, persistenceService);
+                bilibiliMapper, taskMapper, syncProvider, persistenceService,
+                mock(CreatorMediaWorkflowGateService.class));
 
         BilibiliVideoSyncResponse result = service.syncVideos("default");
 
@@ -69,8 +77,9 @@ class CreatorBilibiliServiceTest {
     @Test
     void shouldPersistSyncedVideoAndVerifyBinding() {
         CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
         BilibiliVideoSyncPersistenceService persistenceService =
-                new BilibiliVideoSyncPersistenceService(bilibiliMapper);
+                new BilibiliVideoSyncPersistenceService(bilibiliMapper, mediaWorkflowGateService);
         BilibiliAccountRecord account = account("default", "27058248");
         TaskVideoBindingRecord binding = binding(
                 "task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY");
@@ -87,6 +96,70 @@ class CreatorBilibiliServiceTest {
         verify(bilibiliMapper).insertVideo(org.mockito.ArgumentMatchers.any(BilibiliVideoRecord.class));
         verify(bilibiliMapper).updateBindingStatus(
                 "binding-1", "BOUND", "BV归属校验通过");
+        verify(mediaWorkflowGateService).ensureReadyForPostPublish("task-1", "default", "BV绑定");
+    }
+
+    /** 存量待校验绑定可随账号同步校验，但不能因此绕过成片媒体探测推进为 BOUND。 */
+    @Test
+    void shouldKeepLegacyBindingUnchangedWhenMediaGateRejectsSync() {
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
+        BilibiliVideoSyncPersistenceService persistenceService =
+                new BilibiliVideoSyncPersistenceService(bilibiliMapper, mediaWorkflowGateService);
+        BilibiliAccountRecord account = account("default", "27058248");
+        TaskVideoBindingRecord binding = binding(
+                "task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY");
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "成片尚未通过媒体探测"))
+                .when(mediaWorkflowGateService)
+                .ensureReadyForPostPublish("task-1", "default", "BV绑定");
+
+        BilibiliVideoSyncResponse result = persistenceService.persist(
+                account,
+                syncPayload("27058248"),
+                List.of(binding)
+        );
+
+        assertThat(result.syncedCount()).isEqualTo(1);
+        assertThat(result.linkedCount()).isZero();
+        assertThat(result.warnings()).contains("存在尚未完成成片媒体探测的任务，已跳过其BV绑定通过状态更新");
+        verify(bilibiliMapper, never()).updateBindingStatus(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
+    }
+
+    /** 负向归属事实不会放行发布后流程，即使媒体未就绪也应落库，避免旧绑定永久停在待校验。 */
+    @Test
+    void shouldPersistNegativeBindingDecisionWithoutMediaGate() {
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
+        BilibiliVideoSyncPersistenceService persistenceService =
+                new BilibiliVideoSyncPersistenceService(bilibiliMapper, mediaWorkflowGateService);
+        BilibiliAccountRecord account = account("default", "27058248");
+        TaskVideoBindingRecord binding = binding(
+                "task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY");
+        BilibiliVideoVerificationResult verification = new BilibiliVideoVerificationResult(
+                "BV1xx411c7mD",
+                "UID_MISMATCH",
+                "99999999",
+                "BV不属于当前绑定UID"
+        );
+        BilibiliVideoSyncPayload payload = new BilibiliVideoSyncPayload(
+                "27058248",
+                "测试账号",
+                false,
+                false,
+                List.of(),
+                List.of(verification),
+                List.of()
+        );
+
+        BilibiliVideoSyncResponse result = persistenceService.persist(account, payload, List.of(binding));
+
+        assertThat(result.anomalyCount()).isEqualTo(1);
+        verify(bilibiliMapper).updateBindingStatus(
+                "binding-1", "UID_MISMATCH", "BV不属于当前绑定UID");
+        verifyNoInteractions(mediaWorkflowGateService);
     }
 
     /** POST /accounts：首次绑定时应创建记录并返回完整账号信息。 */
@@ -165,6 +238,28 @@ class CreatorBilibiliServiceTest {
         verify(bilibiliMapper).insertBinding(org.mockito.ArgumentMatchers.any(TaskVideoBindingRecord.class));
     }
 
+    /** 新建 BV 绑定必须先通过任务级媒体门禁，不能只依赖前端导航禁用。 */
+    @Test
+    void shouldRejectNewBvBindingWhenMediaGateRejects() {
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(task("task-1", "测试任务")));
+        when(bilibiliMapper.findBindingByTaskId("task-1")).thenReturn(Optional.empty());
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "成片尚未通过媒体探测"))
+                .when(mediaWorkflowGateService)
+                .ensureReadyForPostPublish("task-1", "default", "BV绑定");
+        CreatorBilibiliService service = service(bilibiliMapper, taskMapper, mediaWorkflowGateService);
+
+        assertThatThrownBy(() -> service.bindBvToTask(
+                "task-1",
+                new BindBvRequest("default", "27058248", "BV1xx411c7mD")
+        )).isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        verify(bilibiliMapper, never()).insertBinding(org.mockito.ArgumentMatchers.any(TaskVideoBindingRecord.class));
+    }
+
     /** 非 BOUND 绑定允许重新填写 BV，并在缓存可信时直接恢复为 BOUND。 */
     @Test
     void shouldRepairNonBoundBinding() {
@@ -206,6 +301,7 @@ class CreatorBilibiliServiceTest {
     void shouldNotOverwriteBoundBinding() {
         CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
         CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
         TaskVideoBindingRecord boundBinding = binding(
                 "task-1", "default", "27058248", "BV1xx411c7mD", "BOUND");
 
@@ -213,7 +309,7 @@ class CreatorBilibiliServiceTest {
                 .thenReturn(Optional.of(task("task-1", "测试任务")));
         when(bilibiliMapper.findBindingByTaskId("task-1"))
                 .thenReturn(Optional.of(boundBinding));
-        CreatorBilibiliService service = service(bilibiliMapper, taskMapper);
+        CreatorBilibiliService service = service(bilibiliMapper, taskMapper, mediaWorkflowGateService);
 
         TaskVideoBindingResponse result = service.bindBvToTask(
                 "task-1", new BindBvRequest("default", "27058248", "BV1yy511c7eF"));
@@ -226,6 +322,7 @@ class CreatorBilibiliServiceTest {
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.nullable(String.class));
+        verifyNoInteractions(mediaWorkflowGateService);
     }
 
     /** 已同步缓存能够证明 BV 归属时，绑定不应继续停留在 WAITING_VERIFY。 */
@@ -305,7 +402,7 @@ class CreatorBilibiliServiceTest {
         task.setUserId("default");
         task.setTaskName(taskName);
         task.setVideoType("项目展示");
-        task.setStatus("PRE_PUBLISH_CONFIRMED");
+        task.setStatus(CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name());
         return task;
     }
 
@@ -333,12 +430,19 @@ class CreatorBilibiliServiceTest {
     }
 
     private CreatorBilibiliService service(CreatorBilibiliMapper bilibiliMapper,
-                                            CreatorTaskMapper taskMapper) {
+                                             CreatorTaskMapper taskMapper) {
+        return service(bilibiliMapper, taskMapper, mock(CreatorMediaWorkflowGateService.class));
+    }
+
+    private CreatorBilibiliService service(CreatorBilibiliMapper bilibiliMapper,
+                                            CreatorTaskMapper taskMapper,
+                                            CreatorMediaWorkflowGateService mediaWorkflowGateService) {
         return new CreatorBilibiliService(
                 bilibiliMapper,
                 taskMapper,
                 mock(BilibiliVideoSyncProvider.class),
-                mock(BilibiliVideoSyncPersistenceService.class)
+                mock(BilibiliVideoSyncPersistenceService.class),
+                mediaWorkflowGateService
         );
     }
 

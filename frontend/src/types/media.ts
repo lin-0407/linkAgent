@@ -14,6 +14,7 @@ export type MediaUpload = {
   status: 'CREATED' | 'UPLOADING' | 'VERIFYING' | 'COMPLETED' | 'ABORTED' | 'EXPIRED' | 'FAILED' | 'SUPERSEDED'
   expectedSize: number
   fileFingerprint: string
+  idempotencyKey: string
   partSize: number
   totalParts: number
   completedPartCount: number
@@ -35,6 +36,15 @@ export type PresignedMediaUploadPart = {
   expiresAt: string
 }
 
+export type DraftVideoStatus =
+  | 'UPLOADING'
+  | 'UPLOADED'
+  | 'PROBING'
+  | 'READY_FOR_REVIEW'
+  | 'PROBE_FAILED'
+  | 'UPLOAD_FAILED'
+  | 'UPLOAD_ABORTED'
+
 export type DraftVideo = {
   versionId: string
   taskId: string
@@ -43,7 +53,14 @@ export type DraftVideo = {
   originalFileName: string
   contentType: string
   fileSize: number
-  status: string
+  durationMs: number | null
+  width: number | null
+  height: number | null
+  frameRate: number | null
+  videoCodec: string | null
+  audioCodec: string | null
+  hasAudio: boolean | null
+  status: DraftVideoStatus
   createTime: string
   updateTime: string
 }

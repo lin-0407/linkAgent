@@ -22,6 +22,7 @@ import com.link.linkagent.creator.media.upload.model.MediaUploadRecord;
 import com.link.linkagent.creator.media.upload.model.MediaUploadResponse;
 import com.link.linkagent.creator.media.upload.model.MediaUploadStatus;
 import com.link.linkagent.creator.media.upload.model.PresignedMediaUploadPartResponse;
+import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -73,18 +74,22 @@ public class MediaUploadService {
     private final MediaUploadMapper mediaUploadMapper;
     // 数据库事务边界聚合（保证成片、上传会话、分片记录的原子写入）
     private final MediaUploadPersistenceService persistenceService;
+    // 发布方案确认门禁，防止草稿任务直接创建 OSS 成片上传会话
+    private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
 
     // 构造器注入，Spring 自动装配所有依赖
     public MediaUploadService(CreatorMediaProperties mediaProperties,
                               ObjectStorageProperties storageProperties,
-                              ObjectStorageService objectStorageService,
-                              MediaUploadMapper mediaUploadMapper,
-                              MediaUploadPersistenceService persistenceService) {
+                               ObjectStorageService objectStorageService,
+                               MediaUploadMapper mediaUploadMapper,
+                               MediaUploadPersistenceService persistenceService,
+                               CreatorMediaWorkflowGateService mediaWorkflowGateService) {
         this.mediaProperties = mediaProperties;
         this.storageProperties = storageProperties;
         this.objectStorageService = objectStorageService;
         this.mediaUploadMapper = mediaUploadMapper;
         this.persistenceService = persistenceService;
+        this.mediaWorkflowGateService = mediaWorkflowGateService;
     }
 
     /**
@@ -116,6 +121,13 @@ public class MediaUploadService {
         // 计算文件指纹：文件名 + 大小 + 最后修改时间的 SHA-256，用于续传对账和幂等校验
         String fingerprint = fileFingerprint(normalizedFileName, request.fileSize(), request.lastModified());
 
+        // 校验任务是否存在且属于单人工作台默认归属。
+        if (mediaUploadMapper.countTaskByOwner(normalizedTaskId, ownerId) != 1) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在");
+        }
+        // 在读取或复用幂等上传会话前确认发布方案，避免旧会话成为绕过成片试映顺序的入口。
+        mediaWorkflowGateService.ensurePrePublishConfirmed(normalizedTaskId, ownerId, "成片试映");
+
         // 先查幂等键是否已有现存会话，避免重复创建 OSS Multipart Upload（每次创建都可能产生存储费用）
         OptionalUpload optionalUpload = findIdempotentUpload(
                 normalizedTaskId,
@@ -126,11 +138,6 @@ public class MediaUploadService {
         if (optionalUpload.found()) {
             // 幂等命中：直接返回已有会话，不发任何 OSS 请求
             return toUploadResponse(optionalUpload.upload());
-        }
-
-        // 校验任务是否存在且属于单人工作台默认归属。
-        if (mediaUploadMapper.countTaskByOwner(normalizedTaskId, ownerId) != 1) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在");
         }
 
         // 查是否已有该任务的成片记录：没有则新建，有则需判断是否能复用
@@ -174,6 +181,14 @@ public class MediaUploadService {
                 objectKey,                                     // 后端生成的对象键
                 request.contentType().toLowerCase(Locale.ROOT),
                 request.fileSize(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
                 DraftVideoStatus.UPLOADING.name(),             // 初始状态：上传中
                 createDraft ? null : currentDraft.createTime(),
                 createDraft ? null : currentDraft.updateTime()
@@ -250,6 +265,16 @@ public class MediaUploadService {
     }
 
     /**
+     * 查询任务当前活跃上传会话，作为浏览器本地续传指针丢失后的服务端兜底。
+     */
+    public MediaUploadResponse getCurrentUpload(String ownerId, String taskId) {
+        MediaUploadRecord upload = mediaUploadMapper.findCurrentUpload(taskId.trim(), ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "当前任务没有未完成上传会话"));
+        expireIfNecessary(upload);
+        return toUploadResponse(upload);
+    }
+
+    /**
      * 列出已登记的分片列表，供前端续传时跳过已完成分片。
      */
     public List<MediaUploadPartResponse> listParts(String ownerId,
@@ -275,6 +300,7 @@ public class MediaUploadService {
                                                  String uploadSessionId,
                                                  List<Integer> partNumbers) {
         MediaUploadRecord upload = requireUpload(ownerId, taskId, uploadSessionId);
+        mediaWorkflowGateService.ensurePrePublishConfirmed(upload.taskId(), upload.ownerId(), "成片试映");
         expireIfNecessary(upload);
         ensureStatusAllowsUpload(upload.status()); // 只允许 CREATED 和 UPLOADING 状态签名
 
@@ -336,6 +362,7 @@ public class MediaUploadService {
                                                                 String uploadSessionId,
                                                                 MediaUploadPartsCompleteRequest request) {
         MediaUploadRecord upload = requireUpload(ownerId, taskId, uploadSessionId);
+        mediaWorkflowGateService.ensurePrePublishConfirmed(upload.taskId(), upload.ownerId(), "成片试映");
         expireIfNecessary(upload);
         ensureStatusAllowsUpload(upload.status());
 
@@ -389,6 +416,7 @@ public class MediaUploadService {
         if (MediaUploadStatus.COMPLETED.name().equals(upload.status())) {
             return toDraftVideoResponse(requireDraft(ownerId, taskId));
         }
+        mediaWorkflowGateService.ensurePrePublishConfirmed(upload.taskId(), upload.ownerId(), "成片试映");
         expireIfNecessary(upload);
         if (MediaUploadStatus.VERIFYING.name().equals(upload.status())) {
             // VERIFYING 状态恢复：上轮 Complete 请求可能已成功，先 HeadObject 确认
@@ -436,9 +464,9 @@ public class MediaUploadService {
 
         // 校验实际对象大小和媒体类型是否与预期一致
         if (!isExpectedObject(upload, metadata)) {
-            // 校验失败：删除已合并的对象，标记失败，要求重新上传
-            safeDelete(upload.objectKey());
+            // 先保存失败事实再清理对象，避免删除成功但数据库仍停在 VERIFYING。
             markFailed(upload, "上传完成后的对象大小或媒体类型校验失败");
+            safeDelete(upload.objectKey());
             throw new ResponseStatusException(HttpStatus.CONFLICT, "上传对象校验失败，请重新上传视频");
         }
 
@@ -546,11 +574,12 @@ public class MediaUploadService {
 
     /**
      * 判断成片状态是否允许复用创建新上传。
-     * 只有 UPLOAD_FAILED 和 UPLOAD_ABORTED 表示上一次尝试已结束，可以重新上传。
+     * 只有上传失败、用户取消或探测失败表示上一次尝试已结束，可以重新上传。
      */
     private boolean canReuseDraft(String status) {
         return DraftVideoStatus.UPLOAD_FAILED.name().equals(status)
-                || DraftVideoStatus.UPLOAD_ABORTED.name().equals(status);
+                || DraftVideoStatus.UPLOAD_ABORTED.name().equals(status)
+                || DraftVideoStatus.PROBE_FAILED.name().equals(status);
     }
 
     /**
@@ -618,6 +647,7 @@ public class MediaUploadService {
         // 无过期时间 或 未过期 或 已是终态，无需处理
         if (upload.expiresAt() == null
                 || !LocalDateTime.now().isAfter(upload.expiresAt())
+                || MediaUploadStatus.VERIFYING.name().equals(upload.status())
                 || isTerminalStatus(upload.status())) {
             return;
         }
@@ -646,7 +676,7 @@ public class MediaUploadService {
      * VERIFYING 是 Complete 请求发送后、数据库更新前的中间态。
      * 恢复策略：
      * 1. HeadObject 成功 → 对象已存在，直接标记 COMPLETED
-     * 2. HeadObject 失败且超时 → 将状态回退到 FAILED，允许客户端重新确认
+     * 2. HeadObject 失败且超时 → 将状态回退到 UPLOADING，允许客户端重新确认
      * 3. HeadObject 失败但未超时 → 返回 null，要求客户端稍后重试
      *
      * @return 恢复成功则返回 DraftVideoResponse，仍需等待则返回 null
@@ -656,8 +686,8 @@ public class MediaUploadService {
         if (metadata != null) {
             // HeadObject 成功：对象已存在，校验后直接标记完成
             if (!isExpectedObject(upload, metadata)) {
-                safeDelete(upload.objectKey());
                 markFailed(upload, "上传完成后的对象大小或媒体类型校验失败");
+                safeDelete(upload.objectKey());
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "上传对象校验失败，请重新上传视频");
             }
             persistenceService.markUploadCompleted(
@@ -812,6 +842,7 @@ public class MediaUploadService {
                 upload.status(),
                 upload.expectedSize(),
                 upload.fileFingerprint(),
+                upload.idempotencyKey(),
                 upload.partSize(),
                 upload.totalParts(),
                 completedPartCount,  // 已登记分片数，前端据此计算上传进度百分比
@@ -845,6 +876,13 @@ public class MediaUploadService {
                 draft.originalFileName(),
                 draft.contentType(),
                 draft.fileSize(),
+                draft.durationMs(),
+                draft.width(),
+                draft.height(),
+                draft.frameRate(),
+                draft.videoCodec(),
+                draft.audioCodec(),
+                draft.hasAudio(),
                 draft.status(),
                 draft.createTime(),
                 draft.updateTime()

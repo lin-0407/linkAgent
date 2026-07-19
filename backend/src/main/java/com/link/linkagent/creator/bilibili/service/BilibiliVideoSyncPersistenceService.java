@@ -8,9 +8,11 @@ import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncPayload;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncResponse;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoVerificationResult;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
+import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -38,9 +40,12 @@ public class BilibiliVideoSyncPersistenceService {
     private static final ZoneId BILIBILI_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final CreatorBilibiliMapper bilibiliMapper;
+    private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
 
-    public BilibiliVideoSyncPersistenceService(CreatorBilibiliMapper bilibiliMapper) {
+    public BilibiliVideoSyncPersistenceService(CreatorBilibiliMapper bilibiliMapper,
+                                                CreatorMediaWorkflowGateService mediaWorkflowGateService) {
         this.bilibiliMapper = bilibiliMapper;
+        this.mediaWorkflowGateService = mediaWorkflowGateService;
     }
 
     /**
@@ -89,6 +94,9 @@ public class BilibiliVideoSyncPersistenceService {
                 if (decision.status() == null) {
                     continue;
                 }
+                if (!canUpdateBindingStatus(binding, decision.status(), warningSet)) {
+                    continue;
+                }
                 bilibiliMapper.updateBindingStatus(
                         binding.getBindingId(),
                         decision.status(),
@@ -132,6 +140,30 @@ public class BilibiliVideoSyncPersistenceService {
                 payload.hasMore(),
                 message
         );
+    }
+
+    /**
+     * 同步账号缓存和负向校验事实可以继续写入，但不能借由旧 WAITING_VERIFY 记录绕过成片试映推进为 BOUND。
+     * <p>
+     * UID_MISMATCH、VIDEO_NOT_FOUND 是纠正旧绑定的数据事实，不代表进入发布后流程，不能被媒体门禁丢弃。
+     */
+    private boolean canUpdateBindingStatus(TaskVideoBindingRecord binding,
+                                           String nextStatus,
+                                           Set<String> warningSet) {
+        if (!"BOUND".equals(nextStatus) || "BOUND".equals(binding.getBindingStatus())) {
+            return true;
+        }
+        try {
+            mediaWorkflowGateService.ensureReadyForPostPublish(
+                    binding.getTaskId(),
+                    binding.getUserId(),
+                    "BV绑定"
+            );
+            return true;
+        } catch (ResponseStatusException exception) {
+            warningSet.add("存在尚未完成成片媒体探测的任务，已跳过其BV绑定通过状态更新");
+            return false;
+        }
     }
 
     private Map<String, BilibiliVideoSyncItem> collectValidVideos(BilibiliAccountRecord account,

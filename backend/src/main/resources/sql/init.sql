@@ -1228,7 +1228,8 @@ CREATE TABLE IF NOT EXISTS creator_draft_video
     video_codec         VARCHAR(64)            DEFAULT NULL COMMENT '视频编码名称，P0-1 前为空',
     audio_codec         VARCHAR(64)            DEFAULT NULL COMMENT '音频编码名称，无音轨时为空',
     has_audio           TINYINT                DEFAULT NULL COMMENT '是否存在音轨：1=存在，0=不存在，未探测时为空',
-    status              VARCHAR(32)   NOT NULL DEFAULT 'UPLOADING' COMMENT '成片状态：UPLOADING=上传中，UPLOADED=已上传，UPLOAD_FAILED=上传失败，UPLOAD_ABORTED=已取消',
+    probe_attempt_id    VARCHAR(64)            DEFAULT NULL COMMENT '当前媒体探测领取标识；防止超时恢复后的旧请求覆盖新探测结果',
+    status              VARCHAR(32)   NOT NULL DEFAULT 'UPLOADING' COMMENT '成片状态：UPLOADING=上传中，UPLOADED=已上传待探测，PROBING=探测中，READY_FOR_REVIEW=探测通过，PROBE_FAILED=探测失败，UPLOAD_FAILED=上传失败，UPLOAD_ABORTED=已取消',
     current_review_id   VARCHAR(64)            DEFAULT NULL COMMENT '当前发布前试映任务ID，P0-2 前为空',
     published_flag      TINYINT       NOT NULL DEFAULT 0 COMMENT '用户是否确认已发布：1=已发布，0=未发布',
     published_at        DATETIME               DEFAULT NULL COMMENT '用户确认发布时间',
@@ -1327,6 +1328,14 @@ CREATE TABLE IF NOT EXISTS creator_media_upload_part
 -- 幂等迁移：为已存在的表补充新列
 -- 用 INFORMATION_SCHEMA 判断列是否存在，兼容所有 MySQL 8.x 版本
 -- ============================================================
+
+-- 媒体探测领取标识：旧库必须补齐，否则超时恢复后晚到的旧探测可能覆盖新一轮结果。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_draft_video ADD COLUMN probe_attempt_id VARCHAR(64) DEFAULT NULL COMMENT ''当前媒体探测领取标识；防止超时恢复后的旧请求覆盖新探测结果'' AFTER has_audio',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_draft_video' AND COLUMN_NAME = 'probe_attempt_id');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 参考视频质量分可信度字段：这里仅补齐旧库缺失列，避免 db-init 每次执行时清空已有质量分数据
 SET @sql = (SELECT IF(COUNT(*) = 0,

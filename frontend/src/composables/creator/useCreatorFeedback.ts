@@ -18,7 +18,9 @@ import type {
   CreatorFeedbackAnalyzePayload,
   CreatorFeedbackChatPayload,
   CreatorFeedbackChatResult,
+  CreatorFeedbackChatTurn,
   CreatorFeedbackDashboard,
+  CreatorFeedbackEvidenceIndexResult,
   CreatorFeedbackEvidenceIndexStatus,
   CreatorFeedbackFetchPayload,
   CreatorFeedbackFetchResult,
@@ -26,14 +28,11 @@ import type {
   CreatorFeedbackReport,
   CreatorFeedbackSavePayload,
 } from '@/types/creator'
-
-type FeedbackChatTurn = {
-  id: string
-  question: string
-  result: CreatorFeedbackChatResult | null
-  status: 'pending' | 'loading' | 'done' | 'error'
-  errorMessage: string
-}
+import {
+  clampScriptNumber,
+  extractBvid,
+  hasText,
+} from '@/composables/creator/creatorWorkspaceUtils'
 
 let turnCounter = 0
 function nextTurnId() {
@@ -42,16 +41,18 @@ function nextTurnId() {
 
 export function useCreatorFeedback(
   selectedTaskId: Ref<string>,
-  hasConfirmedPrePublish: Ref<boolean>,
+  canEnterFeedback: Ref<boolean>,
   errorRef: Ref<string>,
   successRef: Ref<string>,
 ) {
+  let requestVersion = 0
+
   // ── 状态 ──
   const feedback = ref<CreatorFeedback | null>(null)
   const feedbackDashboard = ref<CreatorFeedbackDashboard | null>(null)
   const feedbackReport = ref<CreatorFeedbackReport | null>(null)
   const feedbackChatResult = ref<CreatorFeedbackChatResult | null>(null)
-  const feedbackChatTurns = ref<FeedbackChatTurn[]>([])
+  const feedbackChatTurns = ref<CreatorFeedbackChatTurn[]>([])
   const feedbackFetchResult = ref<CreatorFeedbackFetchResult | null>(null)
   const feedbackImportFile = ref<File | null>(null)
   const feedbackImportWarnings = ref<string[]>([])
@@ -90,8 +91,6 @@ export function useCreatorFeedback(
 
   // ── 计算 ──
 
-  const canEnterFeedback = computed(() => selectedTaskId.value.length > 0 && hasConfirmedPrePublish.value)
-
   const hasFeedbackSampleInput = computed(
     () => hasText(feedbackForm.commentSamples) || hasText(feedbackForm.danmakuSamples),
   )
@@ -99,6 +98,8 @@ export function useCreatorFeedback(
   const canRunFeedbackAnalyze = computed(() =>
     Boolean(
       canEnterFeedback.value &&
+        !isSavingFeedback.value &&
+        !isImportingFeedback.value &&
         !isFetchingFeedback.value &&
         !isAnalyzingFeedback.value &&
         (feedback.value ||
@@ -116,8 +117,6 @@ export function useCreatorFeedback(
     ),
   )
 
-  const hasFeedbackChatTurns = computed(() => feedbackChatTurns.value.length > 0)
-
   const feedbackDashboardWarnings = computed(() => {
     const warnings = [...feedbackImportWarnings.value, ...(feedbackDashboard.value?.warnings ?? [])]
     return Array.from(new Set(warnings))
@@ -127,129 +126,212 @@ export function useCreatorFeedback(
 
   // ── 工具 ──
   function showError(error: unknown) {
-    errorRef.value = error instanceof Error ? error.message : String(error)
+    errorRef.value = error instanceof Error ? error.message : '请求失败'
   }
 
-  async function optionalRequest<T>(request: () => Promise<T>): Promise<T | undefined> {
-    try { return await request() } catch { return undefined }
+  function beginRequest() {
+    errorRef.value = ''
+    successRef.value = ''
+  }
+
+  function isCurrentRequest(taskId: string, version: number) {
+    return selectedTaskId.value === taskId && requestVersion === version
+  }
+
+  function hasPendingFeedbackMutation() {
+    return isSavingFeedback.value ||
+      isImportingFeedback.value ||
+      isFetchingFeedback.value ||
+      isAnalyzingFeedback.value
+  }
+
+  async function optionalRequest<T>(request: () => Promise<T>): Promise<T | null> {
+    try { return await request() } catch { return null }
   }
 
   // ── 方法 ──
 
-  /** 加载任务关联的反馈数据（feedback → dashboard → report） */
-  async function loadFeedbackData(taskId: string) {
-    feedback.value = await optionalRequest(() => getCreatorFeedback(taskId)) ?? null
-    feedbackDashboard.value = await optionalRequest(() => getCreatorFeedbackDashboard(taskId)) ?? null
+  /** 任务切换时按后端状态恢复反馈数据，避免页面表单成为第二份结果来源。 */
+  async function loadFeedbackData(taskId: string, includeReport = false) {
+    const version = requestVersion
+    const loadedFeedback = await optionalRequest(() => getCreatorFeedback(taskId))
+    if (!isCurrentRequest(taskId, version)) return
+    feedback.value = loadedFeedback
+
+    const loadedDashboard = await optionalRequest(() => getCreatorFeedbackDashboard(taskId))
+    if (!isCurrentRequest(taskId, version)) return
+    feedbackDashboard.value = loadedDashboard
+
+    if (includeReport) {
+      const loadedReport = await optionalRequest(() => getCreatorFeedbackReport(taskId))
+      if (!isCurrentRequest(taskId, version)) return
+      feedbackReport.value = loadedReport
+    }
   }
 
   /** 从已填充的表单手动保存反馈样例 */
-  async function submitFeedback(taskId: string) {
-    if (!canEnterFeedback.value) return
+  async function submitFeedback(): Promise<CreatorFeedback | null> {
+    const taskId = selectedTaskId.value
+    if (!taskId || !canEnterFeedback.value || hasPendingFeedbackMutation()) return null
+    const version = requestVersion
     isSavingFeedback.value = true
-    errorRef.value = ''
+    beginRequest()
     try {
       const payload: CreatorFeedbackSavePayload = {}
       if (hasText(feedbackForm.commentSamples)) payload.commentSamples = feedbackForm.commentSamples
       if (hasText(feedbackForm.danmakuSamples)) payload.danmakuSamples = feedbackForm.danmakuSamples
       if (hasText(feedbackForm.extraContext)) payload.extraContext = feedbackForm.extraContext
-      feedback.value = await saveCreatorFeedback(taskId, payload)
+      const result = await saveCreatorFeedback(taskId, payload)
+      if (!isCurrentRequest(taskId, version)) return null
+      feedback.value = result
+      feedbackReport.value = null
+      clearFeedbackChatState()
+      feedbackDashboard.value = null
+      feedbackFetchResult.value = null
+      feedbackImportWarnings.value = []
+      return result
     } catch (error) {
-      showError(error)
+      if (isCurrentRequest(taskId, version)) showError(error)
+      return null
     } finally {
-      isSavingFeedback.value = false
+      if (requestVersion === version) isSavingFeedback.value = false
     }
   }
 
   function handleFeedbackFileChange(event: Event) {
     const input = event.target as HTMLInputElement
     feedbackImportFile.value = input.files?.[0] ?? null
+    feedbackImportWarnings.value = []
   }
 
-  async function importFeedbackFile(taskId: string) {
-    if (!canEnterFeedback.value || !feedbackImportFile.value) return
+  async function importFeedbackFile(): Promise<CreatorFeedbackImportResult | null> {
+    const taskId = selectedTaskId.value
+    const file = feedbackImportFile.value
+    if (!taskId || !canEnterFeedback.value || !file || hasPendingFeedbackMutation()) return null
+    const version = requestVersion
     isImportingFeedback.value = true
-    errorRef.value = ''
+    beginRequest()
     try {
-      const result = await importCreatorFeedbackFile(taskId, feedbackImportFile.value)
+      const result = await importCreatorFeedbackFile(taskId, file)
+      if (!isCurrentRequest(taskId, version)) return null
+      feedbackFetchResult.value = null
+      feedbackReport.value = null
+      clearFeedbackChatState()
       feedbackImportWarnings.value = result.warnings ?? []
-      feedback.value = await optionalRequest(() => getCreatorFeedback(taskId)) ?? feedback.value
-      feedbackDashboard.value =
-        await optionalRequest(() => getCreatorFeedbackDashboard(taskId)) ?? feedbackDashboard.value
+
+      const loadedFeedback = await optionalRequest(() => getCreatorFeedback(taskId))
+      if (!isCurrentRequest(taskId, version)) return null
+      feedback.value = loadedFeedback
+
+      const loadedDashboard = await optionalRequest(() => getCreatorFeedbackDashboard(taskId))
+      if (!isCurrentRequest(taskId, version)) return null
+      feedbackDashboard.value = loadedDashboard
+      return result
     } catch (error) {
-      showError(error)
+      if (isCurrentRequest(taskId, version)) showError(error)
+      return null
     } finally {
-      isImportingFeedback.value = false
+      if (requestVersion === version) isImportingFeedback.value = false
     }
   }
 
-  async function fetchFeedbackByBv(taskId: string) {
-    if (!canEnterFeedback.value) return
+  async function fetchFeedbackByBv(): Promise<CreatorFeedbackFetchResult | null> {
+    const taskId = selectedTaskId.value
+    if (!taskId || !canEnterFeedback.value || hasPendingFeedbackMutation()) return null
+    if (!feedbackScriptBv.value) {
+      errorRef.value = '请先输入有效 BV 号或视频链接。'
+      return null
+    }
+    const version = requestVersion
     isFetchingFeedback.value = true
-    errorRef.value = ''
+    beginRequest()
     try {
-      const bv = extractBvid(feedbackScriptForm.bvInput)
       const payload: CreatorFeedbackFetchPayload = {
         bvInput: feedbackScriptForm.bvInput,
-        maxComments: feedbackScriptForm.maxComments,
-        maxRepliesPerComment: feedbackScriptForm.maxRepliesPerComment,
-        maxDanmaku: feedbackScriptForm.maxDanmaku,
+        maxComments: clampScriptNumber(feedbackScriptForm.maxComments, 0, 500),
+        maxRepliesPerComment: clampScriptNumber(feedbackScriptForm.maxRepliesPerComment, 0, 100),
+        maxDanmaku: clampScriptNumber(feedbackScriptForm.maxDanmaku, 0, 2000),
         format: feedbackScriptForm.format,
       }
       const result = await fetchCreatorFeedbackByBv(taskId, payload)
+      if (!isCurrentRequest(taskId, version)) return null
       feedbackFetchResult.value = result
-      feedback.value = await optionalRequest(() => getCreatorFeedback(taskId)) ?? feedback.value
-      feedbackDashboard.value =
-        await optionalRequest(() => getCreatorFeedbackDashboard(taskId)) ?? feedbackDashboard.value
+      feedbackReport.value = null
+      clearFeedbackChatState()
+      feedbackImportWarnings.value = result.warnings ?? []
+
+      const loadedFeedback = await optionalRequest(() => getCreatorFeedback(taskId))
+      if (!isCurrentRequest(taskId, version)) return null
+      feedback.value = loadedFeedback
+
+      const loadedDashboard = await optionalRequest(() => getCreatorFeedbackDashboard(taskId))
+      if (!isCurrentRequest(taskId, version)) return null
+      feedbackDashboard.value = loadedDashboard
+      return result
     } catch (error) {
-      showError(error)
+      if (isCurrentRequest(taskId, version)) showError(error)
+      return null
     } finally {
-      isFetchingFeedback.value = false
+      if (requestVersion === version) isFetchingFeedback.value = false
     }
   }
 
-  async function runAnalyze(taskId: string, payload: CreatorFeedbackAnalyzePayload) {
-    if (!canRunFeedbackAnalyze.value) return
+  async function runAnalyze(
+    payload: CreatorFeedbackAnalyzePayload,
+  ): Promise<CreatorFeedbackReport | null> {
+    const taskId = selectedTaskId.value
+    if (!taskId || !canRunFeedbackAnalyze.value) return null
+    const version = requestVersion
     isAnalyzingFeedback.value = true
-    errorRef.value = ''
+    beginRequest()
     try {
-      feedbackReport.value = await analyzeCreatorFeedback(taskId, payload)
+      const result = await analyzeCreatorFeedback(taskId, payload)
+      if (!isCurrentRequest(taskId, version)) return null
+      feedbackReport.value = result
+      clearFeedbackChatState()
+      return result
     } catch (error) {
-      showError(error)
+      if (isCurrentRequest(taskId, version)) showError(error)
+      return null
     } finally {
-      isAnalyzingFeedback.value = false
+      if (requestVersion === version) isAnalyzingFeedback.value = false
     }
   }
 
-  async function askChat(taskId: string) {
+  async function askChat(): Promise<CreatorFeedbackChatResult | null> {
+    const taskId = selectedTaskId.value
     if (!canAskFeedbackChat.value) return null
-    const turn: FeedbackChatTurn = {
+    const version = requestVersion
+    const turn: CreatorFeedbackChatTurn = {
       id: nextTurnId(),
       question: feedbackChatForm.question.trim(),
       result: null,
-      status: 'loading',
-      errorMessage: '',
+      status: 'PENDING',
     }
     feedbackChatTurns.value = [...feedbackChatTurns.value, turn]
     feedbackChatForm.question = ''
     isAskingFeedbackChat.value = true
+    beginRequest()
 
     try {
       const payload: CreatorFeedbackChatPayload = { question: turn.question }
       const result = await chatCreatorFeedback(taskId, payload)
-      updateFeedbackChatTurn(turn.id, { result, status: 'done' })
+      if (!isCurrentRequest(taskId, version)) return null
+      updateFeedbackChatTurn(turn.id, { result, status: 'DONE' })
       feedbackChatResult.value = result
       return result
     } catch (error) {
+      if (!isCurrentRequest(taskId, version)) return null
       const message = error instanceof Error ? error.message : String(error)
-      updateFeedbackChatTurn(turn.id, { status: 'error', errorMessage: message })
+      updateFeedbackChatTurn(turn.id, { status: 'FAILED', errorMessage: message })
       showError(error)
       return null
     } finally {
-      isAskingFeedbackChat.value = false
+      if (requestVersion === version) isAskingFeedbackChat.value = false
     }
   }
 
-  function updateFeedbackChatTurn(turnId: string, patch: Partial<FeedbackChatTurn>) {
+  function updateFeedbackChatTurn(turnId: string, patch: Partial<CreatorFeedbackChatTurn>) {
     feedbackChatTurns.value = feedbackChatTurns.value.map((t) =>
       t.id === turnId ? { ...t, ...patch } : t,
     )
@@ -261,62 +343,97 @@ export function useCreatorFeedback(
     if (clearQuestion) feedbackChatForm.question = ''
   }
 
-  async function downloadReportMarkdown(taskId: string) {
-    if (!selectedTaskId.value || isExportingReportMarkdown.value) return
+  async function downloadReportMarkdown() {
+    const taskId = selectedTaskId.value
+    if (!taskId || isExportingReportMarkdown.value) return false
+    const version = requestVersion
     isExportingReportMarkdown.value = true
+    beginRequest()
     try {
       const { blob, filename } = await exportCreatorReportMarkdown(taskId)
+      if (!isCurrentRequest(taskId, version)) return false
       triggerBrowserDownload(blob, filename || `creator-report-${taskId}.md`)
       successRef.value = '报告已下载。'
+      return true
     } catch (error) {
-      showError(error)
+      if (isCurrentRequest(taskId, version)) showError(error)
+      return false
     } finally {
-      isExportingReportMarkdown.value = false
+      if (requestVersion === version) isExportingReportMarkdown.value = false
     }
   }
 
-  async function loadEvidenceIndexStatus(taskId: string) {
-    if (!taskId || isLoadingFeedbackEvidenceIndexStatus.value) return
+  async function loadEvidenceIndexStatus(): Promise<CreatorFeedbackEvidenceIndexStatus | null> {
+    const taskId = selectedTaskId.value
+    if (!taskId || isLoadingFeedbackEvidenceIndexStatus.value) return null
+    const version = requestVersion
     isLoadingFeedbackEvidenceIndexStatus.value = true
     try {
       const result = await getCreatorFeedbackEvidenceIndexStatus(taskId)
+      if (!isCurrentRequest(taskId, version)) return null
       feedbackEvidenceIndexStatus.value = result
-      feedbackEvidenceIndexWarnings.value = (result as Record<string, unknown>).warnings as string[] ?? []
+      feedbackEvidenceIndexWarnings.value = []
+      return result
     } catch (error) {
-      showError(error)
+      if (isCurrentRequest(taskId, version)) showError(error)
+      return null
     } finally {
-      isLoadingFeedbackEvidenceIndexStatus.value = false
+      if (requestVersion === version) isLoadingFeedbackEvidenceIndexStatus.value = false
     }
   }
 
-  async function rebuildEvidenceIndex(taskId: string) {
-    if (!taskId || isRebuildingFeedbackEvidenceIndex.value) return
+  async function rebuildEvidenceIndex(): Promise<CreatorFeedbackEvidenceIndexResult | null> {
+    const taskId = selectedTaskId.value
+    if (
+      !taskId ||
+      !canEnterFeedback.value ||
+      hasPendingFeedbackMutation() ||
+      isRebuildingFeedbackEvidenceIndex.value
+    ) return null
+    const version = requestVersion
     isRebuildingFeedbackEvidenceIndex.value = true
-    errorRef.value = ''
+    beginRequest()
     try {
       const result = await rebuildCreatorFeedbackEvidenceIndex(taskId, {})
-      feedbackEvidenceIndexStatus.value = (result as Record<string, unknown>).status as CreatorFeedbackEvidenceIndexStatus ?? feedbackEvidenceIndexStatus.value
-      if (result.warnings?.length) {
-        feedbackEvidenceIndexWarnings.value = result.warnings
+      if (!isCurrentRequest(taskId, version)) return null
+      feedbackEvidenceIndexWarnings.value = result.warnings ?? []
+      // 重建接口只返回本次处理统计，额外回读状态才能让弹窗展示最新的待索引和失败数量。
+      const status = await optionalRequest(() => getCreatorFeedbackEvidenceIndexStatus(taskId))
+      if (!isCurrentRequest(taskId, version)) return null
+      if (status) {
+        feedbackEvidenceIndexStatus.value = status
       }
+      clearFeedbackChatState(false)
       successRef.value = '证据索引重建已触发，可在反馈报告弹窗查看最新状态。'
+      return result
     } catch (error) {
-      showError(error)
+      if (isCurrentRequest(taskId, version)) showError(error)
+      return null
     } finally {
-      isRebuildingFeedbackEvidenceIndex.value = false
+      if (requestVersion === version) isRebuildingFeedbackEvidenceIndex.value = false
     }
   }
 
-  function openChatDrawer() {
-    isFeedbackChatDrawerOpen.value = true
-  }
-
-  function closeChatDrawer() {
+  function resetFeedbackData() {
+    requestVersion += 1
+    feedback.value = null
+    feedbackDashboard.value = null
+    feedbackReport.value = null
+    feedbackFetchResult.value = null
+    feedbackImportFile.value = null
+    feedbackImportWarnings.value = []
+    feedbackEvidenceIndexStatus.value = null
+    feedbackEvidenceIndexWarnings.value = []
     isFeedbackChatDrawerOpen.value = false
-  }
-
-  function toggleChatDrawer() {
-    isFeedbackChatDrawerOpen.value = !isFeedbackChatDrawerOpen.value
+    clearFeedbackChatState()
+    isSavingFeedback.value = false
+    isImportingFeedback.value = false
+    isFetchingFeedback.value = false
+    isAnalyzingFeedback.value = false
+    isAskingFeedbackChat.value = false
+    isRebuildingFeedbackEvidenceIndex.value = false
+    isLoadingFeedbackEvidenceIndexStatus.value = false
+    isExportingReportMarkdown.value = false
   }
 
   return {
@@ -332,25 +449,14 @@ export function useCreatorFeedback(
     isRebuildingFeedbackEvidenceIndex, isLoadingFeedbackEvidenceIndexStatus,
     isExportingReportMarkdown,
     // 计算
-    canEnterFeedback, hasFeedbackSampleInput, canRunFeedbackAnalyze,
-    canAskFeedbackChat, hasFeedbackChatTurns,
+    hasFeedbackSampleInput, canRunFeedbackAnalyze, canAskFeedbackChat,
     feedbackDashboardWarnings, feedbackScriptBv,
     // 方法
-    loadFeedbackData, submitFeedback,
+    loadFeedbackData, resetFeedbackData, submitFeedback,
     handleFeedbackFileChange, importFeedbackFile,
     fetchFeedbackByBv, runAnalyze, askChat,
-    clearFeedbackChatState, updateFeedbackChatTurn,
     downloadReportMarkdown, loadEvidenceIndexStatus, rebuildEvidenceIndex,
-    openChatDrawer, closeChatDrawer, toggleChatDrawer,
   }
-}
-
-// ── 内部工具 ──
-const hasText = (v: string) => v.trim().length > 0
-
-function extractBvid(value: string) {
-  const matched = value.match(/BV[0-9A-Za-z]{10}/)
-  return matched?.[0] ?? ''
 }
 
 function triggerBrowserDownload(blob: Blob, filename: string) {

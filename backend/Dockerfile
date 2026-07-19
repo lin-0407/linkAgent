@@ -21,8 +21,9 @@ COPY --from=build /workspace/target/linkAgent-0.0.1-SNAPSHOT.jar /app/app.jar
 COPY scripts/ /app/scripts/
 
 # 采集脚本仅使用 Python 标准库；创建 python 别名以兼容 Java 侧既有固定命令。
+# 阶段 7 媒体探测依赖 ffprobe，Debian 的 ffmpeg 包会同时提供 ffmpeg 和 ffprobe。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 \
+    && apt-get install -y --no-install-recommends python3 ffmpeg \
     && ln -sf /usr/bin/python3 /usr/local/bin/python \
     && rm -rf /var/lib/apt/lists/*
 

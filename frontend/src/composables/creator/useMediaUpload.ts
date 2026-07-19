@@ -4,6 +4,8 @@ import {
   abortDraftVideoUpload,
   completeDraftVideoUpload,
   createDraftVideoUpload,
+  getCurrentDraftVideoUpload,
+  getDraftVideo,
   getDraftVideoUpload,
   listDraftVideoUploadParts,
   putDraftVideoPart,
@@ -47,26 +49,37 @@ export function useMediaUpload() {
   async function restoreStoredUpload(taskId: string) {
     const generation = operationGeneration
     const stored = readStoredResume(taskId)
-    if (!stored) {
-      currentUpload.value = null
-      completedParts.value = []
-      completedDraft.value = null
-      uploadedBytes.value = 0
-      statusMessage.value = ''
-      return null
-    }
-    if (!stored.uploadSessionId) {
-      currentUpload.value = null
-      completedParts.value = []
-      completedDraft.value = null
-      uploadedBytes.value = 0
-      statusMessage.value = '已保留上次上传标识，请重新选择同一个本地文件恢复上传会话'
-      return null
-    }
     try {
-      const restoredUpload = await getDraftVideoUpload(taskId, stored.uploadSessionId)
+      let restoredUpload: MediaUpload | null = null
+      if (stored?.uploadSessionId) {
+        try {
+          restoredUpload = await getDraftVideoUpload(taskId, stored.uploadSessionId)
+        } catch (error) {
+          if (!(error instanceof ApiError) || (error.status !== 404 && error.status !== 410)) {
+            throw error
+          }
+          clearStoredResume(taskId)
+        }
+      }
+      if (!restoredUpload) {
+        try {
+          restoredUpload = await getCurrentDraftVideoUpload(taskId)
+        } catch (error) {
+          if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
+            clearUploadState()
+            return null
+          }
+          throw error
+        }
+      }
       if (generation !== operationGeneration) return null
-      const restoredParts = await listDraftVideoUploadParts(taskId, stored.uploadSessionId)
+      writeStoredResume({
+        taskId,
+        uploadSessionId: restoredUpload.uploadSessionId,
+        fileFingerprint: restoredUpload.fileFingerprint,
+        idempotencyKey: restoredUpload.idempotencyKey,
+      })
+      const restoredParts = await listDraftVideoUploadParts(taskId, restoredUpload.uploadSessionId)
       if (generation !== operationGeneration) return null
       if (isClosedUploadStatus(restoredUpload.status)) {
         clearStoredResume(taskId)
@@ -81,9 +94,26 @@ export function useMediaUpload() {
       }
       currentUpload.value = restoredUpload
       completedParts.value = restoredParts
+      completedDraft.value = null
       uploadedBytes.value = sumPartBytes(completedParts.value)
+      if (restoredUpload.status === 'COMPLETED') {
+        try {
+          const draft = await getDraftVideo(taskId, restoredUpload.versionId)
+          if (generation !== operationGeneration) return null
+          completedDraft.value = draft
+        } catch (error) {
+          if (generation !== operationGeneration) return null
+          if (!(error instanceof ApiError) || error.status !== 404) throw error
+          // 上传会话仍然是续传事实；查询成片摘要失败不应阻止用户重新进入上传页。
+          completedDraft.value = null
+        }
+      }
       statusMessage.value = currentUpload.value.status === 'COMPLETED'
-        ? '成片已经上传完成'
+        ? completedDraft.value?.status === 'READY_FOR_REVIEW'
+          ? '成片已完成媒体探测'
+          : completedDraft.value?.status === 'PROBING'
+            ? '成片正在进行媒体探测，请稍后刷新结果'
+          : '成片已经上传完成，等待媒体探测'
         : currentUpload.value.status === 'VERIFYING'
           ? '成片正在由服务端确认，请稍后刷新结果'
         : '已找到未完成上传，请重新选择同一个本地文件继续'
@@ -92,8 +122,10 @@ export function useMediaUpload() {
       if (generation !== operationGeneration) return null
       if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
         clearStoredResume(taskId)
+        clearUploadState()
+        return null
       }
-      return null
+      throw error
     }
   }
 
@@ -105,43 +137,43 @@ export function useMediaUpload() {
     isUploading.value = true
     isPaused.value = false
     errorMessage.value = ''
+    const isReplacingProbeFailedDraft = completedDraft.value?.status === 'PROBE_FAILED'
+    if (isReplacingProbeFailedDraft) {
+      // 探测失败后必须生成新的幂等键和 OSS 上传会话，不能复用已经完成的旧对象。
+      clearStoredResume(taskId)
+      currentUpload.value = null
+      completedParts.value = []
+      uploadedBytes.value = 0
+    }
     completedDraft.value = null
     const controller = new AbortController()
     uploadAbortController = controller
     const generation = ++operationGeneration
 
     try {
-      const fingerprint = await fileFingerprint(file)
       const storedResume = readStoredResume(taskId)
-      const idempotencyKey = storedResume?.fileFingerprint === fingerprint
-        ? storedResume.idempotencyKey
-        : `media-${fingerprint.slice(0, 24)}-${crypto.randomUUID()}`
-      // 先保存幂等键，页面恰好在创建接口返回前关闭时，下一次仍能用同一键找回服务端会话。
-      writeStoredResume({
-        taskId,
-        uploadSessionId: storedResume?.fileFingerprint === fingerprint ? storedResume.uploadSessionId : null,
-        fileFingerprint: fingerprint,
-        idempotencyKey,
-      })
+      // 活跃会话必须复用服务端返回的幂等键；新会话只需要唯一标识，不依赖安全上下文中的 Web Crypto。
+      const idempotencyKey = currentUpload.value?.idempotencyKey
+        ?? (storedResume?.uploadSessionId ? storedResume.idempotencyKey : `media-${createClientId()}`)
       const upload = await createDraftVideoUpload(
         taskId,
         idempotencyKey,
         {
           versionName: versionName.trim() || 'V1 初剪',
-          fileName: file.name,
+          fileName: normalizeFileName(file.name),
           fileSize: file.size,
           contentType: 'video/mp4',
           lastModified: file.lastModified,
         },
       )
-      if (upload.fileFingerprint !== fingerprint || upload.expectedSize !== file.size) {
+      if (upload.expectedSize !== file.size) {
         throw new Error('重新选择的文件与原上传会话不一致')
       }
       writeStoredResume({
         taskId,
         uploadSessionId: upload.uploadSessionId,
-        fileFingerprint: fingerprint,
-        idempotencyKey,
+        fileFingerprint: upload.fileFingerprint,
+        idempotencyKey: upload.idempotencyKey,
       })
       ensureActiveOperation(generation, operationGeneration, controller)
       currentUpload.value = upload
@@ -166,7 +198,30 @@ export function useMediaUpload() {
             const start = (part.partNumber - 1) * upload.partSize
             const end = Math.min(start + upload.partSize, file.size)
             const chunk = file.slice(start, end, 'video/mp4')
-            const etag = await putDraftVideoPart(part.uploadUrl, chunk, controller.signal)
+            let uploadUrl = part.uploadUrl
+            if (Date.parse(part.expiresAt) - Date.now() < 60_000) {
+              const refreshed = await signDraftVideoUploadParts(
+                taskId,
+                upload.uploadSessionId,
+                [part.partNumber],
+              )
+              uploadUrl = refreshed.parts[0]?.uploadUrl ?? uploadUrl
+            }
+            let etag: string
+            try {
+              etag = await putDraftVideoPart(uploadUrl, chunk, controller.signal)
+            } catch (error) {
+              if (!(error instanceof ApiError) || error.status !== 403) throw error
+              // 短签可能在慢速上传中失效；只为当前分片换签一次，不重传已登记分片。
+              const refreshed = await signDraftVideoUploadParts(
+                taskId,
+                upload.uploadSessionId,
+                [part.partNumber],
+              )
+              const refreshedUrl = refreshed.parts[0]?.uploadUrl
+              if (!refreshedUrl) throw error
+              etag = await putDraftVideoPart(refreshedUrl, chunk, controller.signal)
+            }
             await registerDraftVideoUploadParts(taskId, upload.uploadSessionId, [
               { partNumber: part.partNumber, etag, partSize: chunk.size },
             ])
@@ -176,6 +231,7 @@ export function useMediaUpload() {
             if (activeUpload) {
               currentUpload.value = {
                 ...activeUpload,
+                status: 'UPLOADING',
                 completedPartCount: Math.min(
                   activeUpload.totalParts,
                   activeUpload.completedPartCount + 1,
@@ -205,20 +261,30 @@ export function useMediaUpload() {
       return completedDraft.value
     } catch (error) {
       if (error instanceof ApiError && error.status === 410 && generation === operationGeneration) {
+        // 过期会话不能继续复用内存中的幂等键，否则下一次上传仍会命中同一个已结束会话。
         clearStoredResume(taskId)
+        clearUploadState()
       }
       if (generation !== operationGeneration) return null
       const activeUpload = currentUpload.value
-      if (error instanceof ApiError && error.status === 409 && activeUpload) {
+      if (error instanceof ApiError && error.status === 409) {
         try {
-          const latestUpload = await getDraftVideoUpload(taskId, activeUpload.uploadSessionId)
+          const latestUpload = activeUpload
+            ? await getDraftVideoUpload(taskId, activeUpload.uploadSessionId)
+            : await getCurrentDraftVideoUpload(taskId)
           ensureActiveOperation(generation, operationGeneration, controller)
           if (isClosedUploadStatus(latestUpload.status)) {
             clearStoredResume(taskId)
-            currentUpload.value = null
-            completedParts.value = []
-            uploadedBytes.value = 0
+            clearUploadState()
             statusMessage.value = '上次上传未能完成，请重新选择文件创建新的上传尝试'
+          } else {
+            currentUpload.value = latestUpload
+            writeStoredResume({
+              taskId,
+              uploadSessionId: latestUpload.uploadSessionId,
+              fileFingerprint: latestUpload.fileFingerprint,
+              idempotencyKey: latestUpload.idempotencyKey,
+            })
           }
         } catch {
           // 原始上传错误更有助于用户判断问题，回查失败时不覆盖它。
@@ -245,6 +311,44 @@ export function useMediaUpload() {
     uploadAbortController?.abort()
   }
 
+  function clearUploadState() {
+    currentUpload.value = null
+    completedParts.value = []
+    completedDraft.value = null
+    uploadedBytes.value = 0
+    statusMessage.value = ''
+  }
+
+  async function confirmUploadResult(taskId: string) {
+    const upload = currentUpload.value
+    if (!upload || upload.status !== 'VERIFYING') return null
+    const generation = operationGeneration
+    isUploading.value = true
+    errorMessage.value = ''
+    statusMessage.value = '正在向服务端确认完整对象'
+    try {
+      const draft = await completeDraftVideoUpload(taskId, upload.uploadSessionId)
+      // 任务切换会递增操作序号，旧请求返回后不能覆盖新任务的上传状态。
+      if (generation !== operationGeneration) return null
+      completedDraft.value = draft
+      currentUpload.value = {
+        ...upload,
+        status: 'COMPLETED',
+        completedPartCount: upload.totalParts,
+      }
+      statusMessage.value = '成片已安全上传，下一阶段可以开始媒体探测'
+      return draft
+    } catch (error) {
+      if (generation !== operationGeneration) return null
+      errorMessage.value = toErrorMessage(error)
+      throw error
+    } finally {
+      if (generation === operationGeneration) {
+        isUploading.value = false
+      }
+    }
+  }
+
   function resetForTaskChange() {
     operationGeneration += 1
     uploadAbortController?.abort()
@@ -267,20 +371,29 @@ export function useMediaUpload() {
   }
 
   async function cancelUpload(taskId: string) {
-    operationGeneration += 1
+    const generation = ++operationGeneration
     uploadAbortController?.abort()
     uploadAbortController = null
     const upload = currentUpload.value
-    if (upload && upload.status !== 'COMPLETED') {
-      await abortDraftVideoUpload(taskId, upload.uploadSessionId)
+    try {
+      if (upload && upload.status !== 'COMPLETED') {
+        await abortDraftVideoUpload(taskId, upload.uploadSessionId)
+      }
+      if (generation !== operationGeneration) return
+      clearStoredResume(taskId)
+      currentUpload.value = null
+      completedParts.value = []
+      uploadedBytes.value = 0
+      isPaused.value = false
+      statusMessage.value = '上传会话已取消'
+    } catch (error) {
+      if (generation !== operationGeneration) return
+      throw error
+    } finally {
+      if (generation === operationGeneration) {
+        isUploading.value = false
+      }
     }
-    clearStoredResume(taskId)
-    currentUpload.value = null
-    completedParts.value = []
-    uploadedBytes.value = 0
-    isUploading.value = false
-    isPaused.value = false
-    statusMessage.value = '上传会话已取消'
   }
 
   return {
@@ -296,20 +409,16 @@ export function useMediaUpload() {
     restoreStoredUpload,
     startOrResume,
     pauseUpload,
+    confirmUploadResult,
     resetForTaskChange,
     disposeUpload,
     cancelUpload,
   }
 }
 
-async function fileFingerprint(file: File) {
-  const source = `${file.name}\n${file.size}\n${file.lastModified}`
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source))
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
 function validateFile(file: File) {
-  if (!file.name.toLowerCase().endsWith('.mp4') || (file.type && file.type !== 'video/mp4')) {
+  if (!normalizeFileName(file.name).toLowerCase().endsWith('.mp4')
+    || (file.type && file.type !== 'video/mp4')) {
     throw new Error('P0 只支持 MP4 视频文件')
   }
   if (file.size <= 0 || file.size > 1_500_000_000) {
@@ -356,11 +465,30 @@ function readStoredResume(taskId: string): StoredMediaUploadResume | null {
 }
 
 function writeStoredResume(resume: StoredMediaUploadResume) {
-  localStorage.setItem(`${RESUME_KEY_PREFIX}${resume.taskId}`, JSON.stringify(resume))
+  try {
+    localStorage.setItem(`${RESUME_KEY_PREFIX}${resume.taskId}`, JSON.stringify(resume))
+  } catch {
+    // 服务端 current 接口可以恢复会话，本地存储不可用不应阻断上传。
+  }
 }
 
 function clearStoredResume(taskId: string) {
-  localStorage.removeItem(`${RESUME_KEY_PREFIX}${taskId}`)
+  try {
+    localStorage.removeItem(`${RESUME_KEY_PREFIX}${taskId}`)
+  } catch {
+    // 本地存储不可用时无需清理；服务端状态仍是唯一事实来源。
+  }
+}
+
+function normalizeFileName(fileName: string) {
+  const normalized = fileName.trim().replaceAll('\\', '/')
+  return normalized.slice(normalized.lastIndexOf('/') + 1)
+}
+
+function createClientId() {
+  const secureId = globalThis.crypto?.randomUUID?.()
+  if (secureId) return secureId
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
 }
 
 function isAbortError(error: unknown) {

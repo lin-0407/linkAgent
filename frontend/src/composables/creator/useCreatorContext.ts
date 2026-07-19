@@ -16,6 +16,9 @@ import type {
 const hasText = (v: string) => v.trim().length > 0
 
 export function useCreatorContext(errorRef: Ref<string>) {
+  let preferenceLoadVersion = 0
+  let contextTermLoadVersion = 0
+
   // ── 状态 ──
   const creatorPreferences = ref<CreatorPreference[]>([])
   const creatorContextTerms = ref<CreatorContextTerm[]>([])
@@ -30,29 +33,33 @@ export function useCreatorContext(errorRef: Ref<string>) {
   }
 
   async function loadCreatorPreferences(userId = 'default') {
+    const version = ++preferenceLoadVersion
     isLoadingCreatorPreferences.value = true
     try {
-      creatorPreferences.value = await listCreatorPreferences(userId)
+      const result = await listCreatorPreferences(userId)
+      if (version === preferenceLoadVersion) creatorPreferences.value = result
     } catch (error) {
-      showError(error)
+      if (version === preferenceLoadVersion) showError(error)
     } finally {
-      isLoadingCreatorPreferences.value = false
+      if (version === preferenceLoadVersion) isLoadingCreatorPreferences.value = false
     }
   }
 
   async function loadCreatorContextTerms(userId = 'default', videoType?: string) {
+    const version = ++contextTermLoadVersion
     isLoadingCreatorContextTerms.value = true
     try {
-      creatorContextTerms.value = await listCreatorContextTerms(
+      const result = await listCreatorContextTerms(
         userId,
         videoType,
         false,
         50,
       )
+      if (version === contextTermLoadVersion) creatorContextTerms.value = result
     } catch (error) {
-      showError(error)
+      if (version === contextTermLoadVersion) showError(error)
     } finally {
-      isLoadingCreatorContextTerms.value = false
+      if (version === contextTermLoadVersion) isLoadingCreatorContextTerms.value = false
     }
   }
 

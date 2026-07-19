@@ -10,6 +10,7 @@ import com.link.linkagent.creator.bilibili.model.BindAccountRequest;
 import com.link.linkagent.creator.bilibili.model.BindBvRequest;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingResponse;
+import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,8 +39,8 @@ import java.util.stream.Collectors;
  * B站公开视频同步由 {@link BilibiliVideoSyncProvider} 负责外部脚本调用，
  * 再由 {@link BilibiliVideoSyncPersistenceService} 在独立事务中保存结果。
  * <p>
- * 架构位置：本服务位于 creator.bilibili 模块的 service 层，向下依赖 Mapper 和本模块同步服务，
- * 向上被 Controller 层直接调用，不依赖其他创作领域 Service，避免循环依赖。
+ * 架构位置：本服务位于 creator.bilibili 模块的 service 层，向下依赖 Mapper、本模块同步服务
+ * 和阶段 7 的发布后流程门禁；门禁只读取成片状态，不反向依赖 B站模块，避免循环依赖。
  */
 @Service
 public class CreatorBilibiliService {
@@ -54,15 +55,19 @@ public class CreatorBilibiliService {
     private final BilibiliVideoSyncProvider syncProvider;
     /** 同步结果持久化服务，确保外部调用完成后才开启数据库事务 */
     private final BilibiliVideoSyncPersistenceService syncPersistenceService;
+    /** 发布后流程门禁，防止新 BV 绑定绕过已完成的成片试映 */
+    private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
 
     public CreatorBilibiliService(CreatorBilibiliMapper bilibiliMapper,
-                                  CreatorTaskMapper taskMapper,
-                                  BilibiliVideoSyncProvider syncProvider,
-                                  BilibiliVideoSyncPersistenceService syncPersistenceService) {
+                                   CreatorTaskMapper taskMapper,
+                                   BilibiliVideoSyncProvider syncProvider,
+                                   BilibiliVideoSyncPersistenceService syncPersistenceService,
+                                   CreatorMediaWorkflowGateService mediaWorkflowGateService) {
         this.bilibiliMapper = bilibiliMapper;
         this.taskMapper = taskMapper;
         this.syncProvider = syncProvider;
         this.syncPersistenceService = syncPersistenceService;
+        this.mediaWorkflowGateService = mediaWorkflowGateService;
     }
 
     /**
@@ -229,6 +234,12 @@ public class CreatorBilibiliService {
             log.info("任务已有BV绑定，直接返回：taskId={}, bvid={}", taskId, existingBinding.get().getBvid());
             return toBindingResponse(existingBinding.get());
         }
+
+        mediaWorkflowGateService.ensureReadyForPostPublish(
+                task.getTaskId(),
+                task.getUserId(),
+                "BV绑定"
+        );
 
         var account = bilibiliMapper.findAccountByUserId(request.userId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
