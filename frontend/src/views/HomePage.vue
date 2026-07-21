@@ -1970,10 +1970,9 @@ const architectureNodes = [
 
 .home-architecture-map {
   display: grid;
-  grid-template-columns: minmax(94px, 1fr) 28px minmax(94px, 1fr) 28px minmax(
-      94px,
-      1fr
-    ) 28px minmax(94px, 1fr);
+  grid-template-columns:
+    minmax(94px, 1fr) 28px minmax(94px, 1fr) 28px minmax(94px, 1fr)
+    28px minmax(94px, 1fr);
   align-items: center;
   gap: 7px;
   padding: 32px 20px 24px;
