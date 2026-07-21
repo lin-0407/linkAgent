@@ -7,9 +7,6 @@ import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Result;
-import org.apache.ibatis.annotations.ResultMap;
-import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
@@ -90,30 +87,6 @@ public interface MediaUploadMapper {
               AND is_deleted = 0
             LIMIT 1
             """)
-    @Results(id = "DraftVideoRecordMap", value = {
-            @Result(column = "id", property = "id"),
-            @Result(column = "version_id", property = "versionId"),
-            @Result(column = "task_id", property = "taskId"),
-            @Result(column = "owner_id", property = "ownerId"),
-            @Result(column = "version_no", property = "versionNo"),
-            @Result(column = "version_name", property = "versionName"),
-            @Result(column = "original_file_name", property = "originalFileName"),
-            @Result(column = "bucket_name", property = "bucketName"),
-            @Result(column = "object_key", property = "objectKey"),
-            @Result(column = "content_type", property = "contentType"),
-            @Result(column = "file_size", property = "fileSize"),
-            @Result(column = "duration_ms", property = "durationMs"),
-            @Result(column = "width", property = "width"),
-            @Result(column = "height", property = "height"),
-            @Result(column = "frame_rate", property = "frameRate"),
-            @Result(column = "video_codec", property = "videoCodec"),
-            @Result(column = "audio_codec", property = "audioCodec"),
-            @Result(column = "has_audio", property = "hasAudio"),
-            @Result(column = "probe_attempt_id", property = "probeAttemptId"),
-            @Result(column = "status", property = "status"),
-            @Result(column = "create_time", property = "createTime"),
-            @Result(column = "update_time", property = "updateTime")
-    })
     Optional<DraftVideoRecord> findDraftVideo(@Param("taskId") String taskId,
                                                @Param("ownerId") String ownerId);
 
@@ -151,7 +124,6 @@ public interface MediaUploadMapper {
               AND is_deleted = 0
             LIMIT 1
             """)
-    @ResultMap("DraftVideoRecordMap")
     Optional<DraftVideoRecord> findDraftVideoByVersion(@Param("taskId") String taskId,
                                                        @Param("ownerId") String ownerId,
                                                        @Param("versionId") String versionId);
@@ -189,27 +161,6 @@ public interface MediaUploadMapper {
               AND is_deleted = 0
             LIMIT 1
             """)
-    @Results(id = "MediaUploadRecordMap", value = {
-            @Result(column = "id", property = "id"),
-            @Result(column = "upload_session_id", property = "uploadSessionId"),
-            @Result(column = "version_id", property = "versionId"),
-            @Result(column = "task_id", property = "taskId"),
-            @Result(column = "owner_id", property = "ownerId"),
-            @Result(column = "storage_upload_id", property = "storageUploadId"),
-            @Result(column = "object_key", property = "objectKey"),
-            @Result(column = "content_type", property = "contentType"),
-            @Result(column = "expected_size", property = "expectedSize"),
-            @Result(column = "file_fingerprint", property = "fileFingerprint"),
-            @Result(column = "part_size", property = "partSize"),
-            @Result(column = "total_parts", property = "totalParts"),
-            @Result(column = "status", property = "status"),
-            @Result(column = "idempotency_key", property = "idempotencyKey"),
-            @Result(column = "failure_message", property = "failureMessage"),
-            @Result(column = "expires_at", property = "expiresAt"),
-            @Result(column = "completed_at", property = "completedAt"),
-            @Result(column = "create_time", property = "createTime"),
-            @Result(column = "update_time", property = "updateTime")
-    })
     Optional<MediaUploadRecord> findUploadByIdempotency(@Param("taskId") String taskId,
                                                         @Param("ownerId") String ownerId,
                                                         @Param("idempotencyKey") String idempotencyKey);
@@ -245,7 +196,6 @@ public interface MediaUploadMapper {
               AND is_deleted = 0
             LIMIT 1
             """)
-    @ResultMap("MediaUploadRecordMap") // 复用上面定义的 ResultMap，避免重复声明
     Optional<MediaUploadRecord> findUpload(@Param("taskId") String taskId,
                                            @Param("ownerId") String ownerId,
                                            @Param("uploadSessionId") String uploadSessionId);
@@ -283,7 +233,6 @@ public interface MediaUploadMapper {
             ORDER BY id DESC
             LIMIT 1
             """)
-    @ResultMap("MediaUploadRecordMap")
     Optional<MediaUploadRecord> findCurrentUpload(@Param("taskId") String taskId,
                                                   @Param("ownerId") String ownerId);
 
@@ -326,7 +275,6 @@ public interface MediaUploadMapper {
             LIMIT 1
             FOR UPDATE                  -- 行级排他锁，事务内阻塞并发写操作
             """)
-    @ResultMap("MediaUploadRecordMap")
     Optional<MediaUploadRecord> lockUploadByObjectKey(@Param("versionId") String versionId,
                                                        @Param("taskId") String taskId,
                                                        @Param("ownerId") String ownerId,
@@ -470,16 +418,6 @@ public interface MediaUploadMapper {
             WHERE upload_session_id = #{uploadSessionId}
             ORDER BY part_number ASC                    -- 按分片序号升序，便于校验连续性
             """)
-    @Results(id = "MediaUploadPartRecordMap", value = {
-            @Result(column = "id", property = "id"),
-            @Result(column = "upload_session_id", property = "uploadSessionId"),
-            @Result(column = "part_number", property = "partNumber"),
-            @Result(column = "etag", property = "etag"),
-            @Result(column = "part_size", property = "partSize"),
-            @Result(column = "completed_at", property = "completedAt"),
-            @Result(column = "create_time", property = "createTime"),
-            @Result(column = "update_time", property = "updateTime")
-    })
     List<MediaUploadPartRecord> listParts(@Param("uploadSessionId") String uploadSessionId);
 
     /**
