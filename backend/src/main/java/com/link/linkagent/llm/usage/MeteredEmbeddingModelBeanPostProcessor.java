@@ -2,6 +2,7 @@ package com.link.linkagent.llm.usage;
 
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.stereotype.Component;
 
@@ -12,16 +13,17 @@ import org.springframework.stereotype.Component;
 @Component
 public class MeteredEmbeddingModelBeanPostProcessor implements BeanPostProcessor {
 
-    private final LlmApiUsageService llmApiUsageService;
+    private final ObjectProvider<LlmApiUsageService> llmApiUsageServiceProvider;
 
-    public MeteredEmbeddingModelBeanPostProcessor(LlmApiUsageService llmApiUsageService) {
-        this.llmApiUsageService = llmApiUsageService;
+    public MeteredEmbeddingModelBeanPostProcessor(ObjectProvider<LlmApiUsageService> llmApiUsageServiceProvider) {
+        this.llmApiUsageServiceProvider = llmApiUsageServiceProvider;
     }
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
         if (bean instanceof EmbeddingModel embeddingModel && !(bean instanceof MeteredEmbeddingModel)) {
-            return new MeteredEmbeddingModel(embeddingModel, llmApiUsageService);
+            // BeanPostProcessor 注册时不能提前创建 MyBatis 统计服务，否则数据源会绕过部分后处理器。
+            return new MeteredEmbeddingModel(embeddingModel, llmApiUsageServiceProvider.getObject());
         }
         return bean;
     }
