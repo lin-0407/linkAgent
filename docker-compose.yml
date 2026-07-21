@@ -107,16 +107,15 @@ services:
       LLM_GUARD_ENABLED: ${LLM_GUARD_ENABLED:-true}
       LLM_GUARD_MAX_PROMPT_CHARS: ${LLM_GUARD_MAX_PROMPT_CHARS:-30000}
       VECTOR_STORE_TYPE: ${VECTOR_STORE_TYPE:-none}
-      MILVUS_HOST: ${MILVUS_HOST:-milvus}
-      MILVUS_PORT: ${MILVUS_PORT:-19530}
+      # Compose 内通过服务名访问 Milvus，不能沿用宿主机或开发机地址。
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
       MILVUS_USERNAME: ${MILVUS_USERNAME:-}
       MILVUS_PASSWORD: ${MILVUS_PASSWORD:-}
       MILVUS_DATABASE_NAME: ${MILVUS_DATABASE_NAME:-default}
       MILVUS_COLLECTION_NAME: ${MILVUS_COLLECTION_NAME:-creator_feedback_evidence}
       MILVUS_INITIALIZE_SCHEMA: ${MILVUS_INITIALIZE_SCHEMA:-true}
       MILVUS_EMBEDDING_DIMENSION: ${MILVUS_EMBEDDING_DIMENSION:-1024}
-      KNOWLEDGE_RAG_MILVUS_HOST: ${MILVUS_HOST:-milvus}
-      KNOWLEDGE_RAG_MILVUS_PORT: ${MILVUS_PORT:-19530}
       EMBEDDING_MODEL_TYPE: ${EMBEDDING_MODEL_TYPE:-none}
       LLM_EMBEDDING_API_KEY: ${LLM_EMBEDDING_API_KEY:-}
       LLM_EMBEDDING_BASE_URL: ${LLM_EMBEDDING_BASE_URL:-}
@@ -155,7 +154,7 @@ services:
       redis:
         condition: service_healthy
       milvus:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
