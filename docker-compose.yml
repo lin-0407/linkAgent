@@ -63,7 +63,7 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-link_agent_root_password}
     volumes:
       - ./backend/src/main/resources/sql/init.sql:/init.sql:ro
-    entrypoint: ["sh", "-c", "mysql -h mysql -u root -p\"$MYSQL_ROOT_PASSWORD\" --default-character-set=utf8mb4 link_agent < /init.sql && echo 'init.sql executed successfully'"]
+    entrypoint: ["sh", "-c", "mysql -h mysql -u root -p\"$$MYSQL_ROOT_PASSWORD\" --default-character-set=utf8mb4 link_agent < /init.sql && echo 'init.sql executed successfully'"]
     restart: "no"
 
   milvus:
