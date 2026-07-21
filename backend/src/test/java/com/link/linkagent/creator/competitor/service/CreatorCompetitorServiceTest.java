@@ -341,6 +341,12 @@ class CreatorCompetitorServiceTest {
         }
 
         @Override
+        public List<com.link.linkagent.creator.feedback.model.CreatorFeedbackDashboardStatRecord> listDashboardStats(
+                String taskId) {
+            return List.of();
+        }
+
+        @Override
         public Optional<com.link.linkagent.creator.feedback.model.CreatorFeedbackMetricRecord> findMetricByTaskId(String taskId) {
             throw new UnsupportedOperationException();
         }
