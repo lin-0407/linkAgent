@@ -197,7 +197,9 @@ export function useMediaUpload() {
           try {
             const start = (part.partNumber - 1) * upload.partSize
             const end = Math.min(start + upload.partSize, file.size)
-            const chunk = file.slice(start, end, 'video/mp4')
+            // 分片正文不携带 Content-Type，避免跨域 PUT 因该请求头触发额外的 OSS CORS 预检。
+            // 完整对象的 video/mp4 已在服务端创建 Multipart Upload 时声明。
+            const chunk = file.slice(start, end)
             let uploadUrl = part.uploadUrl
             if (Date.parse(part.expiresAt) - Date.now() < 60_000) {
               const refreshed = await signDraftVideoUploadParts(

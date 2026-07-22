@@ -92,12 +92,22 @@ export async function putDraftVideoPart(
   body: Blob,
   signal: AbortSignal,
 ): Promise<string> {
-  const response = await fetch(uploadUrl, {
-    method: 'PUT',
-    body,
-    signal,
-    credentials: 'omit',
-  })
+  let response: Response
+  try {
+    response = await fetch(uploadUrl, {
+      method: 'PUT',
+      body,
+      signal,
+      credentials: 'omit',
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    const storageHost = safeUrlHost(uploadUrl)
+    throw new ApiError(
+      0,
+      `浏览器无法连接对象存储${storageHost ? `（${storageHost}）` : ''}，请确认 OSS CORS 已允许来源 ${window.location.origin} 的 PUT 请求，并检查浏览器 Endpoint 和 HTTPS 配置`,
+    )
+  }
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
     throw new ApiError(response.status, detail || `视频分片上传失败（HTTP ${response.status}）`, detail)
@@ -111,4 +121,12 @@ export async function putDraftVideoPart(
 
 function uploadUrl(taskId: string, uploadSessionId: string) {
   return `/creator/tasks/${encodeURIComponent(taskId)}/draft-video/uploads/${encodeURIComponent(uploadSessionId)}`
+}
+
+function safeUrlHost(url: string) {
+  try {
+    return new URL(url).host
+  } catch {
+    return ''
+  }
 }
