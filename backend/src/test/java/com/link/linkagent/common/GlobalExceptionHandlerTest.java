@@ -1,12 +1,15 @@
 package com.link.linkagent.common;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.servlet.HandlerMapping;
 
+import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,6 +40,23 @@ class GlobalExceptionHandlerTest {
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "服务内部异常，请查看后端日志定位具体原因。",
                 "/api/agent/sessions"
+        ));
+    }
+
+    @Test
+    void shouldReturnMethodNotAllowedForUnsupportedRequestMethod() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/settings/connectivity/check");
+        HttpRequestMethodNotSupportedException exception =
+                new HttpRequestMethodNotSupportedException("GET", List.of("POST"));
+
+        ResponseEntity<?> response = handler.handleHttpRequestMethodNotSupported(exception, request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.METHOD_NOT_ALLOWED);
+        assertThat(response.getHeaders().getAllow()).containsExactly(HttpMethod.POST);
+        assertThat(response.getBody()).isEqualTo(new ApiErrorResponse(
+                HttpStatus.METHOD_NOT_ALLOWED.value(),
+                "请求方法 GET 不受支持，请使用 POST。",
+                "/api/settings/connectivity/check"
         ));
     }
 }

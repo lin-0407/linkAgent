@@ -6,11 +6,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -19,6 +21,7 @@ import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Collection;
+import java.util.Set;
 
 /**
  * 全局异常处理器 —— Spring MVC 统一异常翻译层。
@@ -67,6 +70,36 @@ public class GlobalExceptionHandler {
         }
         return ResponseEntity.status(status)
                 .body(new ApiErrorResponse(status.value(), message, request.getRequestURI()));
+    }
+
+    /**
+     * 请求方法不匹配属于客户端调用错误，必须保留 405 和 Allow 响应头，不能落入兜底处理器变成 500。
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<?> handleHttpRequestMethodNotSupported(
+            HttpRequestMethodNotSupportedException exception,
+            HttpServletRequest request) {
+        Set<HttpMethod> supportedMethods = exception.getSupportedHttpMethods();
+        String supportedMethodText = supportedMethods == null
+                ? ""
+                : String.join("、", supportedMethods.stream().map(HttpMethod::name).toList());
+        String message = supportedMethodText.isEmpty()
+                ? "请求方法 " + request.getMethod() + " 不受支持。"
+                : "请求方法 " + request.getMethod() + " 不受支持，请使用 " + supportedMethodText + "。";
+
+        log.warn("请求方法不受支持: path={}, method={}, supportedMethods={}",
+                request.getRequestURI(), request.getMethod(), supportedMethodText);
+        ResponseEntity.BodyBuilder responseBuilder = ResponseEntity
+                .status(HttpStatus.METHOD_NOT_ALLOWED)
+                .headers(exception.getHeaders());
+        if (isEventStreamRequest(request)) {
+            return responseBuilder.build();
+        }
+        return responseBuilder.body(new ApiErrorResponse(
+                HttpStatus.METHOD_NOT_ALLOWED.value(),
+                message,
+                request.getRequestURI()
+        ));
     }
 
     /**
