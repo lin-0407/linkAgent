@@ -137,6 +137,8 @@ export function useMediaUpload() {
     isUploading.value = true
     isPaused.value = false
     errorMessage.value = ''
+    // 重试开始时立即覆盖旧的取消或失败状态，避免用户误以为按钮没有生效。
+    statusMessage.value = '正在准备上传分片'
     const isReplacingProbeFailedDraft = completedDraft.value?.status === 'PROBE_FAILED'
     if (isReplacingProbeFailedDraft) {
       // 探测失败后必须生成新的幂等键和 OSS 上传会话，不能复用已经完成的旧对象。

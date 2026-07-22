@@ -103,9 +103,12 @@ export async function putDraftVideoPart(
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
     const storageHost = safeUrlHost(uploadUrl)
+    const directRuleTarget = storageHost || '当前对象存储域名'
+    // 浏览器不会暴露系统代理状态，CORS、DNS、TLS 和代理断连都会表现为没有状态码的网络异常。
+    // 提示按实际可操作顺序覆盖这些来源，避免用户在 CORS 已正确配置后仍反复修改 Bucket。
     throw new ApiError(
       0,
-      `浏览器无法连接对象存储${storageHost ? `（${storageHost}）` : ''}，请确认 OSS CORS 已允许来源 ${window.location.origin} 的 PUT 请求，并检查浏览器 Endpoint 和 HTTPS 配置`,
+      `浏览器与对象存储${storageHost ? `（${storageHost}）` : ''}的连接被中断。请先确认 OSS CORS 已允许来源 ${window.location.origin} 的 PUT 请求；若 CORS 已配置，请临时关闭本机代理/VPN（如梯子或网络加速工具），或将 ${directRuleTarget} 加入直连规则后重试；仍失败时再检查浏览器 Endpoint 与 HTTPS 配置。`,
     )
   }
   if (!response.ok) {
