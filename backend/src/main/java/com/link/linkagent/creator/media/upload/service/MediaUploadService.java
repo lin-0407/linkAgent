@@ -23,6 +23,8 @@ import com.link.linkagent.creator.media.upload.model.MediaUploadResponse;
 import com.link.linkagent.creator.media.upload.model.MediaUploadStatus;
 import com.link.linkagent.creator.media.upload.model.PresignedMediaUploadPartResponse;
 import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
+import com.link.linkagent.creator.production.service.ProductionPlanGateService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -76,20 +78,36 @@ public class MediaUploadService {
     private final MediaUploadPersistenceService persistenceService;
     // 发布方案确认门禁，防止草稿任务直接创建 OSS 成片上传会话
     private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
+    // P0-1 制作蓝图完成门禁，防止已确认发布方案直接绕过制作步骤上传成片
+    private final ProductionPlanGateService productionPlanGateService;
 
     // 构造器注入，Spring 自动装配所有依赖
+    @Autowired
     public MediaUploadService(CreatorMediaProperties mediaProperties,
                               ObjectStorageProperties storageProperties,
                                ObjectStorageService objectStorageService,
                                MediaUploadMapper mediaUploadMapper,
                                MediaUploadPersistenceService persistenceService,
-                               CreatorMediaWorkflowGateService mediaWorkflowGateService) {
+                               CreatorMediaWorkflowGateService mediaWorkflowGateService,
+                               ProductionPlanGateService productionPlanGateService) {
         this.mediaProperties = mediaProperties;
         this.storageProperties = storageProperties;
         this.objectStorageService = objectStorageService;
         this.mediaUploadMapper = mediaUploadMapper;
         this.persistenceService = persistenceService;
         this.mediaWorkflowGateService = mediaWorkflowGateService;
+        this.productionPlanGateService = productionPlanGateService;
+    }
+
+    /** 保留旧构造器，便于现有媒体服务单元测试在 P0-1 逐步接入期间继续复用。 */
+    public MediaUploadService(CreatorMediaProperties mediaProperties,
+                               ObjectStorageProperties storageProperties,
+                               ObjectStorageService objectStorageService,
+                               MediaUploadMapper mediaUploadMapper,
+                               MediaUploadPersistenceService persistenceService,
+                               CreatorMediaWorkflowGateService mediaWorkflowGateService) {
+        this(mediaProperties, storageProperties, objectStorageService, mediaUploadMapper,
+                persistenceService, mediaWorkflowGateService, null);
     }
 
     /**
@@ -127,6 +145,7 @@ public class MediaUploadService {
         }
         // 在读取或复用幂等上传会话前确认发布方案，避免旧会话成为绕过成片试映顺序的入口。
         mediaWorkflowGateService.ensurePrePublishConfirmed(normalizedTaskId, ownerId, "成片试映");
+        ensureProductionPlanReady(normalizedTaskId, ownerId);
 
         // 先查幂等键是否已有现存会话，避免重复创建 OSS Multipart Upload（每次创建都可能产生存储费用）
         OptionalUpload optionalUpload = findIdempotentUpload(
@@ -301,6 +320,7 @@ public class MediaUploadService {
                                                  List<Integer> partNumbers) {
         MediaUploadRecord upload = requireUpload(ownerId, taskId, uploadSessionId);
         mediaWorkflowGateService.ensurePrePublishConfirmed(upload.taskId(), upload.ownerId(), "成片试映");
+        ensureProductionPlanReady(upload.taskId(), upload.ownerId());
         expireIfNecessary(upload);
         ensureStatusAllowsUpload(upload.status()); // 只允许 CREATED 和 UPLOADING 状态签名
 
@@ -363,6 +383,7 @@ public class MediaUploadService {
                                                                 MediaUploadPartsCompleteRequest request) {
         MediaUploadRecord upload = requireUpload(ownerId, taskId, uploadSessionId);
         mediaWorkflowGateService.ensurePrePublishConfirmed(upload.taskId(), upload.ownerId(), "成片试映");
+        ensureProductionPlanReady(upload.taskId(), upload.ownerId());
         expireIfNecessary(upload);
         ensureStatusAllowsUpload(upload.status());
 
@@ -417,6 +438,7 @@ public class MediaUploadService {
             return toDraftVideoResponse(requireDraft(ownerId, taskId));
         }
         mediaWorkflowGateService.ensurePrePublishConfirmed(upload.taskId(), upload.ownerId(), "成片试映");
+        ensureProductionPlanReady(upload.taskId(), upload.ownerId());
         expireIfNecessary(upload);
         if (MediaUploadStatus.VERIFYING.name().equals(upload.status())) {
             // VERIFYING 状态恢复：上轮 Complete 请求可能已成功，先 HeadObject 确认
@@ -516,6 +538,13 @@ public class MediaUploadService {
      * 校验媒体能力和对象存储配置是否就绪。
      * 每个公开方法入口都调用此方法，避免外部调用时才发现缺配置。
      */
+    /** P0-1 未接入的旧单元测试允许跳过；生产 Bean 一定由 Spring 注入门禁服务。 */
+    private void ensureProductionPlanReady(String taskId, String ownerId) {
+        if (productionPlanGateService != null) {
+            productionPlanGateService.requireReady(taskId, ownerId);
+        }
+    }
+
     private void ensureConfigurationReady() {
         try {
             mediaProperties.validateEnabledConfiguration(); // 校验媒体能力配置完整性

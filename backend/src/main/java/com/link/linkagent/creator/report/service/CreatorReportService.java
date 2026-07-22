@@ -11,6 +11,7 @@ import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.report.mapper.CreatorReportMapper;
 import com.link.linkagent.creator.report.model.CreatorReportAnalyzeRequest;
+import com.link.linkagent.creator.report.model.CreatorReportAnalysisOutput;
 import com.link.linkagent.creator.report.model.CreatorReportRecord;
 import com.link.linkagent.creator.report.model.CreatorReportResponse;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
@@ -25,7 +26,6 @@ import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
-import com.link.linkagent.util.LlmJsonUtil;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -54,8 +54,8 @@ import java.util.UUID;
  *   <li><b>跨期趋势对比</b>：复盘报告不仅看当期表现，还会拉取同一创作者近期已完成
  *       复盘的历史报告，让 LLM 识别"反复出现的问题"和"持续进步的方向"，输出比单期
  *       复盘更有深度。</li>
- *   <li><b>解析容错</b>：LLM 原始输出先尝试解析为结构化 JSON 字段；解析失败时标记为
- *       RAW_ONLY，保留原始文本供人工查阅，不丢失排障线索。</li>
+ *   <li><b>结构完整性校验</b>：通过 LLMService 的结构化输出能力生成强类型结果；
+ *       JSON 缺少必填字段时由 DTO 构造校验触发模型重试，避免继续落库空报告。</li>
  *   <li><b>创作者偏好沉淀</b>：复盘完成后自动将 LLM 识别出的创作者偏好洞察写入偏好表，
  *       供后续发布前优化复用，形成"优化→发布→复盘→偏好沉淀→优化"的闭环。</li>
  * </ol>
@@ -92,7 +92,7 @@ public class CreatorReportService {
     private final CreatorPreferenceService creatorPreferenceService;
     /** LLM 调用入口 */
     private final LLMService llmService;
-    /** JSON 解析器，用于解析 LLM 结构化输出 */
+    /** JSON 处理器，用于序列化报告字段并支持 Markdown 导出 */
     private final ObjectMapper objectMapper;
     /** 提示词模板服务，管理系统提示词和用户提示词模板 */
     private final PromptService promptService;
@@ -130,8 +130,8 @@ public class CreatorReportService {
      *   <li>强制校验三道前序关口：发布前建议、反馈分析、竞品分析均需已完成（缺一则抛错）</li>
      *   <li>拉取任务关联的素材文件</li>
      *   <li>构建跨期对比上下文（创作者历史报告摘要）</li>
-     *   <li>调用 LLM 生成复盘报告</li>
-     *   <li>解析 LLM 输出为结构化字段，upsert 入库</li>
+     *   <li>调用 LLM 生成并校验结构化复盘报告</li>
+     *   <li>将强类型输出映射为现有数据库字段，upsert 入库</li>
      *   <li>将 LLM 识别出的创作者偏好洞察沉淀到偏好表</li>
      *   <li>将任务状态推进到 ANALYZED</li>
      * </ol>
@@ -160,16 +160,17 @@ public class CreatorReportService {
         // 拉取同一创作者最近几期复盘报告摘要，供 LLM 识别"反复出现的问题"和"持续进步的方向"
         String crossPeriodContext = buildCrossPeriodContext(taskRecord);
 
-        String rawOutput;
+        CreatorReportAnalysisOutput analysisOutput;
         // 用 try-with-resources 打开用量上下文，确保 LLM 调用被 Langfuse 正确追踪
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "创作复盘报告")) {
-            rawOutput = llmService.chat(
+            analysisOutput = llmService.chatStructured(
                     buildSystemPrompt(),
                     buildUserPrompt(taskRecord, materials, suggestionRecord, feedbackReportRecord, competitorReportRecord,
-                            crossPeriodContext, request)
+                            crossPeriodContext, request),
+                    CreatorReportAnalysisOutput.class
             );
         }
-        CreatorReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
+        CreatorReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), analysisOutput);
         creatorReportMapper.upsert(reportRecord);
         // 复盘完成后，将 LLM 识别出的创作者偏好洞察沉淀到偏好表，供后续发布前优化复用
         creatorPreferenceService.saveFromReport(taskRecord, reportRecord);
@@ -191,8 +192,8 @@ public class CreatorReportService {
     /**
      * 将复盘报告导出为 Markdown 文本，用于创作者下载/分享/存档。
      *
-     * <p>若 LLM 输出解析失败（RAW_ONLY 状态），Markdown 中会额外附加原始输出段，
-     * 保留排查 LLM 输出格式问题的关键证据。
+     * <p>若读取到历史 RAW_ONLY 报告，Markdown 中会额外附加原始输出段，
+     * 保留旧数据的排障线索；新报告只有结构校验成功后才会落库。
      *
      * @param taskId 创作任务 ID
      * @return Markdown 格式的复盘报告全文
@@ -229,43 +230,31 @@ public class CreatorReportService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作复盘报告不存在"));
     }
 
-    /**
-     * 根据 LLM 原始输出构建复盘报告记录。
-     * 生成唯一 reportId、关联 taskId、保存原始文本，然后尝试解析为结构化字段。
-     */
-    private CreatorReportRecord buildReportRecord(String taskId, String rawOutput) {
+    /** 将已完成字段校验的模型输出映射到现有报告表。 */
+    private CreatorReportRecord buildReportRecord(String taskId, CreatorReportAnalysisOutput analysisOutput) {
         CreatorReportRecord record = new CreatorReportRecord();
         record.setReportId(UUID.randomUUID().toString());
         record.setTaskId(taskId);
-        record.setRawOutput(rawOutput);
-        fillParsedFields(record, rawOutput);
+        record.setContentSummary(analysisOutput.contentSummary());
+        record.setCoreSellingPoints(writeJson(analysisOutput.coreSellingPoints()));
+        record.setTitleDescriptionReview(writeJson(analysisOutput.titleDescriptionReview()));
+        record.setAudienceFeedbackSummary(analysisOutput.audienceFeedbackSummary());
+        record.setCompetitorComparison(writeJson(analysisOutput.competitorComparison()));
+        record.setControversyAndMisunderstanding(writeJson(analysisOutput.controversyAndMisunderstanding()));
+        record.setNextActionSuggestions(writeJson(analysisOutput.nextActionSuggestions()));
+        record.setCreatorPreferenceInsight(writeJson(analysisOutput.creatorPreferenceInsight()));
+        record.setOverallConclusion(analysisOutput.overallConclusion());
+        record.setRawOutput(writeJson(analysisOutput));
+        record.setParseStatus("PARSED");
         return record;
     }
 
-    /**
-     * 尝试将 LLM 原始输出解析为结构化 JSON 字段，写入 record。
-     *
-     * <p>解析容错策略：LLM 输出不总是合法 JSON（格式漂移、截断、额外说明文本），
-     * 因此先通过 {@link LlmJsonUtil#extractJsonObject} 提取 JSON 部分，
-     * 再用 ObjectMapper 解析。解析成功标记 PARSED，失败标记 RAW_ONLY 保留原始文本。
-     * RAW_ONLY 在 Markdown 导出时会额外输出原始文本，保留排障线索。
-     */
-    private void fillParsedFields(CreatorReportRecord record, String rawOutput) {
+    /** 将结构化模型对象或列表序列化为数据库现有 JSON 字段。 */
+    private String writeJson(Object value) {
         try {
-            JsonNode rootNode = objectMapper.readTree(LlmJsonUtil.extractJsonObject(rawOutput));
-            record.setContentSummary(LlmJsonUtil.text(rootNode, "contentSummary"));
-            record.setCoreSellingPoints(LlmJsonUtil.json(objectMapper, rootNode, "coreSellingPoints"));
-            record.setTitleDescriptionReview(LlmJsonUtil.json(objectMapper, rootNode, "titleDescriptionReview"));
-            record.setAudienceFeedbackSummary(LlmJsonUtil.text(rootNode, "audienceFeedbackSummary"));
-            record.setCompetitorComparison(LlmJsonUtil.json(objectMapper, rootNode, "competitorComparison"));
-            record.setControversyAndMisunderstanding(LlmJsonUtil.json(objectMapper, rootNode, "controversyAndMisunderstanding"));
-            record.setNextActionSuggestions(LlmJsonUtil.json(objectMapper, rootNode, "nextActionSuggestions"));
-            record.setCreatorPreferenceInsight(LlmJsonUtil.json(objectMapper, rootNode, "creatorPreferenceInsight"));
-            record.setOverallConclusion(LlmJsonUtil.text(rootNode, "overallConclusion"));
-            record.setParseStatus("PARSED");
-        } catch (JsonProcessingException | IllegalArgumentException exception) {
-            // LLM 输出格式异常时不做二次重试：保留原始文本，让调用方根据 RAW_ONLY 状态决定后续处理
-            record.setParseStatus("RAW_ONLY");
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("结构化复盘报告序列化失败", exception);
         }
     }
 

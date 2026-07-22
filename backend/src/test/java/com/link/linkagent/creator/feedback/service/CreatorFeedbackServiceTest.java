@@ -2,6 +2,11 @@ package com.link.linkagent.creator.feedback.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalysisOutput;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackRecord;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackSaveRequest;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.probe.service.DraftVideoProbeRecoveryService;
@@ -12,6 +17,7 @@ import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
+import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.creator.workflow.mapper.CreatorWorkflowMapper;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowSessionRecord;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStage;
@@ -24,19 +30,27 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyMap;
+import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * 评论弹幕反馈阶段的流程门禁回归测试。
+ * 评论弹幕反馈服务回归测试。
  *
- * 使用 Mock 隔离任务、反馈、模型和脚本相关依赖，验证媒体能力关闭时请求会在第一步被拒绝，
- * 避免测试本身触发外部 I/O 或因为下游依赖而掩盖状态机问题。
+ * 使用 Mock 隔离任务、反馈、模型和脚本相关依赖，覆盖流程门禁和结构化报告生成，
+ * 避免测试本身触发外部 I/O。
  */
 class CreatorFeedbackServiceTest {
 
@@ -157,11 +171,107 @@ class CreatorFeedbackServiceTest {
         );
     }
 
+    @Test
+    void shouldGenerateParsedReportThroughStructuredOutput() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
+        LLMService llmService = mock(LLMService.class);
+        TransactionTemplate transactionTemplate = mock(TransactionTemplate.class);
+        CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService =
+                mock(CreatorFeedbackEvidenceRetrievalService.class);
+        PromptService promptService = mock(PromptService.class);
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        CreatorFeedbackRecord feedbackRecord = feedback();
+        CreatorFeedbackAnalysisOutput analysisOutput = analysisOutput();
+        AtomicReference<CreatorFeedbackReportRecord> savedReport = new AtomicReference<>();
+
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(task("task-1")));
+        when(feedbackMapper.findFeedbackByTaskId("task-1")).thenReturn(Optional.of(feedbackRecord));
+        when(feedbackMapper.upsertReport(any(CreatorFeedbackReportRecord.class))).thenAnswer(invocation -> {
+            savedReport.set(invocation.getArgument(0));
+            return 1;
+        });
+        when(feedbackMapper.findReportByTaskId("task-1"))
+                .thenAnswer(invocation -> Optional.ofNullable(savedReport.get()));
+        when(promptService.get("feedback_analyze.system")).thenReturn("请分析反馈并返回 JSON");
+        when(promptService.render(eq("feedback_analyze.user"), anyMap())).thenReturn("评论和弹幕样例");
+        when(llmService.chatStructured(
+                anyString(),
+                anyString(),
+                eq(CreatorFeedbackAnalysisOutput.class)
+        )).thenReturn(analysisOutput);
+
+        CreatorFeedbackService service = new CreatorFeedbackService(
+                taskMapper,
+                feedbackMapper,
+                llmService,
+                objectMapper,
+                transactionTemplate,
+                evidenceRetrievalService,
+                promptService,
+                mediaWorkflowGateService
+        );
+
+        CreatorFeedbackReportResponse response = service.analyze(
+                "task-1",
+                new CreatorFeedbackAnalyzeRequest(null, null, null)
+        );
+
+        assertThat(response.parseStatus()).isEqualTo("PARSED");
+        assertThat(response.feedbackSummary()).isEqualTo("整体反馈积极");
+        assertThat(response.hotTopics()).contains("证据充分");
+        assertThat(savedReport.get()).isNotNull();
+        verify(llmService).chatStructured(
+                anyString(),
+                anyString(),
+                eq(CreatorFeedbackAnalysisOutput.class)
+        );
+        verify(llmService, never()).chat(anyString(), anyString());
+        verify(taskMapper).updateTaskStatus("task-1", CreatorTaskStatus.ANALYZED.name());
+    }
+
     private CreatorTaskRecord task(String taskId) {
         CreatorTaskRecord task = new CreatorTaskRecord();
         task.setTaskId(taskId);
         task.setUserId("default");
+        task.setTaskName("反馈任务");
         return task;
+    }
+
+    private CreatorFeedbackRecord feedback() {
+        CreatorFeedbackRecord feedback = new CreatorFeedbackRecord();
+        feedback.setFeedbackId("feedback-1");
+        feedback.setTaskId("task-1");
+        feedback.setCommentSamples("讲得很清楚，希望补充完整示例");
+        feedback.setDanmakuSamples("学到了");
+        return feedback;
+    }
+
+    private CreatorFeedbackAnalysisOutput analysisOutput() {
+        return new CreatorFeedbackAnalysisOutput(
+                "整体反馈积极",
+                "需要兼顾深度与节奏",
+                "观众希望补充完整示例",
+                List.of(new CreatorFeedbackAnalysisOutput.HotTopic(
+                        "完整示例",
+                        "证据充分",
+                        "下一期补充",
+                        "给出可运行代码"
+                )),
+                "整体偏正向",
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(new CreatorFeedbackAnalysisOutput.FeedbackAction(
+                        "HIGH",
+                        "补充完整示例",
+                        "高频反馈",
+                        "降低理解成本"
+                ))
+        );
     }
 
     private DraftVideoRecord draft(String status) {

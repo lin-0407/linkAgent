@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalysisOutput;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackChatRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackChatResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackDashboardResponse;
@@ -141,7 +142,7 @@ public class CreatorFeedbackService {
     private final CreatorFeedbackMapper creatorFeedbackMapper;
     /** LLM 调用入口，统一通过本服务内的 chat/chatStructured 方法调用模型 */
     private final LLMService llmService;
-    /** JSON 解析工具，用于解析脚本输出的 JSON 和 LLM 返回的 JSON */
+    /** JSON 处理器，用于解析采集/分类结果并序列化结构化反馈报告 */
     private final ObjectMapper objectMapper;
     /** 事务模板，用于脚本采集场景的手动事务控制（脚本采集在事务外执行，但后续落库需要事务） */
     private final TransactionTemplate transactionTemplate;
@@ -236,11 +237,15 @@ public class CreatorFeedbackService {
         CreatorFeedbackRecord feedbackRecord = creatorFeedbackMapper.findFeedbackByTaskId(taskRecord.getTaskId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先提交评论或弹幕样例"));
 
-        String rawOutput;
+        CreatorFeedbackAnalysisOutput analysisOutput;
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "评论弹幕分析")) {
-            rawOutput = llmService.chat(buildSystemPrompt(), buildUserPrompt(taskRecord, feedbackRecord, request));
+            analysisOutput = llmService.chatStructured(
+                    buildSystemPrompt(),
+                    buildUserPrompt(taskRecord, feedbackRecord, request),
+                    CreatorFeedbackAnalysisOutput.class
+            );
         }
-        CreatorFeedbackReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
+        CreatorFeedbackReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), analysisOutput);
         creatorFeedbackMapper.upsertReport(reportRecord);
         // 评论弹幕分析产出的报告即是创作者工作流定义的复盘结果，因此在报告落库后直接进入完毕状态。
         creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.ANALYZED.name());
@@ -1526,52 +1531,43 @@ public class CreatorFeedbackService {
     ) {
     }
 
-    private CreatorFeedbackReportRecord buildReportRecord(String taskId, String rawOutput) {
+    private CreatorFeedbackReportRecord buildReportRecord(
+            String taskId,
+            CreatorFeedbackAnalysisOutput analysisOutput
+    ) {
         CreatorFeedbackReportRecord record = new CreatorFeedbackReportRecord();
         record.setReportId(UUID.randomUUID().toString());
         record.setTaskId(taskId);
-        record.setRawOutput(rawOutput);
-        fillParsedFields(record, rawOutput);
+        record.setFeedbackSummary(analysisOutput.feedbackSummary());
+        record.setHotTopics(writeJson(analysisOutput.hotTopics()));
+        record.setSentimentSummary(analysisOutput.sentimentSummary());
+        record.setControversyPoints(writeJson(analysisOutput.controversyPoints()));
+        record.setMisunderstandingPoints(writeJson(analysisOutput.misunderstandingPoints()));
+        record.setNextContentSuggestions(writeJson(analysisOutput.nextContentSuggestions()));
+        record.setInteractionSuggestions(writeJson(analysisOutput.interactionSuggestions()));
+        record.setCreatorFeedbackDilemma(analysisOutput.creatorFeedbackDilemma());
+        record.setAudienceCoreConcern(analysisOutput.audienceCoreConcern());
+        record.setMisunderstandingSourceAnalysis(writeJson(analysisOutput.misunderstandingSourceAnalysis()));
+        record.setFeedbackActionPlan(writeJson(analysisOutput.feedbackActionPlan()));
+        record.setRawOutput(writeJson(analysisOutput));
+        record.setParseStatus("PARSED");
         return record;
     }
 
-    /**
-     * 解析 LLM 返回的 JSON 并填充报告结构化字段。
-     * <p>
-     * 每个字段独立解析——某个字段缺失时不影响其他字段的解析。
-     * 阶段 4.12 新增字段（creatorFeedbackDilemma、audienceCoreConcern、misunderstandingSourceAnalysis、
-     * feedbackActionPlan）在旧版本 JSON 中不存在，LlmJsonUtil 会返回 null，不会把整份报告打成 RAW_ONLY。
-     * 只有顶层 JSON 解析失败（如 LLM 返回了纯文本而非 JSON）时，整个报告标记为 RAW_ONLY。
-     *
-     * @param record 报告记录（原地修改 parseStatus 和各业务字段）
-     * @param rawOutput LLM 原始输出文本
-     */
-    private void fillParsedFields(CreatorFeedbackReportRecord record, String rawOutput) {
+    /** 将结构化模型对象或列表序列化为数据库现有 JSON 字段。 */
+    private String writeJson(Object value) {
         try {
-            JsonNode rootNode = objectMapper.readTree(LlmJsonUtil.extractJsonObject(rawOutput));
-            record.setFeedbackSummary(LlmJsonUtil.text(rootNode, "feedbackSummary"));
-            record.setHotTopics(LlmJsonUtil.json(objectMapper, rootNode, "hotTopics"));
-            record.setSentimentSummary(LlmJsonUtil.text(rootNode, "sentimentSummary"));
-            record.setControversyPoints(LlmJsonUtil.json(objectMapper, rootNode, "controversyPoints"));
-            record.setMisunderstandingPoints(LlmJsonUtil.json(objectMapper, rootNode, "misunderstandingPoints"));
-            record.setNextContentSuggestions(LlmJsonUtil.json(objectMapper, rootNode, "nextContentSuggestions"));
-            record.setInteractionSuggestions(LlmJsonUtil.json(objectMapper, rootNode, "interactionSuggestions"));
-            // 阶段 4.12 新增字段：缺失时 LlmJsonUtil 返回 null，不会把整份报告打成 RAW_ONLY，旧字段照常解析。
-            record.setCreatorFeedbackDilemma(LlmJsonUtil.text(rootNode, "creatorFeedbackDilemma"));
-            record.setAudienceCoreConcern(LlmJsonUtil.text(rootNode, "audienceCoreConcern"));
-            record.setMisunderstandingSourceAnalysis(LlmJsonUtil.json(objectMapper, rootNode, "misunderstandingSourceAnalysis"));
-            record.setFeedbackActionPlan(LlmJsonUtil.json(objectMapper, rootNode, "feedbackActionPlan"));
-            record.setParseStatus("PARSED");
-        } catch (JsonProcessingException | IllegalArgumentException exception) {
-            record.setParseStatus("RAW_ONLY");
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("结构化反馈报告序列化失败", exception);
         }
     }
 
     /**
      * 构建反馈分析 System Prompt。
      * <p>
-     * 从 PromptService 获取预定义的模板文本，模板内容定义了 LLM 的输出格式（JSON schema）
-     * 和分析维度（整体反馈、热点议题、情绪倾向、争议点、误解点、下期建议、互动建议等）。
+     * 从 PromptService 获取预定义的分析规则；JSON schema 由 chatStructured 根据目标 DTO 统一追加，
+     * 避免数据库模板与代码字段定义各维护一份后发生漂移。
      */
     private String buildSystemPrompt() {
         return promptService.get("feedback_analyze.system");

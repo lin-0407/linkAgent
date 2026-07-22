@@ -117,6 +117,11 @@ export function post<T>(url: string, body?: unknown, options?: RequestOptions): 
   return http.post(url, body, options) as Promise<T>
 }
 
+/** PATCH 请求，供带乐观锁的局部状态更新使用。 */
+export function patch<T>(url: string, body?: unknown, options?: RequestOptions): Promise<T> {
+  return http.patch(url, body, options) as Promise<T>
+}
+
 /** PUT 请求，发送 JSON body，返回 JSON 解析结果 */
 export function put<T>(url: string, body?: unknown, options?: RequestOptions): Promise<T> {
   return http.put(url, body, options) as Promise<T>

@@ -144,7 +144,7 @@ class CreatorReportServiceTest {
     }
 
     @Test
-    void shouldKeepRawOutputWhenJsonParsingFails() {
+    void shouldNotPersistReportWhenStructuredFieldsAreMissing() {
         FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
         taskMapper.taskRecord = createTaskRecord();
         taskMapper.materials = List.of(createMaterialRecord());
@@ -167,15 +167,19 @@ class CreatorReportServiceTest {
                 competitorMapper,
                 reportMapper,
                 new CreatorPreferenceService(preferenceMapper),
-                new FixedLlmService("不是 JSON"),
+                new FixedLlmService("{}"),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 new StubPromptService(),
                 mock(CreatorMediaWorkflowGateService.class));
 
-        CreatorReportResponse response = service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
+        assertThatThrownBy(() -> service.analyze(
+                "task-1",
+                new CreatorReportAnalyzeRequest(null, null, null)
+        )).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("结构化输出解析失败");
 
-        assertThat(response.parseStatus()).isEqualTo("RAW_ONLY");
-        assertThat(response.rawOutput()).isEqualTo("不是 JSON");
+        assertThat(reportMapper.savedRecord).isNull();
+        assertThat(taskMapper.updatedStatus).isNull();
         assertThat(preferenceMapper.savedRecord).isNull();
     }
 
@@ -301,8 +305,12 @@ class CreatorReportServiceTest {
         }
 
         @Override
-        public String chat(String systemPrompt, String userMessage) {
-            return response;
+        public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> type) {
+            try {
+                return new com.fasterxml.jackson.databind.ObjectMapper().readValue(response, type);
+            } catch (Exception exception) {
+                throw new IllegalArgumentException("结构化输出解析失败：" + exception.getMessage(), exception);
+            }
         }
     }
 

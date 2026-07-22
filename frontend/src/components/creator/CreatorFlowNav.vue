@@ -1,5 +1,5 @@
 <script setup lang="ts">
-type CreatorWorkStep = 'prePublish' | 'preflight' | 'feedback' | 'report'
+type CreatorWorkStep = 'prePublish' | 'production' | 'preflight' | 'feedback' | 'report'
 type CreatorStepKey = 'task' | CreatorWorkStep
 
 type CreatorStepMeta = {
@@ -80,6 +80,10 @@ const emit = defineEmits<{
             <path d="M4.5 6h15v11.5h-15z" />
             <path d="M9.5 9l5 2.75-5 2.75z" />
             <path d="M7 20h10" />
+          </svg>
+          <svg v-else-if="step.key === 'production'" viewBox="0 0 24 24">
+            <path d="M5 7.5h14v11H5z" />
+            <path d="M8 7.5V5h8v2.5M8 11h8M8 14h5" />
           </svg>
           <svg v-else-if="step.key === 'feedback'" viewBox="0 0 24 24">
             <path d="M5 6.5h14v8.5h-8l-4 3v-3h-2z" />

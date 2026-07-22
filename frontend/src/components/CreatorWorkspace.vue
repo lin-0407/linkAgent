@@ -59,7 +59,7 @@ import { useCreatorGuidance } from '@/composables/creator/useCreatorGuidance'
 import { useCreatorTask } from '@/composables/creator/useCreatorTask'
 import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
-type CreatorWorkStep = 'prePublish' | 'preflight' | 'feedback' | 'report'
+type CreatorWorkStep = 'prePublish' | 'production' | 'preflight' | 'feedback' | 'report'
 type CreatorStepKey = 'task' | CreatorWorkStep
 type PreferenceChip = {
   text: string
@@ -81,6 +81,7 @@ const GuidanceEditorModal = defineAsyncComponent(() => import('@/components/crea
 const MaterialsTab = defineAsyncComponent(() => import('@/components/creator/MaterialsTab.vue'))
 const PreflightTab = defineAsyncComponent(() => import('@/components/creator/PreflightTab.vue'))
 const PrePublishTab = defineAsyncComponent(() => import('@/components/creator/PrePublishTab.vue'))
+const ProductionPlanTab = defineAsyncComponent(() => import('@/components/creator/ProductionPlanTab.vue'))
 const ReportTab = defineAsyncComponent(() => import('@/components/creator/ReportTab.vue'))
 const TaskListPanel = defineAsyncComponent(() => import('@/components/creator/TaskListPanel.vue'))
 const UsageTab = defineAsyncComponent(() => import('@/components/creator/UsageTab.vue'))
@@ -237,6 +238,7 @@ const { activeStep, restoredTaskId } = storeToRefs(creatorStore)
 const isMediaFeatureEnabled = ref(false)
 const isMediaFeatureAvailabilityResolved = ref(false)
 const currentDraftVideo = ref<DraftVideo | null>(null)
+const productionPlanReady = ref(false)
 let currentDraftRefreshGeneration = 0
 const mediaFeatureUnavailableMessage =
   '发布前试映未启用，任务不能进入观众反馈阶段。请先完成媒体配置并开启该能力。'
@@ -252,6 +254,7 @@ const creatorStepMetas = computed<CreatorStepMeta[]>(() => {
   const steps: CreatorStepMeta[] = [
     { key: 'task', label: '视频资料', shortLabel: '资料', description: '填写视频基础信息' },
     { key: 'prePublish', label: '发布方案', shortLabel: '发布', description: '生成发布计划与方案' },
+    { key: 'production', label: '制作蓝图', shortLabel: '制作', description: '拆解制作步骤与工具' },
   ]
   if (isMediaFeatureEnabled.value) {
     steps.push({ key: 'preflight', label: '成片试映', shortLabel: '试映', description: '上传成片并完成发布前体检' })
@@ -317,7 +320,7 @@ const hasPrePublishScriptMaterial = computed(
   () => hasFullScriptMaterial.value || hasGeneratedPrePublishDraft.value,
 )
 const canEnterPreflight = computed(() =>
-  hasSelectedTask.value && hasConfirmedPrePublish.value && isMediaFeatureEnabled.value,
+  hasSelectedTask.value && hasConfirmedPrePublish.value && productionPlanReady.value && isMediaFeatureEnabled.value,
 )
 const hasReadyPreflightDraft = computed(() => currentDraftVideo.value?.status === 'READY_FOR_REVIEW')
 const canEnterFeedback = computed(() =>
@@ -325,6 +328,7 @@ const canEnterFeedback = computed(() =>
     selectedTask.value
       && (hasFeedbackResult(selectedTask.value.status)
         || (hasConfirmedPrePublish.value
+          && productionPlanReady.value
           && isMediaFeatureEnabled.value
           && hasReadyPreflightDraft.value)),
   ),
@@ -517,12 +521,12 @@ async function refreshMediaFeatureAvailability() {
     return
   }
   if (!isMediaFeatureEnabled.value) {
-    activeStep.value = 'prePublish'
+    activeStep.value = 'production'
     errorMessage.value = mediaFeatureUnavailableMessage
     return
   }
   void refreshCurrentDraftVideo(task.taskId)
-  activeStep.value = 'preflight'
+  activeStep.value = 'production'
 }
 
 onBeforeUnmount(() => {
@@ -750,6 +754,9 @@ function isCreatorStepCompleted(stepKey: CreatorStepKey) {
   if (stepKey === 'preflight') {
     return hasReadyPreflightDraft.value
   }
+  if (stepKey === 'production') {
+    return productionPlanReady.value
+  }
   const index = creatorStepIndex(stepKey)
   return index >= 0 && index < currentTaskProgressIndex.value
 }
@@ -761,6 +768,9 @@ function canNavigateCreatorStep(stepKey: CreatorStepKey) {
   if (stepKey === 'prePublish') {
     return hasSelectedTask.value
   }
+  if (stepKey === 'production') {
+    return hasSelectedTask.value && hasConfirmedPrePublish.value
+  }
   if (stepKey === 'preflight') {
     return canEnterPreflight.value
   }
@@ -771,6 +781,11 @@ function canNavigateCreatorStep(stepKey: CreatorStepKey) {
 }
 
 function navigateCreatorStep(stepKey: CreatorStepKey) {
+  if ((stepKey === 'preflight' || stepKey === 'feedback') && hasConfirmedPrePublish.value && !productionPlanReady.value) {
+    errorMessage.value = '请先完成制作蓝图中的全部步骤，再进入成片试映。'
+    activeStep.value = 'production'
+    return
+  }
   if (
     (stepKey === 'preflight' || stepKey === 'feedback' || stepKey === 'report') &&
     selectedTask.value &&
@@ -857,6 +872,7 @@ async function selectTask(taskId: string) {
   taskManageMode.value = 'create'
   taskModule.resetTaskForm()
   currentDraftVideo.value = null
+  productionPlanReady.value = false
   // 委托 taskModule 加载完整任务（内部已处理 selectedTask / store）
   const task = await taskModule.loadTask(taskId)
   if (!task) return
@@ -1090,7 +1106,7 @@ async function runPrePublishAnalyze() {
     if (!result) return
     lastPrePublishPreferenceMode.value = prePublishForm.preferenceMode
     hasPrePublishPreferenceModeSnapshot.value = true
-    successMessage.value = '发布前优化建议已生成，请确认采用后进入成片试映。'
+    successMessage.value = '发布前优化建议已生成，请确认采用后进入制作蓝图。'
   } finally {
     await refreshUsageStats(1, false)
   }
@@ -1107,8 +1123,8 @@ async function confirmPrePublishResult() {
     selectedTask.value = task
     await refreshMediaFeatureAvailability()
     if (!isMediaFeatureEnabled.value) return
-    activeStep.value = 'preflight'
-    successMessage.value = '已采用本轮发布前优化建议，请上传成片进行发布前试映。'
+    activeStep.value = 'production'
+    successMessage.value = '已采用本轮发布前优化建议，请先生成制作蓝图。'
     await refreshTasks()
   } catch (error) {
     showError(error)
@@ -1213,7 +1229,7 @@ function resolveTaskEntryStep(task: Pick<CreatorTask, 'status'>): CreatorWorkSte
     return 'report'
   }
   if (hasPrePublishResult(task.status) && hasConfirmedPrePublish.value) {
-    return isMediaFeatureEnabled.value ? 'preflight' : 'prePublish'
+    return 'production'
   }
   return 'prePublish'
 }
@@ -1232,6 +1248,9 @@ function normalizeReturnStepForTask(
   if (targetStep === 'preflight' && !hasPrePublishResult(task.status)) {
     return resolveTaskEntryStep(task)
   }
+  if (targetStep === 'production' && !hasPrePublishResult(task.status)) {
+    return resolveTaskEntryStep(task)
+  }
   if (
     targetStep === 'feedback' &&
     requiresPreflight(task) &&
@@ -1245,6 +1264,7 @@ function normalizeReturnStepForTask(
 function resolveCurrentEditReturnStep(): CreatorWorkStep {
   if (
     activeStep.value === 'prePublish' ||
+    activeStep.value === 'production' ||
     activeStep.value === 'preflight' ||
     activeStep.value === 'feedback' ||
     activeStep.value === 'report'
@@ -1275,6 +1295,7 @@ function resetSelectedWorkspace() {
   feedbackModule.resetFeedbackData()
   selectedTask.value = null
   currentDraftVideo.value = null
+  productionPlanReady.value = false
   creatorStore.selectedTaskId = null
   taskManageMode.value = 'create'
   resetTaskForm()
@@ -1296,7 +1317,7 @@ function resetSelectedWorkspace() {
 function loadWorkspaceState() {
   if (activeStep.value === 'videoBinding') {
     // 旧版本把发布后 BV 绑定放在创作台主流程里；现在确认发布方案后应回到发布前试映链路。
-    activeStep.value = 'prePublish'
+    activeStep.value = 'production'
   }
   if (creatorStore.selectedTaskId) {
     restoredTaskId.value = creatorStore.selectedTaskId
@@ -1547,6 +1568,7 @@ provideCreatorWorkspace({
         >
           <span :class="{ active: Boolean(selectedTask) }">视频资料</span>
           <span :class="{ active: Boolean(suggestion) }">发布方案</span>
+          <span :class="{ active: activeStep === 'production' || productionPlanReady }">制作蓝图</span>
           <span v-if="isMediaFeatureEnabled" :class="{ active: activeStep === 'preflight' }">成片试映</span>
           <span :class="{ active: Boolean(feedback || feedbackDashboard) }">观众反馈</span>
           <span :class="{ active: Boolean(feedbackReport) }">复盘报告</span>
@@ -1671,6 +1693,11 @@ provideCreatorWorkspace({
         </Teleport>
 
         <PrePublishTab v-if="activeStep === 'prePublish'" />
+
+        <ProductionPlanTab
+          v-if="activeStep === 'production'"
+          @ready-change="productionPlanReady = $event"
+        />
 
         <PreflightTab v-if="isMediaFeatureEnabled && activeStep === 'preflight'" />
 
