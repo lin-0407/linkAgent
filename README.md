@@ -234,7 +234,9 @@ flowchart TD
     Creative --> Select[确认创意方向]
     Select --> PrePublish[发布前优化]
     PrePublish --> Confirm[确认发布方案]
-    Confirm --> BindBv[绑定 BV]
+    Confirm --> Preflight[成片上传与发布前试映]
+    Preflight --> Publish[正式发布]
+    Publish --> BindBv[发布后绑定 BV]
     BindBv --> Feedback[导入或采集评论弹幕]
     Feedback --> Analysis[反馈分析]
     Analysis --> Report[复盘报告]
@@ -263,7 +265,7 @@ npm run build
 npm run type-check
 ```
 
-协作开发约束：AI 助手不得执行上述命令，只能说明应该执行什么、预期结果是什么、失败时优先排查哪里。
+协作开发约束：AI 助手不得执行后端编译、测试、构建、运行或启动命令；前端命令可以用于检查和验证，启动前端服务后必须在验证结束时关闭相关进程。
 
 ## 文档入口
 
