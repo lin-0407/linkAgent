@@ -1,5 +1,6 @@
 package com.link.linkagent.creator.media.storage;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 
@@ -61,6 +62,22 @@ public interface ObjectStorageService {
      * @return 预签名读取结果
      */
     PresignedObjectRead presignGetObject(String bucketName, String objectKey, Duration signatureDuration);
+
+    /**
+     * 为浏览器播放派生媒体生成短时 GET URL。
+     * 浏览器与 Provider 使用不同 Endpoint，避免把 Provider 地址暴露给页面。
+     */
+    PresignedObjectRead presignBrowserGetObject(String bucketName, String objectKey, Duration signatureDuration);
+
+    /**
+     * 将私有对象流式下载到工作目录，避免媒体正文进入 JVM 内存。
+     */
+    void downloadObject(String bucketName, String objectKey, Path targetFile);
+
+    /**
+     * 将 FFmpeg 生成的派生文件上传到私有对象存储。
+     */
+    void putObject(String bucketName, String objectKey, Path sourceFile, String contentType);
 
     /**
      * 提交所有分片 ETag，完成 Multipart Upload。

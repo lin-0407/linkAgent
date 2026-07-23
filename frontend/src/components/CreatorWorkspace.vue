@@ -694,6 +694,16 @@ function startCreateTask() {
   closeTaskManager()
 }
 
+function returnToAiCreation() {
+  resetSelectedWorkspace()
+  // 主动返回创意入口时清空恢复标记，避免任务列表刷新后又自动进入刚离开的项目。
+  restoredTaskId.value = ''
+  pendingDeleteTask.value = null
+  errorMessage.value = ''
+  successMessage.value = ''
+  closeTaskManager()
+}
+
 async function startEditTask(taskId: string) {
   errorMessage.value = ''
   successMessage.value = ''
@@ -1664,7 +1674,10 @@ provideCreatorWorkspace({
           @close="errorMessage = ''"
         />
 
-        <MaterialsTab v-if="activeStep === 'task'" />
+        <MaterialsTab
+          v-if="activeStep === 'task'"
+          @back-to-ai-creation="returnToAiCreation"
+        />
 
         <Teleport to="body">
           <CreatorDevTestModal

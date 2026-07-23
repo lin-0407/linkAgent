@@ -3,6 +3,7 @@ package com.link.linkagent.creator.media.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 
 /**
@@ -87,6 +88,9 @@ public class CreatorMediaProperties {
         if (processing.ffprobePath == null || processing.ffprobePath.isBlank()) {
             throw new IllegalStateException("ffprobe 命令路径不能为空");
         }
+        if (processing.ffmpegPath == null || processing.ffmpegPath.isBlank()) {
+            throw new IllegalStateException("ffmpeg 命令路径不能为空");
+        }
         if (processing.probeTimeout == null || processing.probeTimeout.isZero() || processing.probeTimeout.isNegative()) {
             throw new IllegalStateException("媒体探测超时时间必须大于0");
         }
@@ -95,6 +99,19 @@ public class CreatorMediaProperties {
         }
         if (processing.providerReadTtl.compareTo(processing.probeTimeout.plusSeconds(5)) <= 0) {
             throw new IllegalStateException("Provider 媒体读取短签有效期必须大于媒体探测超时时间");
+        }
+        if (processing.ffmpegTimeout == null || processing.ffmpegTimeout.isZero() || processing.ffmpegTimeout.isNegative()) {
+            throw new IllegalStateException("FFmpeg 处理超时时间必须大于0");
+        }
+        if (processing.workRoot == null || processing.workRoot.isBlank()) {
+            throw new IllegalStateException("媒体处理工作目录不能为空");
+        }
+        if (processing.pollIntervalMs <= 0 || processing.leaseDuration == null
+                || processing.leaseDuration.isZero() || processing.leaseDuration.isNegative()) {
+            throw new IllegalStateException("媒体轮询间隔和租约时长必须大于0");
+        }
+        if (processing.maxAttempts <= 0) {
+            throw new IllegalStateException("媒体处理最大尝试次数必须大于0");
         }
     }
 
@@ -140,6 +157,30 @@ public class CreatorMediaProperties {
         private Duration probeTimeout = Duration.ofSeconds(30);
         /** Provider 读取媒体对象的短签 GET URL 有效期 */
         private Duration providerReadTtl = Duration.ofMinutes(5);
+        /** FFmpeg 可执行文件路径；使用参数列表调用，避免 shell 注入和路径转义问题 */
+        private String ffmpegPath = "ffmpeg";
+        /** 单次 FFmpeg 处理超时时间，防止异常媒体长期占用 Worker */
+        private Duration ffmpegTimeout = Duration.ofHours(2);
+        /** 媒体处理临时工作目录，视频和派生文件不进入 JVM 内存 */
+        private String workRoot = "/var/lib/linkagent-media-work";
+        /** Worker 轮询待处理任务的间隔，使用数据库状态恢复任务 */
+        private long pollIntervalMs = 2000L;
+        /** FFmpeg 长任务的数据库租约时长，避免多实例重复处理 */
+        private Duration leaseDuration = Duration.ofMinutes(2);
+        /** 单个处理任务允许的最大尝试次数 */
+        private int maxAttempts = 3;
+        /** 成本估算价格配置版本，便于解释历史估算结果 */
+        private String pricingVersion = "2026-07-12-config-v1";
+        /** Qwen3-VL-Flash 输入价格，单位为美元/百万 Token */
+        private BigDecimal flashInputUsdPerMillionTokens = new BigDecimal("0.022");
+        /** Qwen3-VL-Flash 输出价格，单位为美元/百万 Token */
+        private BigDecimal flashOutputUsdPerMillionTokens = new BigDecimal("0.215");
+        /** Qwen3-VL-Plus 输入价格，单位为美元/百万 Token；仅用于配置估算 */
+        private BigDecimal plusInputUsdPerMillionTokens = new BigDecimal("0.42");
+        /** Qwen3-VL-Plus 输出价格，单位为美元/百万 Token；仅用于配置估算 */
+        private BigDecimal plusOutputUsdPerMillionTokens = new BigDecimal("1.25");
+        /** ASR 估算价格，单位为美元/秒；仅用于配置估算 */
+        private BigDecimal asrUsdPerSecond = new BigDecimal("0.000035");
 
         public String getFfprobePath() { return ffprobePath; }
         public void setFfprobePath(String ffprobePath) { this.ffprobePath = ffprobePath; }
@@ -149,5 +190,41 @@ public class CreatorMediaProperties {
 
         public Duration getProviderReadTtl() { return providerReadTtl; }
         public void setProviderReadTtl(Duration providerReadTtl) { this.providerReadTtl = providerReadTtl; }
+
+        public String getFfmpegPath() { return ffmpegPath; }
+        public void setFfmpegPath(String ffmpegPath) { this.ffmpegPath = ffmpegPath; }
+
+        public Duration getFfmpegTimeout() { return ffmpegTimeout; }
+        public void setFfmpegTimeout(Duration ffmpegTimeout) { this.ffmpegTimeout = ffmpegTimeout; }
+
+        public String getWorkRoot() { return workRoot; }
+        public void setWorkRoot(String workRoot) { this.workRoot = workRoot; }
+
+        public long getPollIntervalMs() { return pollIntervalMs; }
+        public void setPollIntervalMs(long pollIntervalMs) { this.pollIntervalMs = pollIntervalMs; }
+
+        public Duration getLeaseDuration() { return leaseDuration; }
+        public void setLeaseDuration(Duration leaseDuration) { this.leaseDuration = leaseDuration; }
+
+        public int getMaxAttempts() { return maxAttempts; }
+        public void setMaxAttempts(int maxAttempts) { this.maxAttempts = maxAttempts; }
+
+        public String getPricingVersion() { return pricingVersion; }
+        public void setPricingVersion(String pricingVersion) { this.pricingVersion = pricingVersion; }
+
+        public BigDecimal getFlashInputUsdPerMillionTokens() { return flashInputUsdPerMillionTokens; }
+        public void setFlashInputUsdPerMillionTokens(BigDecimal value) { this.flashInputUsdPerMillionTokens = value; }
+
+        public BigDecimal getFlashOutputUsdPerMillionTokens() { return flashOutputUsdPerMillionTokens; }
+        public void setFlashOutputUsdPerMillionTokens(BigDecimal value) { this.flashOutputUsdPerMillionTokens = value; }
+
+        public BigDecimal getPlusInputUsdPerMillionTokens() { return plusInputUsdPerMillionTokens; }
+        public void setPlusInputUsdPerMillionTokens(BigDecimal value) { this.plusInputUsdPerMillionTokens = value; }
+
+        public BigDecimal getPlusOutputUsdPerMillionTokens() { return plusOutputUsdPerMillionTokens; }
+        public void setPlusOutputUsdPerMillionTokens(BigDecimal value) { this.plusOutputUsdPerMillionTokens = value; }
+
+        public BigDecimal getAsrUsdPerSecond() { return asrUsdPerSecond; }
+        public void setAsrUsdPerSecond(BigDecimal asrUsdPerSecond) { this.asrUsdPerSecond = asrUsdPerSecond; }
     }
 }

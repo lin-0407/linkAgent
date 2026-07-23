@@ -169,10 +169,23 @@ creator:
     processing:
       # ffprobe 用于读取成片元信息，不修改视频文件；容器镜像通过 ffmpeg 包提供该命令。
       ffprobe-path: ${CREATOR_MEDIA_FFPROBE_PATH:ffprobe}
+      # FFmpeg 使用参数列表执行，避免 shell 注入和路径转义问题。
+      ffmpeg-path: ${CREATOR_MEDIA_FFMPEG_PATH:ffmpeg}
       # 探测只读取媒体元信息，超时通常说明对象存储回源或文件结构异常。
       probe-timeout: ${CREATOR_MEDIA_PROBE_TIMEOUT:30s}
+      ffmpeg-timeout: ${CREATOR_MEDIA_FFMPEG_TIMEOUT:2h}
       # Provider 读取原片/代理媒体的短签 GET URL 有效期，避免生成长期公开视频地址。
       provider-read-ttl: ${CREATOR_MEDIA_PROVIDER_READ_TTL:5m}
+      work-root: ${CREATOR_MEDIA_WORK_ROOT:/var/lib/linkagent-media-work}
+      poll-interval-ms: ${CREATOR_MEDIA_PROCESSING_POLL_INTERVAL_MS:2000}
+      lease-duration: ${CREATOR_MEDIA_PROCESSING_LEASE_DURATION:2m}
+      max-attempts: ${CREATOR_MEDIA_PROCESSING_MAX_ATTEMPTS:3}
+      pricing-version: ${CREATOR_MEDIA_PRICING_VERSION:2026-07-12-config-v1}
+      flash-input-usd-per-million-tokens: ${CREATOR_MEDIA_FLASH_INPUT_USD_PER_MILLION_TOKENS:0.022}
+      flash-output-usd-per-million-tokens: ${CREATOR_MEDIA_FLASH_OUTPUT_USD_PER_MILLION_TOKENS:0.215}
+      plus-input-usd-per-million-tokens: ${CREATOR_MEDIA_PLUS_INPUT_USD_PER_MILLION_TOKENS:0.42}
+      plus-output-usd-per-million-tokens: ${CREATOR_MEDIA_PLUS_OUTPUT_USD_PER_MILLION_TOKENS:1.25}
+      asr-usd-per-second: ${CREATOR_MEDIA_ASR_USD_PER_SECOND:0.000035}
   pre-publish:
     # 默认启用发布前优化 Agent 链路；演示或排障时可通过 PRE_PUBLISH_AGENT_ENABLED=false 回退旧直连 LLM 链路。
     agent:

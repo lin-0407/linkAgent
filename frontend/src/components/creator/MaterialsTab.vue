@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 
+const emit = defineEmits<{
+  backToAiCreation: []
+}>()
+
 const {
   taskFormTitle,
   taskManageMode,
@@ -20,7 +24,19 @@ const {
 <template>
   <section class="creator-section">
     <div class="creator-section-head">
-      <div>
+      <div class="creator-section-title-row">
+        <button
+          type="button"
+          class="creator-secondary-action creator-back-action"
+          aria-label="返回 AI 创意生成"
+          title="返回 AI 创意生成"
+          @click="emit('backToAiCreation')"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M15 5l-7 7 7 7M8 12h11" />
+          </svg>
+          <span>AI 创意生成</span>
+        </button>
         <h3>{{ taskManageMode === 'edit' ? taskFormTitle : '视频资料' }}</h3>
       </div>
       <div class="creator-action-row">

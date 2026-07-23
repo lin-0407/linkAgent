@@ -1452,6 +1452,108 @@ CREATE TABLE IF NOT EXISTS creator_tool_knowledge
   DEFAULT CHARSET = utf8mb4
   COMMENT = '制作工具官方知识快照表';
 
+-- ------------------------------------------------------------
+-- 36. 媒体预处理任务表（阶段 7 P0-2）
+--     记录用户确认的抽帧、清晰度、模型估算选项和可恢复执行状态。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_media_processing_job
+(
+    id                              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    job_id                          VARCHAR(64)    NOT NULL COMMENT '媒体预处理任务唯一标识（UUID）',
+    version_id                      VARCHAR(64)    NOT NULL COMMENT '关联 creator_draft_video.version_id',
+    task_id                         VARCHAR(64)    NOT NULL COMMENT '关联 creator_task.task_id',
+    owner_id                        VARCHAR(64)    NOT NULL DEFAULT 'default' COMMENT '可信媒体归属；单人工作台固定为 default',
+    frame_interval_seconds          INT            NOT NULL COMMENT '定时抽帧间隔秒数，仅允许5、10、15、30',
+    target_resolution               VARCHAR(16)    NOT NULL COMMENT '预览和关键帧清晰度：P480、P720、P1080',
+    target_height                   INT            NOT NULL COMMENT '清晰度对应的目标最大高度，避免 Worker 依赖前端解释枚举',
+    model_plan                      VARCHAR(32)    NOT NULL COMMENT '后续视觉模型方案：FLASH、FLASH_PLUS_REVIEW',
+    include_asr                     TINYINT        NOT NULL DEFAULT 1 COMMENT '成本估算是否包含 ASR；P0-2 不调用真实 ASR',
+    pricing_version                 VARCHAR(64)    NOT NULL COMMENT '费用估算使用的配置版本，便于解释历史结果',
+    estimated_frame_count           INT            NOT NULL COMMENT '按视频时长和抽帧间隔估算的图片数量',
+    estimated_visual_input_tokens   BIGINT         NOT NULL COMMENT '后续视觉理解预计输入 Token',
+    estimated_visual_output_tokens  BIGINT         NOT NULL COMMENT '后续视觉理解预计输出 Token',
+    estimated_asr_seconds           BIGINT         NOT NULL COMMENT '后续 ASR 预计计费秒数，无音轨或未勾选时为0',
+    estimated_visual_cost_usd       DECIMAL(18, 8) NOT NULL COMMENT '后续视觉模型预计美元费用，不是供应商账单',
+    estimated_asr_cost_usd          DECIMAL(18, 8) NOT NULL COMMENT '后续 ASR 预计美元费用，不是供应商账单',
+    estimated_total_cost_usd        DECIMAL(18, 8) NOT NULL COMMENT '后续 AI 预计总美元费用，不含本地 FFmpeg 成本',
+    status                          VARCHAR(24)    NOT NULL DEFAULT 'QUEUED' COMMENT '任务状态：QUEUED、RUNNING、COMPLETED、FAILED',
+    current_step                    VARCHAR(32)    NOT NULL DEFAULT 'QUEUED' COMMENT '当前步骤：QUEUED、DOWNLOAD、PREVIEW、AUDIO、FRAMES、SIGNALS、UPLOAD、DONE',
+    progress_percent                INT            NOT NULL DEFAULT 0 COMMENT '处理进度百分比，范围0到100',
+    attempt_count                   INT            NOT NULL DEFAULT 0 COMMENT 'Worker 实际领取次数，用于限制自动恢复次数',
+    lease_owner                     VARCHAR(128)            DEFAULT NULL COMMENT '当前 Worker 租约标识，防止多实例重复处理',
+    lease_expires_at                DATETIME                DEFAULT NULL COMMENT '租约到期时间；到期后任务可重新排队',
+    signal_summary_json             JSON                    DEFAULT NULL COMMENT '黑屏、静音、音量和冻结检测摘要 JSON',
+    failure_message                 VARCHAR(500)            DEFAULT NULL COMMENT '最近失败原因中文摘要，不保存对象签名或命令输出',
+    started_at                      DATETIME                DEFAULT NULL COMMENT '首次开始处理时间',
+    completed_at                    DATETIME                DEFAULT NULL COMMENT '处理完成时间',
+    create_time                     DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time                     DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted                      TINYINT        NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_media_processing_job_id (job_id),
+    KEY idx_media_processing_version (owner_id, task_id, version_id, id DESC),
+    KEY idx_media_processing_claim (status, lease_expires_at, create_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '媒体预处理任务表';
+
+-- ------------------------------------------------------------
+-- 37. 媒体预处理步骤表（阶段 7 P0-2）
+--     每一步独立持久化，页面刷新和任务失败后仍能看到实际执行位置。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_media_processing_step
+(
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    step_id             VARCHAR(64)  NOT NULL COMMENT '处理步骤唯一标识（UUID）',
+    job_id              VARCHAR(64)  NOT NULL COMMENT '关联 creator_media_processing_job.job_id',
+    step_code           VARCHAR(32)  NOT NULL COMMENT '步骤编码：DOWNLOAD、PREVIEW、AUDIO、FRAMES、SIGNALS、UPLOAD',
+    step_name           VARCHAR(64)  NOT NULL COMMENT '面向用户的中文步骤名称',
+    sequence_no         INT          NOT NULL COMMENT '步骤固定顺序号',
+    status              VARCHAR(24)  NOT NULL DEFAULT 'PENDING' COMMENT '步骤状态：PENDING、RUNNING、COMPLETED、SKIPPED、FAILED',
+    progress_percent    INT          NOT NULL DEFAULT 0 COMMENT '当前步骤进度百分比',
+    output_summary      VARCHAR(500)          DEFAULT NULL COMMENT '步骤输出摘要，不保存本地路径、签名地址或密钥',
+    failure_message     VARCHAR(500)          DEFAULT NULL COMMENT '步骤失败中文摘要',
+    started_at          DATETIME              DEFAULT NULL COMMENT '步骤开始时间',
+    completed_at        DATETIME              DEFAULT NULL COMMENT '步骤完成时间',
+    create_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uk_media_processing_step_id (step_id),
+    UNIQUE KEY uk_media_processing_job_step (job_id, step_code),
+    KEY idx_media_processing_step_job (job_id, sequence_no)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '媒体预处理步骤表';
+
+-- ------------------------------------------------------------
+-- 38. 媒体预处理派生素材表（阶段 7 P0-2）
+--     只保存私有对象键和可展示元数据，短时播放地址按需生成且不落库。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_media_processing_asset
+(
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    asset_id            VARCHAR(64)    NOT NULL COMMENT '派生素材唯一标识（UUID）',
+    job_id              VARCHAR(64)    NOT NULL COMMENT '关联 creator_media_processing_job.job_id',
+    version_id          VARCHAR(64)    NOT NULL COMMENT '关联 creator_draft_video.version_id',
+    asset_type          VARCHAR(24)    NOT NULL COMMENT '素材类型：PREVIEW_VIDEO、AUDIO、KEYFRAME',
+    bucket_name         VARCHAR(255)   NOT NULL COMMENT '派生素材所在私有对象存储桶名称',
+    object_key          VARCHAR(1000)  NOT NULL COMMENT '后端生成的派生素材私有对象键，前端不得传入',
+    content_type        VARCHAR(128)   NOT NULL COMMENT '派生素材媒体类型',
+    file_size           BIGINT         NOT NULL COMMENT '派生素材文件字节数',
+    sequence_no         INT                     DEFAULT NULL COMMENT '关键帧顺序号；非关键帧素材为空',
+    timestamp_ms        BIGINT                  DEFAULT NULL COMMENT '关键帧对应原片时间毫秒；非关键帧素材为空',
+    width               INT                     DEFAULT NULL COMMENT '图片或预览宽度；未知时为空',
+    height              INT                     DEFAULT NULL COMMENT '图片或预览高度；未知时为空',
+    duration_ms         BIGINT                  DEFAULT NULL COMMENT '预览或音频时长毫秒；关键帧为空',
+    create_time         DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time         DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted          TINYINT        NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_media_processing_asset_id (asset_id),
+    UNIQUE KEY uk_media_processing_object_key (object_key),
+    KEY idx_media_processing_asset_job (job_id, asset_type, sequence_no)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '媒体预处理派生素材表';
+
+
 -- P0-1 初始工具目录只保存官方入口，不把未经学习的页面内容伪装成菜单知识。
 INSERT INTO creator_tool_catalog (
     tool_id, tool_name, normalized_name, official_domain, official_url,

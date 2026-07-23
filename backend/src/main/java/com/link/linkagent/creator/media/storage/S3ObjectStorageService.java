@@ -4,6 +4,8 @@ import com.link.linkagent.creator.media.config.ObjectStorageProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.core.sync.ResponseTransformer;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest;
@@ -17,6 +19,7 @@ import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchUploadException;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
@@ -24,6 +27,7 @@ import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequ
 import software.amazon.awssdk.services.s3.presigner.model.PresignedUploadPartRequest;
 import software.amazon.awssdk.services.s3.presigner.model.UploadPartPresignRequest;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -48,6 +52,8 @@ import java.util.List;
 public class S3ObjectStorageService implements ObjectStorageService {
 
     // S3Client：后端控制面操作（CreateMultipartUpload、Complete、Abort、Head、Delete）
+    // 浏览器读取派生媒体使用 browserEndpoint，不能把 Provider 地址暴露给页面。
+    private final S3Presigner browserReadPresigner;
     private final S3Client s3Client;
     // S3Presigner：生成浏览器直传 OSS 的短时签名 URL（上传分片不经过本服务）
     private final S3Presigner uploadPartPresigner;
@@ -62,6 +68,7 @@ public class S3ObjectStorageService implements ObjectStorageService {
                                    ObjectStorageProperties properties) {
         this.s3Client = s3Client;
         this.uploadPartPresigner = uploadPartPresigner;
+        this.browserReadPresigner = uploadPartPresigner;
         this.providerReadPresigner = providerReadPresigner;
         this.properties = properties;
     }
@@ -155,6 +162,7 @@ public class S3ObjectStorageService implements ObjectStorageService {
             GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                     .bucket(bucketName)
                     .key(objectKey)
+
                     .build();
             GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
                     .signatureDuration(signatureDuration)
@@ -167,6 +175,26 @@ public class S3ObjectStorageService implements ObjectStorageService {
             );
         } catch (SdkException exception) {
             throw storageFailure("生成媒体读取签名失败", exception);
+        }
+    }
+
+    @Override
+    public PresignedObjectRead presignBrowserGetObject(String bucketName,
+                                                       String objectKey,
+                                                       Duration signatureDuration) {
+        try {
+            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(objectKey)
+                    .build();
+            GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
+                    .signatureDuration(signatureDuration)
+                    .getObjectRequest(getObjectRequest)
+                    .build();
+            PresignedGetObjectRequest signedRequest = browserReadPresigner.presignGetObject(presignRequest);
+            return new PresignedObjectRead(signedRequest.url().toString(), Instant.now().plus(signatureDuration));
+        } catch (SdkException exception) {
+            throw storageFailure("生成媒体预览签名失败", exception);
         }
     }
 
@@ -269,6 +297,35 @@ public class S3ObjectStorageService implements ObjectStorageService {
      * @param objectKey 对象键
      */
     @Override
+    public void downloadObject(String bucketName, String objectKey, Path targetFile) {
+        try {
+            s3Client.getObject(
+                    GetObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key(objectKey)
+                            .build(),
+                    ResponseTransformer.toFile(targetFile)
+            );
+        } catch (SdkException exception) {
+            throw storageFailure("下载媒体对象失败", exception);
+        }
+    }
+
+    @Override
+    public void putObject(String bucketName, String objectKey, Path sourceFile, String contentType) {
+        try {
+            s3Client.putObject(
+                    PutObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key(objectKey)
+                            .contentType(contentType)
+                            .build(),
+                    RequestBody.fromFile(sourceFile)
+            );
+        } catch (SdkException exception) {
+            throw storageFailure("上传派生媒体失败", exception);
+        }
+    }
     public void deleteObject(String objectKey) {
         try {
             s3Client.deleteObject(

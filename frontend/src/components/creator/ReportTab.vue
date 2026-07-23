@@ -39,25 +39,15 @@ const {
       </div>
     </div>
 
-    <article v-if="feedbackReport" class="creator-result-entry">
-      <div>
-        <strong>复盘报告已生成</strong>
-        <span>
-          先看一句话结论、保留项、修改清单和下一期选题；需要归档时可导出 Markdown。
-        </span>
-      </div>
-      <button
-        type="button"
-        class="creator-primary-button"
-        @click="openResultModal('feedbackReport')"
-      >
-        查看完整报告
-      </button>
-    </article>
-
-    <article v-else class="creator-empty-result">
-      <strong>还没有反馈报告</strong>
-      <span>先提交观众反馈并点击“读懂反馈”，生成后这里会给出下一期行动建议。</span>
-    </article>
+    <p v-if="!feedbackReport" class="creator-report-empty">
+      还没有反馈报告，请先提交观众反馈并完成分析。
+    </p>
   </section>
 </template>
+
+<style scoped>
+.creator-report-empty {
+  margin: 0;
+  color: var(--muted);
+}
+</style>
