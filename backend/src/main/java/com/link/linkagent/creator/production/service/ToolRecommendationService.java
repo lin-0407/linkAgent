@@ -61,9 +61,16 @@ public class ToolRecommendationService {
     }
 
     static String normalizeName(String value) {
-        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT)
+        String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT)
                 .replace(" ", "")
                 .replace("-", "")
                 .replace("_", "");
+        return switch (normalized) {
+            case "obs" -> "obsstudio";
+            case "剪映", "capcut/剪映", "剪映/capcut" -> "capcut";
+            case "达芬奇", "davinci" -> "davinciresolve";
+            case "firefly" -> "adobefirefly";
+            default -> normalized;
+        };
     }
 }

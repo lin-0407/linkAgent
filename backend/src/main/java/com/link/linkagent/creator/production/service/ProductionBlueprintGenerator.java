@@ -7,13 +7,15 @@ import com.link.linkagent.creator.production.model.ProductionBlueprintOutput;
 import com.link.linkagent.creator.production.model.ProductionBlueprintStepOutput;
 import com.link.linkagent.creator.production.model.ProductionVideoCategory;
 import com.link.linkagent.creator.production.model.ToolResolutionResponse;
+import com.link.linkagent.creator.preference.mapper.CreatorPreferenceMapper;
+import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
+import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.prompt.service.PromptService;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,15 +30,21 @@ public class ProductionBlueprintGenerator {
     private final LLMService llmService;
     private final PromptService promptService;
     private final CreatorTaskMapper taskMapper;
+    private final CreatorSuggestionMapper suggestionMapper;
+    private final CreatorPreferenceMapper preferenceMapper;
     private final ObjectMapper objectMapper;
 
     public ProductionBlueprintGenerator(LLMService llmService,
                                         PromptService promptService,
                                         CreatorTaskMapper taskMapper,
+                                        CreatorSuggestionMapper suggestionMapper,
+                                        CreatorPreferenceMapper preferenceMapper,
                                         ObjectMapper objectMapper) {
         this.llmService = llmService;
         this.promptService = promptService;
         this.taskMapper = taskMapper;
+        this.suggestionMapper = suggestionMapper;
+        this.preferenceMapper = preferenceMapper;
         this.objectMapper = objectMapper;
     }
 
@@ -61,6 +69,13 @@ public class ProductionBlueprintGenerator {
                 .filter(value -> value != null && !value.isBlank())
                 .limit(8)
                 .toList());
+        context.put("prePublishSuggestion", suggestionMapper.findByTaskId(taskId)
+                .map(this::suggestionSnapshot)
+                .orElseGet(Map::of));
+        context.put("creatorPreferences", preferenceMapper.listByUserId("default", 20).stream()
+                .map(record -> record.getPreferenceContent())
+                .filter(value -> value != null && !value.isBlank())
+                .toList());
         String userMessage = writeJson(context);
         ProductionBlueprintOutput output = llmService.chatStructured(
                 promptService.get(promptKey), userMessage, ProductionBlueprintOutput.class);
@@ -81,6 +96,16 @@ public class ProductionBlueprintGenerator {
 
     private boolean blank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private Map<String, String> suggestionSnapshot(CreatorSuggestionRecord suggestion) {
+        Map<String, String> snapshot = new LinkedHashMap<>();
+        snapshot.put("contentSummary", suggestion.getContentSummary());
+        snapshot.put("audienceProfile", suggestion.getAudienceProfile());
+        snapshot.put("contentPositioning", suggestion.getContentPositioning());
+        snapshot.put("actionableRevisionPlan", suggestion.getActionableRevisionPlan());
+        snapshot.put("riskPoints", suggestion.getRiskPoints());
+        return snapshot;
     }
 
     private String writeJson(Object value) {

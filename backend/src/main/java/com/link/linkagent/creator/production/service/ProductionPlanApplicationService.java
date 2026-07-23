@@ -15,15 +15,14 @@ import com.link.linkagent.creator.production.model.ProductionStepResponse;
 import com.link.linkagent.creator.production.model.ProductionStepStatus;
 import com.link.linkagent.creator.production.model.ProductionWorkspaceResponse;
 import com.link.linkagent.creator.production.model.ToolResolutionResponse;
+import com.link.linkagent.creator.production.model.ToolVerificationStatus;
 import com.link.linkagent.creator.production.model.UpdateProductionStepRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -173,8 +172,9 @@ public class ProductionPlanApplicationService {
         int sequence = 1;
         for (ProductionBlueprintStepOutput step : output.steps()) {
             List<ToolResolutionResponse> refs = step.toolNames() == null ? List.of() : step.toolNames().stream()
-                    .map(name -> toolMap.get(ToolRecommendationService.normalizeName(name)))
-                    .filter(value -> value != null)
+                    .map(name -> toolMap.getOrDefault(
+                            ToolRecommendationService.normalizeName(name),
+                            sourceRequiredTool(name)))
                     .toList();
             records.add(new ProductionStepRecord(
                     null,
@@ -200,6 +200,20 @@ public class ProductionPlanApplicationService {
             ));
         }
         return records;
+    }
+
+    private ToolResolutionResponse sourceRequiredTool(String toolName) {
+        return new ToolResolutionResponse(
+                null,
+                toolName == null || toolName.isBlank() ? "未命名工具" : toolName.trim(),
+                null,
+                null,
+                ToolVerificationStatus.SOURCE_REQUIRED.name(),
+                List.of(),
+                List.of(),
+                List.of(),
+                "蓝图引用了未进入本次可信工具解析结果的工具，请补充官方资料"
+        );
     }
 
     private ProductionWorkspaceResponse toWorkspace(ProductionPlanRecord plan) {

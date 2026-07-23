@@ -1,16 +1,12 @@
 package com.link.linkagent.creator.production.service;
 
 import com.link.linkagent.creator.production.mapper.ProductionPlanMapper;
-import com.link.linkagent.creator.production.model.ProductionBlueprintStepOutput;
 import com.link.linkagent.creator.production.model.ProductionPlanRecord;
-import com.link.linkagent.creator.production.model.ProductionPlanStatus;
 import com.link.linkagent.creator.production.model.ProductionStepRecord;
-import com.link.linkagent.creator.production.model.ProductionStepStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.UUID;
 
 /**
  * 制作蓝图的事务边界。
@@ -67,36 +63,4 @@ public class ProductionPlanPersistenceService {
         }
     }
 
-    public ProductionStepRecord toStepRecord(String planId,
-                                              String taskId,
-                                              int sequenceNo,
-                                              ProductionBlueprintStepOutput output,
-                                              String toolRefs,
-                                              String prerequisites,
-                                              String operations,
-                                              String expectedOutputs,
-                                              String acceptanceCriteria) {
-        return new ProductionStepRecord(
-                null,
-                UUID.randomUUID().toString(),
-                planId,
-                taskId,
-                sequenceNo,
-                output.phase(),
-                output.stepName(),
-                output.objective(),
-                prerequisites,
-                operations,
-                toolRefs,
-                expectedOutputs,
-                acceptanceCriteria,
-                output.difficulty(),
-                output.required() == null || output.required(),
-                ProductionStepStatus.PENDING.name(),
-                0L,
-                null,
-                null,
-                null
-        );
-    }
 }

@@ -1366,6 +1366,7 @@ CREATE TABLE IF NOT EXISTS creator_production_plan
     update_time           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted            TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
     UNIQUE KEY uk_production_plan_id (plan_id),
+    UNIQUE KEY uk_task_plan_version (task_id, plan_version),
     KEY idx_production_plan_task (task_id, owner_id, plan_version),
     KEY idx_production_plan_status (status, update_time)
 ) ENGINE = InnoDB
@@ -1396,6 +1397,7 @@ CREATE TABLE IF NOT EXISTS creator_production_step
     update_time          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted           TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
     UNIQUE KEY uk_production_step_id (step_id),
+    UNIQUE KEY uk_plan_sequence (plan_id, sequence_no),
     KEY idx_production_step_plan (plan_id, task_id, sequence_no)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
@@ -1429,7 +1431,7 @@ CREATE TABLE IF NOT EXISTS creator_tool_knowledge
 (
     id                   BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     knowledge_id         VARCHAR(64)  NOT NULL COMMENT '工具知识快照唯一标识',
-    tool_id              VARCHAR(64)  NOT NULL COMMENT '关联工具目录',
+    tool_id              VARCHAR(64)           DEFAULT NULL COMMENT '关联工具目录，未知工具可为空',
     tool_name            VARCHAR(128) NOT NULL COMMENT '工具名称快照',
     tool_version         VARCHAR(64)  NOT NULL COMMENT '工具版本或 latest',
     official_domain      VARCHAR(255) NOT NULL COMMENT '官方域名',
@@ -1489,6 +1491,21 @@ ON DUPLICATE KEY UPDATE
 -- 幂等迁移：为已存在的表补充新列
 -- 用 INFORMATION_SCHEMA 判断列是否存在，兼容所有 MySQL 8.x 版本
 -- ============================================================
+
+-- P0-1 蓝图唯一约束：兼容已在早期开发版本中创建但尚未带唯一键的本地表。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_production_plan ADD UNIQUE KEY uk_task_plan_version (task_id, plan_version)',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_production_plan' AND INDEX_NAME = 'uk_task_plan_version');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_production_step ADD UNIQUE KEY uk_plan_sequence (plan_id, sequence_no)',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_production_step' AND INDEX_NAME = 'uk_plan_sequence');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 媒体探测领取标识：旧库必须补齐，否则超时恢复后晚到的旧探测可能覆盖新一轮结果。
 SET @sql = (SELECT IF(COUNT(*) = 0,
