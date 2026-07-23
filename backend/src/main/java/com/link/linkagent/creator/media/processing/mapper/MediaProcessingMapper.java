@@ -89,6 +89,27 @@ public interface MediaProcessingMapper {
                                                @Param("versionId") String versionId,
                                                @Param("jobId") String jobId);
 
+    /**
+     * Worker 只能使用已由租约 CAS 领取的 jobId 回读任务，不接受页面传入的归属条件。
+     */
+    @Select("""
+            SELECT id, job_id, version_id, task_id, owner_id, frame_interval_seconds,
+                   target_resolution, target_height, model_plan, include_asr, pricing_version,
+                   estimated_frame_count, estimated_visual_input_tokens, estimated_visual_output_tokens,
+                   estimated_asr_seconds, estimated_visual_cost_usd, estimated_asr_cost_usd,
+                   estimated_total_cost_usd, status, current_step, progress_percent, attempt_count,
+                   lease_owner, lease_expires_at, signal_summary_json, failure_message,
+                   started_at, completed_at, create_time, update_time
+            FROM creator_media_processing_job
+            WHERE job_id = #{jobId}
+              AND status = 'RUNNING'
+              AND lease_owner = #{leaseOwner}
+              AND is_deleted = 0
+            LIMIT 1
+            """)
+    Optional<MediaProcessingJobRecord> findJobForWorker(@Param("jobId") String jobId,
+                                                        @Param("leaseOwner") String leaseOwner);
+
     @Select("""
             SELECT id, job_id, version_id, task_id, owner_id, frame_interval_seconds,
                    target_resolution, target_height, model_plan, include_asr, pricing_version,
@@ -254,6 +275,22 @@ public interface MediaProcessingMapper {
                    @Param("progressPercent") int progressPercent,
                    @Param("outputSummary") String outputSummary,
                    @Param("failureMessage") String failureMessage);
+
+    /**
+     * 任务被重新领取时从第一步完整重跑，因为本地临时文件已在上次执行结束时清理。
+     */
+    @Update("""
+            UPDATE creator_media_processing_step
+            SET status = 'PENDING',
+                progress_percent = 0,
+                output_summary = NULL,
+                failure_message = NULL,
+                started_at = NULL,
+                completed_at = NULL,
+                update_time = CURRENT_TIMESTAMP
+            WHERE job_id = #{jobId}
+            """)
+    int resetSteps(@Param("jobId") String jobId);
 
     @Delete("""
             DELETE FROM creator_media_processing_asset

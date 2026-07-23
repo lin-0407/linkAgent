@@ -17,6 +17,8 @@ import java.math.RoundingMode;
 @ConditionalOnProperty(prefix = "creator.media", name = "enabled", havingValue = "true")
 public class MediaProcessingCostEstimator {
 
+    private static final int MAX_FRAME_COUNT = 360;
+
     private static final BigDecimal ONE_MILLION = new BigDecimal("1000000");
     private static final String NOTICE = "按当前配置估算，仅供选择处理档位，不代表供应商最终账单";
 
@@ -30,11 +32,11 @@ public class MediaProcessingCostEstimator {
                                              boolean hasAudio,
                                              MediaProcessingOptionsRequest options) {
         long durationSeconds = Math.max(1L, (durationMs + 999L) / 1000L);
-        int frameCount = Math.max(
+        int frameCount = Math.min(MAX_FRAME_COUNT, Math.max(
                 1,
                 (int) ((durationSeconds + options.frameIntervalSeconds() - 1L)
                         / options.frameIntervalSeconds())
-        );
+        ));
         long tokensPerFrame = options.resolution().getEstimatedTokensPerFrame();
         long flashInputTokens = frameCount * tokensPerFrame;
         long flashOutputTokens = 1200L;

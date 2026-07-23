@@ -1,6 +1,8 @@
 package com.link.linkagent.creator.media.workflow;
 
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
+import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
+import com.link.linkagent.creator.media.processing.model.MediaProcessingJobRecord;
 import com.link.linkagent.creator.media.probe.service.DraftVideoProbeRecoveryService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
@@ -51,7 +53,7 @@ class CreatorMediaWorkflowGateServiceTest {
     }
 
     @Test
-    void shouldAllowPostPublishWhenDraftProbeIsReady() {
+    void shouldAllowPostPublishWhenDraftProbeAndProcessingAreReady() {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.setEnabled(true);
         MediaUploadMapper mapper = mock(MediaUploadMapper.class);
@@ -63,6 +65,40 @@ class CreatorMediaWorkflowGateServiceTest {
         CreatorMediaWorkflowGateService service = service(properties, mapper, workflowMapper);
 
         service.ensureReadyForPostPublish("task-1", "default", "观众反馈");
+    }
+
+    @Test
+    void shouldRejectPostPublishWhenMediaProcessingHasNotStarted() {
+        CreatorMediaProperties properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        MediaProcessingMapper processingMapper = mock(MediaProcessingMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
+        CreatorSuggestionRecord suggestion = new CreatorSuggestionRecord();
+        suggestion.setTaskId("task-1");
+        suggestion.setSuggestionId("suggestion-1");
+        when(workflowMapper.findLatestSession("task-1", CreatorWorkflowStage.PRE_PUBLISH.name()))
+                .thenReturn(Optional.of(confirmedSession()));
+        when(suggestionMapper.findByTaskId("task-1")).thenReturn(Optional.of(suggestion));
+        when(mapper.findDraftVideo("task-1", "default"))
+                .thenReturn(Optional.of(draft("READY_FOR_REVIEW")));
+        CreatorMediaWorkflowGateService service = new CreatorMediaWorkflowGateService(
+                properties,
+                mapper,
+                processingMapper,
+                workflowMapper,
+                suggestionMapper,
+                new DraftVideoProbeRecoveryService(properties, mapper)
+        );
+
+        ResponseStatusException exception = catchThrowableOfType(
+                () -> service.ensureReadyForPostPublish("task-1", "default", "BV绑定"),
+                ResponseStatusException.class
+        );
+
+        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(exception.getReason()).contains("媒体预处理");
     }
 
     @Test
@@ -200,6 +236,11 @@ class CreatorMediaWorkflowGateServiceTest {
                                                      MediaUploadMapper mapper,
                                                      CreatorWorkflowMapper workflowMapper) {
         CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
+        MediaProcessingMapper processingMapper = mock(MediaProcessingMapper.class);
+        MediaProcessingJobRecord completedJob = mock(MediaProcessingJobRecord.class);
+        when(completedJob.status()).thenReturn("COMPLETED");
+        when(processingMapper.findCurrentJob("task-1", "default", "version-1"))
+                .thenReturn(Optional.of(completedJob));
         CreatorSuggestionRecord suggestion = new CreatorSuggestionRecord();
         suggestion.setTaskId("task-1");
         suggestion.setSuggestionId("suggestion-1");
@@ -207,6 +248,7 @@ class CreatorMediaWorkflowGateServiceTest {
         return new CreatorMediaWorkflowGateService(
                 properties,
                 mapper,
+                processingMapper,
                 workflowMapper,
                 suggestionMapper,
                 new DraftVideoProbeRecoveryService(properties, mapper)

@@ -9,6 +9,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackSaveRequest;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
+import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
 import com.link.linkagent.creator.media.probe.service.DraftVideoProbeRecoveryService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
@@ -71,6 +72,7 @@ class CreatorFeedbackServiceTest {
         CreatorMediaWorkflowGateService mediaWorkflowGateService = new CreatorMediaWorkflowGateService(
                 mediaProperties,
                 mediaUploadMapper,
+                mock(MediaProcessingMapper.class),
                 workflowMapper,
                 mock(CreatorSuggestionMapper.class),
                 new DraftVideoProbeRecoveryService(mediaProperties, mediaUploadMapper)
@@ -148,6 +150,7 @@ class CreatorFeedbackServiceTest {
                 new CreatorMediaWorkflowGateService(
                         mediaProperties,
                         mediaUploadMapper,
+                        mock(MediaProcessingMapper.class),
                         workflowMapper,
                         suggestionMapper,
                         new DraftVideoProbeRecoveryService(mediaProperties, mediaUploadMapper)

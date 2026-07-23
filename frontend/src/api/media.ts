@@ -4,6 +4,10 @@ import type {
   DraftVideo,
   MediaUpload,
   MediaUploadPart,
+  MediaProcessingAssetReadUrl,
+  MediaProcessingEstimate,
+  MediaProcessingJob,
+  MediaProcessingOptions,
   PresignedMediaUploadPart,
 } from '@/types/media'
 
@@ -53,10 +57,7 @@ export function registerDraftVideoUploadParts(
   uploadSessionId: string,
   parts: Array<{ partNumber: number; etag: string; partSize: number }>,
 ) {
-  return post<MediaUploadPart[]>(
-    `${uploadUrl(taskId, uploadSessionId)}/parts:complete`,
-    { parts },
-  )
+  return post<MediaUploadPart[]>(`${uploadUrl(taskId, uploadSessionId)}/parts:complete`, { parts })
 }
 
 export function completeDraftVideoUpload(taskId: string, uploadSessionId: string) {
@@ -81,6 +82,50 @@ export function probeDraftVideo(taskId: string, versionId: string) {
 
 export function abortDraftVideoUpload(taskId: string, uploadSessionId: string) {
   return del(uploadUrl(taskId, uploadSessionId))
+}
+
+export function estimateMediaProcessing(
+  taskId: string,
+  versionId: string,
+  payload: MediaProcessingOptions,
+) {
+  return post<MediaProcessingEstimate>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}/processing-estimate`,
+    payload,
+  )
+}
+
+export function createMediaProcessingJob(
+  taskId: string,
+  versionId: string,
+  payload: MediaProcessingOptions,
+) {
+  return post<MediaProcessingJob>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}/processing-jobs`,
+    payload,
+  )
+}
+
+export function retryMediaProcessingJob(taskId: string, versionId: string, jobId: string) {
+  return post<MediaProcessingJob>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}/processing-jobs/${encodeURIComponent(jobId)}:retry`,
+  )
+}
+
+export function getCurrentMediaProcessingJob(taskId: string, versionId: string) {
+  return get<MediaProcessingJob>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}/processing-jobs/current`,
+  )
+}
+
+export function createMediaProcessingAssetReadUrl(
+  taskId: string,
+  versionId: string,
+  assetId: string,
+) {
+  return post<MediaProcessingAssetReadUrl>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}/processing-assets/${encodeURIComponent(assetId)}:read-url`,
+  )
 }
 
 /**
@@ -113,7 +158,11 @@ export async function putDraftVideoPart(
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
-    throw new ApiError(response.status, detail || `视频分片上传失败（HTTP ${response.status}）`, detail)
+    throw new ApiError(
+      response.status,
+      detail || `视频分片上传失败（HTTP ${response.status}）`,
+      detail,
+    )
   }
   const etag = response.headers.get('ETag')
   if (!etag) {

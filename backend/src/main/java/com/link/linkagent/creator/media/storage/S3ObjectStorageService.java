@@ -290,11 +290,7 @@ public class S3ObjectStorageService implements ObjectStorageService {
     }
 
     /**
-     * 删除 OSS 对象。
-     * <p>
-     * 用于校验失败后清理已合并但不正确的对象。
-     *
-     * @param objectKey 对象键
+     * 将私有对象流式下载到任务工作目录，避免大文件进入 JVM 内存。
      */
     @Override
     public void downloadObject(String bucketName, String objectKey, Path targetFile) {
@@ -326,6 +322,8 @@ public class S3ObjectStorageService implements ObjectStorageService {
             throw storageFailure("上传派生媒体失败", exception);
         }
     }
+
+    @Override
     public void deleteObject(String objectKey) {
         try {
             s3Client.deleteObject(

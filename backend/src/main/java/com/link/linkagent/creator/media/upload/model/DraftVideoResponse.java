@@ -23,7 +23,7 @@ import java.time.LocalDateTime;
  * @param videoCodec       视频编码，未探测时为空
  * @param audioCodec       音频编码，无音轨时为空
  * @param hasAudio         是否存在音轨，未探测时为空
- * @param status           成片状态（READY_FOR_REVIEW 表示可进入后续试映）
+ * @param status           成片状态（READY_FOR_REVIEW 表示探测通过，仍需完成媒体预处理）
  * @param createTime       创建时间
  * @param updateTime       最后更新时间
  */

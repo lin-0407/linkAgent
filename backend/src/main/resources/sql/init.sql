@@ -1535,7 +1535,7 @@ CREATE TABLE IF NOT EXISTS creator_media_processing_asset
     version_id          VARCHAR(64)    NOT NULL COMMENT '关联 creator_draft_video.version_id',
     asset_type          VARCHAR(24)    NOT NULL COMMENT '素材类型：PREVIEW_VIDEO、AUDIO、KEYFRAME',
     bucket_name         VARCHAR(255)   NOT NULL COMMENT '派生素材所在私有对象存储桶名称',
-    object_key          VARCHAR(1000)  NOT NULL COMMENT '后端生成的派生素材私有对象键，前端不得传入',
+    object_key          VARCHAR(512)   NOT NULL COMMENT '后端生成的派生素材私有对象键；限制长度以保留 utf8mb4 完整唯一索引，前端不得传入',
     content_type        VARCHAR(128)   NOT NULL COMMENT '派生素材媒体类型',
     file_size           BIGINT         NOT NULL COMMENT '派生素材文件字节数',
     sequence_no         INT                     DEFAULT NULL COMMENT '关键帧顺序号；非关键帧素材为空',

@@ -19,7 +19,7 @@ import type {
   LlmApiUsageSummary,
   ResultModalTarget,
 } from '@/types/creator'
-import type { DraftVideo } from '@/types/media'
+import type { DraftVideo, MediaProcessingJob } from '@/types/media'
 import type { useCreatorFeedbackEvent } from './useCreatorFeedbackEvent'
 import type { useCreatorGuidance } from './useCreatorGuidance'
 import type { useCreatorTask } from './useCreatorTask'
@@ -65,6 +65,7 @@ export interface CreatorWorkspaceShell {
   confirmPrePublishResult: () => Promise<void>
   contextTermChips: WorkspaceRef<CreatorWorkspaceContextTermChip[]>
   currentDraftVideo: Ref<DraftVideo | null>
+  currentMediaProcessingStatus: Ref<MediaProcessingJob['status'] | null>
   currentVideoType: WorkspaceRef<string>
   downloadReportMarkdown: () => Promise<void>
   feedback: WorkspaceRef<CreatorFeedback | null>

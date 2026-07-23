@@ -1,6 +1,8 @@
 package com.link.linkagent.creator.media.workflow;
 
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
+import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
+import com.link.linkagent.creator.media.processing.model.MediaProcessingJobRecord;
 import com.link.linkagent.creator.media.probe.service.DraftVideoProbeRecoveryService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
@@ -19,24 +21,27 @@ import org.springframework.web.server.ResponseStatusException;
  * 阶段 7 发布后流程门禁。
  * <p>
  * 成片上传成功不代表已完成发布前检查。反馈、BV 绑定等发布后写入操作必须确认当前成片
- * 已通过 FFprobe 探测，才能避免任务绕过“确认发布方案 -> 成片试映 -> 实际发布”的主流程。
+ * 已通过 FFprobe 和媒体预处理，才能避免任务绕过“确认发布方案 -> 成片试映 -> 实际发布”的主流程。
  */
 @Service
 public class CreatorMediaWorkflowGateService {
 
     private final CreatorMediaProperties mediaProperties;
     private final MediaUploadMapper mediaUploadMapper;
+    private final MediaProcessingMapper mediaProcessingMapper;
     private final CreatorWorkflowMapper creatorWorkflowMapper;
     private final CreatorSuggestionMapper creatorSuggestionMapper;
     private final DraftVideoProbeRecoveryService probeRecoveryService;
 
     public CreatorMediaWorkflowGateService(CreatorMediaProperties mediaProperties,
                                             MediaUploadMapper mediaUploadMapper,
+                                            MediaProcessingMapper mediaProcessingMapper,
                                             CreatorWorkflowMapper creatorWorkflowMapper,
                                             CreatorSuggestionMapper creatorSuggestionMapper,
                                             DraftVideoProbeRecoveryService probeRecoveryService) {
         this.mediaProperties = mediaProperties;
         this.mediaUploadMapper = mediaUploadMapper;
+        this.mediaProcessingMapper = mediaProcessingMapper;
         this.creatorWorkflowMapper = creatorWorkflowMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.probeRecoveryService = probeRecoveryService;
@@ -57,7 +62,7 @@ public class CreatorMediaWorkflowGateService {
     }
 
     /**
-     * 检查任务的当前成片是否已通过媒体探测。
+     * 检查任务的当前成片是否已通过媒体探测和 P0-2 媒体预处理。
      *
      * @param taskId        创作任务 ID
      * @param ownerId       当前单人工作台可信归属
@@ -73,7 +78,25 @@ public class CreatorMediaWorkflowGateService {
                 ));
         draft = recoverStaleProbeIfNecessary(draft);
         if (DraftVideoStatus.READY_FOR_REVIEW.name().equals(draft.status())) {
-            return;
+            MediaProcessingJobRecord processingJob = mediaProcessingMapper
+                    .findCurrentJob(taskId.trim(), ownerId, draft.versionId())
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "请先生成预览成片并完成媒体预处理，才能进入" + nextStageName + "阶段。"
+                    ));
+            if ("COMPLETED".equals(processingJob.status())) {
+                return;
+            }
+            if ("QUEUED".equals(processingJob.status()) || "RUNNING".equals(processingJob.status())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "成片正在生成预览和关键画面，请等待完成后再进入" + nextStageName + "阶段。"
+                );
+            }
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "成片媒体预处理尚未完成，不能进入" + nextStageName + "阶段。"
+            );
         }
         if (DraftVideoStatus.PROBING.name().equals(draft.status())) {
             throw new ResponseStatusException(

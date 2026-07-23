@@ -8,7 +8,7 @@ package com.link.linkagent.creator.media.upload.model;
  * <p>
  * 状态流转：
  * <pre>
- *   (null) → UPLOADING → UPLOADED → PROBING → READY_FOR_REVIEW  (探测成功，可进入试映)
+ *   (null) → UPLOADING → UPLOADED → PROBING → READY_FOR_REVIEW  (探测成功，可开始媒体预处理)
  *                                            → PROBE_FAILED      (探测失败，可重试或重新上传)
  *                       → UPLOAD_FAILED                (上传失败)
  *                       → UPLOAD_ABORTED               (用户取消)

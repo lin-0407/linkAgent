@@ -1,12 +1,26 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError } from '@/api/http'
-import { getCurrentDraftVideo, getDraftVideo, probeDraftVideo } from '@/api/media'
+import {
+  createMediaProcessingAssetReadUrl,
+  createMediaProcessingJob,
+  estimateMediaProcessing,
+  getCurrentDraftVideo,
+  getCurrentMediaProcessingJob,
+  getDraftVideo,
+  probeDraftVideo,
+  retryMediaProcessingJob,
+} from '@/api/media'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 import { useMediaUpload } from '@/composables/creator/useMediaUpload'
 
-const { currentDraftVideo, selectedTaskId, selectedTask, refreshCurrentDraftVideo } =
-  useCreatorWorkspaceShell()
+const {
+  currentDraftVideo,
+  currentMediaProcessingStatus,
+  selectedTaskId,
+  selectedTask,
+  refreshCurrentDraftVideo,
+} = useCreatorWorkspaceShell()
 const versionName = ref('V1 初剪')
 const selectedFile = ref<File | null>(null)
 const localError = ref('')
@@ -16,7 +30,9 @@ const isProbing = ref(false)
 const resultModalKind = ref<'upload' | 'probe' | null>(null)
 let isDisposed = false
 let viewGeneration = 0
+let processingEstimateGeneration = 0
 let probeRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let processingRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let resultModalReturnFocus: HTMLElement | null = null
 let isResultModalBackdropPointerDown = false
 
@@ -37,6 +53,23 @@ const {
   disposeUpload,
   cancelUpload,
 } = mediaUpload
+
+const processingOptions = reactive<{
+  frameIntervalSeconds: 5 | 10 | 15 | 30
+  resolution: 'P480' | 'P720' | 'P1080'
+  modelPlan: 'FLASH' | 'FLASH_PLUS_REVIEW'
+  includeAsr: boolean
+}>({
+  frameIntervalSeconds: 10,
+  resolution: 'P480',
+  modelPlan: 'FLASH',
+  includeAsr: true,
+})
+const processingEstimate = ref<Awaited<ReturnType<typeof estimateMediaProcessing>> | null>(null)
+const processingJob = ref<Awaited<ReturnType<typeof getCurrentMediaProcessingJob>> | null>(null)
+const processingBusy = ref(false)
+const processingError = ref('')
+const processingAssetUrls = ref<Record<string, string>>({})
 
 const taskId = computed(() => selectedTaskId.value ?? '')
 const fileSummary = computed(() => {
@@ -148,10 +181,74 @@ const resultPanelIcon = computed(() => {
 const resultModalTitle = computed(() =>
   resultModalKind.value === 'probe' ? '媒体探测完成' : '成片上传完成',
 )
+const canProcessDraft = computed(() => completedDraft.value?.status === 'READY_FOR_REVIEW')
+const processingIsActive = computed(
+  () => processingJob.value?.status === 'QUEUED' || processingJob.value?.status === 'RUNNING',
+)
+const processingPreviewAsset = computed(() =>
+  processingJob.value?.assets.find((asset) => asset.assetType === 'PREVIEW_VIDEO'),
+)
+const processingFrameAssets = computed(
+  () =>
+    processingJob.value?.assets.filter((asset) => asset.assetType === 'KEYFRAME').slice(0, 24) ??
+    [],
+)
+const processingStepLabel = computed(() => {
+  const step = processingJob.value?.steps.find(
+    (item) => item.stepCode === processingJob.value?.currentStep,
+  )
+  return step?.stepName || processingJob.value?.currentStep || '等待处理'
+})
+const processingOptionsMatchJob = computed(() => {
+  const job = processingJob.value
+  return Boolean(
+    job &&
+    job.frameIntervalSeconds === processingOptions.frameIntervalSeconds &&
+    job.targetResolution === processingOptions.resolution &&
+    job.modelPlan === processingOptions.modelPlan &&
+    job.includeAsr === processingOptions.includeAsr,
+  )
+})
+const canStartProcessing = computed(() => {
+  const job = processingJob.value
+  return (
+    !job ||
+    job.status === 'FAILED' ||
+    (job.status === 'COMPLETED' && !processingOptionsMatchJob.value)
+  )
+})
+const processingSignalFacts = computed(() => {
+  const summary = processingJob.value?.signalSummary
+  if (!summary) return []
+  return [
+    ['黑屏片段', (summary.black?.length ?? 0) + ' 段'],
+    ['静音片段', (summary.silence?.length ?? 0) + ' 段'],
+    ['冻结片段', (summary.freeze?.length ?? 0) + ' 段'],
+    ['平均音量', summary.meanVolumeDb == null ? '无音轨' : summary.meanVolumeDb.toFixed(1) + ' dB'],
+    ['峰值音量', summary.maxVolumeDb == null ? '无音轨' : summary.maxVolumeDb.toFixed(1) + ' dB'],
+  ]
+})
 
 watch(completedDraft, (draft) => {
   if (draft && draft.taskId === taskId.value) currentDraftVideo.value = draft
+  currentMediaProcessingStatus.value = null
+  if (draft?.status === 'READY_FOR_REVIEW') void restoreProcessingState()
 })
+
+watch(
+  [
+    taskId,
+    activeVersionId,
+    () => completedDraft.value?.status,
+    () => processingOptions.frameIntervalSeconds,
+    () => processingOptions.resolution,
+    () => processingOptions.modelPlan,
+    () => processingOptions.includeAsr,
+  ],
+  () => {
+    if (canProcessDraft.value) void refreshProcessingEstimate()
+  },
+)
 
 onMounted(async () => {
   const generation = viewGeneration
@@ -168,9 +265,17 @@ onMounted(async () => {
 
 watch(taskId, async (nextTaskId) => {
   viewGeneration += 1
+  processingEstimateGeneration += 1
   const generation = viewGeneration
   isProbing.value = false
   clearProbeRefreshTimer()
+  clearProcessingRefreshTimer()
+  processingEstimate.value = null
+  processingJob.value = null
+  processingBusy.value = false
+  currentMediaProcessingStatus.value = null
+  processingAssetUrls.value = {}
+  processingError.value = ''
   resetForTaskChange()
   selectedFile.value = null
   if (fileInput.value) fileInput.value.value = ''
@@ -190,7 +295,9 @@ watch(taskId, async (nextTaskId) => {
 onBeforeUnmount(() => {
   isDisposed = true
   viewGeneration += 1
+  processingEstimateGeneration += 1
   clearProbeRefreshTimer()
+  clearProcessingRefreshTimer()
   resultModalReturnFocus = null
   disposeUpload()
 })
@@ -357,6 +464,199 @@ async function refreshProbeStatus(showError = false) {
   }
 }
 
+async function refreshProcessingEstimate() {
+  const currentTaskId = taskId.value
+  const versionId = activeVersionId.value
+  if (!currentTaskId || !versionId || !canProcessDraft.value) return
+  const generation = ++processingEstimateGeneration
+  try {
+    const estimate = await estimateMediaProcessing(currentTaskId, versionId, processingOptions)
+    if (
+      isDisposed ||
+      generation !== processingEstimateGeneration ||
+      currentTaskId !== taskId.value ||
+      versionId !== activeVersionId.value
+    ) {
+      return
+    }
+    processingEstimate.value = estimate
+    processingError.value = ''
+  } catch (error) {
+    if (
+      isDisposed ||
+      generation !== processingEstimateGeneration ||
+      currentTaskId !== taskId.value ||
+      versionId !== activeVersionId.value
+    ) {
+      return
+    }
+    processingEstimate.value = null
+    processingError.value = toMessage(error)
+  }
+}
+
+async function restoreProcessingState() {
+  const currentTaskId = taskId.value
+  const versionId = activeVersionId.value
+  if (!currentTaskId || !versionId || !canProcessDraft.value) return
+  const generation = viewGeneration
+  try {
+    const job = await getCurrentMediaProcessingJob(currentTaskId, versionId)
+    if (
+      isDisposed ||
+      generation !== viewGeneration ||
+      currentTaskId !== taskId.value ||
+      versionId !== activeVersionId.value
+    ) {
+      return
+    }
+    processingJob.value = job
+    currentMediaProcessingStatus.value = job.status
+    processingOptions.frameIntervalSeconds = job.frameIntervalSeconds as 5 | 10 | 15 | 30
+    processingOptions.resolution = job.targetResolution as 'P480' | 'P720' | 'P1080'
+    processingOptions.modelPlan = job.modelPlan as 'FLASH' | 'FLASH_PLUS_REVIEW'
+    processingOptions.includeAsr = job.includeAsr
+    if (processingJob.value.status === 'COMPLETED') await loadProcessingAssetUrls()
+    else scheduleProcessingRefreshIfNecessary()
+  } catch (error) {
+    if (
+      isDisposed ||
+      generation !== viewGeneration ||
+      currentTaskId !== taskId.value ||
+      versionId !== activeVersionId.value
+    ) {
+      return
+    }
+    if (error instanceof ApiError && error.status === 404) {
+      processingJob.value = null
+      currentMediaProcessingStatus.value = null
+      return
+    }
+    processingError.value = toMessage(error)
+  }
+}
+
+async function startMediaProcessing() {
+  const currentTaskId = taskId.value
+  const versionId = activeVersionId.value
+  if (!currentTaskId || !versionId || !processingEstimate.value) return
+  const generation = viewGeneration
+  processingBusy.value = true
+  processingError.value = ''
+  try {
+    let job: Awaited<ReturnType<typeof getCurrentMediaProcessingJob>>
+    if (processingJob.value?.status === 'FAILED' && processingOptionsMatchJob.value) {
+      job = await retryMediaProcessingJob(currentTaskId, versionId, processingJob.value.jobId)
+    } else {
+      job = await createMediaProcessingJob(currentTaskId, versionId, processingOptions)
+    }
+    if (
+      isDisposed ||
+      generation !== viewGeneration ||
+      currentTaskId !== taskId.value ||
+      versionId !== activeVersionId.value
+    ) {
+      return
+    }
+    processingJob.value = job
+    currentMediaProcessingStatus.value = processingJob.value.status
+    if (processingJob.value.status === 'COMPLETED') await loadProcessingAssetUrls()
+    else scheduleProcessingRefreshIfNecessary()
+  } catch (error) {
+    if (
+      !isDisposed &&
+      generation === viewGeneration &&
+      currentTaskId === taskId.value &&
+      versionId === activeVersionId.value
+    ) {
+      processingError.value = toMessage(error)
+    }
+  } finally {
+    if (generation === viewGeneration) processingBusy.value = false
+  }
+}
+
+async function refreshProcessingJob(showError = false) {
+  const currentTaskId = taskId.value
+  const versionId = activeVersionId.value
+  if (!currentTaskId || !versionId) return
+  const generation = viewGeneration
+  try {
+    const job = await getCurrentMediaProcessingJob(currentTaskId, versionId)
+    if (
+      isDisposed ||
+      generation !== viewGeneration ||
+      currentTaskId !== taskId.value ||
+      versionId !== activeVersionId.value
+    ) {
+      return
+    }
+    processingJob.value = job
+    currentMediaProcessingStatus.value = processingJob.value.status
+    if (processingJob.value.status === 'COMPLETED') {
+      await loadProcessingAssetUrls()
+    }
+    scheduleProcessingRefreshIfNecessary()
+  } catch (error) {
+    if (
+      isDisposed ||
+      generation !== viewGeneration ||
+      currentTaskId !== taskId.value ||
+      versionId !== activeVersionId.value
+    ) {
+      return
+    }
+    if (showError) processingError.value = toMessage(error)
+    else scheduleProcessingRefreshIfNecessary(5000)
+  }
+}
+
+async function loadProcessingAssetUrls() {
+  const currentTaskId = taskId.value
+  const versionId = activeVersionId.value
+  const job = processingJob.value
+  if (!currentTaskId || !versionId || !job || job.status !== 'COMPLETED') return
+  const generation = viewGeneration
+  const assets = [processingPreviewAsset.value, ...processingFrameAssets.value].filter(Boolean)
+  const nextUrls: Record<string, string> = {}
+  await Promise.all(
+    assets.map(async (asset) => {
+      if (!asset) return
+      try {
+        const result = await createMediaProcessingAssetReadUrl(
+          currentTaskId,
+          versionId,
+          asset.assetId,
+        )
+        nextUrls[asset.assetId] = result.readUrl
+      } catch {
+        // 单个短签失败不影响其它素材和任务状态，用户可刷新任务重新签发。
+      }
+    }),
+  )
+  if (
+    isDisposed ||
+    generation !== viewGeneration ||
+    currentTaskId !== taskId.value ||
+    versionId !== activeVersionId.value ||
+    job.jobId !== processingJob.value?.jobId
+  ) {
+    return
+  }
+  processingAssetUrls.value = nextUrls
+}
+
+function scheduleProcessingRefreshIfNecessary(delay = 2000) {
+  clearProcessingRefreshTimer()
+  if (!processingIsActive.value) return
+  processingRefreshTimer = setTimeout(() => void refreshProcessingJob(), delay)
+}
+
+function clearProcessingRefreshTimer() {
+  if (processingRefreshTimer) clearTimeout(processingRefreshTimer)
+  processingRefreshTimer = null
+}
+
 function scheduleProbeRefreshIfNecessary(generation: number, delay = 2000) {
   clearProbeRefreshTimer()
   if (completedDraft.value?.status !== 'PROBING' || isDisposed || generation !== viewGeneration)
@@ -367,6 +667,10 @@ function scheduleProbeRefreshIfNecessary(generation: number, delay = 2000) {
 function clearProbeRefreshTimer() {
   if (probeRefreshTimer) clearTimeout(probeRefreshTimer)
   probeRefreshTimer = null
+}
+
+function formatCost(value: number | null | undefined) {
+  return `$${Number(value || 0).toFixed(4)}`
 }
 
 function updateProbeStatusMessage(status: string) {
@@ -602,6 +906,154 @@ function toMessage(error: unknown) {
           >
             {{ probeButtonLabel }}
           </button>
+        </div>
+      </section>
+
+      <section v-if="canProcessDraft" class="preflight-processing-panel">
+        <div class="preflight-processing-head">
+          <div>
+            <span class="preflight-index">03</span>
+            <p class="preflight-eyebrow">MEDIA PIPELINE</p>
+            <h4>生成预览与关键画面</h4>
+            <p>先确定抽帧和识别档位，系统按实际视频时长给出本次预估。</p>
+          </div>
+          <span v-if="processingJob" class="preflight-state-chip">{{ processingJob.status }}</span>
+        </div>
+
+        <div class="preflight-processing-options">
+          <label>
+            <span>抽帧间隔</span>
+            <select
+              v-model="processingOptions.frameIntervalSeconds"
+              :disabled="processingIsActive || processingBusy"
+            >
+              <option :value="5">每 5 秒</option>
+              <option :value="10">每 10 秒</option>
+              <option :value="15">每 15 秒</option>
+              <option :value="30">每 30 秒</option>
+            </select>
+          </label>
+          <label>
+            <span>分析清晰度</span>
+            <select
+              v-model="processingOptions.resolution"
+              :disabled="processingIsActive || processingBusy"
+            >
+              <option value="P480">480p · 低成本</option>
+              <option value="P720">720p · 平衡</option>
+              <option value="P1080">1080p · 高细节</option>
+            </select>
+          </label>
+          <label>
+            <span>模型档位</span>
+            <select
+              v-model="processingOptions.modelPlan"
+              :disabled="processingIsActive || processingBusy"
+            >
+              <option value="FLASH">Flash · 基础观察</option>
+              <option value="FLASH_PLUS_REVIEW">Flash + Plus · 抽样复核</option>
+            </select>
+          </label>
+          <label class="preflight-check-option">
+            <input
+              v-model="processingOptions.includeAsr"
+              type="checkbox"
+              :disabled="processingIsActive || processingBusy"
+            />
+            <span>估算 ASR 转写</span>
+          </label>
+        </div>
+
+        <div v-if="processingEstimate" class="preflight-cost-strip">
+          <div>
+            <span>预计图片</span><strong>{{ processingEstimate.estimatedFrameCount }} 张</strong>
+          </div>
+          <div>
+            <span>视觉 Token</span
+            ><strong>{{ processingEstimate.estimatedVisualInputTokens.toLocaleString() }}</strong>
+          </div>
+          <div>
+            <span>ASR 时长</span><strong>{{ processingEstimate.estimatedAsrSeconds }} 秒</strong>
+          </div>
+          <div>
+            <span>预计费用</span
+            ><strong>{{ formatCost(processingEstimate.estimatedTotalCostUsd) }}</strong>
+          </div>
+        </div>
+        <p v-if="processingEstimate" class="preflight-cost-note">{{ processingEstimate.notice }}</p>
+        <p v-if="processingError" class="preflight-processing-error" role="alert">
+          {{ processingError }}
+        </p>
+
+        <div v-if="processingJob" class="preflight-processing-status">
+          <div class="preflight-processing-status-head">
+            <strong>{{
+              processingJob.status === 'COMPLETED'
+                ? '预览已生成'
+                : processingJob.status === 'FAILED'
+                  ? '预处理失败'
+                  : processingStepLabel
+            }}</strong>
+            <span>{{ processingJob.progressPercent }}%</span>
+          </div>
+          <div class="preflight-progress-track">
+            <span :style="{ width: processingJob.progressPercent + `%` }"></span>
+          </div>
+          <p v-if="processingJob.failureMessage" class="preflight-processing-error">
+            {{ processingJob.failureMessage }}
+          </p>
+        </div>
+
+        <dl v-if="processingSignalFacts.length" class="preflight-signal-strip">
+          <div v-for="fact in processingSignalFacts" :key="fact[0]">
+            <dt>{{ fact[0] }}</dt>
+            <dd>{{ fact[1] }}</dd>
+          </div>
+        </dl>
+
+        <div class="preflight-actions">
+          <button
+            v-if="canStartProcessing"
+            type="button"
+            class="preflight-primary"
+            :disabled="!processingEstimate || processingBusy"
+            @click="startMediaProcessing"
+          >
+            {{
+              processingJob?.status === 'FAILED'
+                ? '重新处理'
+                : processingJob?.status === 'COMPLETED'
+                  ? '使用新设置重新生成'
+                  : '确认并开始处理'
+            }}
+          </button>
+        </div>
+
+        <div
+          v-if="processingPreviewAsset && processingAssetUrls[processingPreviewAsset.assetId]"
+          class="preflight-preview-result"
+        >
+          <div class="preflight-processing-status-head">
+            <strong>预览成片</strong>
+            <span>{{ formatBytes(processingPreviewAsset.fileSize) }}</span>
+          </div>
+          <video
+            controls
+            preload="metadata"
+            :src="processingAssetUrls[processingPreviewAsset.assetId]"
+          ></video>
+        </div>
+
+        <div v-if="processingFrameAssets.length" class="preflight-frame-grid">
+          <figure v-for="asset in processingFrameAssets" :key="asset.assetId">
+            <img
+              v-if="processingAssetUrls[asset.assetId]"
+              :src="processingAssetUrls[asset.assetId]"
+              alt="关键画面"
+              loading="lazy"
+            />
+            <figcaption>{{ formatDuration(asset.timestampMs || 0) }}</figcaption>
+          </figure>
         </div>
       </section>
     </div>
@@ -1322,6 +1774,231 @@ button:disabled {
   color: var(--ink);
 }
 
+.preflight-processing-panel {
+  position: relative;
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--s4);
+  padding: var(--s6);
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+}
+
+.preflight-processing-head,
+.preflight-processing-status-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s4);
+}
+
+.preflight-processing-head h4 {
+  margin: 0 0 var(--s2);
+  color: var(--lab-ink);
+  font-size: 20px;
+}
+
+.preflight-processing-head p:not(.preflight-eyebrow) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.preflight-processing-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s3);
+}
+
+.preflight-processing-options label {
+  display: grid;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.preflight-processing-options label > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+
+.preflight-processing-options select {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: var(--surface-sub);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+
+.preflight-processing-options select:focus-visible {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+.preflight-processing-options .preflight-check-option {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  margin-top: 22px;
+  padding: 9px 10px;
+  background: var(--surface-sub);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+
+.preflight-check-option input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--lab-cyan);
+}
+
+.preflight-cost-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--lab-ink);
+  border-radius: var(--r-sm);
+}
+
+.preflight-cost-strip > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: var(--s4);
+  background: var(--lab-ink);
+}
+
+.preflight-cost-strip span {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 11px;
+}
+
+.preflight-cost-strip strong {
+  overflow-wrap: anywhere;
+  font-family: var(--font-code);
+  font-size: 17px;
+}
+
+.preflight-cost-note,
+.preflight-processing-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.preflight-cost-note {
+  color: var(--muted);
+}
+
+.preflight-processing-error {
+  color: var(--danger);
+}
+
+.preflight-processing-status {
+  padding: var(--s4);
+  background: var(--surface-sub);
+  border-left: 3px solid var(--lab-cyan);
+}
+
+.preflight-processing-status .preflight-progress-track {
+  margin: var(--s3) 0;
+}
+
+.preflight-processing-status-head {
+  align-items: center;
+}
+
+.preflight-processing-status-head span {
+  color: var(--muted);
+  font-family: var(--font-code);
+  font-size: 12px;
+}
+
+.preflight-signal-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--s2);
+  margin: 0;
+}
+
+.preflight-signal-strip > div {
+  min-width: 0;
+  padding: var(--s3);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.preflight-signal-strip dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.preflight-signal-strip dd {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 13px;
+}
+
+.preflight-preview-result {
+  display: grid;
+  gap: var(--s3);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--border);
+}
+
+.preflight-preview-result video {
+  width: 100%;
+  max-height: 560px;
+  aspect-ratio: 16 / 9;
+  background: #08121d;
+  object-fit: contain;
+}
+
+.preflight-frame-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s3);
+}
+
+.preflight-frame-grid figure {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 16 / 9;
+  margin: 0;
+  overflow: hidden;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.preflight-frame-grid img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.preflight-frame-grid figcaption {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 3px 6px;
+  color: #fff;
+  background: rgba(8, 18, 29, 0.82);
+  border-radius: 2px;
+  font-family: var(--font-code);
+  font-size: 10px;
+}
+
 @media (max-width: 860px) {
   .preflight-work-grid {
     grid-template-columns: 1fr;
@@ -1343,6 +2020,13 @@ button:disabled {
   .preflight-result-actions {
     grid-column: 1 / -1;
     justify-content: flex-start;
+  }
+
+  .preflight-processing-options,
+  .preflight-cost-strip,
+  .preflight-signal-strip,
+  .preflight-frame-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1389,6 +2073,21 @@ button:disabled {
 
   .preflight-modal-probe dl {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .preflight-processing-panel {
+    padding: var(--s4);
+  }
+
+  .preflight-processing-options,
+  .preflight-cost-strip,
+  .preflight-signal-strip,
+  .preflight-frame-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preflight-processing-head {
+    flex-direction: column;
   }
 }
 

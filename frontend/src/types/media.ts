@@ -11,7 +11,15 @@ export type MediaUpload = {
   uploadSessionId: string
   versionId: string
   taskId: string
-  status: 'CREATED' | 'UPLOADING' | 'VERIFYING' | 'COMPLETED' | 'ABORTED' | 'EXPIRED' | 'FAILED' | 'SUPERSEDED'
+  status:
+    | 'CREATED'
+    | 'UPLOADING'
+    | 'VERIFYING'
+    | 'COMPLETED'
+    | 'ABORTED'
+    | 'EXPIRED'
+    | 'FAILED'
+    | 'SUPERSEDED'
   expectedSize: number
   fileFingerprint: string
   idempotencyKey: string
@@ -63,6 +71,92 @@ export type DraftVideo = {
   status: DraftVideoStatus
   createTime: string
   updateTime: string
+}
+
+export type MediaProcessingOptions = {
+  frameIntervalSeconds: 5 | 10 | 15 | 30
+  resolution: 'P480' | 'P720' | 'P1080'
+  modelPlan: 'FLASH' | 'FLASH_PLUS_REVIEW'
+  includeAsr: boolean
+}
+
+export type MediaProcessingEstimate = {
+  pricingVersion: string
+  durationSeconds: number
+  estimatedFrameCount: number
+  plusReviewFrameCount: number
+  estimatedVisualInputTokens: number
+  estimatedVisualOutputTokens: number
+  estimatedAsrSeconds: number
+  estimatedFlashCostUsd: number
+  estimatedPlusCostUsd: number
+  estimatedVisualCostUsd: number
+  estimatedAsrCostUsd: number
+  estimatedTotalCostUsd: number
+  notice: string
+}
+
+export type MediaProcessingSignalSummary = {
+  black: Array<{ startSeconds: number; endSeconds?: number; durationSeconds?: number }>
+  silence: Array<{ startSeconds: number; endSeconds?: number; durationSeconds?: number }>
+  freeze: Array<{ startSeconds: number; endSeconds?: number; durationSeconds?: number }>
+  meanVolumeDb: number | null
+  maxVolumeDb: number | null
+}
+
+export type MediaProcessingJob = {
+  jobId: string
+  versionId: string
+  taskId: string
+  frameIntervalSeconds: number
+  targetResolution: string
+  modelPlan: string
+  includeAsr: boolean
+  pricingVersion: string
+  estimatedFrameCount: number
+  estimatedVisualInputTokens: number
+  estimatedVisualOutputTokens: number
+  estimatedAsrSeconds: number
+  estimatedVisualCostUsd: number
+  estimatedAsrCostUsd: number
+  estimatedTotalCostUsd: number
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  currentStep: string
+  progressPercent: number
+  attemptCount: number
+  failureMessage: string | null
+  signalSummary: MediaProcessingSignalSummary | null
+  startedAt: string | null
+  completedAt: string | null
+  createTime: string
+  updateTime: string
+  steps: Array<{
+    stepCode: string
+    stepName: string
+    sequenceNo: number
+    status: string
+    progressPercent: number
+    outputSummary: string | null
+    failureMessage: string | null
+  }>
+  assets: Array<{
+    assetId: string
+    assetType: 'PREVIEW_VIDEO' | 'AUDIO' | 'KEYFRAME'
+    contentType: string
+    fileSize: number
+    sequenceNo: number | null
+    timestampMs: number | null
+    width: number | null
+    height: number | null
+    durationMs: number | null
+  }>
+  costNotice: string
+}
+
+export type MediaProcessingAssetReadUrl = {
+  assetId: string
+  readUrl: string
+  expiresAt: string
 }
 
 export type StoredMediaUploadResume = {

@@ -8,7 +8,11 @@ import {
   recordCreatorContextTermFeedback,
   saveCreatorContextTerm,
 } from '@/api/creator'
-import { getCurrentDraftVideo, getMediaFeatureStatus } from '@/api/media'
+import {
+  getCurrentDraftVideo,
+  getCurrentMediaProcessingJob,
+  getMediaFeatureStatus,
+} from '@/api/media'
 import NotificationToast from '@/components/NotificationToast.vue'
 import CreatorDeleteConfirmModal from '@/components/creator/CreatorDeleteConfirmModal.vue'
 import CreatorDevTestModal from '@/components/creator/CreatorDevTestModal.vue'
@@ -50,7 +54,7 @@ import type {
   LlmApiModelCategory,
   ResultModalTarget,
 } from '@/types/creator'
-import type { DraftVideo } from '@/types/media'
+import type { DraftVideo, MediaProcessingJob } from '@/types/media'
 import { useCreatorStore } from '@/stores/creatorStore'
 import { useCreatorEvaluation, type CreatorEvaluationResultDraft } from '@/composables/creator/useCreatorEvaluation'
 import { useCreatorUsage } from '@/composables/creator/useCreatorUsage'
@@ -238,12 +242,13 @@ const { activeStep, restoredTaskId } = storeToRefs(creatorStore)
 const isMediaFeatureEnabled = ref(false)
 const isMediaFeatureAvailabilityResolved = ref(false)
 const currentDraftVideo = ref<DraftVideo | null>(null)
+const currentMediaProcessingStatus = ref<MediaProcessingJob['status'] | null>(null)
 const productionPlanReady = ref(false)
 let currentDraftRefreshGeneration = 0
 const mediaFeatureUnavailableMessage =
   '发布前试映未启用，任务不能进入观众反馈阶段。请先完成媒体配置并开启该能力。'
 const mediaPreflightRequiredMessage =
-  '请先在成片试映完成媒体探测后，再进入观众反馈阶段。'
+  '请先在成片试映完成媒体探测和预处理，再进入观众反馈阶段。'
 type CreatorStepMeta = {
   key: CreatorStepKey
   label: string
@@ -323,6 +328,9 @@ const canEnterPreflight = computed(() =>
   hasSelectedTask.value && hasConfirmedPrePublish.value && productionPlanReady.value && isMediaFeatureEnabled.value,
 )
 const hasReadyPreflightDraft = computed(() => currentDraftVideo.value?.status === 'READY_FOR_REVIEW')
+const hasCompletedPreflightProcessing = computed(
+  () => hasReadyPreflightDraft.value && currentMediaProcessingStatus.value === 'COMPLETED',
+)
 const canEnterFeedback = computed(() =>
   Boolean(
     selectedTask.value
@@ -330,7 +338,7 @@ const canEnterFeedback = computed(() =>
         || (hasConfirmedPrePublish.value
           && productionPlanReady.value
           && isMediaFeatureEnabled.value
-          && hasReadyPreflightDraft.value)),
+          && hasCompletedPreflightProcessing.value)),
   ),
 )
 const feedbackModule = useCreatorFeedback(
@@ -760,9 +768,9 @@ function creatorStepIndex(stepKey: CreatorStepKey) {
 }
 
 function isCreatorStepCompleted(stepKey: CreatorStepKey) {
-  // 成片状态独立于任务主状态，只有 FFprobe 探测通过才标记“成片试映”完成。
+  // 成片试映必须同时完成媒体探测和预处理，避免页面提前开放发布后流程。
   if (stepKey === 'preflight') {
-    return hasReadyPreflightDraft.value
+    return hasCompletedPreflightProcessing.value
   }
   if (stepKey === 'production') {
     return productionPlanReady.value
@@ -810,7 +818,7 @@ function navigateCreatorStep(stepKey: CreatorStepKey) {
     selectedTask.value &&
     requiresPreflight(selectedTask.value) &&
     isMediaFeatureEnabled.value &&
-    !hasReadyPreflightDraft.value
+    !hasCompletedPreflightProcessing.value
   ) {
     errorMessage.value = mediaPreflightRequiredMessage
     return
@@ -882,6 +890,7 @@ async function selectTask(taskId: string) {
   taskManageMode.value = 'create'
   taskModule.resetTaskForm()
   currentDraftVideo.value = null
+  currentMediaProcessingStatus.value = null
   productionPlanReady.value = false
   // 委托 taskModule 加载完整任务（内部已处理 selectedTask / store）
   const task = await taskModule.loadTask(taskId)
@@ -915,12 +924,34 @@ async function refreshCurrentDraftVideo(taskId = selectedTask.value?.taskId) {
   const generation = ++currentDraftRefreshGeneration
   if (!taskId || !isMediaFeatureEnabled.value) {
     currentDraftVideo.value = null
+    currentMediaProcessingStatus.value = null
     return
   }
   try {
     const draft = await getCurrentDraftVideo(taskId)
-    if (generation === currentDraftRefreshGeneration && selectedTask.value?.taskId === taskId) {
-      currentDraftVideo.value = draft
+    if (generation !== currentDraftRefreshGeneration || selectedTask.value?.taskId !== taskId) {
+      return
+    }
+    currentDraftVideo.value = draft
+    if (draft.status !== 'READY_FOR_REVIEW') {
+      currentMediaProcessingStatus.value = null
+      return
+    }
+    try {
+      const job = await getCurrentMediaProcessingJob(taskId, draft.versionId)
+      if (generation === currentDraftRefreshGeneration && selectedTask.value?.taskId === taskId) {
+        currentMediaProcessingStatus.value = job.status
+      }
+    } catch (error) {
+      if (generation !== currentDraftRefreshGeneration || selectedTask.value?.taskId !== taskId) {
+        return
+      }
+      if (error instanceof ApiError && error.status === 404) {
+        currentMediaProcessingStatus.value = null
+        return
+      }
+      // 临时读取失败时保留上一次处理状态，避免网络抖动让已完成门禁倒退。
+      showError(error)
     }
   } catch (error) {
     if (generation !== currentDraftRefreshGeneration || selectedTask.value?.taskId !== taskId) {
@@ -928,6 +959,7 @@ async function refreshCurrentDraftVideo(taskId = selectedTask.value?.taskId) {
     }
     if (error instanceof ApiError && error.status === 404) {
       currentDraftVideo.value = null
+      currentMediaProcessingStatus.value = null
       return
     }
     // 暂时读取失败时保留上一次服务端事实，避免把网络故障伪装成“没有成片”。
@@ -1264,7 +1296,7 @@ function normalizeReturnStepForTask(
   if (
     targetStep === 'feedback' &&
     requiresPreflight(task) &&
-    (!isMediaFeatureEnabled.value || !hasReadyPreflightDraft.value)
+    (!isMediaFeatureEnabled.value || !hasCompletedPreflightProcessing.value)
   ) {
     return resolveTaskEntryStep(task)
   }
@@ -1305,6 +1337,7 @@ function resetSelectedWorkspace() {
   feedbackModule.resetFeedbackData()
   selectedTask.value = null
   currentDraftVideo.value = null
+  currentMediaProcessingStatus.value = null
   productionPlanReady.value = false
   creatorStore.selectedTaskId = null
   taskManageMode.value = 'create'
@@ -1457,6 +1490,7 @@ provideCreatorWorkspace({
     confirmPrePublishResult,
     contextTermChips,
     currentDraftVideo,
+    currentMediaProcessingStatus,
     currentVideoType,
     downloadReportMarkdown,
     feedback,
