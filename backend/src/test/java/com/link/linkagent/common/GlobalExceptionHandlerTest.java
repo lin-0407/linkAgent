@@ -7,6 +7,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.method.annotation.ExceptionHandlerMethodResolver;
 import org.springframework.web.servlet.HandlerMapping;
 
 import java.util.List;
@@ -17,6 +19,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class GlobalExceptionHandlerTest {
 
     private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
+
+    @Test
+    void shouldHandleDisconnectedAsyncResponseWithoutFallingBackToServerError() {
+        ExceptionHandlerMethodResolver resolver = new ExceptionHandlerMethodResolver(GlobalExceptionHandler.class);
+
+        assertThat(resolver.resolveMethod(new AsyncRequestNotUsableException("Broken pipe")))
+                .isNotNull()
+                .extracting(method -> method.getName())
+                .isEqualTo("handleAsyncRequestNotUsable");
+    }
 
     @Test
     void shouldNotWriteJsonErrorBodyForEventStreamRequest() {

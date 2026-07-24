@@ -16,6 +16,7 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.server.ResponseStatusException;
@@ -231,6 +232,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AsyncRequestTimeoutException.class)
     public ResponseEntity<Void> handleAsyncTimeout(AsyncRequestTimeoutException exception) {
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * 客户端或反向代理断开 SSE 后，响应流已经不可写，不能再尝试生成错误响应。
+     * Spring 会负责结束异步请求；这里仅阻止正常断连落入兜底处理器并产生 500 误报。
+     */
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleAsyncRequestNotUsable(AsyncRequestNotUsableException exception) {
+        // 响应已不可用，任何写回或再次完成都会触发新的 I/O 异常。
     }
 
     /**

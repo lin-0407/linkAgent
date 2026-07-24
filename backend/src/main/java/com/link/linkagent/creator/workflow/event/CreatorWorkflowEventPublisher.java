@@ -34,7 +34,8 @@ public class CreatorWorkflowEventPublisher {
         try {
             send(emitter, event);
         } catch (IOException exception) {
-            emitter.completeWithError(exception);
+            // 写失败后只移除失效连接，不能再次完成已不可写的响应。
+            removeEmitter(event.sessionId(), emitter);
         }
     }
 
@@ -48,7 +49,7 @@ public class CreatorWorkflowEventPublisher {
             try {
                 send(emitter, event);
             } catch (IOException exception) {
-                emitter.completeWithError(exception);
+                // 客户端断开后只移除失效连接，避免 completeWithError 再次触发异步错误分派。
                 removeEmitter(sessionId, emitter);
             }
         }
