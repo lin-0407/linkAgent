@@ -3,7 +3,8 @@ package com.link.linkagent.creator.feedback.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
+import com.link.linkagent.creator.bilibili.mapper.CreatorBilibiliMapper;
+import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalysisOutput;
@@ -29,6 +30,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackTimelineResponse;
 import com.link.linkagent.creator.feedback.util.CreatorFeedbackLabelUtil;
+import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
@@ -138,6 +140,8 @@ public class CreatorFeedbackService {
 
     /** 创作任务数据访问层，用于校验任务存在性 */
     private final CreatorTaskMapper creatorTaskMapper;
+    /** 任务视频绑定数据访问层，用于保证反馈只发生在已发布视频完成 BV 校验之后 */
+    private final CreatorBilibiliMapper creatorBilibiliMapper;
     /** 反馈数据访问层，负责评论弹幕明细、报告、指标的 CRUD */
     private final CreatorFeedbackMapper creatorFeedbackMapper;
     /** LLM 调用入口，统一通过本服务内的 chat/chatStructured 方法调用模型 */
@@ -154,14 +158,16 @@ public class CreatorFeedbackService {
     private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
 
     public CreatorFeedbackService(CreatorTaskMapper creatorTaskMapper,
+                                  CreatorBilibiliMapper creatorBilibiliMapper,
                                   CreatorFeedbackMapper creatorFeedbackMapper,
-                                   LLMService llmService,
-                                   ObjectMapper objectMapper,
-                                   TransactionTemplate transactionTemplate,
-                                   CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService,
-                                   PromptService promptService,
-                                   CreatorMediaWorkflowGateService mediaWorkflowGateService) {
+                                  LLMService llmService,
+                                  ObjectMapper objectMapper,
+                                  TransactionTemplate transactionTemplate,
+                                  CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService,
+                                  PromptService promptService,
+                                  CreatorMediaWorkflowGateService mediaWorkflowGateService) {
         this.creatorTaskMapper = creatorTaskMapper;
+        this.creatorBilibiliMapper = creatorBilibiliMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
@@ -297,11 +303,15 @@ public class CreatorFeedbackService {
      * @param taskId 创作任务 ID
      * @param request 采集请求，含 BV 输入、最大评论数、最大弹幕数等参数
      * @return 采集结果（含生成文件列表、导入统计）
-     * @throws ResponseStatusException 400 BV号无效，502 脚本执行失败，504 脚本超时
+     * @throws ResponseStatusException 400 BV号无效，409 与任务绑定视频不一致，502 脚本执行失败，504 脚本超时
      */
     public CreatorFeedbackFetchResponse fetchFeedback(String taskId, CreatorFeedbackFetchRequest request) {
         CreatorTaskRecord taskRecord = getTaskReadyForFeedback(taskId);
         String bvid = extractBvid(request.bvInput());
+        TaskVideoBindingRecord binding = getBoundVideoBinding(taskRecord.getTaskId());
+        if (!bvid.equals(binding.getBvid())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "只能读取当前任务已绑定的视频反馈");
+        }
         Path projectRoot = resolveProjectRoot();
         Path scriptPath = resolveRelativePath(projectRoot, FEEDBACK_SCRIPT_PATH);
         Path outputDir = resolveFeedbackOutputDir(projectRoot);
@@ -723,7 +733,21 @@ public class CreatorFeedbackService {
                 taskRecord.getUserId(),
                 "观众反馈"
         );
+        getBoundVideoBinding(taskRecord.getTaskId());
         return taskRecord;
+    }
+
+    /**
+     * 获取已完成归属校验的任务视频绑定。
+     * 反馈属于实际发布后的链路，因此 WAITING_VERIFY 和异常状态都不能提前写入反馈数据。
+     */
+    private TaskVideoBindingRecord getBoundVideoBinding(String taskId) {
+        return creatorBilibiliMapper.findBindingByTaskId(taskId)
+                .filter(binding -> "BOUND".equals(binding.getBindingStatus()))
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "请先完成已发布视频的BV绑定和归属校验，再进入观众反馈"
+                ));
     }
 
     private CreatorTaskRecord getTaskRecord(String taskId) {

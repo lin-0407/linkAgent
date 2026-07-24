@@ -1,15 +1,18 @@
 <script setup lang="ts">
 /**
  * BV 绑定面板 — P0-3 核心组件。
- * 在视频分析页展示，让用户把已发布视频的 BV 号关联到创作任务。
- * 绑定后视频分析页才能展示该视频卡片。
+ * 在观众反馈页和视频分析页展示，让用户把已发布视频的 BV 号关联到创作任务。
+ * 绑定通过后才能读取反馈，并在视频分析页展示该视频卡片。
  */
 import { computed, ref, onMounted } from 'vue'
 import { getTaskVideoBinding, bindBvToTask } from '@/api/creator'
 import type { TaskVideoBinding } from '@/types/creator'
 
 const props = defineProps<{ taskId: string; bilibiliUid?: string | null }>()
-const emit = defineEmits<{ bound: [binding: TaskVideoBinding] }>()
+const emit = defineEmits<{
+  bound: [binding: TaskVideoBinding]
+  bindingReady: [binding: TaskVideoBinding | null]
+}>()
 
 // 组件状态
 const loading = ref(false)
@@ -40,12 +43,14 @@ onMounted(async () => {
   loading.value = true
   try {
     binding.value = await getTaskVideoBinding(props.taskId)
-    // 视频分析页已经绑定账号 UID，优先沿用页面 UID，避免用户重复填写造成归属不一致。
+    // 上层页面已经绑定账号 UID 时优先沿用，避免用户重复填写造成归属不一致。
     uidInput.value = props.bilibiliUid || binding.value.bilibiliUid || ''
     bvInput.value = binding.value.bvid
+    emit('bindingReady', binding.value)
   } catch {
     // 404 表示还没有绑定，正常流程，不报错
     binding.value = null
+    emit('bindingReady', null)
   } finally {
     loading.value = false
   }
@@ -100,7 +105,7 @@ function cancelEdit() {
   <div class="creator-bv-binding-panel">
     <h3 class="creator-section-title">绑定已发布视频</h3>
     <p class="creator-section-desc">
-      发布后把视频的 BV 号填回来，后续即可在视频分析页同步校验并查看数据。
+      发布后把视频的 BV 号填回来，完成归属校验后即可读取反馈并查看视频数据。
     </p>
 
     <!-- 已绑定状态 -->

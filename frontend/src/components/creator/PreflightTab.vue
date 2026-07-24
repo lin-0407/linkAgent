@@ -66,6 +66,7 @@ const processingOptions = reactive<{
   includeAsr: true,
 })
 const processingEstimate = ref<Awaited<ReturnType<typeof estimateMediaProcessing>> | null>(null)
+const processingEstimateFingerprint = ref('')
 const processingJob = ref<Awaited<ReturnType<typeof getCurrentMediaProcessingJob>> | null>(null)
 const processingBusy = ref(false)
 const processingError = ref('')
@@ -89,6 +90,16 @@ const uploadActionLabel = computed(() => {
 })
 const activeVersionId = computed(
   () => completedDraft.value?.versionId ?? currentUpload.value?.versionId ?? '',
+)
+const currentProcessingOptionsFingerprint = computed(() =>
+  [
+    taskId.value,
+    activeVersionId.value,
+    processingOptions.frameIntervalSeconds,
+    processingOptions.resolution,
+    processingOptions.modelPlan,
+    processingOptions.includeAsr ? '1' : '0',
+  ].join('|'),
 )
 const canProbeDraft = computed(() => {
   if (!activeVersionId.value || isUploading.value || isProbing.value) return false
@@ -209,6 +220,11 @@ const processingOptionsMatchJob = computed(() => {
     job.includeAsr === processingOptions.includeAsr,
   )
 })
+const processingEstimateMatchesOptions = computed(
+  () =>
+    Boolean(processingEstimate.value) &&
+    processingEstimateFingerprint.value === currentProcessingOptionsFingerprint.value,
+)
 const canStartProcessing = computed(() => {
   const job = processingJob.value
   return (
@@ -246,6 +262,11 @@ watch(
     () => processingOptions.includeAsr,
   ],
   () => {
+    // 配置变化时旧估价不再代表当前任务，先失效再请求，避免用户按旧金额启动新配置。
+    processingEstimateGeneration += 1
+    processingEstimate.value = null
+    processingEstimateFingerprint.value = ''
+    processingError.value = ''
     if (canProcessDraft.value) void refreshProcessingEstimate()
   },
 )
@@ -271,6 +292,7 @@ watch(taskId, async (nextTaskId) => {
   clearProbeRefreshTimer()
   clearProcessingRefreshTimer()
   processingEstimate.value = null
+  processingEstimateFingerprint.value = ''
   processingJob.value = null
   processingBusy.value = false
   currentMediaProcessingStatus.value = null
@@ -468,6 +490,7 @@ async function refreshProcessingEstimate() {
   const currentTaskId = taskId.value
   const versionId = activeVersionId.value
   if (!currentTaskId || !versionId || !canProcessDraft.value) return
+  const fingerprint = currentProcessingOptionsFingerprint.value
   const generation = ++processingEstimateGeneration
   try {
     const estimate = await estimateMediaProcessing(currentTaskId, versionId, processingOptions)
@@ -475,22 +498,26 @@ async function refreshProcessingEstimate() {
       isDisposed ||
       generation !== processingEstimateGeneration ||
       currentTaskId !== taskId.value ||
-      versionId !== activeVersionId.value
+      versionId !== activeVersionId.value ||
+      fingerprint !== currentProcessingOptionsFingerprint.value
     ) {
       return
     }
     processingEstimate.value = estimate
+    processingEstimateFingerprint.value = fingerprint
     processingError.value = ''
   } catch (error) {
     if (
       isDisposed ||
       generation !== processingEstimateGeneration ||
       currentTaskId !== taskId.value ||
-      versionId !== activeVersionId.value
+      versionId !== activeVersionId.value ||
+      fingerprint !== currentProcessingOptionsFingerprint.value
     ) {
       return
     }
     processingEstimate.value = null
+    processingEstimateFingerprint.value = ''
     processingError.value = toMessage(error)
   }
 }
@@ -539,7 +566,7 @@ async function restoreProcessingState() {
 async function startMediaProcessing() {
   const currentTaskId = taskId.value
   const versionId = activeVersionId.value
-  if (!currentTaskId || !versionId || !processingEstimate.value) return
+  if (!currentTaskId || !versionId || !processingEstimateMatchesOptions.value) return
   const generation = viewGeneration
   processingBusy.value = true
   processingError.value = ''
@@ -964,7 +991,10 @@ function toMessage(error: unknown) {
           </label>
         </div>
 
-        <div v-if="processingEstimate" class="preflight-cost-strip">
+        <div
+          v-if="processingEstimateMatchesOptions && processingEstimate"
+          class="preflight-cost-strip"
+        >
           <div>
             <span>预计图片</span><strong>{{ processingEstimate.estimatedFrameCount }} 张</strong>
           </div>
@@ -980,7 +1010,9 @@ function toMessage(error: unknown) {
             ><strong>{{ formatCost(processingEstimate.estimatedTotalCostUsd) }}</strong>
           </div>
         </div>
-        <p v-if="processingEstimate" class="preflight-cost-note">{{ processingEstimate.notice }}</p>
+        <p v-if="processingEstimateMatchesOptions && processingEstimate" class="preflight-cost-note">
+          {{ processingEstimate.notice }}
+        </p>
         <p v-if="processingError" class="preflight-processing-error" role="alert">
           {{ processingError }}
         </p>
@@ -1016,7 +1048,7 @@ function toMessage(error: unknown) {
             v-if="canStartProcessing"
             type="button"
             class="preflight-primary"
-            :disabled="!processingEstimate || processingBusy"
+            :disabled="!processingEstimateMatchesOptions || processingBusy"
             @click="startMediaProcessing"
           >
             {{

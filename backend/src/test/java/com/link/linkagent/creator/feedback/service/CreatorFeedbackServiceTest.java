@@ -1,9 +1,12 @@
 package com.link.linkagent.creator.feedback.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.bilibili.mapper.CreatorBilibiliMapper;
+import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalysisOutput;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackFetchRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportResponse;
@@ -58,6 +61,7 @@ class CreatorFeedbackServiceTest {
     @Test
     void shouldRejectAllFeedbackWritesBeforeAnyStateChangeWhenMediaFeatureIsDisabled() {
         CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
         CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
         LLMService llmService = mock(LLMService.class);
         ObjectMapper objectMapper = mock(ObjectMapper.class);
@@ -79,6 +83,7 @@ class CreatorFeedbackServiceTest {
         );
         CreatorFeedbackService service = new CreatorFeedbackService(
                 taskMapper,
+                bilibiliMapper,
                 feedbackMapper,
                 llmService,
                 objectMapper,
@@ -107,6 +112,7 @@ class CreatorFeedbackServiceTest {
         // 拒绝必须发生在查任务、写反馈、执行脚本和调用模型之前，才能保证状态不发生任何变化。
         verifyNoInteractions(
                 taskMapper,
+                bilibiliMapper,
                 feedbackMapper,
                 llmService,
                 objectMapper,
@@ -121,6 +127,7 @@ class CreatorFeedbackServiceTest {
     @Test
     void shouldRejectFeedbackWriteWhenCurrentDraftHasNotPassedProbe() {
         CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
         CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
         LLMService llmService = mock(LLMService.class);
         ObjectMapper objectMapper = mock(ObjectMapper.class);
@@ -141,6 +148,7 @@ class CreatorFeedbackServiceTest {
                 .thenReturn(Optional.of(draft("UPLOADED")));
         CreatorFeedbackService service = new CreatorFeedbackService(
                 taskMapper,
+                bilibiliMapper,
                 feedbackMapper,
                 llmService,
                 objectMapper,
@@ -177,6 +185,7 @@ class CreatorFeedbackServiceTest {
     @Test
     void shouldGenerateParsedReportThroughStructuredOutput() {
         CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
         CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
         LLMService llmService = mock(LLMService.class);
         TransactionTemplate transactionTemplate = mock(TransactionTemplate.class);
@@ -190,6 +199,8 @@ class CreatorFeedbackServiceTest {
         AtomicReference<CreatorFeedbackReportRecord> savedReport = new AtomicReference<>();
 
         when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(task("task-1")));
+        when(bilibiliMapper.findBindingByTaskId("task-1"))
+                .thenReturn(Optional.of(boundBinding("BV1xx411c7mD")));
         when(feedbackMapper.findFeedbackByTaskId("task-1")).thenReturn(Optional.of(feedbackRecord));
         when(feedbackMapper.upsertReport(any(CreatorFeedbackReportRecord.class))).thenAnswer(invocation -> {
             savedReport.set(invocation.getArgument(0));
@@ -207,6 +218,7 @@ class CreatorFeedbackServiceTest {
 
         CreatorFeedbackService service = new CreatorFeedbackService(
                 taskMapper,
+                bilibiliMapper,
                 feedbackMapper,
                 llmService,
                 objectMapper,
@@ -234,6 +246,67 @@ class CreatorFeedbackServiceTest {
         verify(taskMapper).updateTaskStatus("task-1", CreatorTaskStatus.ANALYZED.name());
     }
 
+    @Test
+    void shouldRejectFeedbackWriteBeforeBvBinding() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(task("task-1")));
+        when(bilibiliMapper.findBindingByTaskId("task-1")).thenReturn(Optional.empty());
+        CreatorFeedbackService service = new CreatorFeedbackService(
+                taskMapper,
+                bilibiliMapper,
+                feedbackMapper,
+                mock(LLMService.class),
+                mock(ObjectMapper.class),
+                mock(TransactionTemplate.class),
+                mock(CreatorFeedbackEvidenceRetrievalService.class),
+                mock(PromptService.class),
+                mock(CreatorMediaWorkflowGateService.class)
+        );
+
+        assertThatThrownBy(() -> service.saveFeedback(
+                "task-1",
+                new CreatorFeedbackSaveRequest("评论样例", null, null)
+        )).isInstanceOfSatisfying(ResponseStatusException.class, exception -> {
+            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+            assertThat(exception.getReason()).contains("BV绑定");
+        });
+
+        verifyNoInteractions(feedbackMapper);
+    }
+
+    @Test
+    void shouldRejectFeedbackFetchForAnotherBv() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(task("task-1")));
+        when(bilibiliMapper.findBindingByTaskId("task-1"))
+                .thenReturn(Optional.of(boundBinding("BV1xx411c7mD")));
+        CreatorFeedbackService service = new CreatorFeedbackService(
+                taskMapper,
+                bilibiliMapper,
+                feedbackMapper,
+                mock(LLMService.class),
+                mock(ObjectMapper.class),
+                mock(TransactionTemplate.class),
+                mock(CreatorFeedbackEvidenceRetrievalService.class),
+                mock(PromptService.class),
+                mock(CreatorMediaWorkflowGateService.class)
+        );
+
+        assertThatThrownBy(() -> service.fetchFeedback(
+                "task-1",
+                new CreatorFeedbackFetchRequest("BV1yy511c7eF", 50, 20, 500, "both")
+        )).isInstanceOfSatisfying(ResponseStatusException.class, exception -> {
+            assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+            assertThat(exception.getReason()).contains("已绑定的视频");
+        });
+
+        verifyNoInteractions(feedbackMapper);
+    }
+
     private CreatorTaskRecord task(String taskId) {
         CreatorTaskRecord task = new CreatorTaskRecord();
         task.setTaskId(taskId);
@@ -249,6 +322,17 @@ class CreatorFeedbackServiceTest {
         feedback.setCommentSamples("讲得很清楚，希望补充完整示例");
         feedback.setDanmakuSamples("学到了");
         return feedback;
+    }
+
+    private TaskVideoBindingRecord boundBinding(String bvid) {
+        TaskVideoBindingRecord binding = new TaskVideoBindingRecord();
+        binding.setBindingId("binding-1");
+        binding.setTaskId("task-1");
+        binding.setUserId("default");
+        binding.setBilibiliUid("27058248");
+        binding.setBvid(bvid);
+        binding.setBindingStatus("BOUND");
+        return binding;
     }
 
     private CreatorFeedbackAnalysisOutput analysisOutput() {

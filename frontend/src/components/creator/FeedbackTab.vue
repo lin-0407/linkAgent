@@ -1,5 +1,9 @@
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import BilibiliAccountPanel from '@/components/creator/BilibiliAccountPanel.vue'
+import BvBindingPanel from '@/components/creator/BvBindingPanel.vue'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
+import type { BilibiliAccount, TaskVideoBinding } from '@/types/creator'
 
 const {
   openGuidanceEditor,
@@ -29,6 +33,36 @@ const {
   formatDate,
   isActiveStepReadOnly,
 } = useCreatorWorkspaceShell()
+
+const bilibiliAccount = ref<BilibiliAccount | null>(null)
+const taskVideoBinding = ref<TaskVideoBinding | null>(null)
+const bindingRefreshKey = ref(0)
+const feedbackBindingReady = computed(() => taskVideoBinding.value?.bindingStatus === 'BOUND')
+const feedbackBvMatchesBinding = computed(
+  () =>
+    feedbackBindingReady.value &&
+    feedbackScriptBv.value === taskVideoBinding.value?.bvid,
+)
+
+watch(selectedTaskId, () => {
+  // 切换任务时先关闭旧任务的反馈入口，等待新任务绑定状态回读后再开放。
+  taskVideoBinding.value = null
+})
+
+function handleAccountReady(account: BilibiliAccount | null) {
+  bilibiliAccount.value = account
+}
+
+function handleBindingReady(binding: TaskVideoBinding | null) {
+  taskVideoBinding.value = binding
+  if (binding) feedbackScriptForm.bvInput = binding.bvid
+}
+
+function refreshBindingAfterSync() {
+  // 同步会在后端更新 WAITING_VERIFY 状态，重建绑定面板以回读最新结果。
+  taskVideoBinding.value = null
+  bindingRefreshKey.value += 1
+}
 </script>
 
 <template>
@@ -65,13 +99,29 @@ const {
         <button
           type="button"
           class="creator-primary-button"
-          :disabled="isActiveStepReadOnly || !canRunFeedbackAnalyze"
+          :disabled="isActiveStepReadOnly || !feedbackBindingReady || !canRunFeedbackAnalyze"
           @click="runFeedbackAnalyze"
         >
           {{ isAnalyzingFeedback ? '分析中...' : '读懂反馈' }}
         </button>
       </div>
     </div>
+
+    <BilibiliAccountPanel
+      @account-ready="handleAccountReady"
+      @sync-completed="refreshBindingAfterSync"
+    />
+    <BvBindingPanel
+      v-if="selectedTaskId"
+      :key="[selectedTaskId, bindingRefreshKey].join(':')"
+      :task-id="selectedTaskId"
+      :bilibili-uid="bilibiliAccount?.bilibiliUid"
+      @binding-ready="handleBindingReady"
+      @bound="handleBindingReady"
+    />
+    <p v-if="!feedbackBindingReady" class="creator-inline-note">
+      请先实际发布视频并完成 BV 归属校验；校验通过后才会开放反馈采集、导入和分析。
+    </p>
 
     <div class="creator-form-grid creator-feedback-form-grid">
       <article class="span-full creator-script-panel">
@@ -86,6 +136,8 @@ const {
             :disabled="
               isActiveStepReadOnly ||
               !canEnterFeedback ||
+              !feedbackBindingReady ||
+              !feedbackBvMatchesBinding ||
               !feedbackScriptBv ||
               isFetchingFeedback ||
               isImportingFeedback ||
@@ -103,7 +155,7 @@ const {
             v-model="feedbackScriptForm.bvInput"
             type="text"
             maxlength="200"
-            :disabled="isActiveStepReadOnly"
+            :disabled="isActiveStepReadOnly || feedbackBindingReady"
             placeholder="BVxxxx 或 https://www.bilibili.com/video/BVxxxx"
           />
         </label>
@@ -166,6 +218,7 @@ const {
             :disabled="
               isActiveStepReadOnly ||
               !canEnterFeedback ||
+              !feedbackBindingReady ||
               isImportingFeedback ||
               isFetchingFeedback ||
               isSavingFeedback ||
@@ -180,6 +233,7 @@ const {
           :disabled="
             isActiveStepReadOnly ||
             !canEnterFeedback ||
+            !feedbackBindingReady ||
             !feedbackImportFile ||
             isImportingFeedback ||
             isFetchingFeedback ||
@@ -239,6 +293,7 @@ const {
             :disabled="
               isActiveStepReadOnly ||
               !canEnterFeedback ||
+              !feedbackBindingReady ||
               !hasFeedbackSampleInput ||
               isSavingFeedback ||
               isFetchingFeedback ||

@@ -36,7 +36,7 @@ export function useProductionPlan() {
     isGenerating.value = true
     errorMessage.value = ''
     try {
-      workspace.value = await createProductionPlan(taskId, payload, `${taskId}:${crypto.randomUUID()}`)
+      workspace.value = await createProductionPlan(taskId, payload, createIdempotencyKey(taskId))
       return true
     } catch (error) {
       errorMessage.value = error instanceof ApiError ? error.message : '制作蓝图生成失败'
@@ -75,4 +75,11 @@ export function useProductionPlan() {
     generate,
     updateStep,
   }
+}
+
+function createIdempotencyKey(taskId: string) {
+  const secureId = globalThis.crypto?.randomUUID?.()
+  const requestId = secureId
+    ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+  return `${taskId}:${requestId}`
 }

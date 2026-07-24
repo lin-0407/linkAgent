@@ -26,7 +26,7 @@ public class CreatorMediaProperties {
     private long maxFileBytes = 1_500_000_000L;
     /** 单个媒体文件最大时长毫秒；默认 30 分钟 */
     private long maxDurationMs = 1_800_000L;
-    /** 未发布成片保留天数；超期自动清理原片对象 */
+    /** 未发布成片保留天数；供后续清理能力使用，当前不会自动删除原片对象 */
     private int unpublishedRetentionDays = 30;
     /** 上传子配置（分片大小、签名 TTL） */
     private final Upload upload = new Upload();
