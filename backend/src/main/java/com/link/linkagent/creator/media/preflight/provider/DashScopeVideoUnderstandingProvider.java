@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -25,6 +26,7 @@ public class DashScopeVideoUnderstandingProvider implements VideoUnderstandingPr
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
 
+    @Autowired
     public DashScopeVideoUnderstandingProvider(CreatorMediaProperties mediaProperties, ObjectMapper objectMapper) {
         this.properties = mediaProperties.getPreflight();
         this.objectMapper = objectMapper;

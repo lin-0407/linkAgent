@@ -3,6 +3,7 @@ package com.link.linkagent.creator.media.preflight.provider;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -30,6 +31,7 @@ public class DashScopeAsrProvider implements SpeechRecognitionProvider {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
 
+    @Autowired
     public DashScopeAsrProvider(CreatorMediaProperties mediaProperties, ObjectMapper objectMapper) {
         this.properties = mediaProperties.getPreflight();
         this.objectMapper = objectMapper;

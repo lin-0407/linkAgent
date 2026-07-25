@@ -13,6 +13,7 @@ import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingAssetRecord;
 import com.link.linkagent.creator.media.storage.ObjectStorageService;
 import com.link.linkagent.util.LlmJsonUtil;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -42,6 +43,7 @@ public class PreflightVideoAnalysisService {
     private final Supplier<String> evidenceIdSupplier;
     private final Supplier<String> issueIdSupplier;
 
+    @Autowired
     public PreflightVideoAnalysisService(CreatorMediaProperties properties,
                                          PreflightReviewMapper mapper,
                                          MediaProcessingMapper processingMapper,
