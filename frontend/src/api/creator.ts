@@ -15,7 +15,6 @@ import type {
   CreatorEvalPromptVersionStats,
   CreatorEvalResult,
   CreatorEvalResultPayload,
-  CreatorContextBundle,
   CreatorContextTerm,
   CreatorContextTermPayload,
   CreatorFeedbackEventPayload,
@@ -23,7 +22,6 @@ import type {
   CreatorPreference,
   CreatorFeedbackSavePayload,
   CreatorSuggestion,
-  CreatorMaterialType,
   CreatorTask,
   CreatorTaskCreatePayload,
   CreatorTaskSummary,
@@ -43,7 +41,6 @@ import type {
   PrePublishAnalyzePayload,
   PrePublishDraftPayload,
   PrePublishDraftResult,
-  WorkflowUsageResponse,
   // P0-3: B站账号绑定 + 视频分析
   BilibiliAccount,
   BindAccountPayload,
@@ -55,17 +52,8 @@ import type {
   // 创作者画像
   CreatorProfile,
   // 竞品分析
-  CreatorCompetitorSample,
   CreatorCompetitorReport,
-  CreatorCompetitorSavePayload,
-  CreatorCompetitorAnalyzePayload,
   CompetitorAnalyzeByReferencePayload,
-  // 字段自动补全
-  FieldAutofillPayload,
-  FieldAutofillResult,
-  // 创作复盘报告
-  CreatorReport,
-  CreatorReportAnalyzePayload,
 } from '@/types/creator'
 import { cleanPayload, del, download, get, post, put, upload } from './http'
 
@@ -77,17 +65,6 @@ export function createCreatorTask(payload: CreatorTaskCreatePayload) {
 
 export function updateCreatorTask(taskId: string, payload: CreatorTaskUpdatePayload) {
   return put<CreatorTask>(`/creator/tasks/${encodeURIComponent(taskId)}`, payload)
-}
-
-export function importCreatorTaskMaterialFile(
-  taskId: string,
-  materialType: CreatorMaterialType,
-  file: File,
-) {
-  const formData = new FormData()
-  formData.append('materialType', materialType)
-  formData.append('file', file)
-  return upload<CreatorTask>(`/creator/tasks/${encodeURIComponent(taskId)}/materials/import`, formData)
 }
 
 export function deleteCreatorTask(taskId: string) {
@@ -106,10 +83,6 @@ export function getCreatorTask(taskId: string) {
 
 export function createInteractiveTask(payload: InteractiveTaskCreatePayload) {
   return post<InteractiveTask>('/creator/interactive/tasks', cleanPayload(payload))
-}
-
-export function getInteractiveTask(taskId: string) {
-  return get<InteractiveTask>(`/creator/interactive/tasks/${encodeURIComponent(taskId)}`)
 }
 
 export function regenerateCreativeOptions(
@@ -172,12 +145,6 @@ export function listCreatorContextTerms(
   })
 }
 
-export function getCreatorContextBundle(userId = 'default', videoType?: string, scene = 'PRE_PUBLISH') {
-  return get<CreatorContextBundle>('/creator/context/bundle', {
-    params: { userId, videoType, scene },
-  })
-}
-
 export function saveCreatorContextTerm(payload: CreatorContextTermPayload) {
   return post<CreatorContextTerm>('/creator/context/terms', cleanPayload(payload))
 }
@@ -194,13 +161,6 @@ export function recordCreatorContextTermFeedback(termId: string, accepted: boole
 }
 
 // ── 发布前优化 ──
-
-export function analyzePrePublish(taskId: string, payload: PrePublishAnalyzePayload) {
-  return post<CreatorSuggestion>(
-    `/creator/tasks/${encodeURIComponent(taskId)}/pre-publish/analyze`,
-    cleanPayload(payload),
-  )
-}
 
 export function getPrePublishSuggestion(taskId: string) {
   return get<CreatorSuggestion>(`/creator/tasks/${encodeURIComponent(taskId)}/pre-publish/suggestions`)
@@ -227,12 +187,6 @@ export function listWorkflowMessages(taskId: string, sessionId: string) {
 export function listWorkflowSteps(taskId: string, sessionId: string) {
   return get<CreatorWorkflowStep[]>(
     `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/steps`,
-  )
-}
-
-export function getWorkflowUsage(taskId: string, sessionId: string) {
-  return get<WorkflowUsageResponse>(
-    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/usage`,
   )
 }
 
@@ -472,92 +426,10 @@ export function refreshCreatorProfile(userId?: string) {
   })
 }
 
-// ── 竞品分析 ──
-// 后端 CreatorCompetitorController，路径前缀 /api/creator/tasks/{taskId}/competitors
-
-/** 保存竞品视频信息 */
-export function saveCompetitorVideo(taskId: string, payload: CreatorCompetitorSavePayload) {
-  return post<CreatorCompetitorSample>(
-    `/creator/tasks/${encodeURIComponent(taskId)}/competitors`,
-    cleanPayload(payload),
-  )
-}
-
-/** 获取已保存的竞品视频信息 */
-export function getCompetitorVideo(taskId: string) {
-  return get<CreatorCompetitorSample>(
-    `/creator/tasks/${encodeURIComponent(taskId)}/competitors`,
-  )
-}
-
-/** 触发竞品分析 */
-export function analyzeCompetitor(taskId: string, payload: CreatorCompetitorAnalyzePayload) {
-  return post<CreatorCompetitorReport>(
-    `/creator/tasks/${encodeURIComponent(taskId)}/competitors/analyze`,
-    cleanPayload(payload),
-  )
-}
-
-/** 获取竞品分析报告 */
-export function getCompetitorReport(taskId: string) {
-  return get<CreatorCompetitorReport>(
-    `/creator/tasks/${encodeURIComponent(taskId)}/competitors/report`,
-  )
-}
-
 /** 基于参考案例触发竞品分析（P1-1：无需手动填写竞品文稿，直接从知识库读取） */
 export function analyzeCompetitorByReference(taskId: string, payload: CompetitorAnalyzeByReferencePayload) {
   return post<CreatorCompetitorReport>(
     `/creator/tasks/${encodeURIComponent(taskId)}/competitors/analyze-by-reference`,
     cleanPayload(payload),
-  )
-}
-
-// ── 字段自动补全 ──
-// 后端 TaskAutofillController，路径 POST /api/creator/tasks/{taskId}/autofill
-
-/** AI 自动补全任务字段（标题草稿 / 简介草稿 / 自定义指导 / 标题风格 / 额外要求） */
-export function autofillTaskField(taskId: string, payload: FieldAutofillPayload) {
-  return post<FieldAutofillResult>(
-    `/creator/tasks/${encodeURIComponent(taskId)}/autofill`,
-    cleanPayload(payload),
-  )
-}
-
-// ── 创作复盘报告 ──
-// 后端 CreatorReportController，路径前缀 /api/creator/tasks/{taskId}/report
-
-/** 触发创作复盘分析 */
-export function analyzeCreatorReport(taskId: string, payload: CreatorReportAnalyzePayload) {
-  return post<CreatorReport>(
-    `/creator/tasks/${encodeURIComponent(taskId)}/report/analyze`,
-    cleanPayload(payload),
-  )
-}
-
-/** 获取已生成的创作复盘报告 */
-export function getCreatorReport(taskId: string) {
-  return get<CreatorReport>(`/creator/tasks/${encodeURIComponent(taskId)}/report`)
-}
-
-// ── 评测：createCase / getCase 补充 ──
-
-/** 创建评测用例 */
-export function createCreatorEvalCase(payload: {
-  userId?: string
-  caseName: string
-  targetStage: CreatorWorkflowStage
-  taskId?: string
-  inputSnapshot: string
-  expectedPoints?: string
-  scoringRubric?: string
-}) {
-  return post<CreatorEvalCase>('/creator/evaluations/cases', cleanPayload(payload))
-}
-
-/** 获取单个评测用例详情 */
-export function getCreatorEvalCase(caseId: string) {
-  return get<CreatorEvalCase>(
-    `/creator/evaluations/cases/${encodeURIComponent(caseId)}`,
   )
 }

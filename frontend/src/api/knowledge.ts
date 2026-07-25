@@ -6,8 +6,6 @@ import type {
   ReferenceVideoIndexStatus,
   ReferenceVideoListQuery,
   ReferenceVideoPage,
-  ReferenceVideoSearchPayload,
-  ReferenceVideoSearchResult,
   ReferenceVideoTopicSearchPayload,
   ReferenceVideoTopicSearchResult,
 } from '@/types/knowledge'
@@ -99,18 +97,6 @@ export function rebuildReferenceVideoItemHybridIndex(maxItems?: number) {
 }
 
 // ── 检索 ──
-
-/** 案例检索：query 必填；空的 tier / category / strategy 不下发，交给后端按「不过滤 / 配置默认」处理。 */
-export function searchReferenceVideos(payload: ReferenceVideoSearchPayload) {
-  const body: Record<string, string> = { query: payload.query.trim() }
-  const tier = payload.tier?.trim()
-  const category = payload.category?.trim()
-  const strategy = payload.strategy?.trim()
-  if (tier) body.tier = tier
-  if (category) body.category = category
-  if (strategy) body.strategy = strategy
-  return post<ReferenceVideoSearchResult>('/knowledge/reference-videos/search', body)
-}
 
 /** 主题优先检索：先召回主题中块，再由后端按视频质量信号分页返回卡片。 */
 export function topicSearchReferenceVideos(payload: ReferenceVideoTopicSearchPayload) {

@@ -22,6 +22,28 @@ import java.util.Optional;
 @Mapper
 public interface MediaProcessingMapper {
 
+    @Select("""
+            SELECT version_id
+            FROM creator_draft_video
+            WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND version_id = #{versionId}
+              AND is_deleted = 0
+            LIMIT 1
+            FOR UPDATE
+            """)
+    Optional<String> lockDraftVersion(@Param("taskId") String taskId,
+                                      @Param("ownerId") String ownerId,
+                                      @Param("versionId") String versionId);
+
+    @Update("""
+            UPDATE creator_draft_video
+            SET current_review_id = NULL, update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND version_id = #{versionId}
+              AND is_deleted = 0
+            """)
+    int clearCurrentReview(@Param("taskId") String taskId,
+                           @Param("ownerId") String ownerId,
+                           @Param("versionId") String versionId);
+
     @Insert("""
             INSERT INTO creator_media_processing_job (
                 job_id, version_id, task_id, owner_id, frame_interval_seconds,

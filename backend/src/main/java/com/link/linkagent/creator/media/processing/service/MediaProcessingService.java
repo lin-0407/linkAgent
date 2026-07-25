@@ -85,6 +85,8 @@ public class MediaProcessingService {
                                                 String versionId,
                                                 MediaProcessingOptionsRequest options) {
         validateEnabledConfiguration();
+        processingMapper.lockDraftVersion(taskId, ownerId, versionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
         DraftVideoRecord draft = requireReadyDraft(ownerId, taskId, versionId);
         MediaProcessingJobRecord current = processingMapper.findCurrentJob(taskId, ownerId, versionId)
                 .orElse(null);
@@ -136,6 +138,8 @@ public class MediaProcessingService {
         if (processingMapper.insertJob(record) != 1) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "创建媒体预处理任务失败");
         }
+        // 新预处理结果会替换旧素材基础，旧试映不得继续作为当前发布门禁依据。
+        processingMapper.clearCurrentReview(taskId, ownerId, versionId);
         for (StepDefinition definition : STEPS) {
             MediaProcessingStepRecord step = new MediaProcessingStepRecord(
                     null,

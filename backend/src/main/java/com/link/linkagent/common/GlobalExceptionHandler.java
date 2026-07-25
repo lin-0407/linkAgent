@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.servlet.HandlerMapping;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Collection;
@@ -241,6 +242,24 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AsyncRequestNotUsableException.class)
     public void handleAsyncRequestNotUsable(AsyncRequestNotUsableException exception) {
         // 响应已不可用，任何写回或再次完成都会触发新的 I/O 异常。
+    }
+
+    /**
+     * 未匹配到 Controller 的地址会落入 Spring 静态资源处理器，这属于客户端访问了不存在的地址。
+     * 单独返回 404，避免公网探测或手工输入错误地址被兜底处理器误记成服务端故障。
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<?> handleNoResourceFound(NoResourceFoundException exception,
+                                                    HttpServletRequest request) {
+        if (isEventStreamRequest(request)) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ApiErrorResponse(
+                        HttpStatus.NOT_FOUND.value(),
+                        "请求地址不存在。",
+                        request.getRequestURI()
+                ));
     }
 
     /**

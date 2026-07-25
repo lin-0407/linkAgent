@@ -159,6 +159,88 @@ export type MediaProcessingAssetReadUrl = {
   expiresAt: string
 }
 
+export type CreatePreflightReviewPayload = {
+  versionId: string
+  confirmedProviderDisclosure: boolean
+  reviewFocus?: string
+}
+
+export type PreflightReviewStatus =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'RETRY_WAIT'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCEL_REQUESTED'
+  | 'CANCELLED'
+
+export type PreflightReview = {
+  reviewId: string
+  taskId: string
+  versionId: string
+  status: PreflightReviewStatus
+  currentStep: string
+  progressPercent: number
+  eventSequence: number
+  cancelRequested: boolean
+  attemptCount: number
+  maxAttempts: number
+  reviewFocus: string | null
+  executiveSummary: string | null
+  estimatedCostUsd: number | null
+  actualCostUsd: number | null
+  usageSeconds: number | null
+  currency: string
+  errorCode: string | null
+  errorMessage: string | null
+  startedAt: string | null
+  completedAt: string | null
+  createTime: string
+  updateTime: string
+  steps: Array<{
+    stepId: string
+    stepType: 'TRANSCRIBE' | 'BUILD_TIMELINE' | 'ANALYZE_VIDEO'
+    sequenceNo: number
+    status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED'
+    attemptCount: number
+    providerTaskId: string | null
+    errorCode: string | null
+    errorMessage: string | null
+  }>
+  evidence: Array<{
+    evidenceId: string
+    sourceType:
+      | 'TRANSCRIPT'
+      | 'KEY_FRAME'
+      | 'BLACK'
+      | 'SILENCE'
+      | 'FREEZE'
+      | 'VOLUME'
+      | 'VIDEO_MODEL'
+    startMs: number
+    endMs: number
+    content: string
+    confidence: number | null
+    assetId: string | null
+    assetAvailable: boolean
+    metadataJson: string | null
+  }>
+  issues: Array<{
+    issueId: string
+    issueType: string
+    dimension: string
+    title: string
+    description: string
+    startMs: number
+    endMs: number
+    severity: 'BLOCKER' | 'HIGH' | 'MEDIUM' | 'LOW'
+    confidence: number
+    evidenceRefs: string[]
+    suggestedAction: string
+    needsHumanReview: boolean
+  }>
+}
+
 export type StoredMediaUploadResume = {
   taskId: string
   uploadSessionId: string | null

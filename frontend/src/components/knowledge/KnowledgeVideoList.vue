@@ -29,6 +29,7 @@ const TIER_OPTIONS = [
 ] as const
 
 const filterCategoryInput = ref(props.category)
+const detailTarget = ref<ReferenceVideo | null>(null)
 
 watch(() => props.category, (val) => {
   filterCategoryInput.value = val
@@ -79,6 +80,26 @@ function formatCount(value: number | null) {
     return `${(value / 10000).toFixed(1)}万`
   }
   return String(value)
+}
+
+function formatExactCount(value: number | null) {
+  if (value === null || value === undefined) {
+    return '—'
+  }
+  return value.toLocaleString('zh-CN')
+}
+
+function openDetail(video: ReferenceVideo) {
+  detailTarget.value = video
+}
+
+function closeDetail() {
+  detailTarget.value = null
+}
+
+function openCompetitorFromDetail(video: ReferenceVideo) {
+  closeDetail()
+  emit('open-competitor', video)
 }
 
 const totalPages = computed(() => Math.max(1, Math.ceil(props.total / props.pageSize)))
@@ -179,35 +200,35 @@ function goToPage(targetPage: number | null) {
     </p>
     <div v-else-if="!error" class="knowledge-card-list">
       <article v-for="item in items" :key="item.id" class="knowledge-card">
-        <strong>{{ item.title }}</strong>
-        <div class="creator-chip-list">
-          <b>{{ tierLabel(item.tier) }}</b>
-          <b v-if="item.category">{{ item.category }}</b>
-          <b v-if="qualityScoreLabel(item)" :title="qualityScoreTitle(item)">{{ qualityScoreLabel(item) }}</b>
-          <b v-if="developerMode">{{ embeddingLabel(item.embeddingStatus) }}</b>
+        <div class="knowledge-card-cover">
+          <span class="knowledge-card-tier">{{ tierLabel(item.tier) }}</span>
+          <span class="knowledge-card-play" aria-hidden="true"></span>
+          <div class="knowledge-card-cover-stats">
+            <span>播放 {{ formatCount(item.viewCount) }}</span>
+            <span>弹幕 {{ formatCount(item.danmakuCount) }}</span>
+          </div>
         </div>
-        <small>
-          {{ item.bvId || '无 BV' }} · {{ item.source }}
-          <template v-if="item.publishTimeText"> · {{ item.publishTimeText }}</template>
-        </small>
-        <p v-if="item.highlightSummary">{{ item.highlightSummary }}</p>
-        <p v-else class="creator-muted">（暂无亮点摘要）</p>
-        <div class="knowledge-stats">
-          <span>播放 {{ formatCount(item.viewCount) }}</span>
-          <span>点赞 {{ formatCount(item.likeCount) }}</span>
-          <span>投币 {{ formatCount(item.coinCount) }}</span>
-          <span>收藏 {{ formatCount(item.favoriteCount) }}</span>
-          <span>弹幕 {{ formatCount(item.danmakuCount) }}</span>
-          <span>评论 {{ formatCount(item.replyCount) }}</span>
+        <div class="knowledge-card-body">
+          <strong :title="item.title">{{ item.title }}</strong>
+          <small>
+            {{ item.bvId || '无 BV' }}
+            <template v-if="item.publishTimeText"> · {{ item.publishTimeText }}</template>
+          </small>
+          <div class="knowledge-card-chips">
+            <b v-if="item.category">{{ item.category }}</b>
+            <b v-if="qualityScoreLabel(item)" :title="qualityScoreTitle(item)">{{ qualityScoreLabel(item) }}</b>
+            <b v-if="developerMode">{{ embeddingLabel(item.embeddingStatus) }}</b>
+          </div>
+          <button
+            type="button"
+            class="knowledge-card-detail-button"
+            :aria-label="`查看《${item.title}》的详细信息`"
+            @click="openDetail(item)"
+          >
+            查看详情
+            <span aria-hidden="true">→</span>
+          </button>
         </div>
-        <button
-          v-if="item.tier === 'COMPETITOR'"
-          type="button"
-          class="creator-secondary-action knowledge-card-competitor-btn"
-          @click="emit('open-competitor', item)"
-        >
-          对比我的创作
-        </button>
       </article>
     </div>
 
@@ -246,6 +267,81 @@ function goToPage(targetPage: number | null) {
         </button>
       </div>
     </nav>
+
+    <Teleport to="body">
+      <Transition name="creator-modal">
+        <div
+          v-if="detailTarget"
+          class="creator-modal-backdrop"
+          role="presentation"
+          @click.self="closeDetail"
+        >
+          <section
+            class="creator-prompt-modal knowledge-detail-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="knowledge-detail-title"
+          >
+            <header class="creator-result-modal-head knowledge-detail-head">
+              <div>
+                <span>{{ tierLabel(detailTarget.tier) }}</span>
+                <h3 id="knowledge-detail-title">案例详情</h3>
+              </div>
+              <button type="button" class="creator-ghost-button" @click="closeDetail">关闭</button>
+            </header>
+
+            <div class="knowledge-detail-title-block">
+              <strong>{{ detailTarget.title }}</strong>
+              <small>
+                {{ detailTarget.bvId || '无 BV' }} · {{ detailTarget.source }}
+                <template v-if="detailTarget.publishTimeText"> · {{ detailTarget.publishTimeText }}</template>
+              </small>
+            </div>
+
+            <section class="knowledge-detail-section">
+              <h4>亮点摘要</h4>
+              <p>{{ detailTarget.highlightSummary || '暂无亮点摘要。' }}</p>
+            </section>
+
+            <section class="knowledge-detail-section">
+              <h4>视频简介</h4>
+              <p>{{ detailTarget.description || '暂无视频简介。' }}</p>
+            </section>
+
+            <section class="knowledge-detail-section">
+              <h4>互动数据</h4>
+              <dl class="knowledge-detail-stats">
+                <div><dt>播放</dt><dd>{{ formatExactCount(detailTarget.viewCount) }}</dd></div>
+                <div><dt>点赞</dt><dd>{{ formatExactCount(detailTarget.likeCount) }}</dd></div>
+                <div><dt>投币</dt><dd>{{ formatExactCount(detailTarget.coinCount) }}</dd></div>
+                <div><dt>收藏</dt><dd>{{ formatExactCount(detailTarget.favoriteCount) }}</dd></div>
+                <div><dt>弹幕</dt><dd>{{ formatExactCount(detailTarget.danmakuCount) }}</dd></div>
+                <div><dt>评论</dt><dd>{{ formatExactCount(detailTarget.replyCount) }}</dd></div>
+              </dl>
+            </section>
+
+            <dl class="knowledge-detail-meta">
+              <div><dt>案例层级</dt><dd>{{ tierLabel(detailTarget.tier) }}</dd></div>
+              <div><dt>分区</dt><dd>{{ detailTarget.category || '未设置' }}</dd></div>
+              <div><dt>质量评估</dt><dd>{{ qualityScoreLabel(detailTarget) || '暂无评分' }}</dd></div>
+              <div v-if="developerMode"><dt>索引状态</dt><dd>{{ embeddingLabel(detailTarget.embeddingStatus) }}</dd></div>
+            </dl>
+
+            <footer class="knowledge-detail-actions">
+              <button
+                v-if="detailTarget.tier === 'COMPETITOR'"
+                type="button"
+                class="creator-primary-button"
+                @click="openCompetitorFromDetail(detailTarget)"
+              >
+                对比我的创作
+              </button>
+              <button type="button" class="creator-secondary-action" @click="closeDetail">返回列表</button>
+            </footer>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -319,64 +415,303 @@ function goToPage(targetPage: number | null) {
 
 .knowledge-card-list {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 0;
-  border-top: 1px solid rgba(23, 32, 51, 0.1);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s5) var(--s4);
 }
 
 .knowledge-card {
   display: grid;
-  align-content: start;
-  gap: 10px;
-  padding: var(--s4) 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  overflow: hidden;
   color: inherit;
-  background: transparent;
-  border: 0;
-  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
-  border-radius: 0;
+  background: var(--surface);
+  border: 1px solid rgba(23, 32, 51, 0.1);
+  border-radius: var(--r);
+  box-shadow: var(--sh-sm);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
 }
 
-.knowledge-card:last-child {
-  border-bottom: 0;
+.knowledge-card:hover {
+  border-color: rgba(0, 174, 236, 0.3);
+  box-shadow: var(--sh-md);
+  transform: translateY(-2px);
 }
 
-.knowledge-card > strong {
+.knowledge-card-cover {
+  position: relative;
+  display: grid;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  place-items: center;
+  background:
+    linear-gradient(0deg, rgba(15, 36, 54, 0.72), transparent 38%),
+    radial-gradient(circle at 78% 20%, rgba(251, 114, 153, 0.22), transparent 24%),
+    radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.9), transparent 24%),
+    linear-gradient(135deg, #dff5ff 0%, #edf9ff 48%, #d8effb 100%);
+}
+
+.knowledge-card-cover::before,
+.knowledge-card-cover::after {
+  position: absolute;
+  content: '';
+  border: 1px solid rgba(0, 138, 197, 0.12);
+  border-radius: 50%;
+}
+
+.knowledge-card-cover::before {
+  width: 150px;
+  height: 150px;
+  top: -86px;
+  right: -30px;
+}
+
+.knowledge-card-cover::after {
+  width: 94px;
+  height: 94px;
+  bottom: -54px;
+  left: 18px;
+}
+
+.knowledge-card-tier {
+  position: absolute;
+  z-index: 1;
+  top: var(--s3);
+  left: var(--s3);
+  padding: 4px 8px;
+  color: #fff;
+  background: rgba(23, 32, 51, 0.72);
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+  backdrop-filter: blur(6px);
+}
+
+.knowledge-card-play {
+  position: relative;
+  z-index: 1;
+  width: 46px;
+  height: 46px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 50%;
+  box-shadow: 0 8px 22px rgba(0, 138, 197, 0.2);
+}
+
+.knowledge-card-play::after {
+  position: absolute;
+  top: 50%;
+  left: 52%;
+  width: 0;
+  height: 0;
+  content: '';
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 11px solid var(--accent);
+  transform: translate(-40%, -50%);
+}
+
+.knowledge-card-cover-stats {
+  position: absolute;
+  z-index: 1;
+  right: var(--s3);
+  bottom: var(--s2);
+  left: var(--s3);
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  color: #fff;
+  font-size: 11px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+
+.knowledge-card-body {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  align-content: start;
+  gap: var(--s2);
+  min-width: 0;
+  padding: var(--s3);
+}
+
+.knowledge-card-body > strong {
+  display: -webkit-box;
+  min-height: 44px;
+  overflow: hidden;
   color: var(--ink);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.knowledge-card small {
+.knowledge-card-body small {
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.knowledge-card p {
+.knowledge-card-chips {
+  display: flex;
+  gap: 6px;
+  min-height: 25px;
+  overflow: hidden;
+}
+
+.knowledge-card-chips b {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  color: var(--muted);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.knowledge-card-detail-button {
+  align-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  margin-top: var(--s1);
+  padding: 0 11px;
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.knowledge-card-detail-button:hover {
+  color: #fff;
+  background: var(--accent);
+}
+
+.knowledge-card-detail-button:focus-visible {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+.knowledge-detail-modal {
+  width: min(820px, 100%);
+}
+
+.knowledge-detail-head > div {
+  display: grid;
+  gap: 2px;
+}
+
+.knowledge-detail-head span {
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+
+.knowledge-detail-title-block {
+  display: grid;
+  gap: var(--s2);
+  padding: var(--s4);
+  background: linear-gradient(135deg, var(--accent-tint), rgba(251, 114, 153, 0.08));
+  border: 1px solid rgba(0, 174, 236, 0.14);
+  border-radius: var(--r);
+}
+
+.knowledge-detail-title-block strong {
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.knowledge-detail-title-block small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.knowledge-detail-section {
+  display: grid;
+  gap: var(--s2);
+}
+
+.knowledge-detail-section h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.knowledge-detail-section p {
   margin: 0;
   color: var(--text);
   font-size: 13px;
-  line-height: 1.56;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.knowledge-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
+.knowledge-detail-stats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--s2);
+  margin: 0;
 }
 
-.knowledge-stats span {
-  padding: 0;
+.knowledge-detail-stats > div {
+  display: grid;
+  gap: 3px;
+  padding: var(--s3) var(--s2);
+  text-align: center;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.knowledge-detail-stats dt,
+.knowledge-detail-meta dt {
   color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  font-size: 12px;
-  font-weight: var(--fw-medium);
+  font-size: 11px;
 }
 
-.knowledge-card-competitor-btn {
-  margin-top: var(--s2);
+.knowledge-detail-stats dd,
+.knowledge-detail-meta dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+}
+
+.knowledge-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s2) var(--s5);
+  margin: 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+}
+
+.knowledge-detail-meta > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+
+.knowledge-detail-actions {
+  justify-content: flex-end !important;
 }
 
 .knowledge-pagination {
@@ -439,6 +774,14 @@ function goToPage(targetPage: number | null) {
     margin-left: 0;
   }
 
+  .knowledge-card-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .knowledge-detail-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .knowledge-pagination {
     grid-template-columns: 1fr;
   }
@@ -449,6 +792,27 @@ function goToPage(targetPage: number | null) {
 
   .knowledge-pagination-controls {
     justify-content: center;
+  }
+}
+
+@media (max-width: 520px) {
+  .knowledge-list-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--s1);
+  }
+
+  .knowledge-card-list,
+  .knowledge-detail-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-detail-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .knowledge-detail-actions {
+    display: grid !important;
   }
 }
 </style>

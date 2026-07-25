@@ -186,6 +186,19 @@ creator:
       plus-input-usd-per-million-tokens: ${CREATOR_MEDIA_PLUS_INPUT_USD_PER_MILLION_TOKENS:0.42}
       plus-output-usd-per-million-tokens: ${CREATOR_MEDIA_PLUS_OUTPUT_USD_PER_MILLION_TOKENS:1.25}
       asr-usd-per-second: ${CREATOR_MEDIA_ASR_USD_PER_SECOND:0.000035}
+    preflight:
+      poll-interval-ms: ${CREATOR_MEDIA_PREFLIGHT_POLL_INTERVAL_MS:2000}
+      lease-duration: ${CREATOR_MEDIA_PREFLIGHT_LEASE_DURATION:90s}
+      max-attempts: ${CREATOR_MEDIA_PREFLIGHT_MAX_ATTEMPTS:3}
+      provider-poll-interval: ${CREATOR_MEDIA_PREFLIGHT_PROVIDER_POLL_INTERVAL:5s}
+      dash-scope-base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com}
+      dash-scope-api-key: ${DASHSCOPE_API_KEY:}
+      asr-model: ${CREATOR_MEDIA_ASR_MODEL:qwen3-asr-flash-filetrans}
+      video-model: ${CREATOR_MEDIA_VIDEO_MODEL:qwen3-vl-flash}
+      video-fps: ${CREATOR_MEDIA_VIDEO_FPS:0.2}
+      connect-timeout: ${CREATOR_MEDIA_ASR_CONNECT_TIMEOUT:10s}
+      read-timeout: ${CREATOR_MEDIA_ASR_READ_TIMEOUT:30s}
+      video-read-timeout: ${CREATOR_MEDIA_VIDEO_READ_TIMEOUT:10m}
   pre-publish:
     # 默认启用发布前优化 Agent 链路；演示或排障时可通过 PRE_PUBLISH_AGENT_ENABLED=false 回退旧直连 LLM 链路。
     agent:

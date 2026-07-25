@@ -284,19 +284,6 @@ export type CreatorContextTermPayload = {
   evidenceText?: string
 }
 
-export type CreatorContextBundle = {
-  userId: string
-  videoType: string
-  scene: string
-  terms: CreatorContextTerm[]
-  keywords: string[]
-  slangTerms: string[]
-  titlePatterns: string[]
-  audienceConcerns: string[]
-  tabooTerms: string[]
-  promptContext: string
-}
-
 export type CreatorSuggestion = {
   id: number
   suggestionId: string
@@ -396,16 +383,6 @@ export type CreatorWorkflowMessagePayload = {
 
 export type CreatorWorkflowConfirmPayload = {
   suggestionId: string
-}
-
-export type CreatorWorkflowEvent = {
-  eventId: string
-  sessionId: string
-  taskId: string
-  eventType: string
-  sequenceNo: number | null
-  payload: unknown
-  createTime: string
 }
 
 export type CreatorFeedbackSavePayload = {
@@ -657,25 +634,6 @@ export type LlmApiCallPage = {
   items: LlmApiCallRecord[]
 }
 
-export type WorkflowStepUsage = {
-  stepId: string
-  stepName: string
-  stage: CreatorWorkflowStage | string | null
-  calls: LlmApiCallRecord[]
-}
-
-export type WorkflowUsageResponse = {
-  taskId: string
-  sessionId: string
-  totalCalls: number
-  successCalls: number
-  failedCalls: number
-  skippedCalls: number
-  totalTokens: number | null
-  totalElapsedMs: number | null
-  steps: WorkflowStepUsage[]
-}
-
 // ═══════════════════════════════════════════
 // 创作者反馈事件（对接 POST /api/creator/profile/events → creator_event 表）
 // ═══════════════════════════════════════════
@@ -733,12 +691,6 @@ export type CreatorFeedbackEventPayload = {
  * 主壳和子组件共享这个类型，是为了让弹窗入口保持同一组合法值。
  */
 export type ResultModalTarget = 'feedbackDashboard' | 'feedbackReport'
-
-/**
- * 创作台一级步骤。
- * 持久化 activeStep 时复用同一类型，避免主壳和子组件各自维护 tab 名称。
- */
-export type CreatorActiveStep = 'task' | 'prePublish' | 'preflight' | 'feedback' | 'report' | 'usage' | 'videoAnalysis'
 
 // ═══════════════════════════════════════════
 // P0-3: B站账号绑定
@@ -886,20 +838,6 @@ export type CreatorProfile = {
 // 竞品分析
 // ═══════════════════════════════════════════
 
-/** 竞品视频样本，对应后端 CreatorCompetitorSampleResponse */
-export type CreatorCompetitorSample = {
-  id: number
-  competitorBvId: string
-  competitorVideoName: string
-  taskId: string
-  category: string | null
-  competitorSamples: string
-  compareDimension: string | null
-  extraContext: string | null
-  createTime: string
-  updateTime: string
-}
-
 /** 竞品分析报告，对应后端 CreatorCompetitorReportResponse */
 export type CreatorCompetitorReport = {
   id: number
@@ -918,74 +856,10 @@ export type CreatorCompetitorReport = {
   updateTime: string
 }
 
-/** 竞品视频保存请求，对应后端 CreatorCompetitorSaveRequest */
-export type CreatorCompetitorSavePayload = {
-  competitorBvId: string
-  competitorVideoName: string
-  category?: string
-  competitorSamples: string
-  compareDimension?: string
-  extraContext?: string
-}
-
-/** 竞品分析触发请求，对应后端 CreatorCompetitorAnalyzeRequest */
-export type CreatorCompetitorAnalyzePayload = {
-  customGuidance?: string
-  analysisFocus?: string
-  extraRequirement?: string
-}
-
 /** 基于参考案例的竞品分析请求（P1-1），对应后端 CompetitorAnalyzeByReferenceRequest */
 export type CompetitorAnalyzeByReferencePayload = {
   referenceVideoId: string
   customGuidance?: string
   analysisFocus?: string
-  extraRequirement?: string
-}
-
-// ═══════════════════════════════════════════
-// 字段自动补全
-// ═══════════════════════════════════════════
-
-/** 字段自动补全请求，对应后端 FieldAutofillRequest */
-export type FieldAutofillPayload = {
-  /** 字段类型：TITLE_DRAFT / DESCRIPTION_DRAFT / CUSTOM_GUIDANCE / TITLE_STYLE / EXTRA_REQUIREMENT */
-  fieldType: string
-}
-
-/** 字段自动补全响应，对应后端 FieldAutofillResponse */
-export type FieldAutofillResult = {
-  fieldType: string
-  suggestion: string
-}
-
-// ═══════════════════════════════════════════
-// 创作复盘报告
-// ═══════════════════════════════════════════
-
-/** 创作复盘报告，对应后端 CreatorReportResponse */
-export type CreatorReport = {
-  id: number
-  reportId: string
-  taskId: string
-  contentSummary: string | null
-  coreSellingPoints: string | null
-  titleDescriptionReview: string | null
-  audienceFeedbackSummary: string | null
-  competitorComparison: string | null
-  controversyAndMisunderstanding: string | null
-  nextActionSuggestions: string | null
-  creatorPreferenceInsight: string | null
-  overallConclusion: string | null
-  rawOutput: string
-  parseStatus: string
-  createTime: string
-  updateTime: string
-}
-
-/** 创作复盘分析请求，对应后端 CreatorReportAnalyzeRequest */
-export type CreatorReportAnalyzePayload = {
-  customGuidance?: string
-  reviewFocus?: string
   extraRequirement?: string
 }

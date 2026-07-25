@@ -25,7 +25,7 @@ import java.util.Optional;
  *   <li>行级锁（FOR UPDATE）只在替换上传会话时使用，范围最小化</li>
  * </ul>
  * <p>
- * P0 简化：version_no 固定为 1，current_review_id 等 P0-1/P0-2 字段待后续扩展。
+ * P0 简化：version_no 固定为 1；current_review_id 由 P0-3 创建时写入，重做 P0-2 时清空。
  */
 @Mapper
 public interface MediaUploadMapper {

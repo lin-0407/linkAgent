@@ -99,11 +99,6 @@ const hasBackgroundContext = computed(() =>
   (interactiveTask.value?.backgroundContext?.length ?? 0) > 0,
 )
 
-/** 已上传的文件名集合，用于去重展示 */
-const uploadedFileNames = computed(() =>
-  uploadedFiles.value.map((f) => f.name),
-)
-
 const statusText = computed(() => {
   if (isCreating.value) return '正在创建任务...'
   if (isUploading.value) return '正在上传并解析文档...'

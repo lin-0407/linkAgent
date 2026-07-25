@@ -8,6 +8,8 @@ import type {
   MediaProcessingEstimate,
   MediaProcessingJob,
   MediaProcessingOptions,
+  CreatePreflightReviewPayload,
+  PreflightReview,
   PresignedMediaUploadPart,
 } from '@/types/media'
 
@@ -125,6 +127,43 @@ export function createMediaProcessingAssetReadUrl(
 ) {
   return post<MediaProcessingAssetReadUrl>(
     `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}/processing-assets/${encodeURIComponent(assetId)}:read-url`,
+  )
+}
+
+export function createPreflightReview(
+  taskId: string,
+  idempotencyKey: string,
+  payload: CreatePreflightReviewPayload,
+) {
+  return post<PreflightReview>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/preflight-jobs`,
+    payload,
+    { headers: { 'Idempotency-Key': idempotencyKey } },
+  )
+}
+
+export function getCurrentPreflightReview(taskId: string, versionId: string) {
+  return get<PreflightReview>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/preflight-jobs/current`,
+    { params: { versionId } },
+  )
+}
+
+export function getPreflightReview(taskId: string, reviewId: string) {
+  return get<PreflightReview>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/preflight-jobs/${encodeURIComponent(reviewId)}`,
+  )
+}
+
+export function cancelPreflightReview(taskId: string, reviewId: string) {
+  return post<PreflightReview>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/preflight-jobs/${encodeURIComponent(reviewId)}:cancel`,
+  )
+}
+
+export function retryPreflightReview(taskId: string, reviewId: string) {
+  return post<PreflightReview>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/preflight-jobs/${encodeURIComponent(reviewId)}:retry`,
   )
 }
 

@@ -3,6 +3,8 @@ package com.link.linkagent.creator.media.workflow;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingJobRecord;
+import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
+import com.link.linkagent.creator.media.preflight.model.PreflightReviewRecord;
 import com.link.linkagent.creator.media.probe.service.DraftVideoProbeRecoveryService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
@@ -13,6 +15,8 @@ import com.link.linkagent.creator.workflow.model.CreatorWorkflowSessionRecord;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStage;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStatus;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -53,7 +57,7 @@ class CreatorMediaWorkflowGateServiceTest {
     }
 
     @Test
-    void shouldAllowPostPublishWhenDraftProbeAndProcessingAreReady() {
+    void shouldAllowPostPublishWhenPreflightReviewIsCompleted() {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.setEnabled(true);
         MediaUploadMapper mapper = mock(MediaUploadMapper.class);
@@ -65,6 +69,107 @@ class CreatorMediaWorkflowGateServiceTest {
         CreatorMediaWorkflowGateService service = service(properties, mapper, workflowMapper);
 
         service.ensureReadyForPostPublish("task-1", "default", "观众反馈");
+    }
+
+    @Test
+    void shouldRejectCompletedReviewFromPreviousMediaProcessingJob() {
+        CreatorMediaProperties properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        MediaProcessingMapper processingMapper = completedProcessingMapper();
+        PreflightReviewMapper preflightReviewMapper = mock(PreflightReviewMapper.class);
+        PreflightReviewRecord review = mock(PreflightReviewRecord.class);
+        when(review.status()).thenReturn("COMPLETED");
+        when(review.processingJobId()).thenReturn("job-old");
+        when(mapper.findDraftVideo("task-1", "default"))
+                .thenReturn(Optional.of(draft("READY_FOR_REVIEW")));
+        when(preflightReviewMapper.findCurrentByVersion("task-1", "default", "version-1"))
+                .thenReturn(Optional.of(review));
+        CreatorMediaWorkflowGateService service = new CreatorMediaWorkflowGateService(
+                properties,
+                mapper,
+                processingMapper,
+                preflightReviewMapper,
+                confirmedWorkflowMapper(),
+                confirmedSuggestionMapper(),
+                new DraftVideoProbeRecoveryService(properties, mapper)
+        );
+
+        ResponseStatusException exception = catchThrowableOfType(
+                () -> service.ensureReadyForPostPublish("task-1", "default", "BV绑定"),
+                ResponseStatusException.class
+        );
+
+        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(exception.getReason()).contains("最新媒体预处理结果");
+    }
+
+    @Test
+    void shouldRejectPostPublishWhenPreflightReviewHasNotStarted() {
+        CreatorMediaProperties properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        MediaProcessingMapper processingMapper = completedProcessingMapper();
+        PreflightReviewMapper preflightReviewMapper = mock(PreflightReviewMapper.class);
+        CreatorWorkflowMapper workflowMapper = confirmedWorkflowMapper();
+        CreatorSuggestionMapper suggestionMapper = confirmedSuggestionMapper();
+        when(mapper.findDraftVideo("task-1", "default"))
+                .thenReturn(Optional.of(draft("READY_FOR_REVIEW")));
+        when(preflightReviewMapper.findCurrentByVersion("task-1", "default", "version-1"))
+                .thenReturn(Optional.empty());
+        CreatorMediaWorkflowGateService service = new CreatorMediaWorkflowGateService(
+                properties,
+                mapper,
+                processingMapper,
+                preflightReviewMapper,
+                workflowMapper,
+                suggestionMapper,
+                new DraftVideoProbeRecoveryService(properties, mapper)
+        );
+
+        ResponseStatusException exception = catchThrowableOfType(
+                () -> service.ensureReadyForPostPublish("task-1", "default", "BV绑定"),
+                ResponseStatusException.class
+        );
+
+        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(exception.getReason()).contains("发布前试映");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"QUEUED", "RUNNING", "RETRY_WAIT", "FAILED", "CANCEL_REQUESTED", "CANCELLED"})
+    void shouldRejectPostPublishWhenPreflightReviewIsNotCompleted(String status) {
+        CreatorMediaProperties properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        MediaProcessingMapper processingMapper = completedProcessingMapper();
+        PreflightReviewMapper preflightReviewMapper = mock(PreflightReviewMapper.class);
+        CreatorWorkflowMapper workflowMapper = confirmedWorkflowMapper();
+        CreatorSuggestionMapper suggestionMapper = confirmedSuggestionMapper();
+        PreflightReviewRecord review = mock(PreflightReviewRecord.class);
+        when(review.status()).thenReturn(status);
+        when(review.processingJobId()).thenReturn("job-1");
+        when(mapper.findDraftVideo("task-1", "default"))
+                .thenReturn(Optional.of(draft("READY_FOR_REVIEW")));
+        when(preflightReviewMapper.findCurrentByVersion("task-1", "default", "version-1"))
+                .thenReturn(Optional.of(review));
+        CreatorMediaWorkflowGateService service = new CreatorMediaWorkflowGateService(
+                properties,
+                mapper,
+                processingMapper,
+                preflightReviewMapper,
+                workflowMapper,
+                suggestionMapper,
+                new DraftVideoProbeRecoveryService(properties, mapper)
+        );
+
+        ResponseStatusException exception = catchThrowableOfType(
+                () -> service.ensureReadyForPostPublish("task-1", "default", "观众反馈"),
+                ResponseStatusException.class
+        );
+
+        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(exception.getReason()).contains("发布前试映");
     }
 
     @Test
@@ -87,6 +192,7 @@ class CreatorMediaWorkflowGateServiceTest {
                 properties,
                 mapper,
                 processingMapper,
+                mock(PreflightReviewMapper.class),
                 workflowMapper,
                 suggestionMapper,
                 new DraftVideoProbeRecoveryService(properties, mapper)
@@ -235,23 +341,48 @@ class CreatorMediaWorkflowGateServiceTest {
     private CreatorMediaWorkflowGateService service(CreatorMediaProperties properties,
                                                      MediaUploadMapper mapper,
                                                      CreatorWorkflowMapper workflowMapper) {
-        CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
-        MediaProcessingMapper processingMapper = mock(MediaProcessingMapper.class);
-        MediaProcessingJobRecord completedJob = mock(MediaProcessingJobRecord.class);
-        when(completedJob.status()).thenReturn("COMPLETED");
-        when(processingMapper.findCurrentJob("task-1", "default", "version-1"))
-                .thenReturn(Optional.of(completedJob));
-        CreatorSuggestionRecord suggestion = new CreatorSuggestionRecord();
-        suggestion.setTaskId("task-1");
-        suggestion.setSuggestionId("suggestion-1");
-        when(suggestionMapper.findByTaskId("task-1")).thenReturn(Optional.of(suggestion));
+        CreatorSuggestionMapper suggestionMapper = confirmedSuggestionMapper();
+        MediaProcessingMapper processingMapper = completedProcessingMapper();
+        PreflightReviewMapper preflightReviewMapper = mock(PreflightReviewMapper.class);
+        PreflightReviewRecord completedReview = mock(PreflightReviewRecord.class);
+        when(completedReview.status()).thenReturn("COMPLETED");
+        when(completedReview.processingJobId()).thenReturn("job-1");
+        when(preflightReviewMapper.findCurrentByVersion("task-1", "default", "version-1"))
+                .thenReturn(Optional.of(completedReview));
         return new CreatorMediaWorkflowGateService(
                 properties,
                 mapper,
                 processingMapper,
+                preflightReviewMapper,
                 workflowMapper,
                 suggestionMapper,
                 new DraftVideoProbeRecoveryService(properties, mapper)
         );
+    }
+
+    private MediaProcessingMapper completedProcessingMapper() {
+        MediaProcessingMapper processingMapper = mock(MediaProcessingMapper.class);
+        MediaProcessingJobRecord completedJob = mock(MediaProcessingJobRecord.class);
+        when(completedJob.status()).thenReturn("COMPLETED");
+        when(completedJob.jobId()).thenReturn("job-1");
+        when(processingMapper.findCurrentJob("task-1", "default", "version-1"))
+                .thenReturn(Optional.of(completedJob));
+        return processingMapper;
+    }
+
+    private CreatorWorkflowMapper confirmedWorkflowMapper() {
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        when(workflowMapper.findLatestSession("task-1", CreatorWorkflowStage.PRE_PUBLISH.name()))
+                .thenReturn(Optional.of(confirmedSession()));
+        return workflowMapper;
+    }
+
+    private CreatorSuggestionMapper confirmedSuggestionMapper() {
+        CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
+        CreatorSuggestionRecord suggestion = new CreatorSuggestionRecord();
+        suggestion.setTaskId("task-1");
+        suggestion.setSuggestionId("suggestion-1");
+        when(suggestionMapper.findByTaskId("task-1")).thenReturn(Optional.of(suggestion));
+        return suggestionMapper;
     }
 }

@@ -10,6 +10,7 @@ import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.method.annotation.ExceptionHandlerMethodResolver;
 import org.springframework.web.servlet.HandlerMapping;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
 import java.util.Set;
@@ -69,6 +70,22 @@ class GlobalExceptionHandlerTest {
                 HttpStatus.METHOD_NOT_ALLOWED.value(),
                 "请求方法 GET 不受支持，请使用 POST。",
                 "/api/settings/connectivity/check"
+        ));
+    }
+
+    @Test
+    void shouldReturnNotFoundForMissingResource() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/missing");
+        NoResourceFoundException exception =
+                new NoResourceFoundException(HttpMethod.GET, "/api/missing");
+
+        ResponseEntity<?> response = handler.handleNoResourceFound(exception, request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isEqualTo(new ApiErrorResponse(
+                HttpStatus.NOT_FOUND.value(),
+                "请求地址不存在。",
+                "/api/missing"
         ));
     }
 }

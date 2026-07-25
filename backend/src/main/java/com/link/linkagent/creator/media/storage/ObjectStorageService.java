@@ -64,6 +64,12 @@ public interface ObjectStorageService {
     PresignedObjectRead presignGetObject(String bucketName, String objectKey, Duration signatureDuration);
 
     /**
+     * 为 ASR 生成阿里云 OSS 原生 V1 短签。
+     * DashScope 文件转写会拒绝同一对象的 S3 X-Amz 签名，因此单独保留这个已实测兼容的边界。
+     */
+    PresignedObjectRead presignAsrGetObject(String bucketName, String objectKey, Duration signatureDuration);
+
+    /**
      * 为浏览器播放派生媒体生成短时 GET URL。
      * 浏览器与 Provider 使用不同 Endpoint，避免把 Provider 地址暴露给页面。
      */

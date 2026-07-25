@@ -1242,7 +1242,7 @@ CREATE TABLE IF NOT EXISTS creator_draft_video
     has_audio           TINYINT                DEFAULT NULL COMMENT '是否存在音轨：1=存在，0=不存在，未探测时为空',
     probe_attempt_id    VARCHAR(64)            DEFAULT NULL COMMENT '当前媒体探测领取标识；防止超时恢复后的旧请求覆盖新探测结果',
     status              VARCHAR(32)   NOT NULL DEFAULT 'UPLOADING' COMMENT '成片状态：UPLOADING=上传中，UPLOADED=已上传待探测，PROBING=探测中，READY_FOR_REVIEW=探测通过，PROBE_FAILED=探测失败，UPLOAD_FAILED=上传失败，UPLOAD_ABORTED=已取消',
-    current_review_id   VARCHAR(64)            DEFAULT NULL COMMENT '当前发布前试映任务ID，P0-2 前为空',
+    current_review_id   VARCHAR(64)            DEFAULT NULL COMMENT '当前发布前试映任务ID，P0-3 创建任务后写入',
     published_flag      TINYINT       NOT NULL DEFAULT 0 COMMENT '用户是否确认已发布：1=已发布，0=未发布',
     published_at        DATETIME               DEFAULT NULL COMMENT '用户确认发布时间',
     media_deleted_at    DATETIME               DEFAULT NULL COMMENT '原片和派生媒体实际删除时间',
@@ -1553,6 +1553,193 @@ CREATE TABLE IF NOT EXISTS creator_media_processing_asset
   DEFAULT CHARSET = utf8mb4
   COMMENT = '媒体预处理派生素材表';
 
+-- ------------------------------------------------------------
+-- 39. 发布前试映任务表（阶段 7 P0-3/P0-4a）
+--     页面关闭后任务仍由数据库租约 Worker 推进，并在时间轴完成后继续生成单视角体检。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_preflight_review
+(
+    id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    review_id             VARCHAR(64)    NOT NULL COMMENT '发布前试映任务唯一标识（UUID）',
+    task_id               VARCHAR(64)    NOT NULL COMMENT '关联 creator_task.task_id',
+    version_id            VARCHAR(64)    NOT NULL COMMENT '关联 creator_draft_video.version_id',
+    owner_id              VARCHAR(64)    NOT NULL DEFAULT 'default' COMMENT '可信媒体归属；单人工作台固定为 default',
+    processing_job_id     VARCHAR(64)    NOT NULL COMMENT '关联已完成的媒体预处理任务',
+    idempotency_key       VARCHAR(128)   NOT NULL COMMENT '页面创建任务的幂等键',
+    review_focus          VARCHAR(1000)           DEFAULT NULL COMMENT '作者希望后续试映重点关注的内容',
+    status                VARCHAR(32)    NOT NULL DEFAULT 'QUEUED' COMMENT '状态：QUEUED、RUNNING、RETRY_WAIT、COMPLETED、FAILED、CANCEL_REQUESTED、CANCELLED',
+    current_step          VARCHAR(48)    NOT NULL DEFAULT 'TRANSCRIBE' COMMENT '当前步骤：TRANSCRIBE、BUILD_TIMELINE、ANALYZE_VIDEO、DONE',
+    progress_percent      INT            NOT NULL DEFAULT 0 COMMENT '任务进度百分比，范围0到100',
+    event_sequence        BIGINT         NOT NULL DEFAULT 0 COMMENT 'SSE 快照游标，每次事实变化单调递增',
+    cancel_requested      TINYINT        NOT NULL DEFAULT 0 COMMENT '用户是否请求取消',
+    attempt_count         INT            NOT NULL DEFAULT 0 COMMENT '可重试失败次数，不包含正常 Provider 轮询',
+    max_attempts          INT            NOT NULL DEFAULT 3 COMMENT '最大自动失败重试次数',
+    next_run_at           DATETIME                DEFAULT NULL COMMENT '允许 Worker 再次领取的时间',
+    lease_owner           VARCHAR(128)             DEFAULT NULL COMMENT '当前 Worker 租约标识',
+    lease_expires_at      DATETIME                 DEFAULT NULL COMMENT '租约到期时间，过期后由恢复逻辑处理',
+    input_fingerprint     VARCHAR(64)    NOT NULL COMMENT '成片与预处理输入指纹，防止错误复用结果',
+    provider_snapshot     JSON           NOT NULL COMMENT '本次 ASR 与视频理解 Provider、模型和参数快照',
+    capability_gaps       JSON                    DEFAULT NULL COMMENT '无音轨或未启用 ASR 等能力缺口',
+    executive_summary     TEXT                    DEFAULT NULL COMMENT '单视角发布前体检摘要',
+    estimated_cost_usd    DECIMAL(18, 8)          DEFAULT NULL COMMENT '创建任务时的 ASR 与视频理解预估美元费用',
+    actual_cost_usd       DECIMAL(18, 8)          DEFAULT NULL COMMENT '按 Provider 实际用量计算的美元费用',
+    usage_seconds         BIGINT                   DEFAULT NULL COMMENT 'Provider 返回的 ASR 计费秒数',
+    currency              VARCHAR(16)    NOT NULL DEFAULT 'USD' COMMENT '费用币种',
+    error_code            VARCHAR(64)              DEFAULT NULL COMMENT '最近失败错误码',
+    error_message         VARCHAR(500)             DEFAULT NULL COMMENT '最近失败中文摘要，不保存签名 URL 或密钥',
+    started_at            DATETIME                 DEFAULT NULL COMMENT '首次开始时间',
+    completed_at          DATETIME                 DEFAULT NULL COMMENT '完成或取消时间',
+    create_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted            TINYINT        NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_preflight_review_id (review_id),
+    UNIQUE KEY uk_preflight_idempotency (owner_id, task_id, idempotency_key),
+    KEY idx_preflight_version (owner_id, task_id, version_id, id DESC),
+    KEY idx_preflight_claim (status, next_run_at, lease_expires_at, create_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '发布前试映持久化任务表';
+
+-- ------------------------------------------------------------
+-- 40. 发布前试映步骤表（阶段 7 P0-3/P0-4a）
+--     Provider 任务 ID 必须在提交后立即保存，服务重启只能查询而不能重复提交。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_preflight_step
+(
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    step_id             VARCHAR(64)  NOT NULL COMMENT '步骤唯一标识（UUID）',
+    review_id           VARCHAR(64)  NOT NULL COMMENT '关联 creator_preflight_review.review_id',
+    step_type           VARCHAR(48)  NOT NULL COMMENT '步骤类型：TRANSCRIBE、BUILD_TIMELINE、ANALYZE_VIDEO',
+    sequence_no         INT          NOT NULL COMMENT '固定执行顺序',
+    status              VARCHAR(24)  NOT NULL DEFAULT 'PENDING' COMMENT '状态：PENDING、RUNNING、SUCCEEDED、FAILED、SKIPPED',
+    attempt_count       INT          NOT NULL DEFAULT 0 COMMENT '步骤实际失败次数',
+    input_fingerprint   VARCHAR(64)  NOT NULL COMMENT '步骤输入指纹，用于恢复时判断是否可复用',
+    output_ref          JSON                  DEFAULT NULL COMMENT '用量和结果数量等结构化摘要，不保存签名地址',
+    provider_task_id    VARCHAR(255)           DEFAULT NULL COMMENT 'ASR Provider 任务 ID，提交成功后立即落库',
+    error_code          VARCHAR(64)            DEFAULT NULL COMMENT '最近失败错误码',
+    error_message       VARCHAR(500)           DEFAULT NULL COMMENT '最近失败中文摘要',
+    started_at          DATETIME               DEFAULT NULL COMMENT '步骤开始时间',
+    completed_at        DATETIME               DEFAULT NULL COMMENT '步骤完成时间',
+    create_time         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uk_preflight_step_id (step_id),
+    UNIQUE KEY uk_preflight_step_type (review_id, step_type),
+    KEY idx_preflight_step_review (review_id, sequence_no)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '发布前试映持久化步骤表';
+
+-- ------------------------------------------------------------
+-- 41. 发布前试映时间轴证据表（阶段 7 P0-3）
+--     统一保存转写、关键画面和确定性信号，供 P0-4 视频理解直接消费。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_timeline_evidence
+(
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    evidence_id         VARCHAR(64)   NOT NULL COMMENT '时间轴证据唯一标识（UUID）',
+    review_id           VARCHAR(64)   NOT NULL COMMENT '关联发布前试映任务',
+    version_id          VARCHAR(64)   NOT NULL COMMENT '关联成片版本',
+    source_type         VARCHAR(32)   NOT NULL COMMENT '来源：TRANSCRIPT、KEY_FRAME、BLACK、SILENCE、FREEZE、VOLUME、VIDEO_MODEL',
+    start_ms            BIGINT        NOT NULL COMMENT '证据开始时间毫秒',
+    end_ms              BIGINT        NOT NULL COMMENT '证据结束时间毫秒',
+    content             TEXT          NOT NULL COMMENT '可保留的证据文本或结构化摘要',
+    confidence          DECIMAL(7, 6)          DEFAULT NULL COMMENT 'Provider 置信度，可为空',
+    asset_id            VARCHAR(64)            DEFAULT NULL COMMENT '关联私有派生素材 ID，短签按需生成',
+    asset_available     TINYINT       NOT NULL DEFAULT 0 COMMENT '关联素材是否仍可生成预览地址',
+    source_step_id      VARCHAR(64)   NOT NULL COMMENT '产生证据的持久化步骤 ID',
+    metadata_json       JSON                   DEFAULT NULL COMMENT '语言、说话人、帧序号或信号值等补充数据',
+    create_time         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    is_deleted          TINYINT       NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_timeline_evidence_id (evidence_id),
+    KEY idx_evidence_review_time (review_id, start_ms, end_ms),
+    KEY idx_evidence_version (version_id, source_type)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '发布前试映统一时间轴证据表';
+
+-- ------------------------------------------------------------
+-- 42. 发布前体检问题表（阶段 7 P0-4a）
+--     首轮只保存单 Provider 全片粗审问题，不提前加入观众角色和修改任务状态。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_preflight_issue
+(
+    id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    issue_id              VARCHAR(64)    NOT NULL COMMENT '体检问题唯一标识（UUID）',
+    review_id             VARCHAR(64)    NOT NULL COMMENT '关联发布前试映任务',
+    version_id            VARCHAR(64)    NOT NULL COMMENT '关联成片版本',
+    issue_type            VARCHAR(64)    NOT NULL COMMENT '模型归纳的问题类型',
+    dimension             VARCHAR(64)    NOT NULL COMMENT '检查维度，例如节奏、结构或音画一致性',
+    title                 VARCHAR(255)   NOT NULL COMMENT '问题标题',
+    description           TEXT           NOT NULL COMMENT '问题的证据化说明',
+    start_ms              BIGINT         NOT NULL COMMENT '问题开始时间毫秒',
+    end_ms                BIGINT         NOT NULL COMMENT '问题结束时间毫秒',
+    severity              VARCHAR(16)    NOT NULL COMMENT '严重程度：BLOCKER、HIGH、MEDIUM、LOW',
+    confidence            DECIMAL(7, 6)  NOT NULL COMMENT '模型判断置信度，范围0到1',
+    evidence_refs         JSON           NOT NULL COMMENT '引用的时间轴证据ID列表',
+    suggested_action      TEXT           NOT NULL COMMENT '创作者可直接执行的修改动作',
+    needs_human_review    TINYINT        NOT NULL DEFAULT 0 COMMENT '是否需要作者人工确认',
+    source_types          JSON           NOT NULL COMMENT '本问题使用的规则或模型来源',
+    create_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted            TINYINT        NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_preflight_issue_id (issue_id),
+    KEY idx_preflight_issue_review (review_id, severity, start_ms)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '发布前单视角体检问题表';
+
+-- ------------------------------------------------------------
+-- 43. 媒体 Provider 调用流水表（阶段 7 P0-3/P0-4a）
+--     独立保存 ASR 与视频理解用量，避免混入现有纯文本 LLM Token 统计。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_media_api_call_log
+(
+    id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    call_id               VARCHAR(64)    NOT NULL COMMENT 'Provider 调用唯一标识（UUID）',
+    task_id               VARCHAR(64)    NOT NULL COMMENT '关联创作任务',
+    version_id            VARCHAR(64)    NOT NULL COMMENT '关联成片版本',
+    review_id             VARCHAR(64)    NOT NULL COMMENT '关联发布前试映任务',
+    step_id               VARCHAR(64)    NOT NULL COMMENT '关联持久化步骤',
+    provider_name         VARCHAR(64)    NOT NULL COMMENT 'Provider 名称',
+    model_name            VARCHAR(128)   NOT NULL COMMENT 'Provider 模型名称',
+    capability            VARCHAR(32)    NOT NULL COMMENT '能力类型：ASR、VIDEO',
+    request_fingerprint   VARCHAR(64)    NOT NULL COMMENT '媒体输入摘要，不保存签名地址',
+    provider_task_id      VARCHAR(255)            DEFAULT NULL COMMENT '外部异步任务 ID',
+    audio_duration_ms     BIGINT                   DEFAULT NULL COMMENT 'Provider 返回的计费音频时长毫秒',
+    input_tokens          BIGINT                   DEFAULT NULL COMMENT '视频理解输入Token数，Provider未返回时为空',
+    output_tokens         BIGINT                   DEFAULT NULL COMMENT '视频理解输出Token数，Provider未返回时为空',
+    result_count          INT                      DEFAULT NULL COMMENT '本次调用生成的结构化问题数量',
+    estimated_cost_usd    DECIMAL(18, 8)          DEFAULT NULL COMMENT '提交前预估美元费用',
+    actual_cost_usd       DECIMAL(18, 8)          DEFAULT NULL COMMENT '按实际用量计算的美元费用',
+    status                VARCHAR(24)    NOT NULL COMMENT '状态：SUBMITTED、SUCCESS、FAILED',
+    error_code            VARCHAR(64)             DEFAULT NULL COMMENT '失败错误码',
+    error_message         VARCHAR(500)            DEFAULT NULL COMMENT '失败摘要',
+    started_at            DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '调用开始时间',
+    completed_at          DATETIME                DEFAULT NULL COMMENT '调用完成时间',
+    create_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted            TINYINT        NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_media_api_call_id (call_id),
+    UNIQUE KEY uk_media_api_provider_task (provider_name, provider_task_id),
+    KEY idx_media_api_review (review_id, capability, create_time)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '媒体 Provider 调用流水表';
+
+-- 旧版仍在执行或等待重试的 P0-3 任务继续复用原时间轴，只补上视频理解步骤。
+-- 已完成的旧任务不自动调用付费模型，页面会将其视为尚未生成正式体检并由用户重新启动。
+INSERT INTO creator_preflight_step (
+    step_id, review_id, step_type, sequence_no, status, attempt_count, input_fingerprint
+)
+SELECT UUID(), review.review_id, 'ANALYZE_VIDEO', 3, 'PENDING', 0, review.input_fingerprint
+FROM creator_preflight_review review
+WHERE review.status IN ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'FAILED')
+  AND review.is_deleted = 0
+  AND NOT EXISTS (
+      SELECT 1 FROM creator_preflight_step step
+      WHERE step.review_id = review.review_id AND step.step_type = 'ANALYZE_VIDEO'
+  );
+
 
 -- P0-1 初始工具目录只保存官方入口，不把未经学习的页面内容伪装成菜单知识。
 INSERT INTO creator_tool_catalog (
@@ -1615,6 +1802,43 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_draft_video' AND COLUMN_NAME = 'probe_attempt_id');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 视频理解结果与用量：旧库补齐摘要和三列流水字段后即可继续复用已有 P0-3 数据。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_preflight_review ADD COLUMN executive_summary TEXT DEFAULT NULL COMMENT ''单视角发布前体检摘要'' AFTER capability_gaps',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_preflight_review' AND COLUMN_NAME = 'executive_summary');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_media_api_call_log ADD COLUMN input_tokens BIGINT DEFAULT NULL COMMENT ''视频理解输入Token数，Provider未返回时为空'' AFTER audio_duration_ms',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_media_api_call_log' AND COLUMN_NAME = 'input_tokens');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_media_api_call_log ADD COLUMN output_tokens BIGINT DEFAULT NULL COMMENT ''视频理解输出Token数，Provider未返回时为空'' AFTER input_tokens',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_media_api_call_log' AND COLUMN_NAME = 'output_tokens');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_media_api_call_log ADD COLUMN result_count INT DEFAULT NULL COMMENT ''本次调用生成的结构化问题数量'' AFTER output_tokens',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_media_api_call_log' AND COLUMN_NAME = 'result_count');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 当前发布前试映任务：旧库必须补齐，否则 P0-3 无法把发布后门禁绑定到当前成片任务。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_draft_video ADD COLUMN current_review_id VARCHAR(64) DEFAULT NULL COMMENT ''当前发布前试映任务ID，P0-3 创建任务后写入'' AFTER status',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_draft_video' AND COLUMN_NAME = 'current_review_id');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 参考视频质量分可信度字段：这里仅补齐旧库缺失列，避免 db-init 每次执行时清空已有质量分数据

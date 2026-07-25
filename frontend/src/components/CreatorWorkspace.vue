@@ -11,6 +11,7 @@ import {
 import {
   getCurrentDraftVideo,
   getCurrentMediaProcessingJob,
+  getCurrentPreflightReview,
   getMediaFeatureStatus,
 } from '@/api/media'
 import NotificationToast from '@/components/NotificationToast.vue'
@@ -54,7 +55,7 @@ import type {
   LlmApiModelCategory,
   ResultModalTarget,
 } from '@/types/creator'
-import type { DraftVideo, MediaProcessingJob } from '@/types/media'
+import type { DraftVideo, MediaProcessingJob, PreflightReviewStatus } from '@/types/media'
 import { useCreatorStore } from '@/stores/creatorStore'
 import { useCreatorEvaluation, type CreatorEvaluationResultDraft } from '@/composables/creator/useCreatorEvaluation'
 import { useCreatorUsage } from '@/composables/creator/useCreatorUsage'
@@ -243,12 +244,13 @@ const isMediaFeatureEnabled = ref(false)
 const isMediaFeatureAvailabilityResolved = ref(false)
 const currentDraftVideo = ref<DraftVideo | null>(null)
 const currentMediaProcessingStatus = ref<MediaProcessingJob['status'] | null>(null)
+const currentPreflightReviewStatus = ref<PreflightReviewStatus | null>(null)
 const productionPlanReady = ref(false)
 let currentDraftRefreshGeneration = 0
 const mediaFeatureUnavailableMessage =
   '发布前试映未启用，任务不能进入观众反馈阶段。请先完成媒体配置并开启该能力。'
 const mediaPreflightRequiredMessage =
-  '请先在成片试映完成媒体探测和预处理，再进入观众反馈阶段。'
+  '请先在成片试映完成媒体探测、预处理和发布前试映，再进入观众反馈阶段。'
 type CreatorStepMeta = {
   key: CreatorStepKey
   label: string
@@ -331,6 +333,9 @@ const hasReadyPreflightDraft = computed(() => currentDraftVideo.value?.status ==
 const hasCompletedPreflightProcessing = computed(
   () => hasReadyPreflightDraft.value && currentMediaProcessingStatus.value === 'COMPLETED',
 )
+const hasCompletedPreflightReview = computed(
+  () => hasCompletedPreflightProcessing.value && currentPreflightReviewStatus.value === 'COMPLETED',
+)
 const canEnterFeedback = computed(() =>
   Boolean(
     selectedTask.value
@@ -338,7 +343,7 @@ const canEnterFeedback = computed(() =>
         || (hasConfirmedPrePublish.value
           && productionPlanReady.value
           && isMediaFeatureEnabled.value
-          && hasCompletedPreflightProcessing.value)),
+          && hasCompletedPreflightReview.value)),
   ),
 )
 const feedbackModule = useCreatorFeedback(
@@ -768,9 +773,9 @@ function creatorStepIndex(stepKey: CreatorStepKey) {
 }
 
 function isCreatorStepCompleted(stepKey: CreatorStepKey) {
-  // 成片试映必须同时完成媒体探测和预处理，避免页面提前开放发布后流程。
+  // 成片试映必须完成媒体探测、预处理和 P0-3 试映，避免页面提前开放发布后流程。
   if (stepKey === 'preflight') {
-    return hasCompletedPreflightProcessing.value
+    return hasCompletedPreflightReview.value
   }
   if (stepKey === 'production') {
     return productionPlanReady.value
@@ -818,7 +823,7 @@ function navigateCreatorStep(stepKey: CreatorStepKey) {
     selectedTask.value &&
     requiresPreflight(selectedTask.value) &&
     isMediaFeatureEnabled.value &&
-    !hasCompletedPreflightProcessing.value
+    !hasCompletedPreflightReview.value
   ) {
     errorMessage.value = mediaPreflightRequiredMessage
     return
@@ -891,6 +896,7 @@ async function selectTask(taskId: string) {
   taskModule.resetTaskForm()
   currentDraftVideo.value = null
   currentMediaProcessingStatus.value = null
+  currentPreflightReviewStatus.value = null
   productionPlanReady.value = false
   // 委托 taskModule 加载完整任务（内部已处理 selectedTask / store）
   const task = await taskModule.loadTask(taskId)
@@ -925,6 +931,7 @@ async function refreshCurrentDraftVideo(taskId = selectedTask.value?.taskId) {
   if (!taskId || !isMediaFeatureEnabled.value) {
     currentDraftVideo.value = null
     currentMediaProcessingStatus.value = null
+    currentPreflightReviewStatus.value = null
     return
   }
   try {
@@ -935,6 +942,7 @@ async function refreshCurrentDraftVideo(taskId = selectedTask.value?.taskId) {
     currentDraftVideo.value = draft
     if (draft.status !== 'READY_FOR_REVIEW') {
       currentMediaProcessingStatus.value = null
+      currentPreflightReviewStatus.value = null
       return
     }
     try {
@@ -942,12 +950,33 @@ async function refreshCurrentDraftVideo(taskId = selectedTask.value?.taskId) {
       if (generation === currentDraftRefreshGeneration && selectedTask.value?.taskId === taskId) {
         currentMediaProcessingStatus.value = job.status
       }
+      if (job.status !== 'COMPLETED') {
+        currentPreflightReviewStatus.value = null
+        return
+      }
+      try {
+        const review = await getCurrentPreflightReview(taskId, draft.versionId)
+        if (generation === currentDraftRefreshGeneration && selectedTask.value?.taskId === taskId) {
+          currentPreflightReviewStatus.value = review.status
+        }
+      } catch (error) {
+        if (generation !== currentDraftRefreshGeneration || selectedTask.value?.taskId !== taskId) {
+          return
+        }
+        if (error instanceof ApiError && error.status === 404) {
+          currentPreflightReviewStatus.value = null
+          return
+        }
+        // 临时读取失败时保留上一次试映状态，避免网络抖动让已完成门禁倒退。
+        showError(error)
+      }
     } catch (error) {
       if (generation !== currentDraftRefreshGeneration || selectedTask.value?.taskId !== taskId) {
         return
       }
       if (error instanceof ApiError && error.status === 404) {
         currentMediaProcessingStatus.value = null
+        currentPreflightReviewStatus.value = null
         return
       }
       // 临时读取失败时保留上一次处理状态，避免网络抖动让已完成门禁倒退。
@@ -960,6 +989,7 @@ async function refreshCurrentDraftVideo(taskId = selectedTask.value?.taskId) {
     if (error instanceof ApiError && error.status === 404) {
       currentDraftVideo.value = null
       currentMediaProcessingStatus.value = null
+      currentPreflightReviewStatus.value = null
       return
     }
     // 暂时读取失败时保留上一次服务端事实，避免把网络故障伪装成“没有成片”。
@@ -1296,7 +1326,7 @@ function normalizeReturnStepForTask(
   if (
     targetStep === 'feedback' &&
     requiresPreflight(task) &&
-    (!isMediaFeatureEnabled.value || !hasCompletedPreflightProcessing.value)
+    (!isMediaFeatureEnabled.value || !hasCompletedPreflightReview.value)
   ) {
     return resolveTaskEntryStep(task)
   }
@@ -1338,6 +1368,7 @@ function resetSelectedWorkspace() {
   selectedTask.value = null
   currentDraftVideo.value = null
   currentMediaProcessingStatus.value = null
+  currentPreflightReviewStatus.value = null
   productionPlanReady.value = false
   creatorStore.selectedTaskId = null
   taskManageMode.value = 'create'
@@ -1491,6 +1522,7 @@ provideCreatorWorkspace({
     contextTermChips,
     currentDraftVideo,
     currentMediaProcessingStatus,
+    currentPreflightReviewStatus,
     currentVideoType,
     downloadReportMarkdown,
     feedback,

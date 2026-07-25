@@ -3,6 +3,8 @@ package com.link.linkagent.creator.media.workflow;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingJobRecord;
+import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
+import com.link.linkagent.creator.media.preflight.model.PreflightReviewRecord;
 import com.link.linkagent.creator.media.probe.service.DraftVideoProbeRecoveryService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
@@ -21,7 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
  * 阶段 7 发布后流程门禁。
  * <p>
  * 成片上传成功不代表已完成发布前检查。反馈、BV 绑定等发布后写入操作必须确认当前成片
- * 已通过 FFprobe 和媒体预处理，才能避免任务绕过“确认发布方案 -> 成片试映 -> 实际发布”的主流程。
+ * 已通过 FFprobe、媒体预处理和发布前试映，才能避免任务绕过“确认发布方案 -> 成片试映 -> 实际发布”的主流程。
  */
 @Service
 public class CreatorMediaWorkflowGateService {
@@ -29,6 +31,7 @@ public class CreatorMediaWorkflowGateService {
     private final CreatorMediaProperties mediaProperties;
     private final MediaUploadMapper mediaUploadMapper;
     private final MediaProcessingMapper mediaProcessingMapper;
+    private final PreflightReviewMapper preflightReviewMapper;
     private final CreatorWorkflowMapper creatorWorkflowMapper;
     private final CreatorSuggestionMapper creatorSuggestionMapper;
     private final DraftVideoProbeRecoveryService probeRecoveryService;
@@ -36,12 +39,14 @@ public class CreatorMediaWorkflowGateService {
     public CreatorMediaWorkflowGateService(CreatorMediaProperties mediaProperties,
                                             MediaUploadMapper mediaUploadMapper,
                                             MediaProcessingMapper mediaProcessingMapper,
+                                            PreflightReviewMapper preflightReviewMapper,
                                             CreatorWorkflowMapper creatorWorkflowMapper,
                                             CreatorSuggestionMapper creatorSuggestionMapper,
                                             DraftVideoProbeRecoveryService probeRecoveryService) {
         this.mediaProperties = mediaProperties;
         this.mediaUploadMapper = mediaUploadMapper;
         this.mediaProcessingMapper = mediaProcessingMapper;
+        this.preflightReviewMapper = preflightReviewMapper;
         this.creatorWorkflowMapper = creatorWorkflowMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.probeRecoveryService = probeRecoveryService;
@@ -62,7 +67,7 @@ public class CreatorMediaWorkflowGateService {
     }
 
     /**
-     * 检查任务的当前成片是否已通过媒体探测和 P0-2 媒体预处理。
+     * 检查任务的当前成片是否已通过媒体探测、P0-2 媒体预处理和 P0-4a 完整发布前体检。
      *
      * @param taskId        创作任务 ID
      * @param ownerId       当前单人工作台可信归属
@@ -85,6 +90,8 @@ public class CreatorMediaWorkflowGateService {
                             "请先生成预览成片并完成媒体预处理，才能进入" + nextStageName + "阶段。"
                     ));
             if ("COMPLETED".equals(processingJob.status())) {
+                requireCompletedPreflightReview(
+                        taskId.trim(), ownerId, draft.versionId(), processingJob.jobId(), nextStageName);
                 return;
             }
             if ("QUEUED".equals(processingJob.status()) || "RUNNING".equals(processingJob.status())) {
@@ -107,6 +114,40 @@ public class CreatorMediaWorkflowGateService {
         throw new ResponseStatusException(
                 HttpStatus.CONFLICT,
                 "成片尚未通过媒体探测，不能进入" + nextStageName + "阶段。"
+        );
+    }
+
+    private void requireCompletedPreflightReview(String taskId,
+                                                 String ownerId,
+                                                 String versionId,
+                                                 String processingJobId,
+                                                 String nextStageName) {
+        PreflightReviewRecord review = preflightReviewMapper.findCurrentByVersion(taskId, ownerId, versionId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "请先完成发布前试映，才能进入" + nextStageName + "阶段。"
+                ));
+        if (!processingJobId.equals(review.processingJobId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "当前发布前试映不对应最新媒体预处理结果，请重新完成试映后再进入" + nextStageName + "阶段。"
+            );
+        }
+        if ("COMPLETED".equals(review.status())) {
+            return;
+        }
+        if ("QUEUED".equals(review.status())
+                || "RUNNING".equals(review.status())
+                || "RETRY_WAIT".equals(review.status())
+                || "CANCEL_REQUESTED".equals(review.status())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "发布前试映仍在处理中，请等待完成后再进入" + nextStageName + "阶段。"
+            );
+        }
+        throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "发布前试映尚未完成，请处理失败或取消的任务后再进入" + nextStageName + "阶段。"
         );
     }
 

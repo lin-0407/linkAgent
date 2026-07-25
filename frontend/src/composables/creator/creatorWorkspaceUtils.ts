@@ -80,22 +80,6 @@ export function formatDuration(value: number | null | undefined) {
   return `${minutes} min ${seconds} s`
 }
 
-export function formatTokenUsage(record: LlmApiCallRecord) {
-  if (record.totalTokens !== null && record.totalTokens !== undefined) {
-    return `${formatUsageToken(record.totalTokens)} token`
-  }
-  return 'token 未返回'
-}
-
-export function formatWorkflowCallUsage(record: LlmApiCallRecord) {
-  const statusText = record.status === 'FAILED' ? '失败' : usageStatusLabel(record.status)
-  const base = `${record.modelCategory} · ${record.modelName || '模型未返回'} · ${statusText} · ${formatTokenUsage(record)} · ${formatDuration(record.elapsedMs)}`
-  if (record.errorMessage) {
-    return `${base} · ${record.errorMessage}`
-  }
-  return base
-}
-
 export function formatInputCount(record: LlmApiCallRecord) {
   if (record.inputCount === null || record.inputCount === undefined) {
     return record.modelCategory === 'TEXT' ? '单次对话' : '未记录'
@@ -267,28 +251,6 @@ export function workflowContentTypeLabel(contentType: string) {
     ERROR: '错误',
   }
   return labels[contentType] ?? contentType
-}
-
-export function workflowStepTypeLabel(stepType: string) {
-  const labels: Record<string, string> = {
-    LOAD_CONTEXT: '读取上下文',
-    AGENT_REASONING: 'Agent 推理',
-    TOOL_CALL: '工具调用',
-    LLM_CALL: '模型调用',
-    SAVE_RESULT: '保存结果',
-    CONFIRM_RESULT: '确认结果',
-  }
-  return labels[stepType] ?? stepType
-}
-
-export function workflowStepStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    PENDING: '待执行',
-    RUNNING: '执行中',
-    SUCCESS: '成功',
-    FAILED: '失败',
-  }
-  return labels[status] ?? status
 }
 
 export function workflowSessionLabel(status: string) {

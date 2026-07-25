@@ -9,9 +9,3 @@ export interface PromptTemplate {
   createTime: string
   updateTime: string
 }
-
-/** 按场景分组后的提示词列表 */
-export interface PromptGroup {
-  scene: string
-  items: PromptTemplate[]
-}

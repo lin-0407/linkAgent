@@ -32,6 +32,8 @@ public class CreatorMediaProperties {
     private final Upload upload = new Upload();
     /** 媒体处理子配置（ffprobe 路径、超时、Provider 短签 TTL） */
     private final Processing processing = new Processing();
+    /** 发布前试映子配置（持久化 Worker 与 ASR Provider） */
+    private final Preflight preflight = new Preflight();
 
     // ===== 顶层 getter/setter =====
 
@@ -50,6 +52,8 @@ public class CreatorMediaProperties {
     public Upload getUpload() { return upload; }
 
     public Processing getProcessing() { return processing; }
+
+    public Preflight getPreflight() { return preflight; }
 
     /**
      * 开启媒体能力时执行运行前校验。
@@ -112,6 +116,14 @@ public class CreatorMediaProperties {
         }
         if (processing.maxAttempts <= 0) {
             throw new IllegalStateException("媒体处理最大尝试次数必须大于0");
+        }
+        if (preflight.pollIntervalMs <= 0 || preflight.leaseDuration == null
+                || preflight.leaseDuration.isZero() || preflight.leaseDuration.isNegative()) {
+            throw new IllegalStateException("试映任务轮询间隔和租约时长必须大于0");
+        }
+        if (preflight.maxAttempts <= 0 || preflight.providerPollInterval == null
+                || preflight.providerPollInterval.isZero() || preflight.providerPollInterval.isNegative()) {
+            throw new IllegalStateException("试映任务最大尝试次数和 Provider 轮询间隔必须大于0");
         }
     }
 
@@ -226,5 +238,73 @@ public class CreatorMediaProperties {
 
         public BigDecimal getAsrUsdPerSecond() { return asrUsdPerSecond; }
         public void setAsrUsdPerSecond(BigDecimal asrUsdPerSecond) { this.asrUsdPerSecond = asrUsdPerSecond; }
+    }
+
+    /**
+     * 发布前试映配置。
+     * ASR Key 不在媒体总开关启动时强制校验，避免只使用上传和预处理的部署被无关配置阻断。
+     */
+    public static class Preflight {
+
+        /** 持久化任务轮询间隔 */
+        private long pollIntervalMs = 2000L;
+        /** 单次领取租约；Provider 轮询会主动释放租约，不长期占用 Worker */
+        private Duration leaseDuration = Duration.ofSeconds(90);
+        /** 瞬时失败自动重试上限 */
+        private int maxAttempts = 3;
+        /** 异步 ASR 状态查询间隔 */
+        private Duration providerPollInterval = Duration.ofSeconds(5);
+        /** DashScope 中国区基础地址 */
+        private String dashScopeBaseUrl = "https://dashscope.aliyuncs.com";
+        /** DashScope API Key；通过环境变量注入 */
+        private String dashScopeApiKey = "";
+        /** 文件转写模型 */
+        private String asrModel = "qwen3-asr-flash-filetrans";
+        /** 单次全片粗审使用的视频理解模型 */
+        private String videoModel = "qwen3-vl-flash";
+        /** 全片粗审抽帧频率，P0 按技术方案使用低成本 0.2 fps */
+        private double videoFps = 0.2d;
+        /** HTTP 连接超时 */
+        private Duration connectTimeout = Duration.ofSeconds(10);
+        /** HTTP 响应超时 */
+        private Duration readTimeout = Duration.ofSeconds(30);
+        /** 视频理解同步请求最长等待时间 */
+        private Duration videoReadTimeout = Duration.ofMinutes(10);
+
+        public long getPollIntervalMs() { return pollIntervalMs; }
+        public void setPollIntervalMs(long pollIntervalMs) { this.pollIntervalMs = pollIntervalMs; }
+
+        public Duration getLeaseDuration() { return leaseDuration; }
+        public void setLeaseDuration(Duration leaseDuration) { this.leaseDuration = leaseDuration; }
+
+        public int getMaxAttempts() { return maxAttempts; }
+        public void setMaxAttempts(int maxAttempts) { this.maxAttempts = maxAttempts; }
+
+        public Duration getProviderPollInterval() { return providerPollInterval; }
+        public void setProviderPollInterval(Duration providerPollInterval) { this.providerPollInterval = providerPollInterval; }
+
+        public String getDashScopeBaseUrl() { return dashScopeBaseUrl; }
+        public void setDashScopeBaseUrl(String dashScopeBaseUrl) { this.dashScopeBaseUrl = dashScopeBaseUrl; }
+
+        public String getDashScopeApiKey() { return dashScopeApiKey; }
+        public void setDashScopeApiKey(String dashScopeApiKey) { this.dashScopeApiKey = dashScopeApiKey; }
+
+        public String getAsrModel() { return asrModel; }
+        public void setAsrModel(String asrModel) { this.asrModel = asrModel; }
+
+        public String getVideoModel() { return videoModel; }
+        public void setVideoModel(String videoModel) { this.videoModel = videoModel; }
+
+        public double getVideoFps() { return videoFps; }
+        public void setVideoFps(double videoFps) { this.videoFps = videoFps; }
+
+        public Duration getConnectTimeout() { return connectTimeout; }
+        public void setConnectTimeout(Duration connectTimeout) { this.connectTimeout = connectTimeout; }
+
+        public Duration getReadTimeout() { return readTimeout; }
+        public void setReadTimeout(Duration readTimeout) { this.readTimeout = readTimeout; }
+
+        public Duration getVideoReadTimeout() { return videoReadTimeout; }
+        public void setVideoReadTimeout(Duration videoReadTimeout) { this.videoReadTimeout = videoReadTimeout; }
     }
 }

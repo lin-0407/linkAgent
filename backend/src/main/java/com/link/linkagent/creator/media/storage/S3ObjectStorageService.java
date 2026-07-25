@@ -324,6 +324,24 @@ public class S3ObjectStorageService implements ObjectStorageService {
     }
 
     @Override
+    public PresignedObjectRead presignAsrGetObject(String bucketName,
+                                                   String objectKey,
+                                                   Duration signatureDuration) {
+        try {
+            return OssV1ObjectReadSigner.sign(
+                    properties.getProviderEndpoint(),
+                    bucketName,
+                    objectKey,
+                    properties.getAccessKey(),
+                    properties.getSecretKey(),
+                    signatureDuration
+            );
+        } catch (RuntimeException exception) {
+            throw new MediaStorageException("生成 ASR 媒体读取签名失败", exception);
+        }
+    }
+
+    @Override
     public void deleteObject(String objectKey) {
         try {
             s3Client.deleteObject(

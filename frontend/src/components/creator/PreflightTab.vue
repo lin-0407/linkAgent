@@ -2,13 +2,18 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ApiError } from '@/api/http'
 import {
+  cancelPreflightReview,
+  createPreflightReview,
   createMediaProcessingAssetReadUrl,
   createMediaProcessingJob,
   estimateMediaProcessing,
   getCurrentDraftVideo,
   getCurrentMediaProcessingJob,
+  getCurrentPreflightReview,
   getDraftVideo,
+  getPreflightReview,
   probeDraftVideo,
+  retryPreflightReview,
   retryMediaProcessingJob,
 } from '@/api/media'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
@@ -17,6 +22,7 @@ import { useMediaUpload } from '@/composables/creator/useMediaUpload'
 const {
   currentDraftVideo,
   currentMediaProcessingStatus,
+  currentPreflightReviewStatus,
   selectedTaskId,
   selectedTask,
   refreshCurrentDraftVideo,
@@ -25,6 +31,7 @@ const versionName = ref('V1 初剪')
 const selectedFile = ref<File | null>(null)
 const localError = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
+const processingPreviewVideo = ref<HTMLVideoElement | null>(null)
 const resultDialog = ref<HTMLElement | null>(null)
 const isProbing = ref(false)
 const resultModalKind = ref<'upload' | 'probe' | null>(null)
@@ -33,6 +40,8 @@ let viewGeneration = 0
 let processingEstimateGeneration = 0
 let probeRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let processingRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let preflightEventSource: EventSource | null = null
+let preflightReconnectTimer: ReturnType<typeof setTimeout> | null = null
 let resultModalReturnFocus: HTMLElement | null = null
 let isResultModalBackdropPointerDown = false
 
@@ -71,6 +80,12 @@ const processingJob = ref<Awaited<ReturnType<typeof getCurrentMediaProcessingJob
 const processingBusy = ref(false)
 const processingError = ref('')
 const processingAssetUrls = ref<Record<string, string>>({})
+const preflightReview = ref<Awaited<ReturnType<typeof getPreflightReview>> | null>(null)
+const preflightDisclosureConfirmed = ref(false)
+const preflightReviewFocus = ref('')
+const preflightBusy = ref(false)
+const preflightError = ref('')
+const newPreflightIdempotencyKey = ref('')
 
 const taskId = computed(() => selectedTaskId.value ?? '')
 const fileSummary = computed(() => {
@@ -244,10 +259,46 @@ const processingSignalFacts = computed(() => {
     ['峰值音量', summary.maxVolumeDb == null ? '无音轨' : summary.maxVolumeDb.toFixed(1) + ' dB'],
   ]
 })
+const canStartPreflight = computed(
+  () => processingJob.value?.status === 'COMPLETED' && !preflightReview.value,
+)
+const preflightIsActive = computed(() => {
+  const status = preflightReview.value?.status
+  return status === 'QUEUED' || status === 'RUNNING' || status === 'RETRY_WAIT' || status === 'CANCEL_REQUESTED'
+})
+const preflightTranscript = computed(
+  () => preflightReview.value?.evidence.filter((item) => item.sourceType === 'TRANSCRIPT') ?? [],
+)
+const preflightIssues = computed(() => preflightReview.value?.issues ?? [])
+const preflightProviderTaskId = computed(
+  () => preflightReview.value?.steps.find((item) => item.stepType === 'TRANSCRIBE')?.providerTaskId ?? null,
+)
+const preflightStepLabel = computed(() => {
+  if (preflightReview.value?.currentStep === 'TRANSCRIBE') return '正在生成带时间戳字幕'
+  if (preflightReview.value?.currentStep === 'BUILD_TIMELINE') return '正在汇总媒体时间轴'
+  if (preflightReview.value?.currentStep === 'ANALYZE_VIDEO') return '正在生成发布前体检'
+  return '发布前试映已完成'
+})
+
+function severityLabel(severity: 'BLOCKER' | 'HIGH' | 'MEDIUM' | 'LOW') {
+  if (severity === 'BLOCKER') return '阻断'
+  if (severity === 'HIGH') return '高优先级'
+  if (severity === 'MEDIUM') return '中优先级'
+  return '低优先级'
+}
+
+async function seekPreview(startMs: number) {
+  const video = processingPreviewVideo.value
+  if (!video) return
+  video.currentTime = Math.max(0, startMs / 1000)
+  await video.play().catch(() => undefined)
+  video.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
 
 watch(completedDraft, (draft) => {
   if (draft && draft.taskId === taskId.value) currentDraftVideo.value = draft
   currentMediaProcessingStatus.value = null
+  currentPreflightReviewStatus.value = null
   if (draft?.status === 'READY_FOR_REVIEW') void restoreProcessingState()
 })
 
@@ -294,6 +345,14 @@ watch(taskId, async (nextTaskId) => {
   processingEstimate.value = null
   processingEstimateFingerprint.value = ''
   processingJob.value = null
+  preflightReview.value = null
+  currentPreflightReviewStatus.value = null
+  newPreflightIdempotencyKey.value = ''
+  preflightDisclosureConfirmed.value = false
+  preflightReviewFocus.value = ''
+  preflightBusy.value = false
+  preflightError.value = ''
+  disconnectPreflightEvents()
   processingBusy.value = false
   currentMediaProcessingStatus.value = null
   processingAssetUrls.value = {}
@@ -320,6 +379,7 @@ onBeforeUnmount(() => {
   processingEstimateGeneration += 1
   clearProbeRefreshTimer()
   clearProcessingRefreshTimer()
+  disconnectPreflightEvents()
   resultModalReturnFocus = null
   disposeUpload()
 })
@@ -537,13 +597,21 @@ async function restoreProcessingState() {
     ) {
       return
     }
+    if (job.jobId !== processingJob.value?.jobId) {
+      preflightReview.value = null
+      currentPreflightReviewStatus.value = null
+      disconnectPreflightEvents()
+    }
     processingJob.value = job
     currentMediaProcessingStatus.value = job.status
     processingOptions.frameIntervalSeconds = job.frameIntervalSeconds as 5 | 10 | 15 | 30
     processingOptions.resolution = job.targetResolution as 'P480' | 'P720' | 'P1080'
     processingOptions.modelPlan = job.modelPlan as 'FLASH' | 'FLASH_PLUS_REVIEW'
     processingOptions.includeAsr = job.includeAsr
-    if (processingJob.value.status === 'COMPLETED') await loadProcessingAssetUrls()
+    if (processingJob.value.status === 'COMPLETED') {
+      await loadProcessingAssetUrls()
+      await restorePreflightState()
+    }
     else scheduleProcessingRefreshIfNecessary()
   } catch (error) {
     if (
@@ -585,9 +653,17 @@ async function startMediaProcessing() {
     ) {
       return
     }
+    if (job.jobId !== processingJob.value?.jobId) {
+      preflightReview.value = null
+      currentPreflightReviewStatus.value = null
+      disconnectPreflightEvents()
+    }
     processingJob.value = job
     currentMediaProcessingStatus.value = processingJob.value.status
-    if (processingJob.value.status === 'COMPLETED') await loadProcessingAssetUrls()
+    if (processingJob.value.status === 'COMPLETED') {
+      await loadProcessingAssetUrls()
+      await restorePreflightState()
+    }
     else scheduleProcessingRefreshIfNecessary()
   } catch (error) {
     if (
@@ -622,6 +698,7 @@ async function refreshProcessingJob(showError = false) {
     currentMediaProcessingStatus.value = processingJob.value.status
     if (processingJob.value.status === 'COMPLETED') {
       await loadProcessingAssetUrls()
+      await restorePreflightState()
     }
     scheduleProcessingRefreshIfNecessary()
   } catch (error) {
@@ -671,6 +748,176 @@ async function loadProcessingAssetUrls() {
     return
   }
   processingAssetUrls.value = nextUrls
+}
+
+async function restorePreflightState() {
+  const currentTaskId = taskId.value
+  const versionId = activeVersionId.value
+  if (!currentTaskId || !versionId || processingJob.value?.status !== 'COMPLETED') return
+  const generation = viewGeneration
+  try {
+    const review = await getCurrentPreflightReview(currentTaskId, versionId)
+    if (
+      isDisposed ||
+      generation !== viewGeneration ||
+      currentTaskId !== taskId.value ||
+      versionId !== activeVersionId.value
+    ) return
+    applyPreflightSnapshot(review)
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      preflightReview.value = null
+      currentPreflightReviewStatus.value = null
+      newPreflightIdempotencyKey.value = `preflight-${versionId}-${processingJob.value?.jobId}-video-analysis`
+      disconnectPreflightEvents()
+      return
+    }
+    if (!isDisposed && generation === viewGeneration) preflightError.value = toMessage(error)
+  }
+}
+
+async function startPreflight() {
+  const currentTaskId = taskId.value
+  const versionId = activeVersionId.value
+  if (!currentTaskId || !versionId || !canStartPreflight.value) return
+  if (!preflightDisclosureConfirmed.value) {
+    preflightError.value = '请先确认代理视频和音轨会通过短时私有地址提交给 DashScope'
+    return
+  }
+  const generation = viewGeneration
+  preflightBusy.value = true
+  preflightError.value = ''
+  try {
+    const baseIdempotencyKey = `preflight-${versionId}-${processingJob.value?.jobId}`
+    const idempotencyKey = newPreflightIdempotencyKey.value || baseIdempotencyKey
+    const review = await createPreflightReview(currentTaskId, idempotencyKey, {
+      versionId,
+      confirmedProviderDisclosure: preflightDisclosureConfirmed.value,
+      reviewFocus: preflightReviewFocus.value.trim() || undefined,
+    })
+    if (isDisposed || generation !== viewGeneration || currentTaskId !== taskId.value) return
+    applyPreflightSnapshot(review)
+  } catch (error) {
+    if (!isDisposed && generation === viewGeneration) preflightError.value = toMessage(error)
+  } finally {
+    if (generation === viewGeneration) preflightBusy.value = false
+  }
+}
+
+async function refreshPreflightReview() {
+  const currentTaskId = taskId.value
+  const reviewId = preflightReview.value?.reviewId
+  const generation = viewGeneration
+  if (!currentTaskId || !reviewId) return
+  try {
+    const review = await getPreflightReview(currentTaskId, reviewId)
+    if (
+      isDisposed ||
+      generation !== viewGeneration ||
+      currentTaskId !== taskId.value ||
+      reviewId !== preflightReview.value?.reviewId
+    ) return
+    applyPreflightSnapshot(review)
+  } catch (error) {
+    if (!isDisposed && generation === viewGeneration) {
+      preflightError.value = toMessage(error)
+      schedulePreflightReconnect()
+    }
+  }
+}
+
+async function cancelCurrentPreflight() {
+  const currentTaskId = taskId.value
+  const reviewId = preflightReview.value?.reviewId
+  if (!currentTaskId || !reviewId || !preflightIsActive.value) return
+  preflightBusy.value = true
+  preflightError.value = ''
+  try {
+    applyPreflightSnapshot(await cancelPreflightReview(currentTaskId, reviewId))
+  } catch (error) {
+    preflightError.value = toMessage(error)
+  } finally {
+    preflightBusy.value = false
+  }
+}
+
+async function retryCurrentPreflight() {
+  const currentTaskId = taskId.value
+  const reviewId = preflightReview.value?.reviewId
+  if (!currentTaskId || !reviewId || preflightReview.value?.status !== 'FAILED') return
+  preflightBusy.value = true
+  preflightError.value = ''
+  try {
+    applyPreflightSnapshot(await retryPreflightReview(currentTaskId, reviewId))
+  } catch (error) {
+    preflightError.value = toMessage(error)
+  } finally {
+    preflightBusy.value = false
+  }
+}
+
+function applyPreflightSnapshot(review: Awaited<ReturnType<typeof getPreflightReview>>) {
+  preflightReview.value = review
+  currentPreflightReviewStatus.value = review.status
+  newPreflightIdempotencyKey.value = ''
+  preflightError.value = ''
+  if (preflightIsActive.value) connectPreflightEvents()
+  else disconnectPreflightEvents()
+}
+
+function prepareNewPreflight() {
+  preflightReview.value = null
+  currentPreflightReviewStatus.value = null
+  preflightDisclosureConfirmed.value = false
+  preflightError.value = ''
+  newPreflightIdempotencyKey.value = `preflight-${activeVersionId.value}-${processingJob.value?.jobId}-${Date.now()}`
+}
+
+function connectPreflightEvents() {
+  const currentTaskId = taskId.value
+  const review = preflightReview.value
+  if (!currentTaskId || !review || !preflightIsActive.value || preflightEventSource) return
+  clearPreflightReconnectTimer()
+  const baseUrl = String(import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+  const url = `${baseUrl}/creator/tasks/${encodeURIComponent(currentTaskId)}/preflight-jobs/${encodeURIComponent(review.reviewId)}/events?afterSequence=${review.eventSequence}`
+  const source = new EventSource(url, { withCredentials: true })
+  preflightEventSource = source
+  const refresh = () => void refreshPreflightReview()
+  for (const eventName of [
+    'snapshot',
+    'review_status',
+    'step_started',
+    'step_progress',
+    'step_completed',
+    'step_failed',
+    'review_completed',
+    'review_cancelled',
+  ]) source.addEventListener(eventName, refresh)
+  source.onerror = () => {
+    disconnectPreflightEvents(false)
+    schedulePreflightReconnect()
+  }
+}
+
+function schedulePreflightReconnect() {
+  clearPreflightReconnectTimer()
+  if (!preflightIsActive.value || isDisposed) return
+  preflightReconnectTimer = setTimeout(async () => {
+    preflightReconnectTimer = null
+    await refreshPreflightReview()
+    if (preflightIsActive.value) connectPreflightEvents()
+  }, 2500)
+}
+
+function disconnectPreflightEvents(clearReconnect = true) {
+  preflightEventSource?.close()
+  preflightEventSource = null
+  if (clearReconnect) clearPreflightReconnectTimer()
+}
+
+function clearPreflightReconnectTimer() {
+  if (preflightReconnectTimer) clearTimeout(preflightReconnectTimer)
+  preflightReconnectTimer = null
 }
 
 function scheduleProcessingRefreshIfNecessary(delay = 2000) {
@@ -1070,6 +1317,7 @@ function toMessage(error: unknown) {
             <span>{{ formatBytes(processingPreviewAsset.fileSize) }}</span>
           </div>
           <video
+            ref="processingPreviewVideo"
             controls
             preload="metadata"
             :src="processingAssetUrls[processingPreviewAsset.assetId]"
@@ -1087,6 +1335,164 @@ function toMessage(error: unknown) {
             <figcaption>{{ formatDuration(asset.timestampMs || 0) }}</figcaption>
           </figure>
         </div>
+      </section>
+
+      <section v-if="processingJob?.status === 'COMPLETED'" class="preflight-review-panel">
+        <div class="preflight-processing-head">
+          <div>
+            <span class="preflight-index">04</span>
+            <p class="preflight-eyebrow">PERSISTENT PREFLIGHT</p>
+            <h4>生成发布前体检</h4>
+            <p>页面关闭后任务仍会继续；系统会先汇总时间轴，再用单个视觉模型检查成片。</p>
+          </div>
+          <span v-if="preflightReview" class="preflight-state-chip">{{ preflightReview.status }}</span>
+        </div>
+
+        <template v-if="!preflightReview">
+          <label class="preflight-focus-field">
+            <span>后续试映重点（可选）</span>
+            <textarea
+              v-model="preflightReviewFocus"
+              maxlength="1000"
+              rows="3"
+              placeholder="例如：重点检查项目演示是否能让非技术观众看懂"
+              :disabled="preflightBusy"
+            ></textarea>
+          </label>
+          <label class="preflight-provider-consent">
+            <input
+              v-model="preflightDisclosureConfirmed"
+              type="checkbox"
+              :disabled="preflightBusy"
+            />
+            <span>我确认代理视频和音轨会通过短时私有 OSS 地址提交给 DashScope 处理。</span>
+          </label>
+          <div class="preflight-actions">
+            <button
+              type="button"
+              class="preflight-primary"
+              :disabled="!canStartPreflight || !preflightDisclosureConfirmed || preflightBusy"
+              @click="startPreflight"
+            >
+              {{ preflightBusy ? '正在创建任务' : '开始发布前试映' }}
+            </button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="preflight-processing-status" aria-live="polite">
+            <div class="preflight-processing-status-head">
+              <strong>{{ preflightReview.status === 'COMPLETED' ? '发布前体检已完成' : preflightStepLabel }}</strong>
+              <span>{{ preflightReview.progressPercent }}%</span>
+            </div>
+            <div class="preflight-progress-track">
+              <span :style="{ width: preflightReview.progressPercent + `%` }"></span>
+            </div>
+            <p v-if="preflightReview.executiveSummary" class="preflight-cost-note">
+              {{ preflightReview.executiveSummary }}
+            </p>
+            <p v-if="preflightReview.errorMessage" class="preflight-processing-error">
+              {{ preflightReview.errorMessage }}
+            </p>
+          </div>
+
+          <dl class="preflight-review-facts">
+            <div>
+              <dt>ASR 任务 ID</dt>
+              <dd>{{ preflightProviderTaskId || '尚未提交' }}</dd>
+            </div>
+            <div>
+              <dt>实际用量</dt>
+              <dd>{{ preflightReview.usageSeconds == null ? '等待返回' : `${preflightReview.usageSeconds} 秒` }}</dd>
+            </div>
+            <div>
+              <dt>实际费用</dt>
+              <dd>{{ preflightReview.actualCostUsd == null ? '等待返回' : formatCost(preflightReview.actualCostUsd) }}</dd>
+            </div>
+          </dl>
+
+          <div class="preflight-actions">
+            <button
+              v-if="preflightIsActive"
+              type="button"
+              class="preflight-ghost"
+              :disabled="preflightBusy || preflightReview.status === 'CANCEL_REQUESTED'"
+              @click="cancelCurrentPreflight"
+            >
+              {{ preflightReview.status === 'CANCEL_REQUESTED' ? '正在取消' : '取消任务' }}
+            </button>
+            <button
+              v-if="preflightReview.status === 'FAILED' && preflightReview.errorCode !== 'ASR_SUBMISSION_AMBIGUOUS'"
+              type="button"
+              class="preflight-primary"
+              :disabled="preflightBusy"
+              @click="retryCurrentPreflight"
+            >
+              人工重试
+            </button>
+            <button
+              v-if="preflightReview.status === 'CANCELLED'"
+              type="button"
+              class="preflight-primary"
+              :disabled="preflightBusy"
+              @click="prepareNewPreflight"
+            >
+              重新开始试映
+            </button>
+          </div>
+
+          <section v-if="preflightReview.status === 'COMPLETED'" class="preflight-report">
+            <header class="preflight-report-head">
+              <div>
+                <span>单视角体检</span>
+                <h5>{{ preflightIssues.length ? `发现 ${preflightIssues.length} 个可定位问题` : '未发现明确问题' }}</h5>
+              </div>
+              <strong>{{ preflightIssues.filter((issue) => issue.severity === 'HIGH' || issue.severity === 'BLOCKER').length }} 个重点</strong>
+            </header>
+            <div v-if="preflightIssues.length" class="preflight-issue-list">
+              <article
+                v-for="issue in preflightIssues"
+                :key="issue.issueId"
+                class="preflight-issue-card"
+                :data-severity="issue.severity"
+              >
+                <div class="preflight-issue-meta">
+                  <span>{{ severityLabel(issue.severity) }}</span>
+                  <time>{{ formatDuration(issue.startMs) }} - {{ formatDuration(issue.endMs) }}</time>
+                  <small>{{ issue.dimension }} · 置信度 {{ Math.round(issue.confidence * 100) }}%</small>
+                </div>
+                <h6>{{ issue.title }}</h6>
+                <p>{{ issue.description }}</p>
+                <div class="preflight-issue-action">
+                  <span>建议动作</span>
+                  <p>{{ issue.suggestedAction }}</p>
+                </div>
+                <button type="button" class="preflight-issue-seek" @click="seekPreview(issue.startMs)">
+                  定位到 {{ formatDuration(issue.startMs) }} 播放
+                </button>
+                <small v-if="issue.needsHumanReview" class="preflight-human-review">需要作者人工确认</small>
+              </article>
+            </div>
+            <p v-else class="preflight-report-empty">当前粗审没有形成可验证的问题，仍建议发布前人工通看成片。</p>
+          </section>
+
+          <div v-if="preflightTranscript.length" class="preflight-transcript-list">
+            <div class="preflight-processing-status-head">
+              <strong>带时间戳转写</strong>
+              <span>{{ preflightTranscript.length }} 段</span>
+            </div>
+            <ol>
+              <li v-for="segment in preflightTranscript" :key="segment.evidenceId">
+                <time>{{ formatDuration(segment.startMs) }} - {{ formatDuration(segment.endMs) }}</time>
+                <p>{{ segment.content }}</p>
+              </li>
+            </ol>
+          </div>
+        </template>
+
+        <p v-if="preflightError" class="preflight-processing-error" role="alert">
+          {{ preflightError }}
+        </p>
       </section>
     </div>
 
@@ -1806,7 +2212,8 @@ button:disabled {
   color: var(--ink);
 }
 
-.preflight-processing-panel {
+.preflight-processing-panel,
+.preflight-review-panel {
   position: relative;
   display: grid;
   grid-column: 1 / -1;
@@ -1816,6 +2223,249 @@ button:disabled {
   background: #fff;
   border: 1px solid var(--border-strong);
   border-radius: var(--r);
+}
+
+.preflight-review-panel {
+  position: relative;
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--s4);
+  padding: var(--s6);
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+}
+
+.preflight-focus-field {
+  display: grid;
+  gap: var(--s2);
+}
+
+.preflight-focus-field span,
+.preflight-provider-consent span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+
+.preflight-focus-field textarea {
+  width: 100%;
+  padding: var(--s3);
+  resize: vertical;
+  color: var(--ink);
+  background: var(--surface-sub);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  font: inherit;
+}
+
+.preflight-provider-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+}
+
+.preflight-provider-consent input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--lab-cyan);
+}
+
+.preflight-review-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s2);
+  margin: 0;
+}
+
+.preflight-review-facts > div {
+  min-width: 0;
+  padding: var(--s3);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.preflight-review-facts dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.preflight-review-facts dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-code);
+  font-size: 12px;
+}
+
+.preflight-report {
+  display: grid;
+  gap: var(--s4);
+  padding: var(--s5);
+  color: #f2f6fa;
+  background:
+    linear-gradient(135deg, rgba(0, 174, 236, 0.16), transparent 42%),
+    #102235;
+  border: 1px solid rgba(0, 174, 236, 0.3);
+  border-radius: var(--r);
+}
+
+.preflight-report-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s4);
+}
+
+.preflight-report-head span {
+  color: #70d5fa;
+  font-family: var(--font-code);
+  font-size: 11px;
+}
+
+.preflight-report-head h5 {
+  margin: 5px 0 0;
+  color: #fff;
+  font-size: 20px;
+}
+
+.preflight-report-head > strong {
+  padding: 6px 10px;
+  color: #ffb8ca;
+  background: rgba(251, 114, 153, 0.14);
+  border: 1px solid rgba(251, 114, 153, 0.36);
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.preflight-issue-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s3);
+}
+
+.preflight-issue-card {
+  display: grid;
+  gap: var(--s2);
+  padding: var(--s4);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-left: 3px solid #70d5fa;
+  border-radius: var(--r-sm);
+}
+
+.preflight-issue-card[data-severity='BLOCKER'],
+.preflight-issue-card[data-severity='HIGH'] {
+  border-left-color: var(--bili-pink);
+}
+
+.preflight-issue-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  color: #a9bacb;
+  font-family: var(--font-code);
+  font-size: 10px;
+}
+
+.preflight-issue-meta span {
+  color: #fff;
+  font-weight: var(--fw-bold);
+}
+
+.preflight-issue-meta small {
+  margin-left: auto;
+}
+
+.preflight-issue-card h6 {
+  margin: 0;
+  color: #fff;
+  font-size: 15px;
+}
+
+.preflight-issue-card > p,
+.preflight-issue-action p {
+  margin: 0;
+  color: #cbd6e0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.preflight-issue-action {
+  padding-top: var(--s2);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.preflight-issue-action span {
+  color: #70d5fa;
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+}
+
+.preflight-human-review {
+  color: #ffcf78;
+}
+
+.preflight-issue-seek {
+  width: fit-content;
+  padding: 0;
+  color: #70d5fa;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  cursor: pointer;
+}
+
+.preflight-issue-seek:hover {
+  color: #fff;
+}
+
+.preflight-issue-seek:focus-visible {
+  outline: 2px solid #70d5fa;
+  outline-offset: 3px;
+}
+
+.preflight-report-empty {
+  margin: 0;
+  color: #cbd6e0;
+}
+
+.preflight-transcript-list {
+  display: grid;
+  gap: var(--s3);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--border);
+}
+
+.preflight-transcript-list ol {
+  display: grid;
+  gap: var(--s2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preflight-transcript-list li {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: var(--s3);
+  padding: var(--s3);
+  background: var(--surface-sub);
+  border-radius: var(--r-sm);
+}
+
+.preflight-transcript-list time {
+  color: var(--accent-strong);
+  font-family: var(--font-code);
+  font-size: 11px;
+}
+
+.preflight-transcript-list p {
+  margin: 0;
+  line-height: 1.6;
 }
 
 .preflight-processing-head,
@@ -2057,6 +2707,8 @@ button:disabled {
   .preflight-processing-options,
   .preflight-cost-strip,
   .preflight-signal-strip,
+  .preflight-review-facts,
+  .preflight-issue-list,
   .preflight-frame-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2111,15 +2763,25 @@ button:disabled {
     padding: var(--s4);
   }
 
+  .preflight-review-panel {
+    padding: var(--s4);
+  }
+
   .preflight-processing-options,
   .preflight-cost-strip,
   .preflight-signal-strip,
+  .preflight-review-facts,
+  .preflight-issue-list,
   .preflight-frame-grid {
     grid-template-columns: 1fr;
   }
 
   .preflight-processing-head {
     flex-direction: column;
+  }
+
+  .preflight-transcript-list li {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -1,8 +1,6 @@
 // 案例库（跨分区视频案例）前端类型，对应后端 /api/knowledge/reference-videos 系列接口。
 // 单独成文件而非塞进 creator.ts：案例库是跨创作任务的独立域，类型与创作任务无耦合。
 
-export type ReferenceVideoTier = 'BENCHMARK' | 'COMPETITOR' | 'OWN_HISTORY'
-
 // 「输入 BV → 后端调脚本采集 → 自动清洗导入」一键接口的入参。tier / category 可选。
 export type ReferenceVideoFetchImportPayload = {
   bvInput: string
@@ -87,15 +85,6 @@ export type ReferenceVideoIndexResult = {
   createTime: string
 }
 
-// 案例检索入参（5.2a；5.2b 增补 strategy）：query 必填，tier / category / strategy 可选；topK 用后端默认。
-export type ReferenceVideoSearchPayload = {
-  query: string
-  tier?: string
-  category?: string
-  // 查询增强策略（5.2b，可选）：NONE/REWRITE/HYDE/MULTI_QUERY；为空走后端配置默认（默认 REWRITE）。
-  strategy?: string
-}
-
 // 主题优先检索入参：page 表示“第几批卡片”，后端限制 1-4，每批最多 5 张。
 export type ReferenceVideoTopicSearchPayload = {
   query: string
@@ -127,19 +116,6 @@ export type ReferenceVideoMatchedTopic = {
 export type ReferenceVideoEvidence = {
   videoId: string
   items: ReferenceVideoEvidenceItem[]
-}
-
-// 案例检索响应（5.2a；5.2b 增补 strategy / enhancedQueries；5.2c-2 增补 evidence；5.2e 增补 reranked）：
-// mode 回显实际检索模式；strategy 为实际生效策略（SQL 路径为 NONE）；enhancedQueries 为实际用于向量检索的扩展查询（NONE / SQL 为空）；
-// items 复用案例卡片类型；evidence 为 small-to-big 命中的子条目证据（按 videoId 分组，无子召回 / SQL 路径为空）；
-// reranked 表示本次结果是否经 qwen3-rerank 精排（关闭 / 失败 / SQL 降级为 false）。
-export type ReferenceVideoSearchResult = {
-  mode: string
-  strategy: string
-  enhancedQueries: string[]
-  items: ReferenceVideo[]
-  evidence: ReferenceVideoEvidence[]
-  reranked: boolean
 }
 
 // 主题优先检索响应：cards 是当前批次要展示的视频卡片，matchedTopics/evidence 解释为什么命中和排序。
