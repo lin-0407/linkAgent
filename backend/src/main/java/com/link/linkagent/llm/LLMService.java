@@ -17,7 +17,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
-import reactor.core.publisher.Flux;
 
 import java.util.concurrent.TimeUnit;
 
@@ -255,30 +254,6 @@ public class LLMService {
             recordTextFailure(elapsedMs, exception);
             throw exception;
         }
-    }
-
-    /**
-     * 流式文本对话：返回 Flux&lt;String&gt;，每个元素是一个增量文本块（token 级）。
-     * <p>
-     * 调用方通过订阅 Flux 获取逐步生成的文本，用于 SSE 实时推送场景。
-     * 与 {@link #chat(String, String)} 的区别是使用 {@code .stream().content()} 而非 {@code .call().chatResponse()}，
-     * 让文本以 token 粒度逐块产出，不必等待完整响应。
-     * <p>
-     * <b>注意：</b>此方法不经过 Provider 回退链（llmProviderManager），因为流式调用的回退逻辑
-     * 需要更复杂的流合并处理，当前阶段先在主 Provider 失败时直接向上抛异常。
-     *
-     * @param systemPrompt 系统提示词
-     * @param userMessage 用户输入文本
-     * @return 流式的文本增量 Flux
-     */
-    public Flux<String> chatStreamContent(String systemPrompt, String userMessage) {
-        validatePromptLength(systemPrompt, userMessage);
-        return chatClient
-                .prompt()
-                .system(systemPrompt)
-                .user(userMessage)
-                .stream()
-                .content();
     }
 
     /**

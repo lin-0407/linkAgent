@@ -5,7 +5,6 @@ import com.link.linkagent.core.ToolCall;
 import com.link.linkagent.llm.usage.LlmUsageContext;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -25,8 +24,8 @@ import java.util.concurrent.TimeUnit;
  *   <li><b>重试策略</b>：通过 {@link ToolExecutionProperties#maxRetries()} 控制最大重试次数（默认 0，即不重试）。
  *       重试是「尽力而为」策略——捕获所有异常并重试，不区分是否可恢复，因为 LLM 后续可以通过 Observation
  *       中的错误信息自行调整参数或换用其他工具。如果所有重试都失败，取最后一次异常信息作为 Observation 返回。</li>
- *   <li><b>用量上下文传递</b>：工具执行和批量执行都运行在公共线程池的异步线程中，ThreadLocal 无法自动继承。
- *       因此每次异步执行前，必须显式捕获当前线程的 {@link LlmUsageContext} 并在新线程中恢复，
+ *   <li><b>用量上下文传递</b>：工具执行运行在公共线程池的异步线程中，ThreadLocal 无法自动继承。
+ *       因此异步执行前必须显式捕获当前线程的 {@link LlmUsageContext} 并在新线程中恢复，
  *       否则工具内部若再调用 LLM（如 RAG 检索），用量记录将归属到错误的工作流步骤，影响 Langfuse 追踪。</li>
  * </ul>
  */
@@ -54,34 +53,6 @@ public class ToolExecutor {
      */
     public Observation execute(ToolCall toolCall) {
         return executeInternal(toolCall);
-    }
-
-    /**
-     * 并发执行多个工具调用，等待全部完成后再返回结果列表。
-     * <p>
-     * 为什么用并发而非串行：在 ReAct 的一些衍生模式中（如并行取证的 Plan & Execute），LLM 可能同时需要
-     * 多个独立工具的结果。串行等待所有工具会严重拖慢推理速度；并发执行将总耗时降低到最慢工具的耗时。
-     * <p>
-     * 注意：每个异步任务都会恢复主线程的用量上下文，确保所有工具的模型调用归属到同一个工作流步骤。
-     *
-     * @param toolCalls 工具调用列表
-     * @return 与输入顺序一致的 Observation 列表（每个位置对应一个工具的 Result/FinalAnswer 之后的最终结果）
-     */
-    public List<Observation> executeAll(List<ToolCall> toolCalls) {
-        // 提前捕获主线程的用量上下文——后续每个异步线程都需要恢复它，否则 ThreadLocal 丢失
-        LlmUsageContext usageContext = LlmUsageContext.current();
-        List<CompletableFuture<Observation>> futures = toolCalls.stream()
-                .map(toolCall -> CompletableFuture.supplyAsync(() -> {
-                    // 异步线程：恢复用量上下文（用 try-with-resources 保证 restore 后自动 restore 回原值）
-                    try (LlmUsageContext.UsageScope ignored = LlmUsageContext.restore(usageContext)) {
-                        return executeInternal(toolCall);
-                    }
-                }))
-                .toList();
-        // join() 会阻塞直到所有 future 完成（含超时），且会传播异常（含 TimeoutException）
-        return futures.stream()
-                .map(CompletableFuture::join)
-                .toList();
     }
 
     /**

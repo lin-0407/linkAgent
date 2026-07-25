@@ -10,10 +10,6 @@ import java.util.Locale;
 @Component
 public class OfficialSourceVerifier {
 
-    public String domainOf(ToolCatalogRecord catalog) {
-        return catalog.officialDomain();
-    }
-
     public boolean matches(String rawUrl, ToolCatalogRecord catalog) {
         if (rawUrl == null || rawUrl.isBlank() || catalog == null || catalog.officialDomain() == null) {
             return false;

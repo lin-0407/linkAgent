@@ -82,42 +82,6 @@ class ToolExecutorTest {
         assertThat(observation.result()).contains("Error: tool failed");
     }
 
-    @Test
-    void shouldExecuteMultipleToolsInOrder() {
-        ToolRegistry registry = new ToolRegistry(List.of(
-                new FixedTool("calculator", "42"),
-                new FixedTool("datetime", "2026-05-25 10:00:00")));
-        registry.init();
-        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10, 0));
-
-        List<Observation> observations = executor.executeAll(List.of(
-                new ToolCall("calculator", "6 * 7"),
-                new ToolCall("datetime", "now")));
-
-        assertThat(observations).extracting(Observation::toolName)
-                .containsExactly("calculator", "datetime");
-        assertThat(observations).extracting(Observation::result)
-                .containsExactly("42", "2026-05-25 10:00:00");
-    }
-
-    @Test
-    void shouldKeepOtherToolResultsWhenOneToolFails() {
-        ToolRegistry registry = new ToolRegistry(List.of(
-                new FixedTool("calculator", "42"),
-                new AlwaysBrokenTool("broken")));
-        registry.init();
-        ToolExecutor executor = new ToolExecutor(registry, new ToolExecutionProperties(10, 0));
-
-        List<Observation> observations = executor.executeAll(List.of(
-                new ToolCall("calculator", "6 * 7"),
-                new ToolCall("broken", "input")));
-
-        assertThat(observations).extracting(Observation::toolName)
-                .containsExactly("calculator", "broken");
-        assertThat(observations.get(0).result()).isEqualTo("42");
-        assertThat(observations.get(1).result()).contains("Error: tool failed");
-    }
-
     private record FixedTool(String name, String result) implements Tool {
 
         @Override

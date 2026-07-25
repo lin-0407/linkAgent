@@ -5,7 +5,7 @@ import { onBeforeUnmount, watch } from 'vue'
  * 统一通知弹窗组件 —— 固定在视口右上角，替代原先分散在各处的内联提示。
  *
  * 为什么抽成独立组件：
- * 1. CreatorWorkspace 的错误横条和 AgentFloatingWindow 的 ErrorNotice 视觉位置不一致
+ * 1. CreatorWorkspace 与 AgentFloatingWindow 原先各自维护错误提示，视觉位置不一致
  * 2. 没有统一的警告通知通道
  * 3. 成功提示已经是右上角弹窗模式，错误/警告应保持一致
  */

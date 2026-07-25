@@ -1,7 +1,5 @@
 package com.link.linkagent.core;
 
-import com.link.linkagent.util.TextUtil;
-
 /**
  * 通用 Agent 的执行模式。
  * <p>
@@ -19,13 +17,4 @@ public enum AgentExecutionMode {
         return mode == null ? AUTO : mode;
     }
 
-    public static AgentExecutionMode fromText(String value) {
-        if (TextUtil.isBlank(value)) {
-            return AUTO;
-        }
-        String normalized = value.trim()
-                .replace('-', '_')
-                .toUpperCase();
-        return AgentExecutionMode.valueOf(normalized);
-    }
 }

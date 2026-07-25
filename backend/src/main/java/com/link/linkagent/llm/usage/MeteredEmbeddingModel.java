@@ -102,10 +102,6 @@ public class MeteredEmbeddingModel implements EmbeddingModel {
         return delegate.getEmbeddingContent(document);
     }
 
-    public EmbeddingModel getDelegate() {
-        return delegate;
-    }
-
     private void recordSuccess(EmbeddingResponse response, String requestModel, long elapsedMs, int inputCount) {
         EmbeddingResponseMetadata metadata = response == null ? null : response.getMetadata();
         Usage usage = metadata == null ? null : metadata.getUsage();
