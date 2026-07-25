@@ -11,6 +11,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -114,7 +115,7 @@ public class DashScopeAsrProvider implements SpeechRecognitionProvider {
         if (transcriptionUrl == null || transcriptionUrl.isBlank()) {
             throw new SpeechRecognitionException("ASR 未返回转写结果地址");
         }
-        JsonNode root = restClient.get().uri(transcriptionUrl).retrieve().body(JsonNode.class);
+        JsonNode root = restClient.get().uri(URI.create(transcriptionUrl)).retrieve().body(JsonNode.class);
         List<Segment> segments = parseSegments(root);
         if (segments.isEmpty()) {
             throw new SpeechRecognitionException("ASR 转写结果没有时间戳文本");
