@@ -86,7 +86,11 @@ public class PreflightReviewService {
         PreflightReviewRecord current = mapper.findCurrentByVersion(taskId, ownerId, request.versionId())
                 .orElse(null);
         if (current != null && "COMPLETED".equals(current.status())) {
-            return toResponse(current);
+            boolean matchesCurrentProcessing = processingMapper.findCurrentJob(taskId, ownerId, request.versionId())
+                    .filter(job -> "COMPLETED".equals(job.status()))
+                    .map(job -> job.jobId().equals(current.processingJobId()))
+                    .orElse(false);
+            if (matchesCurrentProcessing) return toResponse(current);
         }
         if (current != null && "FAILED".equals(current.status())) {
             if ("ASR_SUBMISSION_AMBIGUOUS".equals(current.errorCode())) {
@@ -159,8 +163,15 @@ public class PreflightReviewService {
     }
 
     public PreflightReviewResponse getCurrent(String ownerId, String taskId, String versionId) {
-        return toResponse(mapper.findCurrentByVersion(taskId, ownerId, versionId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "当前成片尚无发布前试映任务")));
+        PreflightReviewRecord review = mapper.findCurrentByVersion(taskId, ownerId, versionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "当前成片尚无发布前试映任务"));
+        MediaProcessingJobRecord processing = processingMapper.findCurrentJob(taskId, ownerId, versionId)
+                .filter(job -> "COMPLETED".equals(job.status()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "当前媒体预处理结果尚未完成"));
+        if (!processing.jobId().equals(review.processingJobId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "当前媒体预处理结果尚未开始发布前试映");
+        }
+        return toResponse(review);
     }
 
     public SseEmitter subscribe(String ownerId, String taskId, String reviewId, long afterSequence) {
