@@ -120,7 +120,8 @@ public class PreflightVideoAnalysisService {
                         null, issueIdSupplier.get(), review.reviewId(), review.versionId(), issue.issueType(),
                         issue.dimension(), issue.title(), issue.description(), issue.startMs(), issue.endMs(),
                         issue.severity(), issue.confidence(), json(evidenceRefs), issue.suggestedAction(),
-                        issue.needsHumanReview(), json(List.of("QWEN3_VL_FLASH")), null, null
+                        issue.needsHumanReview(), json(List.of("QWEN3_VL_FLASH")), null,
+                        "PENDING", null, null, null
                 )) != 1) {
                     throw new VideoAnalysisException("发布前体检问题保存失败");
                 }

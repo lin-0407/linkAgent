@@ -46,20 +46,34 @@ public class DashScopeVideoUnderstandingProvider implements VideoUnderstandingPr
 
     @Override
     public AnalysisResult analyze(String videoUrl, String prompt) {
+        return analyze(videoUrl, prompt, properties.getVideoModel(), properties.getVideoFps());
+    }
+
+    @Override
+    public AnalysisResult analyze(String videoUrl, String prompt, String model, double fps) {
         ensureConfigured();
         JsonNode response = restClient.post()
                 .uri(endpoint(CHAT_PATH))
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getDashScopeApiKey())
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(buildRequest(videoUrl, prompt))
+                .body(buildRequest(videoUrl, prompt, model, fps))
                 .retrieve()
                 .body(JsonNode.class);
         return parseResponse(response);
     }
 
     ObjectNode buildRequest(String videoUrl, String prompt) {
+        return buildRequest(
+                videoUrl,
+                prompt,
+                properties == null ? "qwen3-vl-flash" : properties.getVideoModel(),
+                properties == null ? 0.2d : properties.getVideoFps()
+        );
+    }
+
+    ObjectNode buildRequest(String videoUrl, String prompt, String model, double fps) {
         ObjectNode body = objectMapper.createObjectNode();
-        body.put("model", properties == null ? "qwen3-vl-flash" : properties.getVideoModel());
+        body.put("model", model);
         body.put("enable_thinking", false);
         body.putObject("response_format").put("type", "json_object");
         ArrayNode messages = body.putArray("messages");
@@ -68,7 +82,7 @@ public class DashScopeVideoUnderstandingProvider implements VideoUnderstandingPr
         video.put("type", "video_url");
         ObjectNode videoUrlNode = video.putObject("video_url");
         videoUrlNode.put("url", videoUrl);
-        video.put("fps", properties == null ? 0.2d : properties.getVideoFps());
+        video.put("fps", fps);
         content.addObject().put("type", "text").put("text", prompt);
         return body;
     }

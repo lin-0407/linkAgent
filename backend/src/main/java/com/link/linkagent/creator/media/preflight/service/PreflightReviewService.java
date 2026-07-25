@@ -5,9 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
 import com.link.linkagent.creator.media.preflight.model.CreatePreflightReviewRequest;
+import com.link.linkagent.creator.media.preflight.model.EditTaskRecord;
+import com.link.linkagent.creator.media.preflight.model.PreflightIssueRecord;
 import com.link.linkagent.creator.media.preflight.model.PreflightReviewRecord;
 import com.link.linkagent.creator.media.preflight.model.PreflightReviewResponse;
 import com.link.linkagent.creator.media.preflight.model.PreflightStepRecord;
+import com.link.linkagent.creator.media.preflight.model.UpdateEditTaskRequest;
+import com.link.linkagent.creator.media.preflight.model.UpdatePreflightIssueRequest;
 import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingJobRecord;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
@@ -27,7 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** P0-3/P0-4a 发布前试映应用服务。 */
+/** P0-3/P0-4 发布前试映应用服务。 */
 @Service
 @ConditionalOnProperty(prefix = "creator.media", name = "enabled", havingValue = "true")
 public class PreflightReviewService {
@@ -35,7 +39,9 @@ public class PreflightReviewService {
     private static final List<StepDefinition> STEPS = List.of(
             new StepDefinition("TRANSCRIBE", 1),
             new StepDefinition("BUILD_TIMELINE", 2),
-            new StepDefinition("ANALYZE_VIDEO", 3)
+            new StepDefinition("ANALYZE_VIDEO", 3),
+            new StepDefinition("REVIEW_SEGMENTS", 4),
+            new StepDefinition("SCREEN_AUDIENCE", 5)
     );
 
     private final CreatorMediaProperties properties;
@@ -121,7 +127,10 @@ public class PreflightReviewService {
                         "provider", "DASHSCOPE",
                         "asrModel", properties.getPreflight().getAsrModel(),
                         "videoModel", properties.getPreflight().getVideoModel(),
-                        "videoFps", properties.getPreflight().getVideoFps()
+                        "videoFps", properties.getPreflight().getVideoFps(),
+                        "segmentReviewModel", properties.getPreflight().getSegmentReviewModel(),
+                        "segmentReviewFps", properties.getPreflight().getSegmentReviewFps(),
+                        "segmentReviewMaxCount", properties.getPreflight().getSegmentReviewMaxCount()
                 )), capabilityGaps, null, processing.estimatedTotalCostUsd(), null, null,
                 "USD", null, null, null, null, null, null
         );
@@ -193,6 +202,97 @@ public class PreflightReviewService {
         return get(ownerId, taskId, reviewId);
     }
 
+    /** 已完成的 P0-4a 任务由作者显式补全，避免页面刷新后自动产生新的模型费用。 */
+    @Transactional
+    public PreflightReviewResponse completeScreening(String ownerId, String taskId, String reviewId) {
+        PreflightReviewRecord review = requireReview(ownerId, taskId, reviewId);
+        PreflightStepRecord audience = mapper.findStep(reviewId, "SCREEN_AUDIENCE").orElse(null);
+        if (audience != null) {
+            if ("SUCCEEDED".equals(audience.status()) || isActive(review.status())) return toResponse(review);
+            if ("FAILED".equals(review.status())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "观众试映补全失败，请重试当前任务");
+            }
+        }
+        if (!"COMPLETED".equals(review.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "请等待当前发布前试映完成后再补全观众视角");
+        }
+        if (!"SUCCEEDED".equals(mapper.findStep(reviewId, "ANALYZE_VIDEO")
+                .map(PreflightStepRecord::status).orElse(null))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务尚未完成全片体检");
+        }
+        insertMissingStep(review, "REVIEW_SEGMENTS", 4);
+        insertMissingStep(review, "SCREEN_AUDIENCE", 5);
+        if (mapper.queueScreeningCompletion(taskId, ownerId, reviewId) != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "试映任务状态已变化，请刷新后重试");
+        }
+        return get(ownerId, taskId, reviewId);
+    }
+
+    @Transactional
+    public PreflightReviewResponse updateIssue(String ownerId,
+                                               String taskId,
+                                               String issueId,
+                                               UpdatePreflightIssueRequest request) {
+        PreflightIssueRecord issue = mapper.findIssueForOwner(taskId, ownerId, issueId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "体检问题不存在"));
+        PreflightReviewRecord review = requireReview(ownerId, taskId, issue.reviewId());
+        if (!"COMPLETED".equals(review.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "请等待发布前试映完成后再整理修改清单");
+        }
+        if (!"SUCCEEDED".equals(mapper.findStep(issue.reviewId(), "SCREEN_AUDIENCE")
+                .map(PreflightStepRecord::status).orElse(null))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "请先补全三类观众试映，再确认问题和修改清单");
+        }
+        String reason = trimToNull(request.reason());
+        if (mapper.updateIssueDisposition(issue.reviewId(), issue.issueId(), request.disposition(), reason) != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "问题状态已变化，请刷新后重试");
+        }
+        if ("ACCEPTED".equals(request.disposition())) {
+            mapper.upsertEditTask(
+                    UUID.randomUUID().toString(), issue.reviewId(), issue.issueId(), taskId, issue.versionId(),
+                    issue.title(), issue.suggestedAction(), issue.startMs(), issue.endMs(), issue.severity(),
+                    "完成建议动作后通看该时间段，确认问题已消除且前后衔接自然。"
+            );
+        } else {
+            mapper.ignoreEditTaskByIssue(issue.issueId(), reason);
+        }
+        mapper.touchReview(issue.reviewId());
+        PreflightReviewResponse response = get(ownerId, taskId, issue.reviewId());
+        eventPublisher.publish(response, "review_updated");
+        return response;
+    }
+
+    public List<PreflightReviewResponse.EditTask> listEditTasks(String ownerId, String taskId) {
+        DraftVideoRecord draft = uploadMapper.findDraftVideo(taskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "当前任务尚无成片"));
+        PreflightReviewRecord review = mapper.findCurrentByVersion(taskId, ownerId, draft.versionId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "当前成片尚无发布前试映任务"));
+        return mapper.listEditTasks(review.reviewId()).stream().map(this::toEditTaskResponse).toList();
+    }
+
+    @Transactional
+    public PreflightReviewResponse.EditTask updateEditTask(String ownerId,
+                                                           String taskId,
+                                                           String editTaskId,
+                                                           UpdateEditTaskRequest request) {
+        EditTaskRecord task = mapper.findEditTaskForOwner(taskId, ownerId, editTaskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "修改任务不存在"));
+        if (!task.status().equals(request.status()) && !isAllowedTransition(task.status(), request.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前修改任务不能直接切换到该状态");
+        }
+        if (!task.status().equals(request.status()) && mapper.updateEditTaskStatus(
+                editTaskId, request.status(), trimToNull(request.note())) != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "修改任务状态已变化，请刷新后重试");
+        }
+        mapper.touchReview(task.reviewId());
+        PreflightReviewResponse response = get(ownerId, taskId, task.reviewId());
+        eventPublisher.publish(response, "review_updated");
+        return response.editTasks().stream()
+                .filter(item -> editTaskId.equals(item.editTaskId()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "修改任务不存在"));
+    }
+
     public void publish(String reviewId, String eventType) {
         mapper.findReviewInternal(reviewId).ifPresent(review -> eventPublisher.publish(toResponse(review), eventType));
     }
@@ -235,7 +335,8 @@ public class PreflightReviewService {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DASHSCOPE_API_KEY 未配置");
         }
         if (preflight.getDashScopeBaseUrl() == null || preflight.getDashScopeBaseUrl().isBlank()
-                || preflight.getVideoModel() == null || preflight.getVideoModel().isBlank()) {
+                || preflight.getVideoModel() == null || preflight.getVideoModel().isBlank()
+                || preflight.getSegmentReviewModel() == null || preflight.getSegmentReviewModel().isBlank()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DashScope 视频理解配置不完整");
         }
     }
@@ -256,16 +357,61 @@ public class PreflightReviewService {
                         item.issueId(), item.issueType(), item.dimension(), item.title(), item.description(),
                         item.startMs(), item.endMs(), item.severity(), item.confidence(),
                         stringList(item.evidenceRefs()), item.suggestedAction(),
-                        Boolean.TRUE.equals(item.needsHumanReview())
+                        Boolean.TRUE.equals(item.needsHumanReview()), stringList(item.affectedPersonas()),
+                        item.userDisposition(), item.ignoreReason()
                 )).toList();
+        List<PreflightReviewResponse.AudienceScreening> audienceScreenings = mapper
+                .listAudienceScreenings(review.reviewId()).stream()
+                .map(item -> new PreflightReviewResponse.AudienceScreening(
+                        item.screeningId(), item.personaType(), item.overallReaction(),
+                        stringList(item.interestPoints()), stringList(item.confusionPoints()),
+                        stringList(item.dropRisks()), stringList(item.evidenceRefs()), item.confidence()
+                )).toList();
+        List<PreflightReviewResponse.EditTask> editTasks = mapper.listEditTasks(review.reviewId()).stream()
+                .map(this::toEditTaskResponse).toList();
         return new PreflightReviewResponse(
                 review.reviewId(), review.taskId(), review.versionId(), review.status(), review.currentStep(),
                 review.progressPercent(), review.eventSequence(), Boolean.TRUE.equals(review.cancelRequested()),
                 review.attemptCount(), review.maxAttempts(), review.reviewFocus(), review.executiveSummary(),
                 review.estimatedCostUsd(), review.actualCostUsd(), review.usageSeconds(), review.currency(),
                 review.errorCode(), review.errorMessage(), review.startedAt(), review.completedAt(),
-                review.createTime(), review.updateTime(), steps, evidence, issues
+                review.createTime(), review.updateTime(), steps, evidence, issues,
+                audienceScreenings, editTasks
         );
+    }
+
+    private PreflightReviewResponse.EditTask toEditTaskResponse(EditTaskRecord item) {
+        return new PreflightReviewResponse.EditTask(
+                item.editTaskId(), item.issueId(), item.title(), item.action(),
+                item.startMs(), item.endMs(), item.priority(), item.targetOutcome(),
+                item.status(), item.userNote(), item.completedAt(), item.updateTime()
+        );
+    }
+
+    private void insertMissingStep(PreflightReviewRecord review, String type, int sequenceNo) {
+        if (mapper.findStep(review.reviewId(), type).isPresent()) return;
+        PreflightStepRecord step = new PreflightStepRecord(
+                null, UUID.randomUUID().toString(), review.reviewId(), type, sequenceNo,
+                "PENDING", 0, review.inputFingerprint(), null, null, null, null,
+                null, null, null, null
+        );
+        if (mapper.insertStep(step) != 1) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "补全发布前试映步骤失败");
+        }
+    }
+
+    private boolean isActive(String status) {
+        return "QUEUED".equals(status) || "RUNNING".equals(status)
+                || "RETRY_WAIT".equals(status) || "CANCEL_REQUESTED".equals(status);
+    }
+
+    private boolean isAllowedTransition(String current, String next) {
+        return switch (current) {
+            case "TODO" -> "IN_PROGRESS".equals(next) || "IGNORED".equals(next);
+            case "IN_PROGRESS" -> "COMPLETED".equals(next) || "IGNORED".equals(next);
+            case "IGNORED" -> "TODO".equals(next);
+            default -> false;
+        };
     }
 
     private List<String> stringList(String json) {

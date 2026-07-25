@@ -1,7 +1,9 @@
 package com.link.linkagent.creator.media.preflight.mapper;
 
-import com.link.linkagent.creator.media.preflight.model.PreflightReviewRecord;
+import com.link.linkagent.creator.media.preflight.model.AudienceScreeningRecord;
+import com.link.linkagent.creator.media.preflight.model.EditTaskRecord;
 import com.link.linkagent.creator.media.preflight.model.PreflightIssueRecord;
+import com.link.linkagent.creator.media.preflight.model.PreflightReviewRecord;
 import com.link.linkagent.creator.media.preflight.model.PreflightStepRecord;
 import com.link.linkagent.creator.media.preflight.model.TimelineEvidenceRecord;
 import org.apache.ibatis.annotations.Insert;
@@ -15,7 +17,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-/** P0-3/P0-4a 发布前试映持久化访问层。 */
+/** P0-3/P0-4 发布前试映持久化访问层。 */
 @Mapper
 public interface PreflightReviewMapper {
 
@@ -157,12 +159,34 @@ public interface PreflightReviewMapper {
     @Select("""
             SELECT id, issue_id, review_id, version_id, issue_type, dimension, title, description,
                    start_ms, end_ms, severity, confidence, evidence_refs, suggested_action,
-                   needs_human_review, source_types, create_time, update_time
+                   needs_human_review, source_types, affected_personas, user_disposition,
+                   ignore_reason, create_time, update_time
             FROM creator_preflight_issue
             WHERE review_id = #{reviewId} AND is_deleted = 0
             ORDER BY FIELD(severity, 'BLOCKER', 'HIGH', 'MEDIUM', 'LOW'), start_ms ASC, id ASC
             """)
     List<PreflightIssueRecord> listIssues(@Param("reviewId") String reviewId);
+
+    @Select("""
+            SELECT id, screening_id, review_id, persona_type, persona_snapshot, overall_reaction,
+                   interest_points, confusion_points, drop_risks, evidence_refs, confidence,
+                   prompt_version, raw_output, create_time, update_time
+            FROM creator_audience_screening
+            WHERE review_id = #{reviewId} AND is_deleted = 0
+            ORDER BY FIELD(persona_type, 'CASUAL', 'TARGET', 'CORE_FAN'), id ASC
+            """)
+    List<AudienceScreeningRecord> listAudienceScreenings(@Param("reviewId") String reviewId);
+
+    @Select("""
+            SELECT id, edit_task_id, review_id, issue_id, task_id, version_id, title, action,
+                   start_ms, end_ms, priority, target_outcome, status, user_note, completed_at,
+                   create_time, update_time
+            FROM creator_edit_task
+            WHERE review_id = #{reviewId} AND is_deleted = 0
+            ORDER BY FIELD(status, 'IN_PROGRESS', 'TODO', 'IGNORED', 'COMPLETED'),
+                     FIELD(priority, 'BLOCKER', 'HIGH', 'MEDIUM', 'LOW'), start_ms ASC, id ASC
+            """)
+    List<EditTaskRecord> listEditTasks(@Param("reviewId") String reviewId);
 
     @Update("""
             UPDATE creator_preflight_review
@@ -267,6 +291,22 @@ public interface PreflightReviewMapper {
                         @Param("requestFingerprint") String requestFingerprint,
                         @Param("estimatedCostUsd") BigDecimal estimatedCostUsd);
 
+    @Insert("""
+            INSERT INTO creator_media_api_call_log (
+                call_id, task_id, version_id, review_id, step_id, provider_name, model_name,
+                capability, request_fingerprint, status
+            ) VALUES (
+                #{callId}, #{taskId}, #{versionId}, #{reviewId}, #{stepId}, 'SPRING_AI', 'DEFAULT_TEXT_MODEL',
+                'TEXT_SCREENING', #{requestFingerprint}, 'SUBMITTED'
+            )
+            """)
+    int insertTextScreeningCall(@Param("callId") String callId,
+                                @Param("taskId") String taskId,
+                                @Param("versionId") String versionId,
+                                @Param("reviewId") String reviewId,
+                                @Param("stepId") String stepId,
+                                @Param("requestFingerprint") String requestFingerprint);
+
     @Update("""
             UPDATE creator_preflight_review
             SET status = 'RETRY_WAIT', next_run_at = #{nextRunAt}, lease_owner = NULL,
@@ -295,6 +335,13 @@ public interface PreflightReviewMapper {
                       @Param("progressPercent") int progressPercent,
                       @Param("usageSeconds") Long usageSeconds,
                       @Param("actualCostUsd") BigDecimal actualCostUsd);
+
+    @Update("""
+            UPDATE creator_preflight_review
+            SET executive_summary = #{summary}, update_time = CURRENT_TIMESTAMP
+            WHERE review_id = #{reviewId} AND is_deleted = 0
+            """)
+    int saveExecutiveSummary(@Param("reviewId") String reviewId, @Param("summary") String summary);
 
     @Update("""
             UPDATE creator_preflight_step
@@ -357,6 +404,35 @@ public interface PreflightReviewMapper {
                       @Param("errorMessage") String errorMessage);
 
     @Update("""
+            UPDATE creator_media_api_call_log
+            SET status = 'SUCCESS', input_tokens = #{inputTokens}, output_tokens = #{outputTokens},
+                result_count = #{resultCount}, completed_at = CURRENT_TIMESTAMP,
+                update_time = CURRENT_TIMESTAMP
+            WHERE call_id = #{callId} AND capability = 'TEXT_SCREENING' AND is_deleted = 0
+            """)
+    int completeTextScreeningCall(@Param("callId") String callId,
+                                  @Param("inputTokens") Integer inputTokens,
+                                  @Param("outputTokens") Integer outputTokens,
+                                  @Param("resultCount") int resultCount);
+
+    @Update("""
+            UPDATE creator_media_api_call_log
+            SET status = 'FAILED', error_code = #{errorCode}, error_message = #{errorMessage},
+                completed_at = CURRENT_TIMESTAMP, update_time = CURRENT_TIMESTAMP
+            WHERE call_id = #{callId} AND capability = 'TEXT_SCREENING' AND is_deleted = 0
+            """)
+    int failTextScreeningCall(@Param("callId") String callId,
+                              @Param("errorCode") String errorCode,
+                              @Param("errorMessage") String errorMessage);
+
+    @Select("""
+            SELECT COALESCE(SUM(actual_cost_usd), 0)
+            FROM creator_media_api_call_log
+            WHERE review_id = #{reviewId} AND status = 'SUCCESS' AND is_deleted = 0
+            """)
+    BigDecimal sumActualCost(@Param("reviewId") String reviewId);
+
+    @Update("""
             UPDATE creator_timeline_evidence
             SET is_deleted = 1
             WHERE review_id = #{reviewId} AND source_step_id = #{sourceStepId} AND is_deleted = 0
@@ -393,6 +469,152 @@ public interface PreflightReviewMapper {
             )
             """)
     int insertIssue(PreflightIssueRecord record);
+
+    @Update("""
+            UPDATE creator_preflight_issue
+            SET description = #{description}, severity = #{severity}, confidence = #{confidence},
+                suggested_action = #{suggestedAction}, evidence_refs = #{evidenceRefs},
+                source_types = #{sourceTypes}, update_time = CURRENT_TIMESTAMP
+            WHERE review_id = #{reviewId} AND issue_id = #{issueId} AND is_deleted = 0
+            """)
+    int updateIssueAfterSegmentReview(@Param("reviewId") String reviewId,
+                                      @Param("issueId") String issueId,
+                                      @Param("description") String description,
+                                      @Param("severity") String severity,
+                                      @Param("confidence") BigDecimal confidence,
+                                      @Param("suggestedAction") String suggestedAction,
+                                      @Param("evidenceRefs") String evidenceRefs,
+                                      @Param("sourceTypes") String sourceTypes);
+
+    @Update("""
+            UPDATE creator_audience_screening
+            SET is_deleted = 1, update_time = CURRENT_TIMESTAMP
+            WHERE review_id = #{reviewId} AND is_deleted = 0
+            """)
+    int deleteAudienceScreenings(@Param("reviewId") String reviewId);
+
+    @Insert("""
+            INSERT INTO creator_audience_screening (
+                screening_id, review_id, persona_type, persona_snapshot, overall_reaction,
+                interest_points, confusion_points, drop_risks, evidence_refs, confidence,
+                prompt_version, raw_output
+            ) VALUES (
+                #{screeningId}, #{reviewId}, #{personaType}, #{personaSnapshot}, #{overallReaction},
+                #{interestPoints}, #{confusionPoints}, #{dropRisks}, #{evidenceRefs}, #{confidence},
+                #{promptVersion}, #{rawOutput}
+            )
+            ON DUPLICATE KEY UPDATE
+                screening_id = #{screeningId}, persona_snapshot = #{personaSnapshot},
+                overall_reaction = #{overallReaction}, interest_points = #{interestPoints},
+                confusion_points = #{confusionPoints}, drop_risks = #{dropRisks},
+                evidence_refs = #{evidenceRefs}, confidence = #{confidence},
+                prompt_version = #{promptVersion}, raw_output = #{rawOutput},
+                is_deleted = 0, update_time = CURRENT_TIMESTAMP
+            """)
+    int insertAudienceScreening(AudienceScreeningRecord record);
+
+    @Update("""
+            UPDATE creator_preflight_issue
+            SET affected_personas = #{affectedPersonas}, update_time = CURRENT_TIMESTAMP
+            WHERE review_id = #{reviewId} AND issue_id = #{issueId} AND is_deleted = 0
+            """)
+    int updateIssueAffectedPersonas(@Param("reviewId") String reviewId,
+                                    @Param("issueId") String issueId,
+                                    @Param("affectedPersonas") String affectedPersonas);
+
+    @Select("""
+            SELECT issue.id, issue.issue_id, issue.review_id, issue.version_id, issue.issue_type,
+                   issue.dimension, issue.title, issue.description, issue.start_ms, issue.end_ms,
+                   issue.severity, issue.confidence, issue.evidence_refs, issue.suggested_action,
+                   issue.needs_human_review, issue.source_types, issue.affected_personas,
+                   issue.user_disposition, issue.ignore_reason, issue.create_time, issue.update_time
+            FROM creator_preflight_issue issue
+            INNER JOIN creator_preflight_review review ON review.review_id = issue.review_id
+            WHERE issue.issue_id = #{issueId} AND review.task_id = #{taskId}
+              AND review.owner_id = #{ownerId} AND issue.is_deleted = 0 AND review.is_deleted = 0
+            LIMIT 1
+            """)
+    Optional<PreflightIssueRecord> findIssueForOwner(@Param("taskId") String taskId,
+                                                      @Param("ownerId") String ownerId,
+                                                      @Param("issueId") String issueId);
+
+    @Update("""
+            UPDATE creator_preflight_issue
+            SET user_disposition = #{disposition},
+                ignore_reason = CASE WHEN #{disposition} = 'IGNORED' THEN #{reason} ELSE NULL END,
+                update_time = CURRENT_TIMESTAMP
+            WHERE review_id = #{reviewId} AND issue_id = #{issueId} AND is_deleted = 0
+            """)
+    int updateIssueDisposition(@Param("reviewId") String reviewId,
+                               @Param("issueId") String issueId,
+                               @Param("disposition") String disposition,
+                               @Param("reason") String reason);
+
+    @Insert("""
+            INSERT INTO creator_edit_task (
+                edit_task_id, review_id, issue_id, task_id, version_id, title, action,
+                start_ms, end_ms, priority, target_outcome, status
+            ) VALUES (
+                #{editTaskId}, #{reviewId}, #{issueId}, #{taskId}, #{versionId}, #{title}, #{action},
+                #{startMs}, #{endMs}, #{priority}, #{targetOutcome}, 'TODO'
+            )
+            ON DUPLICATE KEY UPDATE
+                user_note = CASE WHEN status = 'IGNORED' THEN NULL ELSE user_note END,
+                status = CASE WHEN status = 'IGNORED' THEN 'TODO' ELSE status END,
+                is_deleted = 0, update_time = CURRENT_TIMESTAMP
+            """)
+    int upsertEditTask(@Param("editTaskId") String editTaskId,
+                       @Param("reviewId") String reviewId,
+                       @Param("issueId") String issueId,
+                       @Param("taskId") String taskId,
+                       @Param("versionId") String versionId,
+                       @Param("title") String title,
+                       @Param("action") String action,
+                       @Param("startMs") Long startMs,
+                       @Param("endMs") Long endMs,
+                       @Param("priority") String priority,
+                       @Param("targetOutcome") String targetOutcome);
+
+    @Update("""
+            UPDATE creator_edit_task
+            SET status = 'IGNORED', user_note = #{reason}, completed_at = NULL,
+                update_time = CURRENT_TIMESTAMP
+            WHERE issue_id = #{issueId} AND is_deleted = 0
+            """)
+    int ignoreEditTaskByIssue(@Param("issueId") String issueId, @Param("reason") String reason);
+
+    @Select("""
+            SELECT id, edit_task_id, review_id, issue_id, task_id, version_id, title, action,
+                   start_ms, end_ms, priority, target_outcome, status, user_note, completed_at,
+                   create_time, update_time
+            FROM creator_edit_task
+            WHERE edit_task_id = #{editTaskId} AND task_id = #{taskId} AND is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_preflight_review review
+                          WHERE review.review_id = creator_edit_task.review_id
+                            AND review.owner_id = #{ownerId} AND review.is_deleted = 0)
+            LIMIT 1
+            """)
+    Optional<EditTaskRecord> findEditTaskForOwner(@Param("taskId") String taskId,
+                                                   @Param("ownerId") String ownerId,
+                                                   @Param("editTaskId") String editTaskId);
+
+    @Update("""
+            UPDATE creator_edit_task
+            SET status = #{status}, user_note = #{note},
+                completed_at = CASE WHEN #{status} = 'COMPLETED' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                update_time = CURRENT_TIMESTAMP
+            WHERE edit_task_id = #{editTaskId} AND is_deleted = 0
+            """)
+    int updateEditTaskStatus(@Param("editTaskId") String editTaskId,
+                             @Param("status") String status,
+                             @Param("note") String note);
+
+    @Update("""
+            UPDATE creator_preflight_review
+            SET event_sequence = event_sequence + 1, update_time = CURRENT_TIMESTAMP
+            WHERE review_id = #{reviewId} AND is_deleted = 0
+            """)
+    int touchReview(@Param("reviewId") String reviewId);
 
     @Update("""
             UPDATE creator_preflight_review
@@ -452,6 +674,14 @@ public interface PreflightReviewMapper {
             SET status = 'QUEUED', current_step = CASE
                     WHEN EXISTS (SELECT 1 FROM creator_preflight_step s
                                 WHERE s.review_id = creator_preflight_review.review_id
+                                  AND s.step_type = 'REVIEW_SEGMENTS' AND s.status IN ('SUCCEEDED', 'SKIPPED'))
+                    THEN 'SCREEN_AUDIENCE'
+                    WHEN EXISTS (SELECT 1 FROM creator_preflight_step s
+                                WHERE s.review_id = creator_preflight_review.review_id
+                                  AND s.step_type = 'ANALYZE_VIDEO' AND s.status = 'SUCCEEDED')
+                    THEN 'REVIEW_SEGMENTS'
+                    WHEN EXISTS (SELECT 1 FROM creator_preflight_step s
+                                WHERE s.review_id = creator_preflight_review.review_id
                                   AND s.step_type = 'BUILD_TIMELINE' AND s.status = 'SUCCEEDED')
                     THEN 'ANALYZE_VIDEO'
                     WHEN EXISTS (SELECT 1 FROM creator_preflight_step s
@@ -459,6 +689,14 @@ public interface PreflightReviewMapper {
                                   AND s.step_type = 'TRANSCRIBE' AND s.status IN ('SUCCEEDED', 'SKIPPED'))
                     THEN 'BUILD_TIMELINE' ELSE 'TRANSCRIBE' END,
                 progress_percent = CASE
+                    WHEN EXISTS (SELECT 1 FROM creator_preflight_step s
+                                WHERE s.review_id = creator_preflight_review.review_id
+                                  AND s.step_type = 'REVIEW_SEGMENTS' AND s.status IN ('SUCCEEDED', 'SKIPPED'))
+                    THEN 90
+                    WHEN EXISTS (SELECT 1 FROM creator_preflight_step s
+                                WHERE s.review_id = creator_preflight_review.review_id
+                                  AND s.step_type = 'ANALYZE_VIDEO' AND s.status = 'SUCCEEDED')
+                    THEN 82
                     WHEN EXISTS (SELECT 1 FROM creator_preflight_step s
                                 WHERE s.review_id = creator_preflight_review.review_id
                                   AND s.step_type = 'BUILD_TIMELINE' AND s.status = 'SUCCEEDED')
@@ -476,6 +714,19 @@ public interface PreflightReviewMapper {
     int retryReview(@Param("taskId") String taskId,
                     @Param("ownerId") String ownerId,
                     @Param("reviewId") String reviewId);
+
+    @Update("""
+            UPDATE creator_preflight_review
+            SET status = 'QUEUED', current_step = 'REVIEW_SEGMENTS', progress_percent = 82,
+                cancel_requested = 0, attempt_count = 0, next_run_at = CURRENT_TIMESTAMP,
+                lease_owner = NULL, lease_expires_at = NULL, error_code = NULL, error_message = NULL,
+                completed_at = NULL, event_sequence = event_sequence + 1, update_time = CURRENT_TIMESTAMP
+            WHERE review_id = #{reviewId} AND task_id = #{taskId} AND owner_id = #{ownerId}
+              AND status = 'COMPLETED' AND is_deleted = 0
+            """)
+    int queueScreeningCompletion(@Param("taskId") String taskId,
+                                 @Param("ownerId") String ownerId,
+                                 @Param("reviewId") String reviewId);
 
     @Update("""
             UPDATE creator_preflight_step

@@ -125,6 +125,10 @@ public class CreatorMediaProperties {
                 || preflight.providerPollInterval.isZero() || preflight.providerPollInterval.isNegative()) {
             throw new IllegalStateException("试映任务最大尝试次数和 Provider 轮询间隔必须大于0");
         }
+        if (preflight.segmentReviewMaxCount <= 0 || preflight.segmentReviewMaxCount > 5
+                || preflight.segmentReviewFps <= 0 || preflight.segmentReviewFps > 10) {
+            throw new IllegalStateException("重点片段复核数量必须在1到5之间，抽帧频率必须在0到10之间");
+        }
     }
 
     /**
@@ -264,6 +268,12 @@ public class CreatorMediaProperties {
         private String videoModel = "qwen3-vl-flash";
         /** 全片粗审抽帧频率，P0 按技术方案使用低成本 0.2 fps */
         private double videoFps = 0.2d;
+        /** 重点片段使用的视频理解模型；只处理少量短片，不重复读取整片 */
+        private String segmentReviewModel = "qwen3-vl-plus";
+        /** 单个短片复核抽帧频率 */
+        private double segmentReviewFps = 1d;
+        /** 单次试映最多复核的重点片段数 */
+        private int segmentReviewMaxCount = 5;
         /** HTTP 连接超时 */
         private Duration connectTimeout = Duration.ofSeconds(10);
         /** HTTP 响应超时 */
@@ -297,6 +307,15 @@ public class CreatorMediaProperties {
 
         public double getVideoFps() { return videoFps; }
         public void setVideoFps(double videoFps) { this.videoFps = videoFps; }
+
+        public String getSegmentReviewModel() { return segmentReviewModel; }
+        public void setSegmentReviewModel(String segmentReviewModel) { this.segmentReviewModel = segmentReviewModel; }
+
+        public double getSegmentReviewFps() { return segmentReviewFps; }
+        public void setSegmentReviewFps(double segmentReviewFps) { this.segmentReviewFps = segmentReviewFps; }
+
+        public int getSegmentReviewMaxCount() { return segmentReviewMaxCount; }
+        public void setSegmentReviewMaxCount(int segmentReviewMaxCount) { this.segmentReviewMaxCount = segmentReviewMaxCount; }
 
         public Duration getConnectTimeout() { return connectTimeout; }
         public void setConnectTimeout(Duration connectTimeout) { this.connectTimeout = connectTimeout; }

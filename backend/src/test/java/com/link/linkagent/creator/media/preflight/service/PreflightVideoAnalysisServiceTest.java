@@ -58,7 +58,7 @@ class PreflightVideoAnalysisServiceTest {
         verify(fixture.mapper).insertIssue(org.mockito.ArgumentMatchers.argThat(issue ->
                 "HIGH".equals(issue.severity())
                         && issue.evidenceRefs().contains("evidence-1")
-                        && issue.evidenceRefs().contains("video-model")
+                        && issue.evidenceRefs().contains("video-model-evidence-1")
                         && !issue.evidenceRefs().contains("stale-video")
         ));
         verify(fixture.mapper).completeVideoCall(eq("call-1"), eq(1200L), eq(180L), any(), anyInt());

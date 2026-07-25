@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * P0-3/P0-4a 持久化试映 Worker。
+ * P0-3/P0-4 持久化试映 Worker。
  * 每次只推进一个可持久化边界，等待异步 Provider 时主动释放租约，页面关闭不会影响任务继续执行。
  */
 @Component
@@ -49,6 +49,8 @@ public class PreflightReviewWorker {
     private final PreflightAsrService asrService;
     private final PreflightTimelineService timelineService;
     private final PreflightVideoAnalysisService videoAnalysisService;
+    private final PreflightSegmentReviewService segmentReviewService;
+    private final AudienceScreeningService audienceScreeningService;
     private final PreflightReviewService reviewService;
     private final ObjectMapper objectMapper;
     private final AtomicBoolean busy = new AtomicBoolean(false);
@@ -70,6 +72,8 @@ public class PreflightReviewWorker {
                                  PreflightAsrService asrService,
                                  PreflightTimelineService timelineService,
                                  PreflightVideoAnalysisService videoAnalysisService,
+                                 PreflightSegmentReviewService segmentReviewService,
+                                 AudienceScreeningService audienceScreeningService,
                                  PreflightReviewService reviewService,
                                  ObjectMapper objectMapper) {
         this.properties = properties;
@@ -79,6 +83,8 @@ public class PreflightReviewWorker {
         this.asrService = asrService;
         this.timelineService = timelineService;
         this.videoAnalysisService = videoAnalysisService;
+        this.segmentReviewService = segmentReviewService;
+        this.audienceScreeningService = audienceScreeningService;
         this.reviewService = reviewService;
         this.objectMapper = objectMapper;
     }
@@ -122,12 +128,7 @@ public class PreflightReviewWorker {
                 reviewService.publish(reviewId, "review_cancelled");
                 return;
             }
-            PreflightStepRecord transcribe = requireStep(reviewId, "TRANSCRIBE");
-            if (!"SUCCEEDED".equals(transcribe.status()) && !"SKIPPED".equals(transcribe.status())) {
-                processTranscription(review, transcribe, leaseOwner);
-                return;
-            }
-            processTimeline(review, leaseOwner);
+            continuePipeline(reviewId, leaseOwner);
         } catch (PreflightAsrService.AmbiguousSubmissionException exception) {
             failPermanently(reviewId, leaseOwner, "ASR_SUBMISSION_AMBIGUOUS", exception.getMessage());
         } catch (PermanentFailure exception) {
@@ -138,6 +139,46 @@ public class PreflightReviewWorker {
             heartbeat.cancel(true);
             busy.set(false);
         }
+    }
+
+    private void continuePipeline(String reviewId, String leaseOwner) {
+        PreflightReviewRecord review = mapper.findReviewForWorker(reviewId, leaseOwner)
+                .orElseThrow(() -> new IllegalStateException("试映任务租约已失效"));
+        if (Boolean.TRUE.equals(review.cancelRequested()) || "CANCEL_REQUESTED".equals(review.status())) {
+            mapper.finishCancellation(reviewId, leaseOwner);
+            reviewService.publish(reviewId, "review_cancelled");
+            return;
+        }
+        PreflightStepRecord transcribe = requireStep(reviewId, "TRANSCRIBE");
+        if (!isFinished(transcribe)) {
+            processTranscription(review, transcribe, leaseOwner);
+            return;
+        }
+        PreflightStepRecord timeline = requireStep(reviewId, "BUILD_TIMELINE");
+        if (!"SUCCEEDED".equals(timeline.status())) {
+            processTimeline(review, timeline, leaseOwner);
+            return;
+        }
+        PreflightStepRecord video = requireStep(reviewId, "ANALYZE_VIDEO");
+        if (!"SUCCEEDED".equals(video.status())) {
+            processVideoAnalysis(review, video, leaseOwner);
+            return;
+        }
+        PreflightStepRecord segments = requireStep(reviewId, "REVIEW_SEGMENTS");
+        if (!isFinished(segments)) {
+            processSegmentReview(review, segments, leaseOwner);
+            return;
+        }
+        PreflightStepRecord audience = requireStep(reviewId, "SCREEN_AUDIENCE");
+        if (!"SUCCEEDED".equals(audience.status())) {
+            processAudienceScreening(review, audience, leaseOwner);
+            return;
+        }
+        PreflightVideoAnalysisService.Result videoResult = restoreVideoResult(video);
+        if (mapper.completeReview(reviewId, leaseOwner, videoResult.executiveSummary(), currentCost(reviewId)) != 1) {
+            throw new IllegalStateException("试映任务状态已变化");
+        }
+        reviewService.publish(reviewId, "review_completed");
     }
 
     private void processTranscription(PreflightReviewRecord review,
@@ -171,83 +212,113 @@ public class PreflightReviewWorker {
         BigDecimal actualCost = asrCost(query.usageSeconds());
         asrService.replaceTranscript(review, step, result, query.usageSeconds(), actualCost);
         if (mapper.advanceReview(review.reviewId(), leaseOwner, "BUILD_TIMELINE", 65,
-                query.usageSeconds(), actualCost) != 1) {
+                query.usageSeconds(), currentCost(review.reviewId())) != 1) {
             throw new IllegalStateException("试映任务状态已变化");
         }
         reviewService.publish(review.reviewId(), "step_completed");
-        processTimeline(mapper.findReviewForWorker(review.reviewId(), leaseOwner)
-                .orElseThrow(() -> new IllegalStateException("试映任务租约已失效")), leaseOwner);
+        continuePipeline(review.reviewId(), leaseOwner);
     }
 
-    private void processTimeline(PreflightReviewRecord review, String leaseOwner) {
-        PreflightReviewRecord current = mapper.findReviewForWorker(review.reviewId(), leaseOwner)
-                .orElseThrow(() -> new IllegalStateException("试映任务租约已失效"));
-        if (Boolean.TRUE.equals(current.cancelRequested()) || "CANCEL_REQUESTED".equals(current.status())) {
-            mapper.finishCancellation(review.reviewId(), leaseOwner);
-            reviewService.publish(review.reviewId(), "review_cancelled");
-            return;
+    private void processTimeline(PreflightReviewRecord review,
+                                 PreflightStepRecord step,
+                                 String leaseOwner) {
+        if ("PENDING".equals(step.status()) && mapper.startStep(review.reviewId(), "BUILD_TIMELINE") != 1) {
+            throw new IllegalStateException("时间轴步骤状态已变化");
         }
-        PreflightStepRecord step = requireStep(review.reviewId(), "BUILD_TIMELINE");
-        int timelineEvidenceCount;
-        if ("SUCCEEDED".equals(step.status())) {
-            timelineEvidenceCount = mapper.listEvidence(review.reviewId()).size();
-        } else {
-            if ("PENDING".equals(step.status()) && mapper.startStep(review.reviewId(), "BUILD_TIMELINE") != 1) {
-                throw new IllegalStateException("时间轴步骤状态已变化");
-            }
-            reviewService.publish(review.reviewId(), "step_started");
-            step = requireStep(review.reviewId(), "BUILD_TIMELINE");
-            timelineEvidenceCount = timelineService.rebuild(review, step);
-            String outputRef = json(Map.of("evidenceCount", timelineEvidenceCount));
-            if (mapper.finishStep(review.reviewId(), "BUILD_TIMELINE", "SUCCEEDED",
-                    outputRef, null, null) != 1) {
-                throw new IllegalStateException("时间轴步骤完成状态保存失败");
-            }
-            reviewService.publish(review.reviewId(), "step_completed");
+        reviewService.publish(review.reviewId(), "step_started");
+        step = requireStep(review.reviewId(), "BUILD_TIMELINE");
+        int timelineEvidenceCount = timelineService.rebuild(review, step);
+        String outputRef = json(Map.of("evidenceCount", timelineEvidenceCount));
+        if (mapper.finishStep(review.reviewId(), "BUILD_TIMELINE", "SUCCEEDED",
+                outputRef, null, null) != 1) {
+            throw new IllegalStateException("时间轴步骤完成状态保存失败");
         }
-        current = mapper.findReviewForWorker(review.reviewId(), leaseOwner)
-                .orElseThrow(() -> new IllegalStateException("试映任务租约已失效"));
-        if (Boolean.TRUE.equals(current.cancelRequested()) || "CANCEL_REQUESTED".equals(current.status())) {
-            mapper.finishCancellation(review.reviewId(), leaseOwner);
-            reviewService.publish(review.reviewId(), "review_cancelled");
-            return;
-        }
+        reviewService.publish(review.reviewId(), "step_completed");
         if (mapper.advanceReview(review.reviewId(), leaseOwner, "ANALYZE_VIDEO", 75,
-                current.usageSeconds(), current.actualCostUsd()) != 1) {
+                review.usageSeconds(), currentCost(review.reviewId())) != 1) {
             throw new IllegalStateException("试映任务状态已变化");
         }
         reviewService.publish(review.reviewId(), "step_completed");
-        processVideoAnalysis(mapper.findReviewForWorker(review.reviewId(), leaseOwner)
-                .orElseThrow(() -> new IllegalStateException("试映任务租约已失效")), leaseOwner);
+        continuePipeline(review.reviewId(), leaseOwner);
     }
 
-    private void processVideoAnalysis(PreflightReviewRecord review, String leaseOwner) {
-        PreflightStepRecord step = requireStep(review.reviewId(), "ANALYZE_VIDEO");
-        PreflightVideoAnalysisService.Result result;
-        if ("SUCCEEDED".equals(step.status())) {
-            result = restoreVideoResult(step);
-        } else {
-            if ("PENDING".equals(step.status()) && mapper.startStep(review.reviewId(), "ANALYZE_VIDEO") != 1) {
-                throw new IllegalStateException("视频理解步骤状态已变化");
-            }
-            reviewService.publish(review.reviewId(), "step_started");
-            step = requireStep(review.reviewId(), "ANALYZE_VIDEO");
-            result = videoAnalysisService.analyze(review, step);
-            Map<String, Object> output = new LinkedHashMap<>();
-            output.put("executiveSummary", result.executiveSummary());
-            output.put("issueCount", result.issueCount());
-            output.put("actualCostUsd", result.actualCostUsd());
-            if (mapper.finishStep(review.reviewId(), "ANALYZE_VIDEO", "SUCCEEDED",
-                    json(output), null, null) != 1) {
-                throw new IllegalStateException("视频理解步骤完成状态保存失败");
-            }
+    private void processVideoAnalysis(PreflightReviewRecord review,
+                                      PreflightStepRecord step,
+                                      String leaseOwner) {
+        if ("PENDING".equals(step.status()) && mapper.startStep(review.reviewId(), "ANALYZE_VIDEO") != 1) {
+            throw new IllegalStateException("视频理解步骤状态已变化");
         }
-        BigDecimal totalActualCost = addCost(review.actualCostUsd(), result.actualCostUsd());
-        if (mapper.completeReview(review.reviewId(), leaseOwner,
-                result.executiveSummary(), totalActualCost) != 1) {
+        reviewService.publish(review.reviewId(), "step_started");
+        step = requireStep(review.reviewId(), "ANALYZE_VIDEO");
+        PreflightVideoAnalysisService.Result result = videoAnalysisService.analyze(review, step);
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("executiveSummary", result.executiveSummary());
+        output.put("issueCount", result.issueCount());
+        output.put("actualCostUsd", result.actualCostUsd());
+        if (mapper.finishStep(review.reviewId(), "ANALYZE_VIDEO", "SUCCEEDED",
+                json(output), null, null) != 1) {
+            throw new IllegalStateException("视频理解步骤完成状态保存失败");
+        }
+        if (mapper.saveExecutiveSummary(review.reviewId(), result.executiveSummary()) != 1) {
+            throw new IllegalStateException("视频理解摘要保存失败");
+        }
+        if (mapper.advanceReview(review.reviewId(), leaseOwner, "REVIEW_SEGMENTS", 82,
+                review.usageSeconds(), currentCost(review.reviewId())) != 1) {
             throw new IllegalStateException("试映任务状态已变化");
         }
-        reviewService.publish(review.reviewId(), "review_completed");
+        reviewService.publish(review.reviewId(), "step_completed");
+        continuePipeline(review.reviewId(), leaseOwner);
+    }
+
+    private void processSegmentReview(PreflightReviewRecord review,
+                                      PreflightStepRecord step,
+                                      String leaseOwner) {
+        if ("PENDING".equals(step.status()) && mapper.startStep(review.reviewId(), "REVIEW_SEGMENTS") != 1) {
+            throw new IllegalStateException("重点片段复核步骤状态已变化");
+        }
+        reviewService.publish(review.reviewId(), "step_started");
+        step = requireStep(review.reviewId(), "REVIEW_SEGMENTS");
+        PreflightSegmentReviewService.Result result = segmentReviewService.review(review, step);
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("selectedCount", result.selectedCount());
+        output.put("reviewedCount", result.reviewedCount());
+        output.put("failedCount", result.failedCount());
+        output.put("actualCostUsd", result.actualCostUsd());
+        String status = result.selectedCount() == 0 || result.reviewedCount() == 0 ? "SKIPPED" : "SUCCEEDED";
+        String errorCode = result.failedCount() > 0 ? "SEGMENT_REVIEW_DEGRADED" : null;
+        String errorMessage = result.failedCount() > 0 ? "部分重点片段未复核，已保留全片粗审结果" : null;
+        if (mapper.finishStep(review.reviewId(), "REVIEW_SEGMENTS", status,
+                json(output), errorCode, errorMessage) != 1) {
+            throw new IllegalStateException("重点片段复核步骤保存失败");
+        }
+        if (mapper.advanceReview(review.reviewId(), leaseOwner, "SCREEN_AUDIENCE", 90,
+                review.usageSeconds(), currentCost(review.reviewId())) != 1) {
+            throw new IllegalStateException("试映任务状态已变化");
+        }
+        reviewService.publish(review.reviewId(), "step_completed");
+        continuePipeline(review.reviewId(), leaseOwner);
+    }
+
+    private void processAudienceScreening(PreflightReviewRecord review,
+                                          PreflightStepRecord step,
+                                          String leaseOwner) {
+        if ("PENDING".equals(step.status()) && mapper.startStep(review.reviewId(), "SCREEN_AUDIENCE") != 1) {
+            throw new IllegalStateException("观众试映步骤状态已变化");
+        }
+        reviewService.publish(review.reviewId(), "step_started");
+        step = requireStep(review.reviewId(), "SCREEN_AUDIENCE");
+        AudienceScreeningService.Result result = audienceScreeningService.screen(review, step);
+        String output = json(Map.of(
+                "personaCount", result.personaCount(),
+                "inputTokens", result.inputTokens() == null ? 0 : result.inputTokens(),
+                "outputTokens", result.outputTokens() == null ? 0 : result.outputTokens()
+        ));
+        if (mapper.finishStep(review.reviewId(), "SCREEN_AUDIENCE", "SUCCEEDED",
+                output, null, null) != 1) {
+            throw new IllegalStateException("观众试映步骤完成状态保存失败");
+        }
+        reviewService.publish(review.reviewId(), "step_completed");
+        continuePipeline(review.reviewId(), leaseOwner);
     }
 
     private PreflightVideoAnalysisService.Result restoreVideoResult(PreflightStepRecord step) {
@@ -311,17 +382,23 @@ public class PreflightReviewWorker {
                 .orElseThrow(() -> new IllegalStateException("试映步骤不存在"));
     }
 
+    private boolean isFinished(PreflightStepRecord step) {
+        return "SUCCEEDED".equals(step.status()) || "SKIPPED".equals(step.status());
+    }
+
+    private BigDecimal currentCost(String reviewId) {
+        BigDecimal total = mapper.sumActualCost(reviewId);
+        if (total == null || total.signum() == 0) {
+            total = mapper.findReviewInternal(reviewId).map(PreflightReviewRecord::actualCostUsd).orElse(null);
+        }
+        return total == null ? BigDecimal.ZERO.setScale(8) : total.setScale(8, RoundingMode.HALF_UP);
+    }
+
     private BigDecimal asrCost(Long usageSeconds) {
         if (usageSeconds == null) return null;
         return properties.getProcessing().getAsrUsdPerSecond()
                 .multiply(BigDecimal.valueOf(usageSeconds))
                 .setScale(8, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal addCost(BigDecimal first, BigDecimal second) {
-        if (first == null) return second;
-        if (second == null) return first;
-        return first.add(second).setScale(8, RoundingMode.HALF_UP);
     }
 
     private String json(Object value) {

@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { ApiError } from '@/api/http'
 import {
   cancelPreflightReview,
+  completePreflightScreening,
   createPreflightReview,
   createMediaProcessingAssetReadUrl,
   createMediaProcessingJob,
@@ -15,6 +16,8 @@ import {
   probeDraftVideo,
   retryPreflightReview,
   retryMediaProcessingJob,
+  updatePreflightEditTask,
+  updatePreflightIssue,
 } from '@/api/media'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 import { useMediaUpload } from '@/composables/creator/useMediaUpload'
@@ -71,7 +74,7 @@ const processingOptions = reactive<{
 }>({
   frameIntervalSeconds: 10,
   resolution: 'P480',
-  modelPlan: 'FLASH',
+  modelPlan: 'FLASH_PLUS_REVIEW',
   includeAsr: true,
 })
 const processingEstimate = ref<Awaited<ReturnType<typeof estimateMediaProcessing>> | null>(null)
@@ -86,6 +89,10 @@ const preflightReviewFocus = ref('')
 const preflightBusy = ref(false)
 const preflightError = ref('')
 const newPreflightIdempotencyKey = ref('')
+const openIssueIgnoreId = ref('')
+const openEditIgnoreId = ref('')
+const issueIgnoreReasons = reactive<Record<string, string>>({})
+const editIgnoreReasons = reactive<Record<string, string>>({})
 
 const taskId = computed(() => selectedTaskId.value ?? '')
 const fileSummary = computed(() => {
@@ -270,6 +277,17 @@ const preflightTranscript = computed(
   () => preflightReview.value?.evidence.filter((item) => item.sourceType === 'TRANSCRIPT') ?? [],
 )
 const preflightIssues = computed(() => preflightReview.value?.issues ?? [])
+const audienceScreenings = computed(() => preflightReview.value?.audienceScreenings ?? [])
+const preflightEditTasks = computed(() => preflightReview.value?.editTasks ?? [])
+const audienceScreeningCompleted = computed(
+  () =>
+    preflightReview.value?.steps.some(
+      (item) => item.stepType === 'SCREEN_AUDIENCE' && item.status === 'SUCCEEDED',
+    ) && audienceScreenings.value.length === 3,
+)
+const needsAudienceCompletion = computed(
+  () => preflightReview.value?.status === 'COMPLETED' && !audienceScreeningCompleted.value,
+)
 const preflightProviderTaskId = computed(
   () => preflightReview.value?.steps.find((item) => item.stepType === 'TRANSCRIBE')?.providerTaskId ?? null,
 )
@@ -277,8 +295,23 @@ const preflightStepLabel = computed(() => {
   if (preflightReview.value?.currentStep === 'TRANSCRIBE') return '正在生成带时间戳字幕'
   if (preflightReview.value?.currentStep === 'BUILD_TIMELINE') return '正在汇总媒体时间轴'
   if (preflightReview.value?.currentStep === 'ANALYZE_VIDEO') return '正在生成发布前体检'
+  if (preflightReview.value?.currentStep === 'REVIEW_SEGMENTS') return '正在复核重点片段'
+  if (preflightReview.value?.currentStep === 'SCREEN_AUDIENCE') return '正在生成三类观众试映'
   return '发布前试映已完成'
 })
+
+function personaLabel(persona: 'CASUAL' | 'TARGET' | 'CORE_FAN') {
+  if (persona === 'CASUAL') return '路人观众'
+  if (persona === 'TARGET') return '目标观众'
+  return '核心粉丝'
+}
+
+function editTaskStatusLabel(status: 'TODO' | 'IN_PROGRESS' | 'COMPLETED' | 'IGNORED') {
+  if (status === 'TODO') return '待修改'
+  if (status === 'IN_PROGRESS') return '修改中'
+  if (status === 'COMPLETED') return '已完成'
+  return '暂不处理'
+}
 
 function severityLabel(severity: 'BLOCKER' | 'HIGH' | 'MEDIUM' | 'LOW') {
   if (severity === 'BLOCKER') return '阻断'
@@ -352,6 +385,10 @@ watch(taskId, async (nextTaskId) => {
   preflightReviewFocus.value = ''
   preflightBusy.value = false
   preflightError.value = ''
+  openIssueIgnoreId.value = ''
+  openEditIgnoreId.value = ''
+  Object.keys(issueIgnoreReasons).forEach((key) => delete issueIgnoreReasons[key])
+  Object.keys(editIgnoreReasons).forEach((key) => delete editIgnoreReasons[key])
   disconnectPreflightEvents()
   processingBusy.value = false
   currentMediaProcessingStatus.value = null
@@ -856,6 +893,94 @@ async function retryCurrentPreflight() {
   }
 }
 
+async function completeAudienceScreening() {
+  const currentTaskId = taskId.value
+  const reviewId = preflightReview.value?.reviewId
+  if (!currentTaskId || !reviewId || !needsAudienceCompletion.value) return
+  preflightBusy.value = true
+  preflightError.value = ''
+  try {
+    applyPreflightSnapshot(await completePreflightScreening(currentTaskId, reviewId))
+  } catch (error) {
+    preflightError.value = toMessage(error)
+  } finally {
+    preflightBusy.value = false
+  }
+}
+
+async function acceptPreflightIssue(issueId: string) {
+  const currentTaskId = taskId.value
+  if (!currentTaskId || preflightBusy.value) return
+  preflightBusy.value = true
+  preflightError.value = ''
+  try {
+    applyPreflightSnapshot(
+      await updatePreflightIssue(currentTaskId, issueId, { disposition: 'ACCEPTED' }),
+    )
+    openIssueIgnoreId.value = ''
+  } catch (error) {
+    preflightError.value = toMessage(error)
+  } finally {
+    preflightBusy.value = false
+  }
+}
+
+async function ignorePreflightIssue(issueId: string) {
+  const currentTaskId = taskId.value
+  const reason = issueIgnoreReasons[issueId]?.trim()
+  if (!currentTaskId || preflightBusy.value) return
+  if (!reason) {
+    preflightError.value = '请简单写明为什么这条不适用于当前成片'
+    return
+  }
+  preflightBusy.value = true
+  preflightError.value = ''
+  try {
+    applyPreflightSnapshot(
+      await updatePreflightIssue(currentTaskId, issueId, {
+        disposition: 'IGNORED',
+        reason,
+      }),
+    )
+    openIssueIgnoreId.value = ''
+  } catch (error) {
+    preflightError.value = toMessage(error)
+  } finally {
+    preflightBusy.value = false
+  }
+}
+
+async function changeEditTaskStatus(
+  editTaskId: string,
+  status: 'TODO' | 'IN_PROGRESS' | 'COMPLETED' | 'IGNORED',
+) {
+  const currentTaskId = taskId.value
+  if (!currentTaskId || preflightBusy.value) return
+  const note = status === 'IGNORED' ? editIgnoreReasons[editTaskId]?.trim() : undefined
+  if (status === 'IGNORED' && !note) {
+    preflightError.value = '请简单写明为什么暂不处理这项修改'
+    return
+  }
+  preflightBusy.value = true
+  preflightError.value = ''
+  try {
+    const updated = await updatePreflightEditTask(currentTaskId, editTaskId, { status, note })
+    if (preflightReview.value) {
+      preflightReview.value = {
+        ...preflightReview.value,
+        editTasks: preflightReview.value.editTasks.map((item) =>
+          item.editTaskId === editTaskId ? updated : item,
+        ),
+      }
+    }
+    openEditIgnoreId.value = ''
+  } catch (error) {
+    preflightError.value = toMessage(error)
+  } finally {
+    preflightBusy.value = false
+  }
+}
+
 function applyPreflightSnapshot(review: Awaited<ReturnType<typeof getPreflightReview>>) {
   preflightReview.value = review
   currentPreflightReviewStatus.value = review.status
@@ -870,6 +995,8 @@ function prepareNewPreflight() {
   currentPreflightReviewStatus.value = null
   preflightDisclosureConfirmed.value = false
   preflightError.value = ''
+  openIssueIgnoreId.value = ''
+  openEditIgnoreId.value = ''
   newPreflightIdempotencyKey.value = `preflight-${activeVersionId.value}-${processingJob.value?.jobId}-${Date.now()}`
 }
 
@@ -1342,8 +1469,8 @@ function toMessage(error: unknown) {
           <div>
             <span class="preflight-index">04</span>
             <p class="preflight-eyebrow">PERSISTENT PREFLIGHT</p>
-            <h4>生成发布前体检</h4>
-            <p>页面关闭后任务仍会继续；系统会先汇总时间轴，再用单个视觉模型检查成片。</p>
+            <h4>完成发布前试映</h4>
+            <p>页面关闭后任务仍会继续；系统会检查成片、按所选模型档位复核重点，再给出三类观众反馈。</p>
           </div>
           <span v-if="preflightReview" class="preflight-state-chip">{{ preflightReview.status }}</span>
         </div>
@@ -1382,7 +1509,15 @@ function toMessage(error: unknown) {
         <template v-else>
           <div class="preflight-processing-status" aria-live="polite">
             <div class="preflight-processing-status-head">
-              <strong>{{ preflightReview.status === 'COMPLETED' ? '发布前体检已完成' : preflightStepLabel }}</strong>
+              <strong>
+                {{
+                  preflightReview.status === 'COMPLETED'
+                    ? audienceScreeningCompleted
+                      ? '发布前试映已完成'
+                      : '基础体检已完成'
+                    : preflightStepLabel
+                }}
+              </strong>
               <span>{{ preflightReview.progressPercent }}%</span>
             </div>
             <div class="preflight-progress-track">
@@ -1444,11 +1579,73 @@ function toMessage(error: unknown) {
           <section v-if="preflightReview.status === 'COMPLETED'" class="preflight-report">
             <header class="preflight-report-head">
               <div>
-                <span>单视角体检</span>
+                <span>发布前试映</span>
                 <h5>{{ preflightIssues.length ? `发现 ${preflightIssues.length} 个可定位问题` : '未发现明确问题' }}</h5>
               </div>
               <strong>{{ preflightIssues.filter((issue) => issue.severity === 'HIGH' || issue.severity === 'BLOCKER').length }} 个重点</strong>
             </header>
+
+            <div v-if="needsAudienceCompletion" class="preflight-completion-card">
+              <div>
+                <span>旧版任务已完成基础体检</span>
+                <strong>补上重点片段复核和三类观众试映，就能得到完整修改清单。</strong>
+                <p>不会重新做 ASR 或全片粗审，只继续尚未完成的两步。</p>
+              </div>
+              <button
+                type="button"
+                class="preflight-primary"
+                :disabled="preflightBusy"
+                @click="completeAudienceScreening"
+              >
+                {{ preflightBusy ? '正在补全' : '补全观众试映' }}
+              </button>
+            </div>
+
+            <section v-if="audienceScreeningCompleted" class="preflight-audience-section">
+              <div class="preflight-section-title">
+                <div>
+                  <span>三类观众</span>
+                  <h6>同一份证据，不重复读取视频</h6>
+                </div>
+                <small>以下是试映假设，不代表真实用户调研</small>
+              </div>
+              <div class="preflight-audience-grid">
+                <article
+                  v-for="screening in audienceScreenings"
+                  :key="screening.screeningId"
+                  class="preflight-audience-card"
+                  :data-persona="screening.personaType"
+                >
+                  <header>
+                    <span>{{ personaLabel(screening.personaType) }}</span>
+                    <small>置信度 {{ Math.round(screening.confidence * 100) }}%</small>
+                  </header>
+                  <p>{{ screening.overallReaction }}</p>
+                  <dl>
+                    <div>
+                      <dt>可能感兴趣</dt>
+                      <dd>{{ screening.interestPoints.join('；') || '暂无明确兴趣点' }}</dd>
+                    </div>
+                    <div>
+                      <dt>可能困惑</dt>
+                      <dd>{{ screening.confusionPoints.join('；') || '暂无明显困惑' }}</dd>
+                    </div>
+                    <div>
+                      <dt>可能离开</dt>
+                      <dd>{{ screening.dropRisks.join('；') || '暂无明显流失点' }}</dd>
+                    </div>
+                  </dl>
+                </article>
+              </div>
+            </section>
+
+            <div class="preflight-section-title">
+              <div>
+                <span>问题确认</span>
+                <h6>只把你认可的问题放进修改清单</h6>
+              </div>
+              <small>每条都可以反悔</small>
+            </div>
             <div v-if="preflightIssues.length" class="preflight-issue-list">
               <article
                 v-for="issue in preflightIssues"
@@ -1467,13 +1664,169 @@ function toMessage(error: unknown) {
                   <span>建议动作</span>
                   <p>{{ issue.suggestedAction }}</p>
                 </div>
+                <p v-if="issue.affectedPersonas.length" class="preflight-affected-personas">
+                  可能影响：{{ issue.affectedPersonas.map(personaLabel).join('、') }}
+                </p>
                 <button type="button" class="preflight-issue-seek" @click="seekPreview(issue.startMs)">
                   定位到 {{ formatDuration(issue.startMs) }} 播放
                 </button>
                 <small v-if="issue.needsHumanReview" class="preflight-human-review">需要作者人工确认</small>
+                <div
+                  v-if="audienceScreeningCompleted && issue.userDisposition === 'IGNORED'"
+                  class="preflight-decision-note"
+                >
+                  <span>已暂不采纳</span>
+                  <p>{{ issue.ignoreReason }}</p>
+                  <button
+                    type="button"
+                    class="preflight-text-button"
+                    :disabled="preflightBusy"
+                    @click="acceptPreflightIssue(issue.issueId)"
+                  >
+                    恢复到修改清单
+                  </button>
+                </div>
+                <div v-else-if="audienceScreeningCompleted" class="preflight-issue-decisions">
+                  <button
+                    type="button"
+                    class="preflight-compact-primary"
+                    :disabled="preflightBusy || issue.userDisposition === 'ACCEPTED'"
+                    @click="acceptPreflightIssue(issue.issueId)"
+                  >
+                    {{ issue.userDisposition === 'ACCEPTED' ? '已加入修改清单' : '加入修改清单' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="preflight-text-button"
+                    :disabled="preflightBusy"
+                    @click="openIssueIgnoreId = openIssueIgnoreId === issue.issueId ? '' : issue.issueId"
+                  >
+                    这条不适用
+                  </button>
+                </div>
+                <div
+                  v-if="audienceScreeningCompleted && openIssueIgnoreId === issue.issueId"
+                  class="preflight-inline-reason"
+                >
+                  <textarea
+                    v-model="issueIgnoreReasons[issue.issueId]"
+                    maxlength="500"
+                    rows="2"
+                    placeholder="例如：这是我刻意保留的节奏，和频道风格一致"
+                    :disabled="preflightBusy"
+                  ></textarea>
+                  <div>
+                    <button type="button" class="preflight-text-button" @click="openIssueIgnoreId = ''">
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      class="preflight-compact-primary"
+                      :disabled="preflightBusy"
+                      @click="ignorePreflightIssue(issue.issueId)"
+                    >
+                      确认暂不采纳
+                    </button>
+                  </div>
+                </div>
               </article>
             </div>
             <p v-else class="preflight-report-empty">当前粗审没有形成可验证的问题，仍建议发布前人工通看成片。</p>
+
+            <section v-if="audienceScreeningCompleted" class="preflight-edit-section">
+              <div class="preflight-section-title">
+                <div>
+                  <span>修改清单</span>
+                  <h6>{{ preflightEditTasks.length ? `${preflightEditTasks.length} 项待你安排` : '还没有加入修改项' }}</h6>
+                </div>
+                <small>从开始到完成，只需一次点击</small>
+              </div>
+              <div v-if="preflightEditTasks.length" class="preflight-edit-list">
+                <article
+                  v-for="editTask in preflightEditTasks"
+                  :key="editTask.editTaskId"
+                  class="preflight-edit-card"
+                  :data-status="editTask.status"
+                >
+                  <header>
+                    <div>
+                      <span>{{ editTaskStatusLabel(editTask.status) }}</span>
+                      <time>{{ formatDuration(editTask.startMs) }} - {{ formatDuration(editTask.endMs) }}</time>
+                    </div>
+                    <button type="button" class="preflight-issue-seek" @click="seekPreview(editTask.startMs)">
+                      去看这一段
+                    </button>
+                  </header>
+                  <h6>{{ editTask.title }}</h6>
+                  <p>{{ editTask.action }}</p>
+                  <small>完成标准：{{ editTask.targetOutcome }}</small>
+                  <p v-if="editTask.status === 'IGNORED' && editTask.userNote" class="preflight-edit-note">
+                    暂不处理原因：{{ editTask.userNote }}
+                  </p>
+                  <div class="preflight-edit-actions">
+                    <button
+                      v-if="editTask.status === 'TODO'"
+                      type="button"
+                      class="preflight-compact-primary"
+                      :disabled="preflightBusy"
+                      @click="changeEditTaskStatus(editTask.editTaskId, 'IN_PROGRESS')"
+                    >
+                      开始修改
+                    </button>
+                    <button
+                      v-if="editTask.status === 'IN_PROGRESS'"
+                      type="button"
+                      class="preflight-compact-primary"
+                      :disabled="preflightBusy"
+                      @click="changeEditTaskStatus(editTask.editTaskId, 'COMPLETED')"
+                    >
+                      标记完成
+                    </button>
+                    <button
+                      v-if="editTask.status === 'TODO' || editTask.status === 'IN_PROGRESS'"
+                      type="button"
+                      class="preflight-text-button"
+                      :disabled="preflightBusy"
+                      @click="openEditIgnoreId = openEditIgnoreId === editTask.editTaskId ? '' : editTask.editTaskId"
+                    >
+                      暂不处理
+                    </button>
+                    <button
+                      v-if="editTask.status === 'IGNORED'"
+                      type="button"
+                      class="preflight-text-button"
+                      :disabled="preflightBusy"
+                      @click="changeEditTaskStatus(editTask.editTaskId, 'TODO')"
+                    >
+                      恢复
+                    </button>
+                  </div>
+                  <div v-if="openEditIgnoreId === editTask.editTaskId" class="preflight-inline-reason">
+                    <textarea
+                      v-model="editIgnoreReasons[editTask.editTaskId]"
+                      maxlength="1000"
+                      rows="2"
+                      placeholder="简单写明为什么这次先不处理"
+                      :disabled="preflightBusy"
+                    ></textarea>
+                    <div>
+                      <button type="button" class="preflight-text-button" @click="openEditIgnoreId = ''">
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        class="preflight-compact-primary"
+                        :disabled="preflightBusy"
+                        @click="changeEditTaskStatus(editTask.editTaskId, 'IGNORED')"
+                      >
+                        确认暂不处理
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <p v-else class="preflight-report-empty">认可某条问题后，它会立即出现在这里。</p>
+            </section>
           </section>
 
           <div v-if="preflightTranscript.length" class="preflight-transcript-list">
@@ -2339,6 +2692,143 @@ button:disabled {
   font-size: 12px;
 }
 
+.preflight-completion-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  padding: var(--s4);
+  background: rgba(112, 213, 250, 0.09);
+  border: 1px solid rgba(112, 213, 250, 0.32);
+  border-radius: var(--r-sm);
+}
+
+.preflight-completion-card div {
+  display: grid;
+  gap: 5px;
+}
+
+.preflight-completion-card span,
+.preflight-section-title span {
+  color: #70d5fa;
+  font-family: var(--font-code);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.preflight-completion-card strong {
+  color: #fff;
+  font-size: 14px;
+}
+
+.preflight-completion-card p {
+  margin: 0;
+  color: #a9bacb;
+  font-size: 12px;
+}
+
+.preflight-audience-section,
+.preflight-edit-section {
+  display: grid;
+  gap: var(--s3);
+}
+
+.preflight-section-title {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding-top: var(--s2);
+}
+
+.preflight-section-title h6 {
+  margin: 4px 0 0;
+  color: #fff;
+  font-size: 15px;
+}
+
+.preflight-section-title small {
+  color: #93a8ba;
+  font-size: 10px;
+}
+
+.preflight-audience-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s3);
+}
+
+.preflight-audience-card {
+  display: grid;
+  align-content: start;
+  gap: var(--s3);
+  min-width: 0;
+  padding: var(--s4);
+  background: rgba(255, 255, 255, 0.065);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-top: 3px solid #70d5fa;
+  border-radius: var(--r-sm);
+}
+
+.preflight-audience-card[data-persona='TARGET'] {
+  border-top-color: #ffcf78;
+}
+
+.preflight-audience-card[data-persona='CORE_FAN'] {
+  border-top-color: #ff8faf;
+}
+
+.preflight-audience-card header,
+.preflight-edit-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.preflight-audience-card header span {
+  color: #fff;
+  font-weight: var(--fw-bold);
+}
+
+.preflight-audience-card header small {
+  color: #93a8ba;
+  font-family: var(--font-code);
+  font-size: 9px;
+}
+
+.preflight-audience-card > p {
+  margin: 0;
+  color: #e0e9f0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.preflight-audience-card dl {
+  display: grid;
+  gap: var(--s2);
+  margin: 0;
+}
+
+.preflight-audience-card dl div {
+  padding-top: var(--s2);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.preflight-audience-card dt {
+  color: #70d5fa;
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+}
+
+.preflight-audience-card dd {
+  margin: 4px 0 0;
+  color: #b8c7d3;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .preflight-issue-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2401,6 +2891,174 @@ button:disabled {
   color: #70d5fa;
   font-size: 10px;
   font-weight: var(--fw-bold);
+}
+
+.preflight-affected-personas {
+  color: #ffcf78 !important;
+}
+
+.preflight-issue-decisions,
+.preflight-edit-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  padding-top: var(--s2);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.preflight-compact-primary,
+.preflight-text-button {
+  min-height: 30px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  cursor: pointer;
+}
+
+.preflight-compact-primary {
+  color: #102235;
+  background: #70d5fa;
+  border: 1px solid #70d5fa;
+}
+
+.preflight-text-button {
+  color: #c8d7e3;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.preflight-compact-primary:hover:not(:disabled) {
+  background: #fff;
+  border-color: #fff;
+}
+
+.preflight-text-button:hover:not(:disabled) {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.preflight-compact-primary:disabled,
+.preflight-text-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.preflight-inline-reason,
+.preflight-decision-note {
+  display: grid;
+  gap: var(--s2);
+  padding: var(--s3);
+  background: rgba(4, 13, 22, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--r-sm);
+}
+
+.preflight-inline-reason textarea {
+  width: 100%;
+  min-height: 62px;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  resize: vertical;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.preflight-inline-reason textarea:focus {
+  border-color: #70d5fa;
+  outline: 2px solid rgba(112, 213, 250, 0.16);
+}
+
+.preflight-inline-reason > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+
+.preflight-decision-note span {
+  color: #ffcf78;
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+}
+
+.preflight-decision-note p {
+  margin: 0;
+  color: #cbd6e0;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.preflight-edit-list {
+  display: grid;
+  gap: var(--s2);
+}
+
+.preflight-edit-card {
+  display: grid;
+  gap: var(--s2);
+  padding: var(--s4);
+  color: #dce7ee;
+  background: rgba(4, 13, 22, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: var(--r-sm);
+}
+
+.preflight-edit-card[data-status='IN_PROGRESS'] {
+  border-color: rgba(112, 213, 250, 0.5);
+}
+
+.preflight-edit-card[data-status='COMPLETED'] {
+  opacity: 0.72;
+}
+
+.preflight-edit-card[data-status='IGNORED'] {
+  border-style: dashed;
+}
+
+.preflight-edit-card header > div {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.preflight-edit-card header span {
+  color: #70d5fa;
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+}
+
+.preflight-edit-card header time {
+  color: #93a8ba;
+  font-family: var(--font-code);
+  font-size: 10px;
+}
+
+.preflight-edit-card h6,
+.preflight-edit-card p {
+  margin: 0;
+}
+
+.preflight-edit-card h6 {
+  color: #fff;
+  font-size: 14px;
+}
+
+.preflight-edit-card p,
+.preflight-edit-card > small {
+  color: #b8c7d3;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.preflight-edit-note {
+  color: #ffcf78 !important;
 }
 
 .preflight-human-review {
@@ -2708,6 +3366,7 @@ button:disabled {
   .preflight-cost-strip,
   .preflight-signal-strip,
   .preflight-review-facts,
+  .preflight-audience-grid,
   .preflight-issue-list,
   .preflight-frame-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2771,6 +3430,7 @@ button:disabled {
   .preflight-cost-strip,
   .preflight-signal-strip,
   .preflight-review-facts,
+  .preflight-audience-grid,
   .preflight-issue-list,
   .preflight-frame-grid {
     grid-template-columns: 1fr;
@@ -2778,6 +3438,17 @@ button:disabled {
 
   .preflight-processing-head {
     flex-direction: column;
+  }
+
+  .preflight-report-head,
+  .preflight-section-title,
+  .preflight-completion-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .preflight-completion-card > button {
+    width: 100%;
   }
 
   .preflight-transcript-list li {

@@ -1554,8 +1554,8 @@ CREATE TABLE IF NOT EXISTS creator_media_processing_asset
   COMMENT = '媒体预处理派生素材表';
 
 -- ------------------------------------------------------------
--- 39. 发布前试映任务表（阶段 7 P0-3/P0-4a）
---     页面关闭后任务仍由数据库租约 Worker 推进，并在时间轴完成后继续生成单视角体检。
+-- 39. 发布前试映任务表（阶段 7 P0-3/P0-4）
+--     页面关闭后任务仍由数据库租约 Worker 推进，直至完成问题复核和三类观众试映。
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS creator_preflight_review
 (
@@ -1568,7 +1568,7 @@ CREATE TABLE IF NOT EXISTS creator_preflight_review
     idempotency_key       VARCHAR(128)   NOT NULL COMMENT '页面创建任务的幂等键',
     review_focus          VARCHAR(1000)           DEFAULT NULL COMMENT '作者希望后续试映重点关注的内容',
     status                VARCHAR(32)    NOT NULL DEFAULT 'QUEUED' COMMENT '状态：QUEUED、RUNNING、RETRY_WAIT、COMPLETED、FAILED、CANCEL_REQUESTED、CANCELLED',
-    current_step          VARCHAR(48)    NOT NULL DEFAULT 'TRANSCRIBE' COMMENT '当前步骤：TRANSCRIBE、BUILD_TIMELINE、ANALYZE_VIDEO、DONE',
+    current_step          VARCHAR(48)    NOT NULL DEFAULT 'TRANSCRIBE' COMMENT '当前步骤：TRANSCRIBE、BUILD_TIMELINE、ANALYZE_VIDEO、REVIEW_SEGMENTS、SCREEN_AUDIENCE、DONE',
     progress_percent      INT            NOT NULL DEFAULT 0 COMMENT '任务进度百分比，范围0到100',
     event_sequence        BIGINT         NOT NULL DEFAULT 0 COMMENT 'SSE 快照游标，每次事实变化单调递增',
     cancel_requested      TINYINT        NOT NULL DEFAULT 0 COMMENT '用户是否请求取消',
@@ -1580,7 +1580,7 @@ CREATE TABLE IF NOT EXISTS creator_preflight_review
     input_fingerprint     VARCHAR(64)    NOT NULL COMMENT '成片与预处理输入指纹，防止错误复用结果',
     provider_snapshot     JSON           NOT NULL COMMENT '本次 ASR 与视频理解 Provider、模型和参数快照',
     capability_gaps       JSON                    DEFAULT NULL COMMENT '无音轨或未启用 ASR 等能力缺口',
-    executive_summary     TEXT                    DEFAULT NULL COMMENT '单视角发布前体检摘要',
+    executive_summary     TEXT                    DEFAULT NULL COMMENT '发布前全片体检摘要，供后续重点复核和观众试映复用',
     estimated_cost_usd    DECIMAL(18, 8)          DEFAULT NULL COMMENT '创建任务时的 ASR 与视频理解预估美元费用',
     actual_cost_usd       DECIMAL(18, 8)          DEFAULT NULL COMMENT '按 Provider 实际用量计算的美元费用',
     usage_seconds         BIGINT                   DEFAULT NULL COMMENT 'Provider 返回的 ASR 计费秒数',
@@ -1601,7 +1601,7 @@ CREATE TABLE IF NOT EXISTS creator_preflight_review
   COMMENT = '发布前试映持久化任务表';
 
 -- ------------------------------------------------------------
--- 40. 发布前试映步骤表（阶段 7 P0-3/P0-4a）
+-- 40. 发布前试映步骤表（阶段 7 P0-3/P0-4）
 --     Provider 任务 ID 必须在提交后立即保存，服务重启只能查询而不能重复提交。
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS creator_preflight_step
@@ -1609,7 +1609,7 @@ CREATE TABLE IF NOT EXISTS creator_preflight_step
     id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     step_id             VARCHAR(64)  NOT NULL COMMENT '步骤唯一标识（UUID）',
     review_id           VARCHAR(64)  NOT NULL COMMENT '关联 creator_preflight_review.review_id',
-    step_type           VARCHAR(48)  NOT NULL COMMENT '步骤类型：TRANSCRIBE、BUILD_TIMELINE、ANALYZE_VIDEO',
+    step_type           VARCHAR(48)  NOT NULL COMMENT '步骤类型：TRANSCRIBE、BUILD_TIMELINE、ANALYZE_VIDEO、REVIEW_SEGMENTS、SCREEN_AUDIENCE',
     sequence_no         INT          NOT NULL COMMENT '固定执行顺序',
     status              VARCHAR(24)  NOT NULL DEFAULT 'PENDING' COMMENT '状态：PENDING、RUNNING、SUCCEEDED、FAILED、SKIPPED',
     attempt_count       INT          NOT NULL DEFAULT 0 COMMENT '步骤实际失败次数',
@@ -1658,8 +1658,8 @@ CREATE TABLE IF NOT EXISTS creator_timeline_evidence
   COMMENT = '发布前试映统一时间轴证据表';
 
 -- ------------------------------------------------------------
--- 42. 发布前体检问题表（阶段 7 P0-4a）
---     首轮只保存单 Provider 全片粗审问题，不提前加入观众角色和修改任务状态。
+-- 42. 发布前体检问题表（阶段 7 P0-4）
+--     保存全片粗审、重点片段复核、受影响观众和作者最终处置。
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS creator_preflight_issue
 (
@@ -1679,6 +1679,9 @@ CREATE TABLE IF NOT EXISTS creator_preflight_issue
     suggested_action      TEXT           NOT NULL COMMENT '创作者可直接执行的修改动作',
     needs_human_review    TINYINT        NOT NULL DEFAULT 0 COMMENT '是否需要作者人工确认',
     source_types          JSON           NOT NULL COMMENT '本问题使用的规则或模型来源',
+    affected_personas     JSON                    DEFAULT NULL COMMENT '受影响观众角色：CASUAL、TARGET、CORE_FAN',
+    user_disposition      VARCHAR(24)    NOT NULL DEFAULT 'PENDING' COMMENT '作者处置：PENDING、ACCEPTED、IGNORED',
+    ignore_reason         VARCHAR(500)            DEFAULT NULL COMMENT '作者暂不采纳该问题的原因',
     create_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted            TINYINT        NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
@@ -1686,11 +1689,71 @@ CREATE TABLE IF NOT EXISTS creator_preflight_issue
     KEY idx_preflight_issue_review (review_id, severity, start_ms)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
-  COMMENT = '发布前单视角体检问题表';
+  COMMENT = '发布前体检问题表';
 
 -- ------------------------------------------------------------
--- 43. 媒体 Provider 调用流水表（阶段 7 P0-3/P0-4a）
---     独立保存 ASR 与视频理解用量，避免混入现有纯文本 LLM Token 统计。
+-- 43. 三类观众试映表（阶段 7 P0-4）
+--     三类角色一次文本模型请求生成，共用同一份证据，不重复读取视频。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_audience_screening
+(
+    id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    screening_id          VARCHAR(64)    NOT NULL COMMENT '观众试映结果唯一标识（UUID）',
+    review_id             VARCHAR(64)    NOT NULL COMMENT '关联发布前试映任务',
+    persona_type          VARCHAR(24)    NOT NULL COMMENT '观众角色：CASUAL、TARGET、CORE_FAN',
+    persona_snapshot      JSON           NOT NULL COMMENT '本次角色定义和关联问题快照',
+    overall_reaction      TEXT           NOT NULL COMMENT '使用假设语气描述的整体反应',
+    interest_points       JSON           NOT NULL COMMENT '可能感兴趣的内容点',
+    confusion_points      JSON           NOT NULL COMMENT '可能感到困惑的内容点',
+    drop_risks            JSON           NOT NULL COMMENT '可能离开的时间点或原因',
+    evidence_refs         JSON           NOT NULL COMMENT '结论引用的时间轴证据ID',
+    confidence            DECIMAL(7, 6)  NOT NULL COMMENT '观众试映结论置信度，范围0到1',
+    prompt_version        VARCHAR(64)    NOT NULL COMMENT '观众试映提示词版本',
+    raw_output            LONGTEXT       NOT NULL COMMENT '本次结构化模型输出，便于回看',
+    create_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted            TINYINT        NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_audience_screening_id (screening_id),
+    UNIQUE KEY uk_review_persona (review_id, persona_type),
+    KEY idx_audience_review (review_id, persona_type)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '发布前三类观众试映结果表';
+
+-- ------------------------------------------------------------
+-- 44. 成片修改任务表（阶段 7 P0-4）
+--     作者接受问题时一键生成，保持简单的待处理、修改中、已完成、暂不处理状态。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_edit_task
+(
+    id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    edit_task_id          VARCHAR(64)    NOT NULL COMMENT '修改任务唯一标识（UUID）',
+    review_id             VARCHAR(64)    NOT NULL COMMENT '关联发布前试映任务',
+    issue_id              VARCHAR(64)    NOT NULL COMMENT '来源体检问题ID，一条问题只生成一个修改任务',
+    task_id               VARCHAR(64)    NOT NULL COMMENT '关联创作任务',
+    version_id            VARCHAR(64)    NOT NULL COMMENT '关联成片版本',
+    title                 VARCHAR(255)   NOT NULL COMMENT '修改任务标题',
+    action                TEXT           NOT NULL COMMENT '创作者可直接执行的修改动作',
+    start_ms              BIGINT         NOT NULL COMMENT '建议修改开始时间毫秒',
+    end_ms                BIGINT         NOT NULL COMMENT '建议修改结束时间毫秒',
+    priority              VARCHAR(16)    NOT NULL COMMENT '优先级：BLOCKER、HIGH、MEDIUM、LOW',
+    target_outcome        TEXT           NOT NULL COMMENT '修改完成后的直白验收目标',
+    status                VARCHAR(24)    NOT NULL DEFAULT 'TODO' COMMENT '状态：TODO、IN_PROGRESS、COMPLETED、IGNORED',
+    user_note             VARCHAR(1000)           DEFAULT NULL COMMENT '作者备注或暂不处理原因',
+    completed_at          DATETIME                DEFAULT NULL COMMENT '标记完成时间',
+    create_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time           DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted            TINYINT        NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
+    UNIQUE KEY uk_edit_task_id (edit_task_id),
+    UNIQUE KEY uk_edit_task_issue (issue_id),
+    KEY idx_edit_task_review (review_id, status, priority)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '发布前成片修改任务表';
+
+-- ------------------------------------------------------------
+-- 45. 媒体 Provider 调用流水表（阶段 7 P0-3/P0-4）
+--     独立保存 ASR、视频理解和观众试映用量，便于解释本次试映成本。
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS creator_media_api_call_log
 (
@@ -1702,7 +1765,7 @@ CREATE TABLE IF NOT EXISTS creator_media_api_call_log
     step_id               VARCHAR(64)    NOT NULL COMMENT '关联持久化步骤',
     provider_name         VARCHAR(64)    NOT NULL COMMENT 'Provider 名称',
     model_name            VARCHAR(128)   NOT NULL COMMENT 'Provider 模型名称',
-    capability            VARCHAR(32)    NOT NULL COMMENT '能力类型：ASR、VIDEO',
+    capability            VARCHAR(32)    NOT NULL COMMENT '能力类型：ASR、VIDEO、TEXT_SCREENING',
     request_fingerprint   VARCHAR(64)    NOT NULL COMMENT '媒体输入摘要，不保存签名地址',
     provider_task_id      VARCHAR(255)            DEFAULT NULL COMMENT '外部异步任务 ID',
     audio_duration_ms     BIGINT                   DEFAULT NULL COMMENT 'Provider 返回的计费音频时长毫秒',
@@ -1726,8 +1789,8 @@ CREATE TABLE IF NOT EXISTS creator_media_api_call_log
   DEFAULT CHARSET = utf8mb4
   COMMENT = '媒体 Provider 调用流水表';
 
--- 旧版仍在执行或等待重试的 P0-3 任务继续复用原时间轴，只补上视频理解步骤。
--- 已完成的旧任务不自动调用付费模型，页面会将其视为尚未生成正式体检并由用户重新启动。
+-- 旧版仍在执行或等待重试的任务继续复用已有结果，只补上尚未执行的 P0-4 步骤。
+-- 已完成的旧任务不自动产生新费用，页面提供显式“补全观众试映”操作。
 INSERT INTO creator_preflight_step (
     step_id, review_id, step_type, sequence_no, status, attempt_count, input_fingerprint
 )
@@ -1738,6 +1801,38 @@ WHERE review.status IN ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'FAILED')
   AND NOT EXISTS (
       SELECT 1 FROM creator_preflight_step step
       WHERE step.review_id = review.review_id AND step.step_type = 'ANALYZE_VIDEO'
+  );
+
+INSERT INTO creator_preflight_step (
+    step_id, review_id, step_type, sequence_no, status, attempt_count, input_fingerprint
+)
+SELECT UUID(), review.review_id, 'REVIEW_SEGMENTS', 4, 'PENDING', 0, review.input_fingerprint
+FROM creator_preflight_review review
+WHERE review.status IN ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'FAILED')
+  AND review.is_deleted = 0
+  AND EXISTS (
+      SELECT 1 FROM creator_preflight_step step
+      WHERE step.review_id = review.review_id AND step.step_type = 'ANALYZE_VIDEO'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM creator_preflight_step step
+      WHERE step.review_id = review.review_id AND step.step_type = 'REVIEW_SEGMENTS'
+  );
+
+INSERT INTO creator_preflight_step (
+    step_id, review_id, step_type, sequence_no, status, attempt_count, input_fingerprint
+)
+SELECT UUID(), review.review_id, 'SCREEN_AUDIENCE', 5, 'PENDING', 0, review.input_fingerprint
+FROM creator_preflight_review review
+WHERE review.status IN ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'FAILED')
+  AND review.is_deleted = 0
+  AND EXISTS (
+      SELECT 1 FROM creator_preflight_step step
+      WHERE step.review_id = review.review_id AND step.step_type = 'ANALYZE_VIDEO'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM creator_preflight_step step
+      WHERE step.review_id = review.review_id AND step.step_type = 'SCREEN_AUDIENCE'
   );
 
 
@@ -1806,7 +1901,7 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 视频理解结果与用量：旧库补齐摘要和三列流水字段后即可继续复用已有 P0-3 数据。
 SET @sql = (SELECT IF(COUNT(*) = 0,
-    'ALTER TABLE creator_preflight_review ADD COLUMN executive_summary TEXT DEFAULT NULL COMMENT ''单视角发布前体检摘要'' AFTER capability_gaps',
+    'ALTER TABLE creator_preflight_review ADD COLUMN executive_summary TEXT DEFAULT NULL COMMENT ''发布前全片体检摘要，供后续重点复核和观众试映复用'' AFTER capability_gaps',
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_preflight_review' AND COLUMN_NAME = 'executive_summary');
@@ -1831,6 +1926,28 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_media_api_call_log' AND COLUMN_NAME = 'result_count');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- P0-4 问题处置字段：旧库补齐后才能保存受影响观众、接受和暂不采纳状态。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_preflight_issue ADD COLUMN affected_personas JSON DEFAULT NULL COMMENT ''受影响观众角色：CASUAL、TARGET、CORE_FAN'' AFTER source_types',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_preflight_issue' AND COLUMN_NAME = 'affected_personas');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_preflight_issue ADD COLUMN user_disposition VARCHAR(24) NOT NULL DEFAULT ''PENDING'' COMMENT ''作者处置：PENDING、ACCEPTED、IGNORED'' AFTER affected_personas',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_preflight_issue' AND COLUMN_NAME = 'user_disposition');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_preflight_issue ADD COLUMN ignore_reason VARCHAR(500) DEFAULT NULL COMMENT ''作者暂不采纳该问题的原因'' AFTER user_disposition',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_preflight_issue' AND COLUMN_NAME = 'ignore_reason');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 当前发布前试映任务：旧库必须补齐，否则 P0-3 无法把发布后门禁绑定到当前成片任务。

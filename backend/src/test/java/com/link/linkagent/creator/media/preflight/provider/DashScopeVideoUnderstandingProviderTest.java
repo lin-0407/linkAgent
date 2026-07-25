@@ -17,6 +17,8 @@ class DashScopeVideoUnderstandingProviderTest {
         );
 
         var request = provider.buildRequest("https://media.example/review.mp4", "检查开场");
+        var segmentRequest = provider.buildRequest(
+                "https://media.example/segment.mp4", "复核重点片段", "qwen3-vl-plus", 1d);
         var result = provider.parseResponse(objectMapper.readTree("""
                 {
                   "choices": [{"message": {"content": "{\\\"executiveSummary\\\":\\\"开场价值明确\\\",\\\"issues\\\":[]}"}}],
@@ -26,6 +28,8 @@ class DashScopeVideoUnderstandingProviderTest {
 
         assertThat(request.at("/messages/0/content/0/type").asText()).isEqualTo("video_url");
         assertThat(request.at("/messages/0/content/0/fps").asDouble()).isEqualTo(0.2d);
+        assertThat(segmentRequest.path("model").asText()).isEqualTo("qwen3-vl-plus");
+        assertThat(segmentRequest.at("/messages/0/content/0/fps").asDouble()).isEqualTo(1d);
         assertThat(request.at("/enable_thinking").asBoolean()).isFalse();
         assertThat(result.content()).contains("开场价值明确");
         assertThat(result.inputTokens()).isEqualTo(1200L);

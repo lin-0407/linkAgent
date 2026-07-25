@@ -30,7 +30,9 @@ public record PreflightReviewResponse(
         LocalDateTime updateTime,
         List<Step> steps,
         List<Evidence> evidence,
-        List<Issue> issues
+        List<Issue> issues,
+        List<AudienceScreening> audienceScreenings,
+        List<EditTask> editTasks
 ) {
     public record Step(String stepId,
                        String stepType,
@@ -64,6 +66,33 @@ public record PreflightReviewResponse(
                         BigDecimal confidence,
                         List<String> evidenceRefs,
                         String suggestedAction,
-                        boolean needsHumanReview) {
+                        boolean needsHumanReview,
+                        List<String> affectedPersonas,
+                        String userDisposition,
+                        String ignoreReason) {
+    }
+
+    public record AudienceScreening(String screeningId,
+                                    String personaType,
+                                    String overallReaction,
+                                    List<String> interestPoints,
+                                    List<String> confusionPoints,
+                                    List<String> dropRisks,
+                                    List<String> evidenceRefs,
+                                    BigDecimal confidence) {
+    }
+
+    public record EditTask(String editTaskId,
+                           String issueId,
+                           String title,
+                           String action,
+                           long startMs,
+                           long endMs,
+                           String priority,
+                           String targetOutcome,
+                           String status,
+                           String userNote,
+                           LocalDateTime completedAt,
+                           LocalDateTime updateTime) {
     }
 }

@@ -1,4 +1,4 @@
-import { ApiError, del, get, post } from './http'
+import { ApiError, del, get, patch, post } from './http'
 import type {
   CreateMediaUploadPayload,
   DraftVideo,
@@ -164,6 +164,37 @@ export function cancelPreflightReview(taskId: string, reviewId: string) {
 export function retryPreflightReview(taskId: string, reviewId: string) {
   return post<PreflightReview>(
     `/creator/tasks/${encodeURIComponent(taskId)}/preflight-jobs/${encodeURIComponent(reviewId)}:retry`,
+  )
+}
+
+export function completePreflightScreening(taskId: string, reviewId: string) {
+  return post<PreflightReview>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/preflight-jobs/${encodeURIComponent(reviewId)}:complete-screening`,
+  )
+}
+
+export function updatePreflightIssue(
+  taskId: string,
+  issueId: string,
+  payload: { disposition: 'ACCEPTED' | 'IGNORED'; reason?: string },
+) {
+  return patch<PreflightReview>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/preflight/issues/${encodeURIComponent(issueId)}`,
+    payload,
+  )
+}
+
+export function updatePreflightEditTask(
+  taskId: string,
+  editTaskId: string,
+  payload: {
+    status: 'TODO' | 'IN_PROGRESS' | 'COMPLETED' | 'IGNORED'
+    note?: string
+  },
+) {
+  return patch<PreflightReview['editTasks'][number]>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/preflight/edit-tasks/${encodeURIComponent(editTaskId)}`,
+    payload,
   )
 }
 

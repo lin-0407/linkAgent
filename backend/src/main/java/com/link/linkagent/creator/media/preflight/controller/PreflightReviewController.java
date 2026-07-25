@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-/** P0-3/P0-4a 发布前试映与单视角体检任务接口。 */
+/** P0-3/P0-4 发布前试映任务接口。 */
 @Validated
 @RestController
 @ConditionalOnProperty(prefix = "creator.media", name = "enabled", havingValue = "true")
@@ -119,5 +119,18 @@ public class PreflightReviewController {
             @Pattern(regexp = SAFE_ID_PATTERN, message = "试映任务ID格式不正确")
             String reviewId) {
         return service.retry(DEFAULT_OWNER_ID, taskId, reviewId);
+    }
+
+    @PostMapping("/{reviewId}:complete-screening")
+    public PreflightReviewResponse completeScreening(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Pattern(regexp = SAFE_ID_PATTERN, message = "任务ID格式不正确")
+            String taskId,
+            @PathVariable
+            @NotBlank(message = "试映任务ID不能为空")
+            @Pattern(regexp = SAFE_ID_PATTERN, message = "试映任务ID格式不正确")
+            String reviewId) {
+        return service.completeScreening(DEFAULT_OWNER_ID, taskId, reviewId);
     }
 }

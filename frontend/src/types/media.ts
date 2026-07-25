@@ -199,7 +199,12 @@ export type PreflightReview = {
   updateTime: string
   steps: Array<{
     stepId: string
-    stepType: 'TRANSCRIBE' | 'BUILD_TIMELINE' | 'ANALYZE_VIDEO'
+    stepType:
+      | 'TRANSCRIBE'
+      | 'BUILD_TIMELINE'
+      | 'ANALYZE_VIDEO'
+      | 'REVIEW_SEGMENTS'
+      | 'SCREEN_AUDIENCE'
     sequenceNo: number
     status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED'
     attemptCount: number
@@ -238,6 +243,33 @@ export type PreflightReview = {
     evidenceRefs: string[]
     suggestedAction: string
     needsHumanReview: boolean
+    affectedPersonas: Array<'CASUAL' | 'TARGET' | 'CORE_FAN'>
+    userDisposition: 'PENDING' | 'ACCEPTED' | 'IGNORED'
+    ignoreReason: string | null
+  }>
+  audienceScreenings: Array<{
+    screeningId: string
+    personaType: 'CASUAL' | 'TARGET' | 'CORE_FAN'
+    overallReaction: string
+    interestPoints: string[]
+    confusionPoints: string[]
+    dropRisks: string[]
+    evidenceRefs: string[]
+    confidence: number
+  }>
+  editTasks: Array<{
+    editTaskId: string
+    issueId: string
+    title: string
+    action: string
+    startMs: number
+    endMs: number
+    priority: 'BLOCKER' | 'HIGH' | 'MEDIUM' | 'LOW'
+    targetOutcome: string
+    status: 'TODO' | 'IN_PROGRESS' | 'COMPLETED' | 'IGNORED'
+    userNote: string | null
+    completedAt: string | null
+    updateTime: string
   }>
 }
 

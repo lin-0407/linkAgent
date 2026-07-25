@@ -21,6 +21,9 @@ public record PreflightIssueRecord(
         String suggestedAction,
         Boolean needsHumanReview,
         String sourceTypes,
+        String affectedPersonas,
+        String userDisposition,
+        String ignoreReason,
         LocalDateTime createTime,
         LocalDateTime updateTime
 ) {
