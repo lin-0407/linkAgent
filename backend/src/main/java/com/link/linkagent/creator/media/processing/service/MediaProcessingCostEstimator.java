@@ -41,10 +41,10 @@ public class MediaProcessingCostEstimator {
         long flashInputTokens = frameCount * tokensPerFrame;
         long flashOutputTokens = 1200L;
         int plusReviewFrameCount = options.modelPlan() == MediaProcessingOptionsRequest.ModelPlan.FLASH_PLUS_REVIEW
-                ? Math.max(1, (int) Math.ceil(frameCount * 0.10D))
+                ? mediaProperties.getPreflight().getSegmentReviewMaxCount()
                 : 0;
         long plusInputTokens = plusReviewFrameCount * tokensPerFrame;
-        long plusOutputTokens = plusReviewFrameCount > 0 ? 800L : 0L;
+        long plusOutputTokens = plusReviewFrameCount * 800L;
 
         CreatorMediaProperties.Processing pricing = mediaProperties.getProcessing();
         BigDecimal flashCost = tokenCost(
@@ -78,7 +78,10 @@ public class MediaProcessingCostEstimator {
                 visualCost,
                 asrCost,
                 visualCost.add(asrCost).setScale(8, RoundingMode.HALF_UP),
-                NOTICE
+                plusReviewFrameCount > 0
+                        ? "按当前配置估算，Plus 复核按最多 %d 个重点片段计算，实际费用以供应商账单为准"
+                                .formatted(plusReviewFrameCount)
+                        : NOTICE
         );
     }
 

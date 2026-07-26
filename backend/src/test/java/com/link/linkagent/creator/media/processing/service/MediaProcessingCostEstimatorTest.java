@@ -23,7 +23,8 @@ class MediaProcessingCostEstimatorTest {
         var estimate = estimator().estimate(3_600_000L, true, options);
 
         assertThat(estimate.estimatedFrameCount()).isEqualTo(360);
-        assertThat(estimate.plusReviewFrameCount()).isEqualTo(36);
+        assertThat(estimate.plusReviewFrameCount()).isEqualTo(5);
+        assertThat(estimate.estimatedVisualOutputTokens()).isEqualTo(5_200L);
         assertThat(estimate.estimatedAsrSeconds()).isEqualTo(3600L);
         assertThat(estimate.estimatedVisualInputTokens()).isPositive();
         assertThat(estimate.estimatedTotalCostUsd()).isPositive();
