@@ -5,6 +5,7 @@ import { getLatestWorkflowFailedStep } from '@/composables/creator/creatorWorksp
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 
 const {
+  suggestion,
   openGuidanceEditor,
   hasSelectedTask,
   openWorkflowMessageModal,
@@ -47,7 +48,10 @@ const compactWorkflowStatus = computed(() => {
 </script>
 
 <template>
-  <section class="creator-section creator-ai-prepublish-section">
+  <section
+    class="creator-section creator-ai-prepublish-section"
+    :class="{ 'is-waiting': !suggestion }"
+  >
     <header class="creator-section-head creator-ai-prepublish-head">
       <div>
         <h3>发布前优化</h3>
@@ -87,7 +91,10 @@ const compactWorkflowStatus = computed(() => {
       </button>
     </section>
 
-    <div class="creator-ai-prepublish-layout">
+    <div
+      class="creator-ai-prepublish-layout"
+      :class="{ 'is-waiting': !suggestion }"
+    >
       <section class="creator-ai-preference-workspace" aria-label="偏好与语境">
         <header class="creator-ai-preference-workspace-head">
           <div>
@@ -265,10 +272,18 @@ const compactWorkflowStatus = computed(() => {
 
 .creator-ai-prepublish-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 324px) minmax(0, 1fr);
+  grid-template-areas: 'preferences result';
+  grid-template-columns: minmax(380px, 0.9fr) minmax(520px, 1.1fr);
   gap: 14px;
   min-width: 0;
   min-height: 0;
+}
+
+/* 方案尚未生成时，结果区只是一个动作卡，放在窄列即可；偏好输入获得主宽度，避免长内容挤在侧栏。 */
+.creator-ai-prepublish-layout.is-waiting {
+  grid-template-areas: 'result preferences';
+  grid-template-columns: minmax(300px, 360px) minmax(520px, 1fr);
+  align-items: start;
 }
 
 .creator-ai-preference-workspace,
@@ -278,6 +293,7 @@ const compactWorkflowStatus = computed(() => {
 }
 
 .creator-ai-preference-workspace {
+  grid-area: preferences;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
@@ -365,6 +381,7 @@ const compactWorkflowStatus = computed(() => {
 }
 
 .creator-ai-result-panel {
+  grid-area: result;
   display: flex;
   overflow: hidden;
 }
@@ -393,6 +410,36 @@ const compactWorkflowStatus = computed(() => {
     height: 100%;
     max-height: 100%;
   }
+
+  /* 等待状态使用自然高度，避免空结果卡被拉满并在工作区下方留下割裂空白。 */
+  .creator-ai-prepublish-section.is-waiting,
+  .creator-ai-prepublish-section.is-waiting .creator-ai-prepublish-layout {
+    height: auto;
+    overflow: visible;
+  }
+
+  .creator-ai-prepublish-layout.is-waiting .creator-ai-preference-workspace,
+  .creator-ai-prepublish-layout.is-waiting .creator-ai-result-panel,
+  .creator-ai-prepublish-layout.is-waiting .creator-ai-result-panel > :deep(.pre-publish-suggestion-panel) {
+    height: auto;
+    max-height: none;
+  }
+
+  .creator-ai-prepublish-layout.is-waiting .creator-ai-preference-workspace,
+  .creator-ai-prepublish-layout.is-waiting .creator-ai-preference-workspace-body,
+  .creator-ai-prepublish-layout.is-waiting .creator-ai-result-panel {
+    overflow: visible;
+  }
+}
+
+@container (min-width: 560px) {
+  .creator-ai-preference-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .creator-ai-preference-form .span-full {
+    grid-column: 1 / -1;
+  }
 }
 
 @container (max-width: 480px) {
@@ -417,7 +464,11 @@ const compactWorkflowStatus = computed(() => {
 
 /* 宽度不足时才收为单列，确保发布方案在中等屏幕仍有足够的阅读宽度。 */
 @media (max-width: 1279px) {
-  .creator-ai-prepublish-layout {
+  .creator-ai-prepublish-layout,
+  .creator-ai-prepublish-layout.is-waiting {
+    grid-template-areas:
+      'preferences'
+      'result';
     grid-template-columns: minmax(0, 1fr);
   }
 

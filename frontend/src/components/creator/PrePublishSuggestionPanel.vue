@@ -203,7 +203,11 @@ function saveSuggestionContext(
 </script>
 
 <template>
-  <section class="pre-publish-suggestion-panel" aria-label="发布方案内容">
+  <section
+    class="pre-publish-suggestion-panel"
+    :class="{ 'is-empty': !suggestion }"
+    aria-label="发布方案内容"
+  >
     <header class="suggestion-panel-head">
       <div>
         <span>发布方案</span>
@@ -572,6 +576,20 @@ function saveSuggestionContext(
   scrollbar-color: rgba(104, 117, 136, 0.5) transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
+}
+
+/* 没有方案时底部不存在操作栏，不预留正文滚动空间，让等待卡保持紧凑。 */
+.pre-publish-suggestion-panel.is-empty {
+  grid-template-rows: auto auto;
+}
+
+.pre-publish-suggestion-panel.is-empty .suggestion-panel-body {
+  padding: 0 14px 14px;
+  overflow: visible;
+}
+
+.pre-publish-suggestion-panel.is-empty .suggestion-empty-state {
+  min-height: 220px;
 }
 
 .suggestion-panel-body::-webkit-scrollbar {

@@ -4226,6 +4226,10 @@ textarea:focus {
 
 .creator-task-manager-list {
   display: grid;
+  grid-template-columns: repeat(auto-fill, 340px);
+  align-content: start;
+  align-items: start;
+  justify-content: start;
   max-height: none;
   min-height: 0;
 }
@@ -7443,6 +7447,10 @@ body {
   .creator-task-manager-modal .creator-task-toolbar,
   .creator-task-manager-modal .creator-task-overview {
     grid-template-columns: 1fr;
+  }
+
+  .creator-task-manager-list {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .creator-task-manager-list .creator-task-item {
