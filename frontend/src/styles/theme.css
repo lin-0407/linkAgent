@@ -1483,12 +1483,6 @@ textarea:focus {
 }
 
 @media (max-width: 1100px) {
-  .app-shell {
-    grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
-    padding: 12px;
-  }
-
-  .sidebar,
   .workspace {
     min-height: calc(100vh - 24px);
     max-height: calc(100vh - 24px);
@@ -1498,25 +1492,6 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .topbar-actions {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .topbar-stats {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-
-  .topbar-stats .session-chip {
-    grid-column: auto;
-  }
-
-  .empty-state {
-    grid-template-columns: 1fr;
-  }
-
-  .prompt-examples {
-    padding-top: 0;
-  }
 }
 
 @media (max-width: 760px) {
@@ -1524,25 +1499,8 @@ textarea:focus {
     background: var(--canvas);
   }
 
-  .app-shell {
-    grid-template-columns: 1fr;
-    min-height: 100vh;
-    padding: 10px;
-    overflow: visible;
-  }
-
-  .app-shell::before,
-  .app-shell::after,
   .workspace::after {
     display: none;
-  }
-
-  .sidebar {
-    min-height: auto;
-    max-height: none;
-    padding: 18px;
-    border-right: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 22px 22px 0 0;
   }
 
   .workspace {
@@ -1577,26 +1535,6 @@ textarea:focus {
     min-height: 66px;
   }
 
-  .topbar-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .topbar-stats .session-chip {
-    grid-column: span 2;
-  }
-
-  .topbar.compact .topbar-actions {
-    grid-template-columns: 1fr;
-  }
-
-  .topbar.compact .topbar-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .topbar.compact .topbar-stats .session-chip {
-    grid-column: span 2;
-  }
-
   .message {
     grid-template-columns: 34px minmax(0, 1fr);
   }
@@ -1622,33 +1560,6 @@ textarea:focus {
     width: 34px;
     height: 34px;
     border-radius: 9px;
-  }
-
-  .empty-state {
-    min-height: 0;
-    border-radius: 20px;
-  }
-
-  .empty-hero,
-  .prompt-examples {
-    padding: 24px;
-  }
-
-  .empty-art {
-    position: relative;
-    top: auto;
-    left: auto;
-    width: 150px;
-    height: 150px;
-    margin-bottom: 36px;
-  }
-
-  .empty-state h3 {
-    font-size: 42px;
-  }
-
-  .prompt-examples button {
-    grid-template-columns: 1fr;
   }
 
   .composer {
@@ -2243,50 +2154,6 @@ textarea:focus {
   border-radius: var(--r-pill);
   font-size: 12px;
   font-weight: var(--fw-medium);
-}
-
-.creator-task-id {
-  display: block;
-  padding: 10px 12px;
-  overflow-wrap: anywhere;
-  color: var(--ink);
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  font-family: var(--font-code);
-  font-size: 12px;
-}
-
-.creator-material-list {
-  display: grid;
-  max-height: 300px;
-  gap: var(--s2);
-  overflow: auto;
-}
-
-.creator-material-list article {
-  display: grid;
-  gap: 6px;
-  padding: 11px;
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-}
-
-.creator-material-list strong {
-  color: var(--ink);
-  font-size: 13px;
-}
-
-.creator-material-list p {
-  display: -webkit-box;
-  margin-bottom: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.55;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
 }
 
 .creator-tabs {
@@ -4852,16 +4719,6 @@ textarea:focus {
   border-color: var(--border);
 }
 
-.creator-task-id,
-.creator-material-list article {
-  background: var(--surface-sub);
-  border-color: var(--border);
-}
-
-.creator-material-list strong {
-  color: var(--ink);
-}
-
 .creator-tabs {
   background: var(--surface);
   border-color: var(--creator-line);
@@ -6439,9 +6296,6 @@ body {
   background: rgba(23, 32, 51, 0.04);
   font-size: 13px;
 }
-.file-icon {
-  flex: 0 0 auto;
-}
 .file-name-btn {
   flex: 1 1 auto;
   min-width: 0;
@@ -6609,8 +6463,7 @@ body {
 .creator-usage-card,
 .creator-usage-category,
 .creator-usage-call-item,
-.creator-task-item,
-.creator-material-list article {
+.creator-task-item {
   gap: var(--s2);
   padding: var(--s3);
   transition:
@@ -6623,8 +6476,7 @@ body {
 .creator-usage-card:hover,
 .creator-usage-category:hover,
 .creator-usage-call-item:hover,
-.creator-task-item:hover,
-.creator-material-list article:hover {
+.creator-task-item:hover {
   border-color: rgba(0, 174, 236, 0.22);
   box-shadow: 0 10px 22px rgba(23, 32, 51, 0.06);
   transform: translateY(-1px);
@@ -6690,10 +6542,6 @@ body {
 .creator-prompt-modal h3,
 .creator-feedback-drawer-head h3 {
   font-size: 18px;
-}
-
-.empty-state h3 {
-  font-size: 30px;
 }
 
 .suggestion-card-grid {
@@ -7294,9 +7142,6 @@ body {
     padding: 12px;
   }
 
-  .empty-state h3 {
-    font-size: 26px;
-  }
 }
 
 @media (max-width: 640px) {
@@ -7361,7 +7206,6 @@ body {
 .creator-result-block,
 .creator-empty-result,
 .creator-task-item,
-.creator-material-list article,
 .creator-usage-card,
 .creator-usage-category,
 .creator-usage-call-item {
@@ -7379,7 +7223,6 @@ body {
 .creator-result-block:hover,
 .creator-empty-result:hover,
 .creator-task-item:hover,
-.creator-material-list article:hover,
 .creator-usage-card:hover,
 .creator-usage-category:hover,
 .creator-usage-call-item:hover {
@@ -7417,7 +7260,6 @@ body {
 .creator-result-block,
 .creator-empty-result,
 .creator-task-item,
-.creator-material-list article,
 .creator-usage-card,
 .creator-usage-category,
 .creator-usage-call-item,

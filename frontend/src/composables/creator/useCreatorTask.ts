@@ -7,6 +7,7 @@ import {
   listCreatorTasks,
   updateCreatorTask,
 } from '@/api/creator'
+import { statusLabel } from '@/composables/creator/creatorWorkspaceUtils'
 import type {
   CreatorTask,
   CreatorTaskCreatePayload,
@@ -338,16 +339,4 @@ const hasText = (v: string) => v.trim().length > 0
 function normalizeVideoType(value: string | null | undefined) {
   const normalizedValue = value?.trim()
   return normalizedValue || '未分类'
-}
-
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
-    DRAFT: '草稿',
-    PRE_PUBLISH_ANALYZED: '已发布前优化',
-    FEEDBACK_ANALYZED: '已反馈分析',
-    COMPETITOR_ANALYZED: '已竞品分析',
-    ANALYZED: '已分析',
-    ARCHIVED: '已归档',
-  }
-  return labels[status] ?? status
 }
