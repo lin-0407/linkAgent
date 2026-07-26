@@ -19,6 +19,7 @@ import NotificationToast from '@/components/NotificationToast.vue'
 import KnowledgeImportForm from '@/components/knowledge/KnowledgeImportForm.vue'
 import KnowledgeVideoList from '@/components/knowledge/KnowledgeVideoList.vue'
 import KnowledgeTopicSearch from '@/components/knowledge/KnowledgeTopicSearch.vue'
+import { knowledgeTierLabel } from '@/components/knowledge/knowledgeDisplay'
 
 const props = withDefaults(
   defineProps<{
@@ -72,19 +73,9 @@ function openCompetitorAnalysis(video: ReferenceVideo) {
   competitorTarget.value = video
 }
 
-const TIER_OPTIONS = [
-  { value: 'BENCHMARK', label: '标杆案例' },
-  { value: 'COMPETITOR', label: '竞品案例' },
-  { value: 'OWN_HISTORY', label: '自己历史' },
-] as const
-
-function tierLabel(value: string) {
-  return TIER_OPTIONS.find((option) => option.value === value)?.label ?? value
-}
-
 function importSummary(result: ReferenceVideoImportResult) {
   if (result.importedCount > 0) {
-    return `成功导入 ${result.importedCount} 条案例（层级 ${tierLabel(result.tier)}）。`
+    return `成功导入 ${result.importedCount} 条案例（层级 ${knowledgeTierLabel(result.tier)}）。`
   }
   if (result.skippedCount > 0) {
     return '该 BV 已在案例库中，本次按 BV 幂等去重跳过。'

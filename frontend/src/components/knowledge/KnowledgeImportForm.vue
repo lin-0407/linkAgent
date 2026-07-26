@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, watch } from 'vue'
+import { KNOWLEDGE_TIER_OPTIONS } from './knowledgeDisplay'
 
 const props = defineProps<{
   importing: boolean
@@ -9,12 +10,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   import: [videoId: string, tier: string, category: string]
 }>()
-
-const TIER_OPTIONS = [
-  { value: 'BENCHMARK', label: '标杆案例' },
-  { value: 'COMPETITOR', label: '竞品案例' },
-  { value: 'OWN_HISTORY', label: '自己历史' },
-] as const
 
 const form = reactive({
   bvInput: '',
@@ -52,7 +47,7 @@ function submitImport() {
       <label>
         <span>案例层级</span>
         <select v-model="form.tier" :disabled="importing">
-          <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
+          <option v-for="option in KNOWLEDGE_TIER_OPTIONS" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
         </select>

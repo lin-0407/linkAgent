@@ -170,7 +170,7 @@ const {
   isLoadingTasks, isCreatingTask, isUpdatingTask, isDeletingTask,
   selectedTaskId, hasSelectedTask, hasSelectedTaskMaterials, hasTaskMaterialInput,
   filteredTasks, taskSummaryStats, taskSubmitLabel, taskFormTitle, taskFormHint,
-  materialPreview, currentVideoType,
+  currentVideoType,
   taskStatusOptions, videoTypeOptions,
 } = taskModule
 
@@ -291,8 +291,6 @@ const currentTaskProgressIndex = computed(() => {
   }
   return creatorStepMetas.value.findIndex((step) => step.key === resolveTaskEntryStep(selectedTask.value!))
 })
-// 当前任务详情默认折叠，让发布前优化和复盘区域成为页面第一视觉重点。
-const isCurrentTaskExpanded = ref(false)
 const isContextLibraryOpen = ref(false)
 const resultModalTarget = ref<ResultModalTarget | null>(null)
 
@@ -575,10 +573,6 @@ function openTaskManager() {
 
 function closeTaskManager() {
   isTaskManagerOpen.value = false
-}
-
-function toggleCurrentTaskExpanded() {
-  isCurrentTaskExpanded.value = !isCurrentTaskExpanded.value
 }
 
 function openContextLibrary() {
@@ -866,7 +860,6 @@ function askDeleteSelectedTask() {
   })
   errorMessage.value = ''
   successMessage.value = ''
-  isTaskManagerOpen.value = true
 }
 
 function cancelDeleteTask() {
@@ -1554,7 +1547,6 @@ provideCreatorWorkspace({
     isAnalyzingPrePublish,
     isConfirmingPrePublish,
     isCreatingTask,
-    isCurrentTaskExpanded,
     isExportingReportMarkdown,
     isFetchingFeedback,
     isGeneratingPrePublishDraft,
@@ -1568,7 +1560,6 @@ provideCreatorWorkspace({
     isUpdatingTask,
     lastPreferenceModeLabel,
     lastPreferenceModeNote,
-    materialPreview,
     openContextLibrary,
     openGuidanceEditor,
     openResultModal,
@@ -1613,7 +1604,6 @@ provideCreatorWorkspace({
     workflowSseText,
     workflowStatusText,
     workflowSteps,
-    toggleCurrentTaskExpanded,
     refreshCurrentDraftVideo,
   },
 })

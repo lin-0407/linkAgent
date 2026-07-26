@@ -3,8 +3,16 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChatComposer from '@/components/ChatComposer.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
+import {
+  chunkTypeLabel,
+  formatKnowledgeCount,
+  knowledgeQualityScoreLabel,
+  knowledgeTierLabel,
+  sentimentLabel,
+  sourceTypeLabel,
+} from '@/components/knowledge/knowledgeDisplay'
 import { useAgentChat } from '@/composables/useAgentChat'
-import type { SessionListItem } from '@/types/agent'
+import type { AgentExecutionMode, SessionListItem } from '@/types/agent'
 import type {
   ReferenceVideo,
   ReferenceVideoAnalysisContext,
@@ -15,7 +23,6 @@ import {
   KNOWLEDGE_VIDEO_CONTEXT_EVENT,
   type KnowledgeVideoContextEventDetail,
 } from '@/utils/agentContext'
-import type { AgentExecutionMode } from '@/types/agent'
 
 type WindowRect = {
   left: number
@@ -239,7 +246,7 @@ function buildKnowledgeContextMessage(userMessage: string) {
     '',
     '【已选视频】',
     `标题：${video.title}`,
-    `BV：${video.bvId || '无'}；分区：${video.category || '未标注'}；层级：${tierLabel(video.tier)}；质量分：${formatKnowledgeQuality(video)}`,
+    `BV：${video.bvId || '无'}；分区：${video.category || '未标注'}；层级：${knowledgeTierLabel(video.tier) || '未标注'}；质量分：${formatKnowledgeQuality(video)}`,
     `数据：播放 ${formatReferenceCount(video.viewCount)}，点赞 ${formatReferenceCount(video.likeCount)}，投币 ${formatReferenceCount(video.coinCount)}，收藏 ${formatReferenceCount(video.favoriteCount)}，弹幕 ${formatReferenceCount(video.danmakuCount)}，评论 ${formatReferenceCount(video.replyCount)}`,
     `摘要：${clipText(video.highlightSummary || video.description || '暂无摘要', 520)}`,
     '',
@@ -538,59 +545,12 @@ function formatEvidenceForPrompt(item: ReferenceVideoEvidenceItem, index: number
   return `${index + 1}. ${sourceTypeLabel(item.sourceType)}｜${sentimentLabel(item.sentiment)}：${clipText(item.content, 240)}`
 }
 
-function chunkTypeLabel(chunkType: string) {
-  switch (chunkType) {
-    case 'TITLE_PACKAGE':
-      return '标题包装'
-    case 'CONTENT_POSITIONING':
-      return '内容定位'
-    case 'AUDIENCE_FEEDBACK_SUMMARY':
-      return '观众反馈'
-    default:
-      return chunkType || '主题'
-  }
-}
-
-function sentimentLabel(sentiment: string) {
-  switch (sentiment) {
-    case 'POSITIVE':
-      return '正向'
-    case 'NEGATIVE':
-      return '负向'
-    default:
-      return sentiment || '中性'
-  }
-}
-
-function sourceTypeLabel(sourceType: string) {
-  return sourceType === 'DANMAKU' ? '弹幕' : '评论'
-}
-
 function modeButtonTitle(option: { label: string; description: string }) {
   return `${option.label}：${option.description}`
 }
 
-function tierLabel(value: string) {
-  switch (value) {
-    case 'BENCHMARK':
-      return '标杆案例'
-    case 'COMPETITOR':
-      return '竞品案例'
-    case 'OWN_HISTORY':
-      return '自己历史'
-    default:
-      return value || '未标注'
-  }
-}
-
 function formatReferenceCount(value: number | null) {
-  if (value === null || value === undefined) {
-    return '无'
-  }
-  if (value >= 10000) {
-    return `${(value / 10000).toFixed(1)}万`
-  }
-  return String(value)
+  return value === null || value === undefined ? '无' : formatKnowledgeCount(value)
 }
 
 function clipText(value: string, maxLength: number) {
@@ -685,12 +645,11 @@ function clipText(value: string, maxLength: number) {
           </div>
           <div class="agent-floating-context-meta">
             <span v-if="knowledgeContextQuery">检索：{{ knowledgeContextQuery }}</span>
-            <span>{{ tierLabel(knowledgeContext.video.tier) }}</span>
+            <span>{{ knowledgeTierLabel(knowledgeContext.video.tier) || '未标注' }}</span>
             <span v-if="knowledgeContext.video.category">{{ knowledgeContext.video.category }}</span>
-            <span v-if="knowledgeContext.video.qualityScoreReliable && knowledgeContext.video.qualityScore !== null">
-              质量分 {{ knowledgeContext.video.qualityScore }}
+            <span v-if="knowledgeQualityScoreLabel(knowledgeContext.video)">
+              {{ knowledgeQualityScoreLabel(knowledgeContext.video) }}
             </span>
-            <span v-else-if="knowledgeContext.video.rawQualityScore !== null">质量样本不足</span>
           </div>
           <div class="agent-floating-context-grid">
             <p v-for="topic in visibleKnowledgeTopics" :key="topic.chunkId">

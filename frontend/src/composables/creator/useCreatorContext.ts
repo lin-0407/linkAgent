@@ -13,8 +13,6 @@ import type {
   CreatorPreference,
 } from '@/types/creator'
 
-const hasText = (v: string) => v.trim().length > 0
-
 export function useCreatorContext(errorRef: Ref<string>) {
   let preferenceLoadVersion = 0
   let contextTermLoadVersion = 0

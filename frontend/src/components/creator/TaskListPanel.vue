@@ -3,14 +3,11 @@ import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorksp
 
 const {
   selectedTask,
-  isCurrentTaskExpanded,
   startEditTask,
   askDeleteSelectedTask,
   statusLabel,
   formatDate,
-  materialPreview,
   openTaskManager,
-  toggleCurrentTaskExpanded,
 } = useCreatorWorkspaceShell()
 </script>
 
@@ -31,13 +28,6 @@ const {
         </button>
         <button
           type="button"
-          class="creator-ghost-button creator-mini-button"
-          @click="toggleCurrentTaskExpanded"
-        >
-          {{ isCurrentTaskExpanded ? '收起' : '展开' }}
-        </button>
-        <button
-          type="button"
           class="creator-danger-action creator-mini-button"
           @click="askDeleteSelectedTask"
         >
@@ -51,19 +41,11 @@ const {
       <span>{{ selectedTask.materials.length }} 份材料</span>
       <span>{{ formatDate(selectedTask.updateTime) }}</span>
     </div>
-    <code v-if="isCurrentTaskExpanded" class="creator-task-id">{{ selectedTask.taskId }}</code>
-    <div v-if="isCurrentTaskExpanded" class="creator-material-list">
-      <article v-for="material in materialPreview" :key="material.id">
-        <strong>{{ material.label }}</strong>
-        <p>{{ material.content }}</p>
-      </article>
-    </div>
   </div>
   <button
-    v-else
     type="button"
     class="creator-panel compact-panel creator-task-empty-panel creator-history-entry"
-    aria-label="打开历史项目"
+    aria-label="打开任务列表管理"
     @click="openTaskManager"
   >
     <span class="creator-history-entry-icon" aria-hidden="true">
@@ -74,8 +56,8 @@ const {
       </svg>
     </span>
     <span class="creator-history-entry-copy">
-      <strong>历史项目</strong>
-      <small>查看和管理过往项目</small>
+      <strong>任务列表管理</strong>
+      <small>切换、编辑或删除项目</small>
     </span>
     <span class="creator-history-entry-arrow" aria-hidden="true">
       <svg viewBox="0 0 24 24">

@@ -3,6 +3,7 @@ import type {
   CreatorContextTermType,
   CreatorPreferenceMode,
   CreatorWorkflowStage,
+  CreatorWorkflowStep,
   CreatorWorkflowStatus,
   LlmApiCallRecord,
 } from '@/types/creator'
@@ -218,6 +219,16 @@ export function isWorkflowStatus(value: string | null): value is CreatorWorkflow
         'CANCELLED',
       ].includes(value),
   )
+}
+
+// 发布方案的父子组件都只关心最近一次执行结果，集中判断可避免两处排序规则逐渐分叉。
+export function getLatestWorkflowFailedStep(steps: readonly CreatorWorkflowStep[]) {
+  const latestStep = [...steps].sort((left, right) => {
+    const leftTime = left.startTime || left.createTime
+    const rightTime = right.startTime || right.createTime
+    return rightTime.localeCompare(leftTime)
+  })[0]
+  return latestStep?.status === 'FAILED' ? latestStep : null
 }
 
 export function hasText(value: string) {

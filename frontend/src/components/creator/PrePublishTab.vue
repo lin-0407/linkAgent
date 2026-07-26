@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import PrePublishSuggestionPanel from '@/components/creator/PrePublishSuggestionPanel.vue'
+import { getLatestWorkflowFailedStep } from '@/composables/creator/creatorWorkspaceUtils'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 
 const {
@@ -25,15 +26,7 @@ const {
   isActiveStepReadOnly,
 } = useCreatorWorkspaceShell()
 
-// 同一会话允许重试，状态条只显示最近一次步骤，避免历史失败遮盖当前可继续的操作。
-const currentWorkflowFailedStep = computed(() => {
-  const latestStep = [...(workflowSteps.value ?? [])].sort((left, right) => {
-    const leftTime = left.startTime || left.createTime
-    const rightTime = right.startTime || right.createTime
-    return rightTime.localeCompare(leftTime)
-  })[0]
-  return latestStep?.status === 'FAILED' ? latestStep : null
-})
+const currentWorkflowFailedStep = computed(() => getLatestWorkflowFailedStep(workflowSteps.value))
 
 const compactWorkflowStatus = computed(() => {
   if (currentWorkflowFailedStep.value) {

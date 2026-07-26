@@ -47,6 +47,9 @@ const capabilityCards = [
       'Agent 同时理解任务材料、历史偏好、视频语境和案例证据，输出的不只是文案，还有选择理由与风险边界。',
     route: '/creator',
     action: '生成发布方案',
+    screenshot: '/screenshots/publishing-plan-detail.png',
+    screenshotAlt: 'LinkAgent 真实发布方案页面，展示创作者偏好、标题建议和采用状态',
+    previewLabel: '发布方案 · 演示任务',
     iconPaths: ['M5 4.5h14v15H5z', 'M8 9h8M8 13h5M8 16.5h7', 'M16.5 3v4M18.5 5h-4'],
   },
   {
@@ -56,6 +59,9 @@ const capabilityCards = [
     description: '从 B 站参考案例中检索标题打法、内容定位与观众反馈，为本期建议提供可回看的依据。',
     route: '/knowledge',
     action: '浏览参考案例',
+    screenshot: '/screenshots/knowledge-library.png',
+    screenshotAlt: 'LinkAgent 真实参考案例页面，展示案例导入、检索和视频案例列表',
+    previewLabel: '参考案例 · 真实数据',
     iconPaths: [
       'M4.5 5.5h6.5a3 3 0 013 3v10a3 3 0 00-3-3H4.5z',
       'M19.5 5.5H13a3 3 0 00-3 3v10a3 3 0 013-3h6.5z',
@@ -69,6 +75,9 @@ const capabilityCards = [
       'MP4 分片直传私有对象存储，支持断点恢复与媒体探测，避免发布方案确认后直接跳过成片检查。',
     route: '/creator',
     action: '进入成片试映',
+    screenshot: '/screenshots/media-preflight.png',
+    screenshotAlt: 'LinkAgent 真实成片试映页面，展示分片传输、媒体探测和预处理状态',
+    previewLabel: '成片试映 · 演示任务',
     iconPaths: ['M4 6h16v12H4z', 'M9.5 9l5 3-5 3z', 'M7 21h10'],
   },
   {
@@ -79,6 +88,9 @@ const capabilityCards = [
       '将公开视频与创作任务关联，从评论弹幕中提炼共鸣、争议和选题机会，再沉淀为长期创作偏好。',
     route: '/video-analysis',
     action: '查看视频分析',
+    screenshot: '/screenshots/audience-feedback.png',
+    screenshotAlt: 'LinkAgent 真实观众反馈页面，展示 BV 绑定、自动读取反馈和文件导入入口',
+    previewLabel: '观众反馈 · 实际流程',
     iconPaths: ['M4.5 5.5h15v10h-8l-4 3v-3h-3z', 'M8 9.5h8M8 12.5h5'],
   },
 ]
@@ -128,109 +140,18 @@ const architectureNodes = [
       </div>
 
       <div class="home-product-stage" aria-label="LinkAgent 产品能力预览">
-        <div class="home-product-note home-product-note-top">
-          <span aria-hidden="true"></span>
-          Agent 协作中
-        </div>
-
-        <div class="home-dashboard">
-          <header class="home-dashboard-bar">
-            <div class="home-window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
-            <span>LinkAgent / 创作台</span>
-            <b><i aria-hidden="true"></i> 已连接</b>
-          </header>
-
-          <div class="home-dashboard-body">
-            <aside class="home-dashboard-sidebar">
-              <div class="home-preview-brand">
-                <span aria-hidden="true"></span>
-                <div>
-                  <strong>本期创作</strong>
-                  <small>AI 工具实测</small>
-                </div>
-              </div>
-              <ol>
-                <li class="completed"><b>1</b><span>创作材料</span></li>
-                <li class="active"><b>2</b><span>发布方案</span></li>
-                <li><b>3</b><span>成片试映</span></li>
-                <li><b>4</b><span>观众反馈</span></li>
-                <li><b>5</b><span>复盘报告</span></li>
-              </ol>
-              <div class="home-sidebar-memory">
-                <span>创作者记忆</span>
-                <strong>已载入历史偏好</strong>
-              </div>
-            </aside>
-
-            <section class="home-dashboard-content">
-              <header class="home-preview-header">
-                <div>
-                  <span>发布方案</span>
-                  <h2>让标题承接内容价值</h2>
-                </div>
-                <b>方案已就绪</b>
-              </header>
-
-              <div class="home-context-chips" aria-label="已载入上下文">
-                <span>科技区</span>
-                <span>硬核实测</span>
-                <span>沿用历史偏好</span>
-              </div>
-
-              <div class="home-preview-grid">
-                <div class="home-plan-panel">
-                  <div class="home-panel-heading">
-                    <div>
-                      <small>标题候选</small>
-                      <strong>基于内容卖点生成</strong>
-                    </div>
-                    <span>3 个方案</span>
-                  </div>
-
-                  <div class="home-title-candidate featured">
-                    <div><b>主方案</b><span>平衡点击与信任</span></div>
-                    <p>我把 AI Agent 用进创作流程后，真正省下了什么？</p>
-                  </div>
-                  <div class="home-title-candidate">
-                    <div><b>叙事向</b><span>突出真实体验</span></div>
-                    <p>连续使用 30 天，我重新理解了 AI 创作工具</p>
-                  </div>
-                  <div class="home-title-candidate muted">
-                    <div><b>搜索向</b><span>强化主题词</span></div>
-                    <p>AI Agent 创作工作流：从选题到复盘的完整实测</p>
-                  </div>
-                </div>
-
-                <aside class="home-review-panel">
-                  <div class="home-review-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24">
-                      <path d="M12 3l7 3v5c0 4.5-2.8 8-7 10-4.2-2-7-5.5-7-10V6z" />
-                      <path d="M8.5 12l2.2 2.2 4.8-5" />
-                    </svg>
-                  </div>
-                  <span>AI 交叉审查</span>
-                  <strong>表达可信，可进入确认</strong>
-                  <ul>
-                    <li>核心卖点已覆盖</li>
-                    <li>标题与文稿一致</li>
-                    <li>夸张风险较低</li>
-                  </ul>
-                </aside>
-              </div>
-
-              <footer class="home-evidence-bar">
-                <span><i aria-hidden="true"></i> 已关联 4 条案例证据</span>
-                <b>查看推理过程</b>
-              </footer>
-            </section>
-          </div>
-        </div>
-
-        <div class="home-product-note home-product-note-bottom">
-          <span>下一步</span>
-          上传成片试映
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" /></svg>
-        </div>
+        <figure class="home-product-shot">
+          <img
+            src="/screenshots/creator-publishing-plan.png"
+            alt="LinkAgent 真实创作台截图，展示发布方案、创作者偏好和六阶段视频发布流程"
+            width="1440"
+            height="900"
+          />
+          <figcaption>
+            <span><i aria-hidden="true"></i> 真实项目界面</span>
+            <strong>发布方案 · 当前演示任务</strong>
+          </figcaption>
+        </figure>
       </div>
     </section>
 
@@ -309,77 +230,19 @@ const architectureNodes = [
               <span>{{ capability.description }}</span>
             </div>
 
-            <div
-              v-if="capability.key === 'strategy'"
-              class="home-capability-visual home-strategy-visual"
-              aria-hidden="true"
-            >
-              <div class="home-strategy-head">
-                <span>发布决策</span>
-                <b>Agent generated</b>
-              </div>
-              <div class="home-strategy-row active">
-                <i></i><span>目标受众与核心卖点</span><b>已提炼</b>
-              </div>
-              <div class="home-strategy-row"><i></i><span>标题与简介候选</span><b>3 组</b></div>
-              <div class="home-strategy-row"><i></i><span>风险点与修改计划</span><b>可执行</b></div>
-              <div class="home-strategy-trace"><span></span>案例证据与创作者偏好已参与推理</div>
-            </div>
-
-            <div
-              v-else-if="capability.key === 'knowledge'"
-              class="home-capability-visual home-knowledge-visual"
-              aria-hidden="true"
-            >
-              <div class="home-search-pill">
-                <svg viewBox="0 0 20 20">
-                  <circle cx="8.5" cy="8.5" r="4.5" />
-                  <path d="M12 12l4 4" />
-                </svg>
-                <span>AI Agent 创作工作流</span>
-              </div>
-              <div class="home-case-card">
-                <b>案例证据 01</b>
-                <span>标题先给结果，再补过程</span>
-                <i></i>
-              </div>
-              <div class="home-case-card offset">
-                <b>案例证据 02</b>
-                <span>评论更关注真实体验</span>
-                <i></i>
-              </div>
-            </div>
-
-            <div
-              v-else-if="capability.key === 'media'"
-              class="home-capability-visual home-media-visual"
-              aria-hidden="true"
-            >
-              <div class="home-media-file">
-                <div class="home-media-play"><span></span></div>
-                <div><strong>final-v03.mp4</strong><small>私有成片 · MP4</small></div>
-                <b>86%</b>
-              </div>
-              <div class="home-media-progress"><span></span></div>
-              <div class="home-media-meta">
-                <span>分片直传</span><span>断点恢复</span><span>媒体探测</span>
-              </div>
-            </div>
-
-            <div v-else class="home-capability-visual home-feedback-visual" aria-hidden="true">
-              <div class="home-feedback-summary">
-                <span>观众反馈摘要</span>
-                <strong>“实测过程”是本期最强共鸣点</strong>
-              </div>
-              <div class="home-feedback-tags">
-                <span>真实感</span><span>工具选择</span><span>流程细节</span>
-              </div>
-              <div class="home-feedback-bars">
-                <i style="--bar-width: 82%"></i>
-                <i style="--bar-width: 64%"></i>
-                <i style="--bar-width: 43%"></i>
-              </div>
-            </div>
+            <figure class="home-capability-visual home-capability-screenshot">
+              <img
+                :src="capability.screenshot"
+                :alt="capability.screenshotAlt"
+                width="1190"
+                height="748"
+                loading="lazy"
+              />
+              <figcaption>
+                <span><i aria-hidden="true"></i> 真实页面截图</span>
+                <b>{{ capability.previewLabel }}</b>
+              </figcaption>
+            </figure>
 
             <RouterLink :to="capability.route" class="home-capability-link">
               {{ capability.action }}
@@ -699,6 +562,69 @@ const architectureNodes = [
 
 .home-product-stage::before {
   content: none;
+}
+
+.home-product-shot {
+  position: relative;
+  margin: 0;
+  padding: 10px 10px 8px;
+  overflow: hidden;
+  background: rgba(231, 246, 251, 0.08);
+  border: 1px solid rgba(199, 229, 239, 0.24);
+  border-radius: 12px;
+  box-shadow:
+    0 42px 70px rgba(0, 5, 12, 0.38),
+    0 0 0 7px rgba(255, 255, 255, 0.025);
+  transform: perspective(1400px) rotateY(-2deg) rotateX(0.8deg);
+  transform-origin: center left;
+}
+
+.home-product-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 8 / 5;
+  object-fit: cover;
+  object-position: top left;
+  background: #f7fafc;
+  border-radius: 7px;
+}
+
+.home-product-shot figcaption,
+.home-capability-screenshot figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.home-product-shot figcaption {
+  min-height: 39px;
+  padding: 8px 4px 0;
+  color: rgba(222, 238, 246, 0.68);
+  font-size: 10px;
+}
+
+.home-product-shot figcaption span,
+.home-capability-screenshot figcaption span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.home-product-shot figcaption i,
+.home-capability-screenshot figcaption i {
+  width: 7px;
+  height: 7px;
+  background: #45c78a;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(69, 199, 138, 0.12);
+}
+
+.home-product-shot figcaption strong {
+  color: #d9edf4;
+  font-size: 10px;
+  font-weight: 650;
 }
 
 .home-dashboard {
@@ -1551,7 +1477,44 @@ const architectureNodes = [
 .home-capability-visual {
   position: relative;
   z-index: 1;
-  margin-top: 24px;
+  margin: 24px 0 0;
+}
+
+.home-capability-screenshot {
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid rgba(160, 199, 212, 0.24);
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(0, 10, 18, 0.18);
+}
+
+.home-capability-screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  object-position: top left;
+  background: #f7fafc;
+}
+
+.home-capability-screenshot figcaption {
+  min-height: 38px;
+  padding: 8px 11px;
+  color: #68808e;
+  background: #f9fbfc;
+  border-top: 1px solid #e5edf1;
+  font-size: 9px;
+}
+
+.home-capability-screenshot figcaption b {
+  color: #25465a;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.is-feedback .home-capability-screenshot img {
+  object-position: center top;
 }
 
 .home-strategy-visual {
@@ -2304,9 +2267,8 @@ const architectureNodes = [
   }
 
   .home-product-stage {
-    height: 240px;
+    height: auto;
     padding: 0;
-    overflow: hidden;
   }
 
   .home-section-heading {
@@ -2373,9 +2335,20 @@ const architectureNodes = [
   }
 
   .home-product-stage {
-    height: 190px;
+    height: auto;
     padding: 0;
-    overflow: hidden;
+  }
+
+  .home-product-shot {
+    padding: 7px 7px 6px;
+    transform: none;
+  }
+
+  .home-product-shot figcaption,
+  .home-capability-screenshot figcaption {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .home-dashboard {

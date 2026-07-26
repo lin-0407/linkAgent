@@ -48,7 +48,6 @@ import type {
   TaskVideoBinding,
   BindBvPayload,
   SyncVideosResult,
-  VideoAnalysisReport,
   // 创作者画像
   CreatorProfile,
   // 竞品分析

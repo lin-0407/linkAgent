@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import {
   confirmCreativeOption,
   createInteractiveTask,
@@ -8,6 +8,7 @@ import {
   triggerUnderstanding,
   uploadContextDocuments,
 } from '@/api/creator'
+import { parseJsonArray } from '@/composables/creator/creatorWorkspaceUtils'
 import type { CreativeIdeaOption, InteractiveTask } from '@/types/creator'
 
 const emit = defineEmits<{
@@ -245,16 +246,7 @@ async function confirmOption(option: CreativeIdeaOption) {
 // ═══════════════════════════════════════════
 
 function parseTextList(value: string | null) {
-  if (!value) return []
-  try {
-    const parsed = JSON.parse(value)
-    if (Array.isArray(parsed)) {
-      return parsed.map((item) => formatValue(item)).filter(Boolean)
-    }
-    return [formatValue(parsed)].filter(Boolean)
-  } catch {
-    return [value]
-  }
+  return parseJsonArray(value).map(formatValue).filter(Boolean)
 }
 
 function formatValue(value: unknown) {

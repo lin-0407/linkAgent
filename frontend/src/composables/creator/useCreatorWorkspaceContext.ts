@@ -5,11 +5,9 @@ import type {
   CreatorFeedbackDashboard,
   CreatorFeedbackFetchResult,
   CreatorFeedbackReport,
-  CreatorMaterial,
   CreatorPreferenceMode,
   CreatorSuggestion,
   CreatorTask,
-  CreatorWorkflowMessage,
   CreatorWorkflowSession,
   CreatorWorkflowStep,
   LlmApiCallPage,
@@ -108,7 +106,6 @@ export interface CreatorWorkspaceShell {
   isAnalyzingPrePublish: WorkspaceRef<boolean>
   isConfirmingPrePublish: WorkspaceRef<boolean>
   isCreatingTask: WorkspaceRef<boolean>
-  isCurrentTaskExpanded: WorkspaceRef<boolean>
   isExportingReportMarkdown: WorkspaceRef<boolean>
   isFetchingFeedback: WorkspaceRef<boolean>
   isGeneratingPrePublishDraft: WorkspaceRef<boolean>
@@ -122,7 +119,6 @@ export interface CreatorWorkspaceShell {
   isUpdatingTask: WorkspaceRef<boolean>
   lastPreferenceModeLabel: WorkspaceRef<string>
   lastPreferenceModeNote: WorkspaceRef<string>
-  materialPreview: WorkspaceRef<Array<CreatorMaterial & { label: string }>>
   openContextLibrary: () => void
   openGuidanceEditor: (target: 'prePublish' | 'feedback') => void
   openResultModal: (target: ResultModalTarget) => void
@@ -156,7 +152,6 @@ export interface CreatorWorkspaceShell {
   taskFormTitle: WorkspaceRef<string>
   taskManageMode: WorkspaceRef<'create' | 'edit'>
   taskSubmitLabel: WorkspaceRef<string>
-  toggleCurrentTaskExpanded: () => void
   usageCallPage: WorkspaceRef<LlmApiCallPage | null>
   usageCategoryFilter: WorkspaceRef<'ALL' | LlmApiModelCategory>
   usageCategoryLabel: (category: string | null | undefined) => string

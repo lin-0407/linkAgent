@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { ReferenceVideo } from '@/types/knowledge'
+import {
+  formatKnowledgeCount,
+  KNOWLEDGE_TIER_OPTIONS,
+  knowledgeEmbeddingLabel,
+  knowledgeQualityScoreLabel,
+  knowledgeQualityScoreTitle,
+  knowledgeTierLabel,
+} from './knowledgeDisplay'
 
 const props = defineProps<{
   items: ReferenceVideo[]
@@ -22,65 +30,12 @@ const emit = defineEmits<{
   'open-competitor': [video: ReferenceVideo]
 }>()
 
-const TIER_OPTIONS = [
-  { value: 'BENCHMARK', label: '标杆案例' },
-  { value: 'COMPETITOR', label: '竞品案例' },
-  { value: 'OWN_HISTORY', label: '自己历史' },
-] as const
-
 const filterCategoryInput = ref(props.category)
 const detailTarget = ref<ReferenceVideo | null>(null)
 
 watch(() => props.category, (val) => {
   filterCategoryInput.value = val
 })
-
-function tierLabel(value: string) {
-  return TIER_OPTIONS.find((option) => option.value === value)?.label ?? value
-}
-
-function embeddingLabel(status: string | null) {
-  switch (status) {
-    case 'INDEXED':
-      return '已索引'
-    case 'FAILED':
-      return '索引失败'
-    case 'PENDING':
-      return '待索引'
-    default:
-      return status ?? '待索引'
-  }
-}
-
-function qualityScoreLabel(video: ReferenceVideo) {
-  if (video.qualityScoreReliable && video.qualityScore !== null) {
-    return `质量分 ${video.qualityScore}`
-  }
-  if (video.rawQualityScore !== null) {
-    return '质量样本不足'
-  }
-  return ''
-}
-
-function qualityScoreTitle(video: ReferenceVideo) {
-  if (video.qualityScoreReliable && video.qualityScore !== null) {
-    return `同分区有效样本 ${video.qualitySampleCount} 条`
-  }
-  if (video.rawQualityScore !== null) {
-    return `同分区有效样本 ${video.qualitySampleCount} 条，暂不展示相对质量分`
-  }
-  return ''
-}
-
-function formatCount(value: number | null) {
-  if (value === null || value === undefined) {
-    return '—'
-  }
-  if (value >= 10000) {
-    return `${(value / 10000).toFixed(1)}万`
-  }
-  return String(value)
-}
 
 function formatExactCount(value: number | null) {
   if (value === null || value === undefined) {
@@ -178,7 +133,7 @@ function goToPage(targetPage: number | null) {
       <div class="knowledge-toolbar knowledge-list-toolbar">
         <select :value="tier" @change="onTierChange">
           <option value="">全部层级</option>
-          <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
+          <option v-for="option in KNOWLEDGE_TIER_OPTIONS" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
         </select>
@@ -201,11 +156,11 @@ function goToPage(targetPage: number | null) {
     <div v-else-if="!error" class="knowledge-card-list">
       <article v-for="item in items" :key="item.id" class="knowledge-card">
         <div class="knowledge-card-cover">
-          <span class="knowledge-card-tier">{{ tierLabel(item.tier) }}</span>
+          <span class="knowledge-card-tier">{{ knowledgeTierLabel(item.tier) }}</span>
           <span class="knowledge-card-play" aria-hidden="true"></span>
           <div class="knowledge-card-cover-stats">
-            <span>播放 {{ formatCount(item.viewCount) }}</span>
-            <span>弹幕 {{ formatCount(item.danmakuCount) }}</span>
+            <span>播放 {{ formatKnowledgeCount(item.viewCount) }}</span>
+            <span>弹幕 {{ formatKnowledgeCount(item.danmakuCount) }}</span>
           </div>
         </div>
         <div class="knowledge-card-body">
@@ -216,8 +171,8 @@ function goToPage(targetPage: number | null) {
           </small>
           <div class="knowledge-card-chips">
             <b v-if="item.category">{{ item.category }}</b>
-            <b v-if="qualityScoreLabel(item)" :title="qualityScoreTitle(item)">{{ qualityScoreLabel(item) }}</b>
-            <b v-if="developerMode">{{ embeddingLabel(item.embeddingStatus) }}</b>
+            <b v-if="knowledgeQualityScoreLabel(item)" :title="knowledgeQualityScoreTitle(item)">{{ knowledgeQualityScoreLabel(item) }}</b>
+            <b v-if="developerMode">{{ knowledgeEmbeddingLabel(item.embeddingStatus) }}</b>
           </div>
           <button
             type="button"
@@ -284,7 +239,7 @@ function goToPage(targetPage: number | null) {
           >
             <header class="creator-result-modal-head knowledge-detail-head">
               <div>
-                <span>{{ tierLabel(detailTarget.tier) }}</span>
+                <span>{{ knowledgeTierLabel(detailTarget.tier) }}</span>
                 <h3 id="knowledge-detail-title">案例详情</h3>
               </div>
               <button type="button" class="creator-ghost-button" @click="closeDetail">关闭</button>
@@ -321,10 +276,10 @@ function goToPage(targetPage: number | null) {
             </section>
 
             <dl class="knowledge-detail-meta">
-              <div><dt>案例层级</dt><dd>{{ tierLabel(detailTarget.tier) }}</dd></div>
+              <div><dt>案例层级</dt><dd>{{ knowledgeTierLabel(detailTarget.tier) }}</dd></div>
               <div><dt>分区</dt><dd>{{ detailTarget.category || '未设置' }}</dd></div>
-              <div><dt>质量评估</dt><dd>{{ qualityScoreLabel(detailTarget) || '暂无评分' }}</dd></div>
-              <div v-if="developerMode"><dt>索引状态</dt><dd>{{ embeddingLabel(detailTarget.embeddingStatus) }}</dd></div>
+              <div><dt>质量评估</dt><dd>{{ knowledgeQualityScoreLabel(detailTarget) || '暂无评分' }}</dd></div>
+              <div v-if="developerMode"><dt>索引状态</dt><dd>{{ knowledgeEmbeddingLabel(detailTarget.embeddingStatus) }}</dd></div>
             </dl>
 
             <footer class="knowledge-detail-actions">

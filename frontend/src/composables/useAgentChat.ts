@@ -2,7 +2,6 @@ import { computed, nextTick, ref, watch } from 'vue'
 import {
   loadAgentSessionMessages,
   loadAgentSessions,
-  sendAgentMessage,
   sendAgentMessageStream,
 } from '@/api/agent'
 import type { AgentExecutionMode, AgentStep, ChatMessage, SessionListItem } from '@/types/agent'

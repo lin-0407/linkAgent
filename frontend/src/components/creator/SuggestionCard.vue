@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import SuggestionRejectPanel from './SuggestionRejectPanel.vue'
-import type { CreatorEventType, CreatorRejectReason } from '@/types/creator'
+import type { CreatorRejectReason } from '@/types/creator'
 
 /**
  * 可复用的建议卡片。

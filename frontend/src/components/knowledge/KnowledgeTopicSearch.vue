@@ -1,6 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { ReferenceVideo, ReferenceVideoTopicSearchResult, ReferenceVideoMatchedTopic, ReferenceVideoEvidenceItem } from '@/types/knowledge'
+import {
+  chunkTypeLabel,
+  formatKnowledgeCount,
+  KNOWLEDGE_TIER_OPTIONS,
+  knowledgeEmbeddingLabel,
+  knowledgeQualityScoreLabel,
+  knowledgeQualityScoreTitle,
+  knowledgeTierLabel,
+  sentimentLabel,
+  sourceTypeLabel,
+} from './knowledgeDisplay'
 
 const props = defineProps<{
   searching: boolean
@@ -20,12 +31,6 @@ const emit = defineEmits<{
   'open-analysis': [video: ReferenceVideo]
   'open-competitor': [video: ReferenceVideo]
 }>()
-
-const TIER_OPTIONS = [
-  { value: 'BENCHMARK', label: '标杆案例' },
-  { value: 'COMPETITOR', label: '竞品案例' },
-  { value: 'OWN_HISTORY', label: '自己历史' },
-] as const
 
 const STRATEGY_OPTIONS = [
   { value: '', label: '默认（后端配置）' },
@@ -61,81 +66,6 @@ const evidenceByVideoId = computed(() => {
   }
   return map
 })
-
-function tierLabel(value: string) {
-  return TIER_OPTIONS.find((option) => option.value === value)?.label ?? value
-}
-
-function embeddingLabel(status: string | null) {
-  switch (status) {
-    case 'INDEXED':
-      return '已索引'
-    case 'FAILED':
-      return '索引失败'
-    case 'PENDING':
-      return '待索引'
-    default:
-      return status ?? '待索引'
-  }
-}
-
-function chunkTypeLabel(chunkType: string) {
-  switch (chunkType) {
-    case 'TITLE_PACKAGE':
-      return '标题包装'
-    case 'CONTENT_POSITIONING':
-      return '内容定位'
-    case 'AUDIENCE_FEEDBACK_SUMMARY':
-      return '观众反馈'
-    default:
-      return chunkType || '主题'
-  }
-}
-
-function sentimentLabel(sentiment: string) {
-  switch (sentiment) {
-    case 'POSITIVE':
-      return '正向'
-    case 'NEGATIVE':
-      return '负向'
-    default:
-      return sentiment || '中性'
-  }
-}
-
-function sourceTypeLabel(sourceType: string) {
-  return sourceType === 'DANMAKU' ? '弹幕' : '评论'
-}
-
-function formatCount(value: number | null) {
-  if (value === null || value === undefined) {
-    return '—'
-  }
-  if (value >= 10000) {
-    return `${(value / 10000).toFixed(1)}万`
-  }
-  return String(value)
-}
-
-function qualityScoreLabel(video: ReferenceVideo) {
-  if (video.qualityScoreReliable && video.qualityScore !== null) {
-    return `质量分 ${video.qualityScore}`
-  }
-  if (video.rawQualityScore !== null) {
-    return '质量样本不足'
-  }
-  return ''
-}
-
-function qualityScoreTitle(video: ReferenceVideo) {
-  if (video.qualityScoreReliable && video.qualityScore !== null) {
-    return `同分区有效样本 ${video.qualitySampleCount} 条`
-  }
-  if (video.rawQualityScore !== null) {
-    return `同分区有效样本 ${video.qualitySampleCount} 条，暂不展示相对质量分`
-  }
-  return ''
-}
 
 function searchModeLabel(mode: string) {
   switch (mode) {
@@ -198,7 +128,7 @@ function refreshSearchCards() {
       />
       <select v-model="tierInput" class="knowledge-search-tier" :disabled="searching">
         <option value="">全部层级</option>
-        <option v-for="option in TIER_OPTIONS" :key="option.value" :value="option.value">
+        <option v-for="option in KNOWLEDGE_TIER_OPTIONS" :key="option.value" :value="option.value">
           {{ option.label }}
         </option>
       </select>
@@ -257,10 +187,10 @@ function refreshSearchCards() {
         >
           <span class="knowledge-card-title">{{ hit.title }}</span>
           <span class="creator-chip-list">
-            <b>{{ tierLabel(hit.tier) }}</b>
+            <b>{{ knowledgeTierLabel(hit.tier) }}</b>
             <b v-if="hit.category">{{ hit.category }}</b>
-            <b v-if="qualityScoreLabel(hit)" :title="qualityScoreTitle(hit)">{{ qualityScoreLabel(hit) }}</b>
-            <b v-if="developerMode">{{ embeddingLabel(hit.embeddingStatus) }}</b>
+            <b v-if="knowledgeQualityScoreLabel(hit)" :title="knowledgeQualityScoreTitle(hit)">{{ knowledgeQualityScoreLabel(hit) }}</b>
+            <b v-if="developerMode">{{ knowledgeEmbeddingLabel(hit.embeddingStatus) }}</b>
           </span>
           <small>
             {{ hit.bvId || '无 BV' }} · {{ hit.source }}
@@ -271,12 +201,12 @@ function refreshSearchCards() {
           </span>
           <span v-else class="knowledge-card-summary creator-muted">（暂无亮点摘要）</span>
           <span class="knowledge-stats">
-            <span>播放 {{ formatCount(hit.viewCount) }}</span>
-            <span>点赞 {{ formatCount(hit.likeCount) }}</span>
-            <span>投币 {{ formatCount(hit.coinCount) }}</span>
-            <span>收藏 {{ formatCount(hit.favoriteCount) }}</span>
-            <span>弹幕 {{ formatCount(hit.danmakuCount) }}</span>
-            <span>评论 {{ formatCount(hit.replyCount) }}</span>
+            <span>播放 {{ formatKnowledgeCount(hit.viewCount) }}</span>
+            <span>点赞 {{ formatKnowledgeCount(hit.likeCount) }}</span>
+            <span>投币 {{ formatKnowledgeCount(hit.coinCount) }}</span>
+            <span>收藏 {{ formatKnowledgeCount(hit.favoriteCount) }}</span>
+            <span>弹幕 {{ formatKnowledgeCount(hit.danmakuCount) }}</span>
+            <span>评论 {{ formatKnowledgeCount(hit.replyCount) }}</span>
           </span>
           <span v-if="matchedTopicsByVideoId[hit.videoId]?.length" class="knowledge-topic-hits">
             <span class="knowledge-topic-hits-label">为什么推荐它</span>

@@ -5,6 +5,7 @@ import { useCreatorWorkspaceContext, useCreatorWorkspaceShell } from '@/composab
 import {
   contextSaveKey,
   formatValue,
+  getLatestWorkflowFailedStep,
   getRecordText,
   parseJsonArray,
 } from '@/composables/creator/creatorWorkspaceUtils'
@@ -62,15 +63,7 @@ const actionableRevisionPlan = computed(() =>
 )
 const tagSuggestions = computed(() => parseJsonArray(suggestion.value?.tagSuggestions))
 
-// 历史失败步骤属于过程回放，不应覆盖当前一次成功或正在执行的生成结果。
-const currentWorkflowFailedStep = computed(() => {
-  const latestStep = [...(workflowSteps.value ?? [])].sort((left, right) => {
-    const leftTime = left.startTime || left.createTime
-    const rightTime = right.startTime || right.createTime
-    return rightTime.localeCompare(leftTime)
-  })[0]
-  return latestStep?.status === 'FAILED' ? latestStep : null
-})
+const currentWorkflowFailedStep = computed(() => getLatestWorkflowFailedStep(workflowSteps.value))
 
 const titleSuggestionCards = computed<SuggestionCardItem[]>(() =>
   titleSuggestions.value.map((raw) => ({

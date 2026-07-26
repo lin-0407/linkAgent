@@ -97,14 +97,6 @@ export function useCreatorTask(errorRef: Ref<string>) {
 
   const pendingDeleteTaskName = computed(() => pendingDeleteTask.value?.taskName ?? '')
 
-  const materialPreview = computed(() => {
-    if (!selectedTask.value) return []
-    return selectedTask.value.materials.map((item) => ({
-      ...item,
-      label: materialLabel(item.materialType),
-    }))
-  })
-
   const currentVideoType = computed(() => {
     if (selectedTask.value?.videoType) return selectedTask.value.videoType
     return taskForm.videoType || '未分类'
@@ -325,7 +317,7 @@ export function useCreatorTask(errorRef: Ref<string>) {
     selectedTaskId, hasSelectedTask, hasSelectedTaskMaterials,
     hasTaskMaterialInput, filteredTasks, taskSummaryStats,
     taskSubmitLabel, taskFormTitle, taskFormHint, pendingDeleteTaskName,
-    materialPreview, currentVideoType,
+    currentVideoType,
     // 选项
     taskStatusOptions, videoTypeOptions,
     // 方法
@@ -358,14 +350,4 @@ function statusLabel(status: string) {
     ARCHIVED: '已归档',
   }
   return labels[status] ?? status
-}
-
-function materialLabel(type: string) {
-  const labels: Record<string, string> = {
-    TITLE_DRAFT: '标题草稿',
-    DESCRIPTION_DRAFT: '简介草稿',
-    MANUSCRIPT: '文稿',
-    SUBTITLE: '字幕',
-  }
-  return labels[type] ?? type
 }

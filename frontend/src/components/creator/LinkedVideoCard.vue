@@ -27,11 +27,6 @@ function formatCount(n: number | null): string {
   return String(n)
 }
 
-/** 分析状态标签和颜色 */
-function analysisLabel(video: BilibiliVideo): { text: string; cls: string } {
-  // 目前 video 没有 analysisStatus 字段 — P0-4 再补充，先统一展示"待分析"
-  return { text: '待分析', cls: 'tag-pending' }
-}
 </script>
 
 <template>
@@ -88,9 +83,8 @@ function analysisLabel(video: BilibiliVideo): { text: string; cls: string } {
         <span v-if="video.taskName" class="card-task-tag" :title="video.taskName">
           {{ video.taskName }}
         </span>
-        <span class="card-analysis-tag" :class="analysisLabel(video).cls">
-          {{ analysisLabel(video).text }}
-        </span>
+        <!-- 当前接口没有分析状态字段，固定显示待分析，避免用预留分支伪造不存在的完成态。 -->
+        <span class="card-analysis-tag tag-pending">待分析</span>
       </div>
     </div>
   </article>
@@ -230,13 +224,4 @@ function analysisLabel(video: BilibiliVideo): { text: string; cls: string } {
   color: var(--creator-muted-ink, #86868b);
 }
 
-.card-analysis-tag.tag-done {
-  background: rgba(52, 199, 89, 0.12);
-  color: #248a3d;
-}
-
-.card-analysis-tag.tag-failed {
-  background: rgba(255, 59, 48, 0.1);
-  color: #c93400;
-}
 </style>
