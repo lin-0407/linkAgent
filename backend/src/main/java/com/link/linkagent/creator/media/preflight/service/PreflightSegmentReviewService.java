@@ -15,6 +15,7 @@ import com.link.linkagent.creator.media.storage.ObjectStorageService;
 import com.link.linkagent.util.LlmJsonUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -54,6 +55,7 @@ public class PreflightSegmentReviewService {
     private final Supplier<String> callIdSupplier;
     private final Supplier<String> evidenceIdSupplier;
 
+    @Autowired
     public PreflightSegmentReviewService(CreatorMediaProperties properties,
                                          PreflightReviewMapper mapper,
                                          MediaProcessingMapper processingMapper,
