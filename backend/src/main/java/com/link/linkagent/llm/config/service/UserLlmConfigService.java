@@ -5,6 +5,7 @@ import com.link.linkagent.llm.config.mapper.UserLlmConfigMapper;
 import com.link.linkagent.llm.config.model.UserLlmConfigRecord;
 import com.link.linkagent.llm.config.model.UserLlmConfigResponse;
 import com.link.linkagent.llm.config.model.UserLlmConfigSaveRequest;
+import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -105,13 +106,13 @@ public class UserLlmConfigService {
         record.setConfigId(UUID.randomUUID().toString());
         record.setUserId(resolvedUserId);
         record.setProvider(request.provider().trim().toUpperCase());
-        record.setLlmBaseUrl(trimToNull(request.llmBaseUrl()));
+        record.setLlmBaseUrl(TextUtil.trimToNull(request.llmBaseUrl()));
         // 只有非空才加密写入，空串保留数据库已有值（upsert SQL 中用 IF(VALUES(...) IS NULL) 控制）
         record.setLlmApiKeyEnc(encryptIfNotEmpty(request.llmApiKey()));
-        record.setLlmModelName(trimToNull(request.llmModelName()));
-        record.setEmbeddingBaseUrl(trimToNull(request.embeddingBaseUrl()));
+        record.setLlmModelName(TextUtil.trimToNull(request.llmModelName()));
+        record.setEmbeddingBaseUrl(TextUtil.trimToNull(request.embeddingBaseUrl()));
         record.setEmbeddingApiKeyEnc(encryptIfNotEmpty(request.embeddingApiKey()));
-        record.setEmbeddingModelName(trimToNull(request.embeddingModelName()));
+        record.setEmbeddingModelName(TextUtil.trimToNull(request.embeddingModelName()));
         LocalDateTime now = LocalDateTime.now();
         record.setCreateTime(now);
         record.setUpdateTime(now);
@@ -167,12 +168,12 @@ public class UserLlmConfigService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "此配置未设置 LLM API Key，无法测试连接。请先保存 LLM API Key 后再测试。");
         }
-        String baseUrl = config.getLlmBaseUrl() != null ? config.getLlmBaseUrl() : trimToNull(defaultLlmBaseUrl);
+        String baseUrl = config.getLlmBaseUrl() != null ? config.getLlmBaseUrl() : TextUtil.trimToNull(defaultLlmBaseUrl);
         if (baseUrl == null || baseUrl.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "LLM Base URL 未配置（既无用户自定义也无系统默认值），无法测试连接。");
         }
-        String modelName = config.getLlmModelName() != null ? config.getLlmModelName() : trimToNull(defaultLlmModelName);
+        String modelName = config.getLlmModelName() != null ? config.getLlmModelName() : TextUtil.trimToNull(defaultLlmModelName);
         if (modelName == null || modelName.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "LLM 模型名称未配置（既无用户自定义也无系统默认值），无法测试连接。");
@@ -268,11 +269,4 @@ public class UserLlmConfigService {
         }
     }
 
-    /** 空字符串转 null：数据库 NULL 的语义比空串更明确 */
-    private String trimToNull(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return value.trim();
-    }
 }

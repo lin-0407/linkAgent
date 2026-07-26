@@ -1,5 +1,7 @@
 package com.link.linkagent.llm.usage;
 
+import com.link.linkagent.util.TextUtil;
+
 import java.util.UUID;
 
 /**
@@ -28,14 +30,14 @@ public final class LlmUsageContext {
                             String workflowStepId,
                             String workflowStepName,
                             String workflowStage) {
-        this.taskId = trimToNull(taskId);
-        this.traceId = trimToNull(traceId);
-        this.requestId = trimToNull(requestId);
-        this.scene = trimToNull(scene);
-        this.workflowSessionId = trimToNull(workflowSessionId);
-        this.workflowStepId = trimToNull(workflowStepId);
-        this.workflowStepName = trimToNull(workflowStepName);
-        this.workflowStage = trimToNull(workflowStage);
+        this.taskId = TextUtil.trimToNull(taskId);
+        this.traceId = TextUtil.trimToNull(traceId);
+        this.requestId = TextUtil.trimToNull(requestId);
+        this.scene = TextUtil.trimToNull(scene);
+        this.workflowSessionId = TextUtil.trimToNull(workflowSessionId);
+        this.workflowStepId = TextUtil.trimToNull(workflowStepId);
+        this.workflowStepName = TextUtil.trimToNull(workflowStepName);
+        this.workflowStage = TextUtil.trimToNull(workflowStage);
     }
 
     public static LlmUsageContext current() {
@@ -138,13 +140,6 @@ public final class LlmUsageContext {
 
     public String workflowStage() {
         return workflowStage;
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return value.trim();
     }
 
     public static final class UsageScope implements AutoCloseable {

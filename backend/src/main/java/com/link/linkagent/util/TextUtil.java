@@ -123,6 +123,32 @@ public final class TextUtil {
     }
 
     /**
+     * 归一化异常消息：消息为空时回退到异常类名，并压缩连续空白。
+     * 统一该规则是为了避免索引、用量统计等旁路能力各自维护一份相同实现。
+     *
+     * @param exception 异常，可为 null
+     * @return 适合记录或展示的单行消息，exception 为 null 时返回 null
+     */
+    public static String normalizeExceptionMessage(Exception exception) {
+        if (exception == null) {
+            return null;
+        }
+        return collapseWhitespace(trimToDefault(
+                exception.getMessage(), exception.getClass().getSimpleName()));
+    }
+
+    /**
+     * 归一化并截断异常消息，统一数据库错误字段和批处理告警的长度控制。
+     *
+     * @param exception 异常，可为 null
+     * @param maxLength 保留的消息字符数，不包含截断后缀
+     * @return 归一化后的异常消息，超长时追加省略号
+     */
+    public static String normalizeExceptionMessage(Exception exception, int maxLength) {
+        return abbreviateWithSuffix(normalizeExceptionMessage(exception), maxLength, "...");
+    }
+
+    /**
      * 生成文本预览：压缩空白后截断并加省略号，空白时返回占位文本。
      * <p>
      * 主要用于 UI 列表的预览列，如会话列表中的最后一条消息预览。

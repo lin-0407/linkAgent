@@ -137,7 +137,7 @@ public class KnowledgeReferenceChunkIndexService {
                     indexed++;
                 }
             } catch (Exception exception) {
-                String reason = normalizeError(exception);
+                String reason = TextUtil.normalizeExceptionMessage(exception, ERROR_MESSAGE_MAX_LENGTH);
                 for (ReferenceVideoChunkIndexRow row : chunk) {
                     knowledgeReferenceVideoMapper.updateChunkEmbeddingFailed(row.getChunkId(), reason);
                     failed++;
@@ -176,7 +176,7 @@ public class KnowledgeReferenceChunkIndexService {
                     generated++;
                 }
             } catch (Exception exception) {
-                String reason = normalizeError(exception);
+                String reason = TextUtil.normalizeExceptionMessage(exception, ERROR_MESSAGE_MAX_LENGTH);
                 if (warnings.size() < MAX_WARNINGS) {
                     warnings.add("视频 " + video.getVideoId() + " 主题中块补齐失败：" + reason);
                 }
@@ -298,14 +298,4 @@ public class KnowledgeReferenceChunkIndexService {
         }
     }
 
-    /**
-     * 归一化异常信息：取 message，空时回退到异常类名，去多余空格后截断到 ERROR_MESSAGE_MAX_LENGTH。
-     */
-    private String normalizeError(Exception exception) {
-        String message = exception.getMessage();
-        if (TextUtil.isBlank(message)) {
-            message = exception.getClass().getSimpleName();
-        }
-        return TextUtil.abbreviateWithSuffix(message.replaceAll("\\s+", " ").trim(), ERROR_MESSAGE_MAX_LENGTH, "...");
-    }
 }

@@ -149,7 +149,7 @@ public class KnowledgeReferenceIndexService {
                     indexed++;
                 }
             } catch (Exception exception) {
-                String reason = normalizeError(exception);
+                String reason = TextUtil.normalizeExceptionMessage(exception, ERROR_MESSAGE_MAX_LENGTH);
                 for (ReferenceVideoRecord video : chunk) {
                     knowledgeReferenceVideoMapper.updateVideoEmbeddingFailed(video.getVideoId(), reason);
                     failed++;
@@ -353,14 +353,4 @@ public class KnowledgeReferenceIndexService {
         }
     }
 
-    /**
-     * 归一化异常信息：取 message，空时回退到类名，去空格后截断到 ERROR_MESSAGE_MAX_LENGTH。
-     */
-    private String normalizeError(Exception exception) {
-        String message = exception.getMessage();
-        if (TextUtil.isBlank(message)) {
-            message = exception.getClass().getSimpleName();
-        }
-        return TextUtil.abbreviateWithSuffix(message.replaceAll("\\s+", " ").trim(), ERROR_MESSAGE_MAX_LENGTH, "...");
-    }
 }

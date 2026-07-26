@@ -176,7 +176,7 @@ public class LlmApiUsageService {
                                      Exception exception,
                                      Integer inputCount) {
         recordWithErrorMessage(modelCategory, modelName, promptTokens, completionTokens, totalTokens,
-                elapsedMs, status, normalizeError(exception), inputCount);
+                elapsedMs, status, TextUtil.normalizeExceptionMessage(exception), inputCount);
     }
 
     private void recordWithErrorMessage(LlmApiModelCategory modelCategory,
@@ -201,7 +201,7 @@ public class LlmApiUsageService {
             record.setWorkflowStage(context == null ? null : context.workflowStage());
             record.setScene(context == null ? null : context.scene());
             record.setModelCategory(modelCategory.name());
-            record.setModelName(trimToNull(modelName));
+            record.setModelName(TextUtil.trimToNull(modelName));
             record.setPromptTokens(normalizeTokenCount(promptTokens));
             record.setCompletionTokens(normalizeTokenCount(completionTokens));
             record.setTotalTokens(normalizeTokenCount(totalTokens));
@@ -237,30 +237,12 @@ public class LlmApiUsageService {
         return elapsedMs == null || elapsedMs < 0 ? null : elapsedMs;
     }
 
-    private String normalizeError(Exception exception) {
-        if (exception == null) {
-            return null;
-        }
-        String message = exception.getMessage();
-        if (TextUtil.isBlank(message)) {
-            message = exception.getClass().getSimpleName();
-        }
-        return message.replaceAll("\\s+", " ").trim();
-    }
-
     private String trimToMax(String value, int maxLength) {
-        String trimmed = trimToNull(value);
+        String trimmed = TextUtil.trimToNull(value);
         if (trimmed == null) {
             return null;
         }
         return TextUtil.abbreviateWithSuffix(trimmed, maxLength, "...");
-    }
-
-    private String trimToNull(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return value.trim();
     }
 
     private Long addNullable(Long left, Long right) {

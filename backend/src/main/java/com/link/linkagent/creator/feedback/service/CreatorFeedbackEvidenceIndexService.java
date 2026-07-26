@@ -191,7 +191,7 @@ public class CreatorFeedbackEvidenceIndexService {
                     indexed++;
                 }
             } catch (Exception exception) {
-                String reason = normalizeError(exception);
+                String reason = TextUtil.normalizeExceptionMessage(exception, ERROR_MESSAGE_MAX_LENGTH);
                 for (CreatorFeedbackItemRecord item : chunk) {
                     creatorFeedbackMapper.updateItemEmbeddingFailed(taskRecord.getTaskId(), item.getItemId(), reason);
                     failed++;
@@ -374,24 +374,6 @@ public class CreatorFeedbackEvidenceIndexService {
         if (value != null) {
             metadata.put(key, value);
         }
-    }
-
-    /**
-     * 标准化错误消息用于写入 embedding_error 列。
-     * <p>
-     * 压缩空白字符并截断至 ERROR_MESSAGE_MAX_LENGTH——
-     * Embedding API 的异常消息可能包含很长的 JSON 响应或堆栈跟踪，
-     * 直接存会导致 embedding_error VARCHAR(512) 列溢出或截断出乱码。
-     *
-     * @param exception 异常对象
-     * @return 截断后的错误消息
-     */
-    private String normalizeError(Exception exception) {
-        String message = exception.getMessage();
-        if (TextUtil.isBlank(message)) {
-            message = exception.getClass().getSimpleName();
-        }
-        return TextUtil.abbreviateWithSuffix(message.replaceAll("\\s+", " ").trim(), ERROR_MESSAGE_MAX_LENGTH, "...");
     }
 
     private CreatorTaskRecord getTaskRecord(String taskId) {

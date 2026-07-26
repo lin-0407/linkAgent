@@ -3,6 +3,7 @@ package com.link.linkagent.llm;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.llm.usage.LlmApiUsageService;
 import com.link.linkagent.util.LlmJsonUtil;
+import com.link.linkagent.util.TextUtil;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -456,7 +457,7 @@ public class LLMService {
         // 不同模型供应商返回 usage 的完整度不一致；缺失时保留 null，比伪造 0 更利于后续排查统计口径。
         return new LlmCallResult(
                 extractContent(chatResponse),
-                metadata == null ? null : trimToNull(metadata.getModel()),
+                metadata == null ? null : TextUtil.trimToNull(metadata.getModel()),
                 extractPromptTokens(usage),
                 extractCompletionTokens(usage),
                 extractTotalTokens(usage),
@@ -529,19 +530,6 @@ public class LLMService {
             return "";
         }
         return chatResponse.getResult().getOutput().getText();
-    }
-
-    /**
-     * 将空白的字符串转为 null：null 或 isBlank() 时返回 null，否则返回 trim 后的值。
-     * <p>
-     * 用在 model 名称字段：Spring AI 的 metadata.getModel() 可能返回空串而非 null，
-     * 统一转为 null 使下游无需区分”空串”和”null”两种缺失语义。
-     */
-    private String trimToNull(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return value.trim();
     }
 
     /**

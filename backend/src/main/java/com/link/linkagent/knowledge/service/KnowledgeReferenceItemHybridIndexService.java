@@ -112,7 +112,7 @@ public class KnowledgeReferenceItemHybridIndexService {
         } catch (Exception exception) {
             log.error("重建子 hybrid 集合失败。", exception);
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "重建子 hybrid 集合失败：" + normalizeError(exception));
+                    "重建子 hybrid 集合失败：" + TextUtil.normalizeExceptionMessage(exception, 200));
         }
 
         List<String> warnings = new ArrayList<>();
@@ -132,7 +132,8 @@ public class KnowledgeReferenceItemHybridIndexService {
             } catch (Exception exception) {
                 failed += chunk.size();
                 if (warnings.size() < MAX_WARNINGS) {
-                    warnings.add("第 " + (start + 1) + "-" + end + " 条子条目灌入失败：" + normalizeError(exception));
+                    warnings.add("第 " + (start + 1) + "-" + end + " 条子条目灌入失败："
+                            + TextUtil.normalizeExceptionMessage(exception, 200));
                 }
                 log.warn("子 hybrid 灌入失败。range={}-{}", start + 1, end, exception);
             }
@@ -184,11 +185,4 @@ public class KnowledgeReferenceItemHybridIndexService {
         return TextUtil.abbreviateWithSuffix(content, ITEM_DOC_TEXT_MAX_CHARS, "...");
     }
 
-    private String normalizeError(Exception exception) {
-        String message = exception.getMessage();
-        if (TextUtil.isBlank(message)) {
-            message = exception.getClass().getSimpleName();
-        }
-        return TextUtil.abbreviateWithSuffix(message.replaceAll("\\s+", " ").trim(), 200, "...");
-    }
 }

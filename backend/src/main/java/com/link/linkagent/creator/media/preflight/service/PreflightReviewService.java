@@ -16,6 +16,7 @@ import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingJobRecord;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
+import com.link.linkagent.util.TextUtil;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -125,7 +126,7 @@ public class PreflightReviewService {
         ));
         PreflightReviewRecord review = new PreflightReviewRecord(
                 null, reviewId, taskId, request.versionId(), ownerId, processing.jobId(), idempotencyKey,
-                trimToNull(request.reviewFocus()), "QUEUED", transcribe ? "TRANSCRIBE" : "BUILD_TIMELINE",
+                TextUtil.trimToNull(request.reviewFocus()), "QUEUED", transcribe ? "TRANSCRIBE" : "BUILD_TIMELINE",
                 0, 0L, false, 0, properties.getPreflight().getMaxAttempts(), LocalDateTime.now(),
                 null, null, fingerprint, json(Map.of(
                         "provider", "DASHSCOPE",
@@ -254,7 +255,7 @@ public class PreflightReviewService {
                 .map(PreflightStepRecord::status).orElse(null))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "请先补全三类观众试映，再确认问题和修改清单");
         }
-        String reason = trimToNull(request.reason());
+        String reason = TextUtil.trimToNull(request.reason());
         if (mapper.updateIssueDisposition(issue.reviewId(), issue.issueId(), request.disposition(), reason) != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "问题状态已变化，请刷新后重试");
         }
@@ -292,7 +293,7 @@ public class PreflightReviewService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "当前修改任务不能直接切换到该状态");
         }
         if (!task.status().equals(request.status()) && mapper.updateEditTaskStatus(
-                editTaskId, request.status(), trimToNull(request.note())) != 1) {
+                editTaskId, request.status(), TextUtil.trimToNull(request.note())) != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "修改任务状态已变化，请刷新后重试");
         }
         mapper.touchReview(task.reviewId());
@@ -437,10 +438,6 @@ public class PreflightReviewService {
 
     private boolean isTerminal(String status) {
         return "COMPLETED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status);
-    }
-
-    private String trimToNull(String value) {
-        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private String json(Object value) {
