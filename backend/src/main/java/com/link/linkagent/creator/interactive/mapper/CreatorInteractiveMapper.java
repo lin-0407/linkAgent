@@ -249,6 +249,7 @@ public interface CreatorInteractiveMapper {
     /**
      * 追加补充背景资料文本。
      * 使用 CONCAT 在已有背景资料后面追加新提取的文本，用换行分隔不同文件。
+     * 新对齐流程同时原子标记为待重新理解，避免资料已变化但旧理解仍被当成可用状态。
      */
     @Update("""
             UPDATE creator_interactive_session
@@ -257,6 +258,7 @@ public interface CreatorInteractiveMapper {
                     IF(IFNULL(background_context, '') = '', '', '\n\n---\n\n'),
                     #{contextText}
                 ),
+                understanding_status = IF(status = 'INTENT_ALIGNMENT', 'PENDING', understanding_status),
                 update_time = CURRENT_TIMESTAMP
             WHERE task_id = #{taskId}
               AND is_deleted = 0
@@ -278,4 +280,32 @@ public interface CreatorInteractiveMapper {
     int updateUnderstanding(@Param("taskId") String taskId,
                            @Param("summary") String summary,
                            @Param("status") String status);
+
+    /**
+     * 新流程首次完成对齐后打上专用状态，旧方向卡任务继续保持原状态以兼容读取。
+     */
+    @Update("""
+            UPDATE creator_interactive_session
+            SET status = 'INTENT_ALIGNMENT',
+                understanding_summary = #{summary},
+                understanding_status = 'READY',
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            """)
+    int markIntentAligned(@Param("taskId") String taskId,
+                          @Param("summary") String summary);
+
+    /**
+     * 用户在新对齐流程中补充原话后标记为待重新理解，防止直接沿用旧理解生成方案。
+     */
+    @Update("""
+            UPDATE creator_interactive_session
+            SET understanding_status = 'PENDING',
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND status = 'INTENT_ALIGNMENT'
+              AND is_deleted = 0
+            """)
+    int markIntentAlignmentPending(@Param("taskId") String taskId);
 }

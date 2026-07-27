@@ -992,8 +992,8 @@ async function refreshCurrentDraftVideo(taskId = selectedTask.value?.taskId) {
 
 async function handleCreativeOptionConfirmed(taskId: string) {
   await selectTask(taskId)
-  activeStep.value = 'prePublish'
-  successMessage.value = '创意方向已确认，下一步可以继续做发布前优化。'
+  activeStep.value = 'production'
+  successMessage.value = '发布方案已确认，下一步生成制作蓝图。'
 }
 
 async function loadOptionalResults(task: CreatorTask) {

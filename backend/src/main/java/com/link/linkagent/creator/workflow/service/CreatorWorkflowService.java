@@ -1,5 +1,7 @@
 package com.link.linkagent.creator.workflow.service;
 
+import com.link.linkagent.creator.interactive.mapper.CreatorInteractiveMapper;
+import com.link.linkagent.creator.interactive.model.InteractiveSessionRecord;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.profile.service.CreatorProfileService;
@@ -7,6 +9,7 @@ import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionResponse;
 import com.link.linkagent.creator.suggestion.model.PrePublishAnalyzeRequest;
+import com.link.linkagent.creator.suggestion.model.PrePublishSuggestionCandidate;
 import com.link.linkagent.creator.suggestion.service.PrePublishSuggestionService;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
@@ -16,6 +19,9 @@ import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.creator.workflow.event.CreatorWorkflowEventPublisher;
 import com.link.linkagent.creator.workflow.mapper.CreatorWorkflowMapper;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowConfirmRequest;
+import com.link.linkagent.creator.workflow.model.CreatorIntentAlignmentContext;
+import com.link.linkagent.creator.workflow.model.CreatorIntentAlignmentOutput;
+import com.link.linkagent.creator.workflow.model.CreatorIntentReviewResult;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowEventResponse;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowEventType;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowMessageContentType;
@@ -48,7 +54,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -86,6 +96,16 @@ public class CreatorWorkflowService {
 
     /** 消息详情引用类型 —— 建议，前端通过(detailRefType, detailRefId)查询建议卡片 */
     private static final String DETAIL_REF_TYPE_SUGGESTION = "SUGGESTION";
+    /** 想法对齐消息标记，前端据此过滤旧流程中的过程话术，只展示真实对话。 */
+    private static final String DETAIL_REF_TYPE_INTENT_ALIGNMENT = "INTENT_ALIGNMENT";
+    /** 同一上下文最多成功生成三次发布方案，失败调用不计入次数。 */
+    private static final int MAX_PLAN_GENERATION_COUNT = 3;
+    /** 给发布方案生成器注入原始想法、背景资料和用户消息时的最大长度。 */
+    private static final int PLAN_GUIDANCE_MAX_LENGTH = 12000;
+    /** 想法对齐上下文总长度上限，避免补充文档无限挤占模型窗口。 */
+    private static final int INTENT_SOURCE_MAX_LENGTH = 30000;
+    /** 单份任务材料进入想法对齐上下文时的最大长度。 */
+    private static final int INTENT_MATERIAL_MAX_LENGTH = 3000;
     /**
      * 工作流补充指导的最大字符数。
      * 合并用户在消息流中的补充要求到 LLM 提示词时，截断上限防止提示词过长导致成本激增。
@@ -129,6 +149,10 @@ public class CreatorWorkflowService {
     private final CreatorSuggestionMapper creatorSuggestionMapper;
     /** 工作流会话/消息/步骤数据访问 */
     private final CreatorWorkflowMapper creatorWorkflowMapper;
+    /** 交互式创作会话访问，用于读取用户最初想法、视频类型和补充背景资料 */
+    private final CreatorInteractiveMapper creatorInteractiveMapper;
+    /** 专用双 Agent 对齐服务，审查 Agent 只标记偏离，不参与改写 */
+    private final CreatorIntentAlignmentService creatorIntentAlignmentService;
     /** 发布前优化建议生成服务，封装 LLM/Agent 推理逻辑 */
     private final PrePublishSuggestionService prePublishSuggestionService;
     /** 工作流事件发布器，通过 SSE 向前端实时推送状态变更 */
@@ -149,6 +173,8 @@ public class CreatorWorkflowService {
     public CreatorWorkflowService(CreatorTaskMapper creatorTaskMapper,
                                   CreatorSuggestionMapper creatorSuggestionMapper,
                                   CreatorWorkflowMapper creatorWorkflowMapper,
+                                  CreatorInteractiveMapper creatorInteractiveMapper,
+                                  CreatorIntentAlignmentService creatorIntentAlignmentService,
                                   PrePublishSuggestionService prePublishSuggestionService,
                                   CreatorWorkflowEventPublisher workflowEventPublisher,
                                   LlmApiUsageService llmApiUsageService,
@@ -160,6 +186,8 @@ public class CreatorWorkflowService {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorWorkflowMapper = creatorWorkflowMapper;
+        this.creatorInteractiveMapper = creatorInteractiveMapper;
+        this.creatorIntentAlignmentService = creatorIntentAlignmentService;
         this.prePublishSuggestionService = prePublishSuggestionService;
         this.workflowEventPublisher = workflowEventPublisher;
         this.llmApiUsageService = llmApiUsageService;
@@ -332,6 +360,9 @@ public class CreatorWorkflowService {
                 null,
                 null
         );
+        // 用户原话发生变化后，旧方案次数不再代表同一上下文；同时把新流程理解状态标记为待更新。
+        creatorWorkflowMapper.resetPlanGenerationState(sessionRecord.getSessionId());
+        creatorInteractiveMapper.markIntentAlignmentPending(sessionRecord.getTaskId());
         publishMessage(sessionRecord.getTaskId(), messageRecord);
         updateSessionStatus(
                 sessionRecord.getTaskId(),
@@ -340,6 +371,83 @@ public class CreatorWorkflowService {
                 null
         );
         return toMessageResponse(messageRecord);
+    }
+
+    /**
+     * 让主 Agent 基于用户原话、补充资料和消息流说明当前理解。
+     * 审查 Agent 在服务内部读取同一份原始上下文，只返回偏离位置；最终只保存主 Agent 的回复。
+     */
+    public CreatorWorkflowMessageResponse alignPrePublishIntent(String taskId, String sessionId) {
+        CreatorWorkflowSessionRecord sessionRecord = getSessionRecord(taskId, sessionId);
+        ensureCanAlignIntent(sessionRecord);
+        List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(sessionRecord.getTaskId());
+        if (materials.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "创作任务缺少可对齐材料");
+        }
+
+        sessionRecord = claimPrePublishExecution(sessionRecord);
+        CreatorWorkflowStepRecord currentStep = startStep(
+                sessionRecord,
+                CreatorWorkflowStepType.AGENT_REASONING,
+                "对齐创作想法",
+                "主 Agent 说明当前理解，独立审查 Agent 只检查是否偏离用户原话。"
+        );
+        try {
+            CreatorIntentAlignmentContext context = buildIntentAlignmentContext(sessionRecord, materials);
+            CreatorIntentAlignmentOutput output;
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.openWorkflowStep(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    currentStep.getStepId(),
+                    currentStep.getStepName(),
+                    sessionRecord.getStage(),
+                    "创作想法对齐"
+            )) {
+                output = creatorIntentAlignmentService.align(context);
+            }
+            String content = creatorIntentAlignmentService.render(output);
+            completeStepSuccess(
+                    sessionRecord,
+                    currentStep,
+                    "已完成本轮理解和偏离检查。",
+                    content
+            );
+            currentStep = null;
+
+            CreatorWorkflowMessageRecord messageRecord = appendAndPublishMessage(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowMessageRole.AGENT,
+                    content,
+                    CreatorWorkflowMessageContentType.TEXT,
+                    DETAIL_REF_TYPE_INTENT_ALIGNMENT,
+                    null
+            );
+            creatorInteractiveMapper.markIntentAligned(sessionRecord.getTaskId(), content);
+            updateSessionStatus(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowStatus.WAITING_USER_INPUT,
+                    null
+            );
+            return toMessageResponse(messageRecord);
+        } catch (RuntimeException exception) {
+            if (currentStep != null) {
+                completeStepFailure(sessionRecord, currentStep, exception);
+            }
+            String errorMessage = TextUtil.abbreviateWithSuffix(
+                    exception.getMessage(),
+                    ERROR_MESSAGE_MAX_LENGTH,
+                    "..."
+            );
+            updateSessionStatus(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowStatus.FAILED,
+                    TextUtil.trimToDefault(errorMessage, "想法对齐失败")
+            );
+            throw exception;
+        }
     }
 
     /**
@@ -378,11 +486,26 @@ public class CreatorWorkflowService {
         if (materials.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "创作任务缺少可分析材料");
         }
+        ensureIntentReadyForPlan(sessionRecord);
+        CreatorIntentAlignmentContext intentContext = buildIntentAlignmentContext(sessionRecord, materials);
+        PrePublishAnalyzeRequest mergedRequest = mergeWorkflowGuidance(
+                request,
+                intentContext
+        );
+        String planContextHash = buildPlanContextHash(intentContext, mergedRequest);
+        int successfulGenerationCount = resolveSuccessfulGenerationCount(sessionRecord, planContextHash);
 
         // 先由数据库原子抢占执行权，再开始画像初始化和 LLM 调用。
         // 前端禁用按钮只能减少重复点击，无法覆盖双标签页、网络重试或直接调用接口的并发请求；
         // 条件更新返回 0 时说明会话状态已被其他请求改变，必须在产生模型成本前立即拒绝本次请求。
         sessionRecord = claimPrePublishExecution(sessionRecord);
+        if (successfulGenerationCount >= MAX_PLAN_GENERATION_COUNT) {
+            stopPlanGenerationAndAskForClarification(sessionRecord, intentContext);
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "同一上下文已经生成三次发布方案，请先回答 AI 的具体问题再继续。"
+            );
+        }
 
         CreatorWorkflowStepRecord currentStep = null;
         try {
@@ -424,10 +547,7 @@ public class CreatorWorkflowService {
                     null
             );
 
-            // 合并工作流消息流中的用户补充要求到分析请求中，
-            // 让 Agent/LLM 能综合考虑"任务材料 + 用户后续补充"生成建议
-            PrePublishAnalyzeRequest mergedRequest = mergeWorkflowGuidance(sessionRecord.getSessionId(), request);
-            CreatorSuggestionResponse suggestionResponse;
+            PrePublishSuggestionCandidate suggestionCandidate;
             // Agent 模式与直连 LLM 模式的切换由运行期设置控制，无需重启服务。
             // 当 Agent 模式生产环境出现不稳定时，可快速关闭开关回退到直连 LLM。
             if (runtimeSettingService.isPrePublishAgentEnabled()) {
@@ -438,12 +558,12 @@ public class CreatorWorkflowService {
                         "基于任务材料、创作指导、创作者偏好和案例知识库执行 Agent 推理。"
                 );
                 try {
-                    suggestionResponse = generateSuggestionInWorkflowStep(sessionRecord, currentStep, mergedRequest, true);
+                    suggestionCandidate = generateSuggestionInWorkflowStep(sessionRecord, currentStep, mergedRequest, true);
                     completeStepSuccess(
                             sessionRecord,
                             currentStep,
-                            "Agent 已返回发布前优化建议，解析状态：" + suggestionResponse.parseStatus(),
-                            suggestionResponse.rawOutput()
+                            "Agent 已返回发布前优化建议，解析状态：" + suggestionCandidate.parseStatus(),
+                            suggestionCandidate.rawOutput()
                     );
                 } catch (RuntimeException agentException) {
                     completeStepFailure(sessionRecord, currentStep, agentException);
@@ -455,12 +575,12 @@ public class CreatorWorkflowService {
                             "直连 LLM 回退生成建议",
                             "Agent 结构化输出或工具链路失败后，使用旧直连 LLM 链路保证发布前优化可用。"
                     );
-                    suggestionResponse = generateSuggestionInWorkflowStep(sessionRecord, currentStep, mergedRequest, false);
+                    suggestionCandidate = generateSuggestionInWorkflowStep(sessionRecord, currentStep, mergedRequest, false);
                     completeStepSuccess(
                             sessionRecord,
                             currentStep,
-                            "旧直连 LLM 已返回发布前优化建议，解析状态：" + suggestionResponse.parseStatus(),
-                            suggestionResponse.rawOutput()
+                            "旧直连 LLM 已返回发布前优化建议，解析状态：" + suggestionCandidate.parseStatus(),
+                            suggestionCandidate.rawOutput()
                     );
                 }
             } else {
@@ -470,13 +590,77 @@ public class CreatorWorkflowService {
                         "生成发布前优化建议",
                         "基于任务材料、创作指导和工作流补充消息调用 LLM。"
                 );
-                suggestionResponse = generateSuggestionInWorkflowStep(sessionRecord, currentStep, mergedRequest, false);
+                suggestionCandidate = generateSuggestionInWorkflowStep(sessionRecord, currentStep, mergedRequest, false);
                 completeStepSuccess(
                         sessionRecord,
                         currentStep,
-                        "LLM 已返回发布前优化建议，解析状态：" + suggestionResponse.parseStatus(),
-                        suggestionResponse.rawOutput()
+                        "LLM 已返回发布前优化建议，解析状态：" + suggestionCandidate.parseStatus(),
+                        suggestionCandidate.rawOutput()
                 );
+            }
+
+            currentStep = startStep(
+                    sessionRecord,
+                    CreatorWorkflowStepType.LLM_CALL,
+                    "检查发布方案是否偏离用户想法",
+                    "审查 Agent 只对照用户原话标记偏离，不提供改写意见。"
+            );
+            CreatorIntentReviewResult reviewResult = reviewCandidateInWorkflowStep(
+                    sessionRecord,
+                    currentStep,
+                    intentContext,
+                    suggestionCandidate.rawOutput()
+            );
+            completeStepSuccess(
+                    sessionRecord,
+                    currentStep,
+                    reviewResult.deviated() ? "发现发布方案存在偏离，主 Agent 将重答一次。" : "发布方案未发现实质偏离。",
+                    creatorIntentAlignmentService.buildReviewReminder(reviewResult)
+            );
+
+            if (reviewResult.deviated() && !reviewResult.issues().isEmpty()) {
+                currentStep = startStep(
+                        sessionRecord,
+                        CreatorWorkflowStepType.LLM_CALL,
+                        "按用户原话重新生成发布方案",
+                        "只使用用户原始上下文和审查指出的偏离位置，最多重答一次。"
+                );
+                suggestionCandidate = generateSuggestionInWorkflowStep(
+                        sessionRecord,
+                        currentStep,
+                        mergedRequest,
+                        false,
+                        creatorIntentAlignmentService.buildReviewReminder(reviewResult)
+                );
+                completeStepSuccess(
+                        sessionRecord,
+                        currentStep,
+                        "主 Agent 已基于用户原话完成一次重答。",
+                        suggestionCandidate.rawOutput()
+                );
+
+                currentStep = startStep(
+                        sessionRecord,
+                        CreatorWorkflowStepType.LLM_CALL,
+                        "复查重答后的发布方案",
+                        "确认最终候选没有继续偏离用户原话。"
+                );
+                CreatorIntentReviewResult retryReview = reviewCandidateInWorkflowStep(
+                        sessionRecord,
+                        currentStep,
+                        intentContext,
+                        suggestionCandidate.rawOutput()
+                );
+                completeStepSuccess(
+                        sessionRecord,
+                        currentStep,
+                        retryReview.deviated() ? "重答后仍有偏离，停止保存并向用户问清楚。" : "重答后的方案已通过偏离检查。",
+                        creatorIntentAlignmentService.buildReviewReminder(retryReview)
+                );
+                currentStep = null;
+                if (retryReview.deviated() && !retryReview.issues().isEmpty()) {
+                    stopPlanAfterRepeatedDeviation(sessionRecord, retryReview);
+                }
             }
 
             currentStep = startStep(
@@ -485,6 +669,7 @@ public class CreatorWorkflowService {
                     "保存建议结果消息",
                     "把结构化建议挂到当前工作流会话，等待用户确认。"
             );
+            CreatorSuggestionResponse suggestionResponse = prePublishSuggestionService.saveSuggestion(suggestionCandidate);
             appendAndPublishMessage(
                     sessionRecord.getTaskId(),
                     sessionRecord.getSessionId(),
@@ -500,6 +685,16 @@ public class CreatorWorkflowService {
                     "建议结果消息已保存，suggestionId=" + suggestionResponse.suggestionId(),
                     null
             );
+            currentStep = null;
+
+            int nextGenerationCount = successfulGenerationCount + 1;
+            creatorWorkflowMapper.updatePlanGenerationState(
+                    sessionRecord.getSessionId(),
+                    planContextHash,
+                    nextGenerationCount
+            );
+            sessionRecord.setPlanContextHash(planContextHash);
+            sessionRecord.setPlanGenerationCount(nextGenerationCount);
 
             updateSessionStatus(
                     sessionRecord.getTaskId(),
@@ -516,6 +711,9 @@ public class CreatorWorkflowService {
             );
             return suggestionResponse;
         } catch (RuntimeException exception) {
+            if (exception instanceof PlanClarificationRequiredException) {
+                throw exception;
+            }
             if (currentStep != null) {
                 completeStepFailure(sessionRecord, currentStep, exception);
             }
@@ -823,6 +1021,7 @@ public class CreatorWorkflowService {
         sessionRecord.setStage(CreatorWorkflowStage.PRE_PUBLISH.name());
         sessionRecord.setStatus(CreatorWorkflowStatus.CONTEXT_LOADING.name());
         sessionRecord.setUserId(normalizeUserId(request == null ? null : request.userId(), taskRecord.getUserId()));
+        sessionRecord.setPlanGenerationCount(0);
         creatorWorkflowMapper.insertSession(sessionRecord);
 
         appendPrePublishContextMessages(sessionRecord.getSessionId(), taskRecord, materials);
@@ -903,33 +1102,24 @@ public class CreatorWorkflowService {
      * <p>
      * 合并后的指导内容截断到 {@link #WORKFLOW_GUIDANCE_MAX_LENGTH}，防止提示词过长。
      */
-    private PrePublishAnalyzeRequest mergeWorkflowGuidance(String sessionId, PrePublishAnalyzeRequest request) {
+    private PrePublishAnalyzeRequest mergeWorkflowGuidance(PrePublishAnalyzeRequest request,
+                                                            CreatorIntentAlignmentContext intentContext) {
         PrePublishAnalyzeRequest safeRequest = request == null
                 ? new PrePublishAnalyzeRequest(null, null, null, null, null, null)
                 : request;
-        StringBuilder builder = new StringBuilder();
+        StringBuilder builder = new StringBuilder("用户已经提供并完成对齐的补充上下文：\n")
+                .append(intentContext.planContext())
+                .append("\n");
         if (TextUtil.hasText(safeRequest.customGuidance())) {
-            builder.append(safeRequest.customGuidance().trim()).append("\n");
-        }
-
-        List<String> userMessages = creatorWorkflowMapper.listMessages(sessionId)
-                .stream()
-                .filter(message -> CreatorWorkflowMessageRole.USER.name().equals(message.getRole()))
-                .map(CreatorWorkflowMessageRecord::getContent)
-                .filter(TextUtil::hasText)
-                .map(String::trim)
-                .toList();
-        if (!userMessages.isEmpty()) {
-            builder.append("\n工作流补充要求（来自用户主动输入的消息）：\n");
-            for (String userMessage : userMessages) {
-                builder.append("- ").append(userMessage).append("\n");
-            }
+            builder.append("\n本次界面额外指导：\n")
+                    .append(safeRequest.customGuidance().trim())
+                    .append("\n");
         }
 
         String mergedGuidance = TextUtil.trimToNull(TextUtil.abbreviateWithSuffix(
                 builder.toString(),
-                WORKFLOW_GUIDANCE_MAX_LENGTH,
-                "\n[工作流补充要求过长，已截断]"
+                PLAN_GUIDANCE_MAX_LENGTH,
+                "\n[用户上下文过长，已截断用于发布方案生成]"
         ));
         return new PrePublishAnalyzeRequest(
                 mergedGuidance,
@@ -942,6 +1132,230 @@ public class CreatorWorkflowService {
     }
 
     /**
+     * 统一整理主 Agent、审查 Agent 和发布方案生成器读取的用户上下文。
+     * 系统提示词不会写入这里，也不会进入消息历史，避免后续轮次把系统规则当成用户事实。
+     */
+    private CreatorIntentAlignmentContext buildIntentAlignmentContext(CreatorWorkflowSessionRecord sessionRecord,
+                                                                       List<CreatorMaterialRecord> materials) {
+        StringBuilder sourceBuilder = new StringBuilder();
+        StringBuilder planBuilder = new StringBuilder();
+        InteractiveSessionRecord interactiveSession = creatorInteractiveMapper
+                .findSessionByTaskId(sessionRecord.getTaskId())
+                .orElse(null);
+        if (interactiveSession != null) {
+            sourceBuilder.append("【用户最初的创作想法】\n")
+                    .append(TextUtil.trimToDefault(interactiveSession.getIdea(), "（未记录）"))
+                    .append("\n\n【用户选择的视频类型】\n")
+                    .append(TextUtil.trimToDefault(interactiveSession.getVideoType(), "未分类"))
+                    .append("\n");
+            // 最初想法已经作为任务材料进入发布方案生成器，这里只补它拿不到的视频类型和背景资料。
+            planBuilder.append("【用户选择的视频类型】\n")
+                    .append(TextUtil.trimToDefault(interactiveSession.getVideoType(), "未分类"))
+                    .append("\n");
+            if (TextUtil.hasText(interactiveSession.getBackgroundContext())) {
+                String backgroundContext = TextUtil.abbreviateWithSuffix(
+                        interactiveSession.getBackgroundContext().trim(),
+                        PLAN_GUIDANCE_MAX_LENGTH,
+                        "\n[补充资料过长，已截断]"
+                );
+                sourceBuilder.append("\n【用户主动提供的补充资料】\n")
+                        .append(backgroundContext)
+                        .append("\n");
+                planBuilder.append("\n【用户主动提供的补充资料】\n")
+                        .append(backgroundContext)
+                        .append("\n");
+            }
+        } else {
+            CreatorTaskRecord taskRecord = getTaskRecord(sessionRecord.getTaskId());
+            sourceBuilder.append("【任务名称】\n")
+                    .append(TextUtil.trimToDefault(taskRecord.getTaskName(), "未命名任务"))
+                    .append("\n\n【视频类型】\n")
+                    .append(TextUtil.trimToDefault(taskRecord.getVideoType(), "未分类"))
+                    .append("\n");
+            planBuilder.append(sourceBuilder);
+        }
+
+        sourceBuilder.append("\n【任务材料】\n");
+        for (CreatorMaterialRecord material : materials) {
+            String content = TextUtil.trimToNull(material.getContent());
+            if (content == null) {
+                continue;
+            }
+            // 交互式会话已经保留用户最初想法时，不再重复塞入自动生成的同一份想法材料。
+            if (interactiveSession != null && content.startsWith("【用户原始创作想法】")) {
+                continue;
+            }
+            sourceBuilder.append("- ")
+                    .append(toChineseMaterialName(material.getMaterialType()))
+                    .append("：\n")
+                    .append(TextUtil.abbreviateWithSuffix(
+                            content,
+                            INTENT_MATERIAL_MAX_LENGTH,
+                            "\n[材料过长，已截断]"
+                    ))
+                    .append("\n");
+        }
+
+        List<String> userMessages = creatorWorkflowMapper.listMessages(sessionRecord.getSessionId())
+                .stream()
+                .filter(message -> CreatorWorkflowMessageRole.USER.name().equals(message.getRole()))
+                .map(CreatorWorkflowMessageRecord::getContent)
+                .filter(TextUtil::hasText)
+                .map(String::trim)
+                .toList();
+        if (!userMessages.isEmpty()) {
+            sourceBuilder.append("\n【用户后续补充的原话，按时间顺序】\n");
+            planBuilder.append("\n【用户后续补充的原话，按时间顺序】\n");
+            for (String userMessage : userMessages) {
+                sourceBuilder.append("- ").append(userMessage).append("\n");
+                planBuilder.append("- ").append(userMessage).append("\n");
+            }
+        }
+
+        return new CreatorIntentAlignmentContext(
+                TextUtil.abbreviateWithSuffix(
+                        sourceBuilder.toString().trim(),
+                        INTENT_SOURCE_MAX_LENGTH,
+                        "\n[对齐上下文过长，已截断]"
+                ),
+                TextUtil.abbreviateWithSuffix(
+                        planBuilder.toString().trim(),
+                        PLAN_GUIDANCE_MAX_LENGTH,
+                        "\n[发布方案上下文过长，已截断]"
+                )
+        );
+    }
+
+    /**
+     * 同一份用户上下文和界面参数生成稳定哈希，只有它们都没变时才累计重试次数。
+     */
+    static String buildPlanContextHash(CreatorIntentAlignmentContext context,
+                                       PrePublishAnalyzeRequest request) {
+        String source = String.join("\u001f",
+                TextUtil.trimToDefault(context.sourceContext(), ""),
+                TextUtil.trimToDefault(request.customGuidance(), ""),
+                TextUtil.trimToDefault(request.creatorPreference(), ""),
+                TextUtil.trimToDefault(request.titleStyle(), ""),
+                TextUtil.trimToDefault(request.extraRequirement(), ""),
+                TextUtil.trimToDefault(request.preferenceMode(), ""),
+                TextUtil.trimToDefault(request.analysisStrategy(), "")
+        );
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(source.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            // Java 运行时必须提供 SHA-256；如果环境损坏，直接暴露错误，不能用不稳定哈希绕过门禁。
+            throw new IllegalStateException("当前 Java 环境不支持 SHA-256", exception);
+        }
+    }
+
+    static int resolveSuccessfulGenerationCount(CreatorWorkflowSessionRecord sessionRecord,
+                                                String contextHash) {
+        if (!contextHash.equals(sessionRecord.getPlanContextHash())) {
+            return 0;
+        }
+        return Math.max(0, sessionRecord.getPlanGenerationCount() == null
+                ? 0
+                : sessionRecord.getPlanGenerationCount());
+    }
+
+    private CreatorIntentReviewResult reviewCandidateInWorkflowStep(CreatorWorkflowSessionRecord sessionRecord,
+                                                                     CreatorWorkflowStepRecord stepRecord,
+                                                                     CreatorIntentAlignmentContext context,
+                                                                     String candidate) {
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.openWorkflowStep(
+                sessionRecord.getTaskId(),
+                sessionRecord.getSessionId(),
+                stepRecord.getStepId(),
+                stepRecord.getStepName(),
+                sessionRecord.getStage(),
+                "创作意图偏离审查"
+        )) {
+            return creatorIntentAlignmentService.review(context, candidate);
+        }
+    }
+
+    /**
+     * 达到三次门禁后让主 Agent 先问清楚分歧，并把会话放回等待用户输入状态。
+     */
+    private void stopPlanGenerationAndAskForClarification(CreatorWorkflowSessionRecord sessionRecord,
+                                                           CreatorIntentAlignmentContext context) {
+        CreatorWorkflowStepRecord stepRecord = startStep(
+                sessionRecord,
+                CreatorWorkflowStepType.AGENT_REASONING,
+                "停止重复生成并追问分歧",
+                "同一上下文已经成功生成三次发布方案，本轮禁止继续生成。"
+        );
+        try {
+            CreatorIntentAlignmentOutput output;
+            try (LlmUsageContext.UsageScope ignored = LlmUsageContext.openWorkflowStep(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    stepRecord.getStepId(),
+                    stepRecord.getStepName(),
+                    sessionRecord.getStage(),
+                    "发布方案三次门禁澄清"
+            )) {
+                output = creatorIntentAlignmentService.clarifyAfterPlanLimit(context);
+            }
+            String content = creatorIntentAlignmentService.render(output);
+            completeStepSuccess(sessionRecord, stepRecord, "已停止重复生成并提出具体问题。", content);
+            appendAndPublishMessage(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowMessageRole.AGENT,
+                    content,
+                    CreatorWorkflowMessageContentType.TEXT,
+                    DETAIL_REF_TYPE_INTENT_ALIGNMENT,
+                    null
+            );
+            updateSessionStatus(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowStatus.WAITING_USER_INPUT,
+                    null
+            );
+        } catch (RuntimeException exception) {
+            completeStepFailure(sessionRecord, stepRecord, exception);
+            updateSessionStatus(
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    CreatorWorkflowStatus.FAILED,
+                    TextUtil.trimToDefault(exception.getMessage(), "发布方案重试门禁澄清失败")
+            );
+            throw exception;
+        }
+    }
+
+    /**
+     * 发布方案重答后仍偏离时不保存候选，转回想法对齐等待用户补充。
+     */
+    private void stopPlanAfterRepeatedDeviation(CreatorWorkflowSessionRecord sessionRecord,
+                                                CreatorIntentReviewResult reviewResult) {
+        String content = creatorIntentAlignmentService.render(
+                creatorIntentAlignmentService.clarifyDeviation(reviewResult)
+        );
+        appendAndPublishMessage(
+                sessionRecord.getTaskId(),
+                sessionRecord.getSessionId(),
+                CreatorWorkflowMessageRole.AGENT,
+                content,
+                CreatorWorkflowMessageContentType.TEXT,
+                DETAIL_REF_TYPE_INTENT_ALIGNMENT,
+                null
+        );
+        creatorInteractiveMapper.markIntentAlignmentPending(sessionRecord.getTaskId());
+        updateSessionStatus(
+                sessionRecord.getTaskId(),
+                sessionRecord.getSessionId(),
+                CreatorWorkflowStatus.WAITING_USER_INPUT,
+                null
+        );
+        throw new PlanClarificationRequiredException("发布方案重答后仍未对齐，请先回答 AI 的具体问题。");
+    }
+
+    /**
      * 在 LLM Token 用量追踪上下文中生成发布前优化建议。
      * <p>
      * 使用 try-with-resources 自动管理 {@link LlmUsageContext.UsageScope}，
@@ -949,10 +1363,21 @@ public class CreatorWorkflowService {
      * agentMode=true 走 Agent 推理路径（结构化的多步 ReAct），
      * agentMode=false 走直连 LLM 路径（一次 chat 调用返回建议 JSON）。
      */
-    private CreatorSuggestionResponse generateSuggestionInWorkflowStep(CreatorWorkflowSessionRecord sessionRecord,
-                                                                       CreatorWorkflowStepRecord stepRecord,
-                                                                       PrePublishAnalyzeRequest request,
-                                                                       boolean agentMode) {
+    private PrePublishSuggestionCandidate generateSuggestionInWorkflowStep(CreatorWorkflowSessionRecord sessionRecord,
+                                                                           CreatorWorkflowStepRecord stepRecord,
+                                                                           PrePublishAnalyzeRequest request,
+                                                                           boolean agentMode) {
+        return generateSuggestionInWorkflowStep(sessionRecord, stepRecord, request, agentMode, null);
+    }
+
+    /**
+     * 偏离提醒作为内部控制信息单独传递，不能拼进用户的 customGuidance。
+     */
+    private PrePublishSuggestionCandidate generateSuggestionInWorkflowStep(CreatorWorkflowSessionRecord sessionRecord,
+                                                                           CreatorWorkflowStepRecord stepRecord,
+                                                                           PrePublishAnalyzeRequest request,
+                                                                           boolean agentMode,
+                                                                           String deviationReminder) {
         String scene = agentMode ? "发布前优化 Agent 推理" : "发布前优化 LLM 回退";
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.openWorkflowStep(
                 sessionRecord.getTaskId(),
@@ -963,9 +1388,16 @@ public class CreatorWorkflowService {
                 scene
         )) {
             if (agentMode) {
-                return prePublishSuggestionService.generateSuggestionByAgent(sessionRecord.getTaskId(), request);
+                return prePublishSuggestionService.generateSuggestionCandidateByAgent(
+                        sessionRecord.getTaskId(),
+                        request
+                );
             }
-            return prePublishSuggestionService.generateSuggestion(sessionRecord.getTaskId(), request);
+            return prePublishSuggestionService.generateSuggestionCandidate(
+                    sessionRecord.getTaskId(),
+                    request,
+                    deviationReminder
+            );
         }
     }
 
@@ -1281,6 +1713,7 @@ public class CreatorWorkflowService {
         return payload(
                 "status", sessionRecord.getStatus(),
                 "confirmedResultId", sessionRecord.getConfirmedResultId(),
+                "planGenerationCount", sessionRecord.getPlanGenerationCount(),
                 "errorMessage", sessionRecord.getErrorMessage()
         );
     }
@@ -1378,6 +1811,37 @@ public class CreatorWorkflowService {
         }
     }
 
+    private void ensureCanAlignIntent(CreatorWorkflowSessionRecord sessionRecord) {
+        if (!CreatorWorkflowStage.PRE_PUBLISH.name().equals(sessionRecord.getStage())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前工作流会话不是发布前优化阶段");
+        }
+        if (CreatorWorkflowStatus.RUNNING.name().equals(sessionRecord.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前工作流正在运行，请稍后再继续对齐");
+        }
+        if (CreatorWorkflowStatus.CONFIRMED.name().equals(sessionRecord.getStatus())
+                || CreatorWorkflowStatus.CANCELLED.name().equals(sessionRecord.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前工作流会话已经结束，不能继续对齐");
+        }
+    }
+
+    /**
+     * 新对齐流程必须先让主 Agent 回应最新用户原话；历史方向卡任务不套用这条新门禁。
+     */
+    private void ensureIntentReadyForPlan(CreatorWorkflowSessionRecord sessionRecord) {
+        InteractiveSessionRecord interactiveSession = creatorInteractiveMapper
+                .findSessionByTaskId(sessionRecord.getTaskId())
+                .orElse(null);
+        if (interactiveSession == null || !"INTENT_ALIGNMENT".equals(interactiveSession.getStatus())) {
+            return;
+        }
+        if (!"READY".equals(interactiveSession.getUnderstandingStatus())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "用户补充了新信息，请先完成本轮想法对齐再生成发布方案。"
+            );
+        }
+    }
+
     /**
      * 状态前置校验：分析操作的状态守卫。
      * <ul>
@@ -1399,6 +1863,16 @@ public class CreatorWorkflowService {
         }
         if (CreatorWorkflowStatus.CANCELLED.name().equals(sessionRecord.getStatus())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前工作流会话不可继续分析");
+        }
+    }
+
+    /**
+     * 这是正常的业务分支，不应被统一异常处理改成 FAILED 状态。
+     */
+    private static final class PlanClarificationRequiredException extends ResponseStatusException {
+
+        private PlanClarificationRequiredException(String reason) {
+            super(HttpStatus.CONFLICT, reason);
         }
     }
 
@@ -1491,6 +1965,7 @@ public class CreatorWorkflowService {
                 record.getStatus(),
                 record.getUserId(),
                 record.getConfirmedResultId(),
+                record.getPlanGenerationCount() == null ? 0 : record.getPlanGenerationCount(),
                 record.getErrorMessage(),
                 record.getCreateTime(),
                 record.getUpdateTime(),

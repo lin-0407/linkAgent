@@ -224,6 +224,7 @@ public class AgentAnswerSynthesizer {
                         每个事实性 statement 必须引用 evidenceIds；没有证据时不要输出该事实。
                         可以基于证据给建议，但要避免把 Worker 推理当成外部事实。
                         若证据不足，请在 limitations 中说明。
+                        text 要像正常交流，先说结论，保持简短；除非用户要求，不要写报告式标题或多层编号。
 
                         【上一轮审查反馈】
                         %s
@@ -526,11 +527,7 @@ public class AgentAnswerSynthesizer {
     }
 
     /**
-     * 将结构化 CitedAnswer 渲染为用户可读的纯文本格式。
-     * <p>
-     * <b>输出格式：</b>每条 statement 以 "- " 开头，后附 [evidenceId1, evidenceId2] 引用标记——
-     * 用户可以通过引用 ID 追溯到具体数据来源。无引用的 statement 标记为 [未找到依据]。
-     * limitations 和审查提示分别放在末尾，提醒用户当前答案的约束条件。
+     * 将结构化答案渲染成自然短文本，证据编号保留在句末供用户追溯。
      *
      * @param answer      LLM 生成的带引用答案
      * @param auditReport 最终审查报告（可能为 null 或 passed）
@@ -544,27 +541,27 @@ public class AgentAnswerSynthesizer {
         if (answer.statements().isEmpty()) {
             builder.append("没有找到足够依据，无法可靠回答。");
         } else {
-            for (CitedStatement statement : answer.statements()) {
-                builder.append("- ")
-                        .append(statement.text());
-                if (statement.evidenceIds().isEmpty()) {
-                    builder.append(" [未找到依据]");
-                } else {
-                    builder.append(" [")
-                            .append(String.join(", ", statement.evidenceIds()))
-                            .append("]");
+            for (int index = 0; index < answer.statements().size(); index++) {
+                CitedStatement statement = answer.statements().get(index);
+                if (index > 0) {
+                    builder.append("\n\n");
                 }
-                builder.append("\n");
+                builder.append(statement.text());
+                if (statement.evidenceIds().isEmpty()) {
+                    builder.append("（暂无可引用依据）");
+                } else {
+                    builder.append("（依据：")
+                            .append(String.join(", ", statement.evidenceIds()))
+                            .append("）");
+                }
             }
         }
         if (!answer.limitations().isEmpty()) {
-            builder.append("\n依据限制：\n");
-            for (String limitation : answer.limitations()) {
-                builder.append("- ").append(limitation).append("\n");
-            }
+            builder.append("\n\n补充说明：")
+                    .append(String.join("；", answer.limitations()));
         }
         if (auditReport != null && !auditReport.passed()) {
-            builder.append("\n审查提示：")
+            builder.append("\n\n这份回答仍有未完全解决的问题：")
                     .append(TextUtil.trimToDefault(auditReport.overallComment(), "答案审查未完全通过。"));
         }
         return TextUtil.trimToDefault(builder.toString(), "合成器没有返回有效回答。");

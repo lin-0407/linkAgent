@@ -82,7 +82,7 @@ export type InteractiveTask = {
   backgroundContext: string | null
   /** AI 对创作者想法的理解摘要 */
   understandingSummary: string | null
-  /** 理解确认状态：NONE / UNDERSTANDING / READY / CONFIRMED */
+  /** 理解状态：NONE / UNDERSTANDING / PENDING / READY / CONFIRMED */
   understandingStatus: string
   createTime: string
   updateTime: string
@@ -366,6 +366,7 @@ export type CreatorWorkflowSession = {
   status: CreatorWorkflowStatus
   userId: string
   confirmedResultId: string | null
+  planGenerationCount: number
   errorMessage: string | null
   createTime: string
   updateTime: string

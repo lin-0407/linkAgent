@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import type { Ref } from 'vue'
 import {
+  alignPrePublishIntent,
   analyzePrePublishWorkflow,
   confirmWorkflowPrePublishSuggestion,
   generatePrePublishManuscriptDraft,
@@ -10,6 +11,7 @@ import {
   sendWorkflowMessage,
   startPrePublishWorkflow,
 } from '@/api/creator'
+import { ApiError } from '@/api/http'
 import {
   isPrePublishSuggestionVisible,
   isWorkflowStatus,
@@ -55,12 +57,14 @@ export function useCreatorWorkflow(
   const workflowMessageModalOpen = ref(false)
   const isLoadingWorkflow = ref(false)
   const isSendingWorkflowMessage = ref(false)
+  const isAligningIntent = ref(false)
   const isAnalyzingPrePublish = ref(false)
   const isConfirmingPrePublish = ref(false)
   const isGeneratingPrePublishDraft = ref(false)
 
   const isWorkflowCommandRunning = computed(() =>
     isSendingWorkflowMessage.value ||
+    isAligningIntent.value ||
     isAnalyzingPrePublish.value ||
     isConfirmingPrePublish.value ||
     isGeneratingPrePublishDraft.value,
@@ -171,7 +175,7 @@ export function useCreatorWorkflow(
         upsertWorkflowMessage(message)
         syncWorkflowSelection()
       },
-      onSessionStatus: (status, confirmedResultId, eventErrorMessage) => {
+      onSessionStatus: (status, confirmedResultId, eventErrorMessage, planGenerationCount) => {
         if (!isCurrentSession(taskId, sessionId, version) || !workflowSession.value) return
         const nextStatus = status ?? null
         workflowSession.value = {
@@ -179,6 +183,8 @@ export function useCreatorWorkflow(
           status: isWorkflowStatus(nextStatus) ? nextStatus : workflowSession.value.status,
           confirmedResultId:
             (confirmedResultId ?? workflowSession.value.confirmedResultId) ?? null,
+          planGenerationCount:
+            planGenerationCount ?? workflowSession.value.planGenerationCount,
           errorMessage: eventErrorMessage ?? null,
         }
         if (status === 'WAITING_CONFIRMATION' || status === 'CONFIRMED') {
@@ -278,6 +284,7 @@ export function useCreatorWorkflow(
       workflowSession.value = {
         ...workflowSession.value!,
         status: 'WAITING_USER_INPUT',
+        planGenerationCount: 0,
       }
       syncWorkflowSelection(result.message.messageId)
       await refreshWorkflow()
@@ -287,6 +294,31 @@ export function useCreatorWorkflow(
       return null
     } finally {
       if (requestVersion === version) isGeneratingPrePublishDraft.value = false
+    }
+  }
+
+  async function alignIntent(): Promise<CreatorWorkflowMessage | null> {
+    const taskId = selectedTaskId.value
+    const sessionId = workflowSession.value?.sessionId
+    if (!taskId || !sessionId || isWorkflowCommandRunning.value) return null
+    const version = requestVersion
+    isAligningIntent.value = true
+    errorRef.value = ''
+    try {
+      const message = await alignPrePublishIntent(taskId, sessionId)
+      if (!isCurrentSession(taskId, sessionId, version)) return null
+      upsertWorkflowMessage(message)
+      workflowSession.value = {
+        ...workflowSession.value!,
+        status: 'WAITING_USER_INPUT',
+      }
+      syncWorkflowSelection(message.messageId)
+      return message
+    } catch (error) {
+      if (isCurrentSession(taskId, sessionId, version)) showError(error)
+      return null
+    } finally {
+      if (requestVersion === version) isAligningIntent.value = false
     }
   }
 
@@ -301,11 +333,22 @@ export function useCreatorWorkflow(
       const result = await analyzePrePublishWorkflow(taskId, sessionId, payload)
       if (!isCurrentSession(taskId, sessionId, version)) return null
       suggestion.value = result
-      workflowSession.value = { ...workflowSession.value!, status: 'WAITING_CONFIRMATION' }
+      workflowSession.value = {
+        ...workflowSession.value!,
+        status: 'WAITING_CONFIRMATION',
+        planGenerationCount: workflowSession.value!.planGenerationCount + 1,
+      }
       await refreshWorkflow()
       return isCurrentSession(taskId, sessionId, version) ? result : null
     } catch (error) {
-      if (isCurrentSession(taskId, sessionId, version)) showError(error)
+      if (isCurrentSession(taskId, sessionId, version)) {
+        if (error instanceof ApiError && error.status === 409) {
+          errorRef.value = ''
+          await refreshWorkflow()
+        } else {
+          showError(error)
+        }
+      }
       return null
     } finally {
       if (requestVersion === version) isAnalyzingPrePublish.value = false
@@ -335,10 +378,10 @@ export function useCreatorWorkflow(
     }
   }
 
-  async function sendSupplement(): Promise<CreatorWorkflowMessage | null> {
+  async function sendSupplement(contentOverride?: string): Promise<CreatorWorkflowMessage | null> {
     const taskId = selectedTaskId.value
     const sessionId = workflowSession.value?.sessionId
-    const content = workflowMessageDraft.value.trim()
+    const content = (contentOverride ?? workflowMessageDraft.value).trim()
     if (!taskId || !sessionId || !content || !canSendWorkflowMessage.value) return null
     const version = requestVersion
     isSendingWorkflowMessage.value = true
@@ -353,6 +396,7 @@ export function useCreatorWorkflow(
       workflowSession.value = {
         ...session,
         status: 'WAITING_USER_INPUT',
+        planGenerationCount: 0,
       }
       syncWorkflowSelection(message.messageId)
       return message
@@ -361,6 +405,15 @@ export function useCreatorWorkflow(
       return null
     } finally {
       if (requestVersion === version) isSendingWorkflowMessage.value = false
+    }
+  }
+
+  function markIntentPending() {
+    if (!workflowSession.value) return
+    workflowSession.value = {
+      ...workflowSession.value,
+      status: 'WAITING_USER_INPUT',
+      planGenerationCount: 0,
     }
   }
 
@@ -377,6 +430,7 @@ export function useCreatorWorkflow(
     suggestion.value = null
     isLoadingWorkflow.value = false
     isSendingWorkflowMessage.value = false
+    isAligningIntent.value = false
     isAnalyzingPrePublish.value = false
     isConfirmingPrePublish.value = false
     isGeneratingPrePublishDraft.value = false
@@ -392,11 +446,11 @@ export function useCreatorWorkflow(
     workflowSession, workflowMessages, workflowSteps,
     workflowMessageDraft, selectedWorkflowMessageId, suggestion,
     workflowMessageModalOpen, workflowSseText,
-    isLoadingWorkflow, isSendingWorkflowMessage,
+    isLoadingWorkflow, isSendingWorkflowMessage, isAligningIntent,
     isAnalyzingPrePublish, isConfirmingPrePublish, isGeneratingPrePublishDraft,
     canSendWorkflowMessage, canRunPrePublishAnalyze, canConfirmPrePublish,
     selectedWorkflowMessage, workflowStatusText,
-    loadWorkflow, refreshWorkflow, generateDraft, runAnalyze,
-    confirmSuggestion, sendSupplement, resetWorkflowState, disconnect,
+    loadWorkflow, refreshWorkflow, generateDraft, alignIntent, runAnalyze,
+    confirmSuggestion, sendSupplement, markIntentPending, resetWorkflowState, disconnect,
   }
 }

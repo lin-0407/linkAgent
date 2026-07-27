@@ -84,6 +84,10 @@ export function createInteractiveTask(payload: InteractiveTaskCreatePayload) {
   return post<InteractiveTask>('/creator/interactive/tasks', cleanPayload(payload))
 }
 
+export function getInteractiveTask(taskId: string) {
+  return get<InteractiveTask>(`/creator/interactive/tasks/${encodeURIComponent(taskId)}`)
+}
+
 export function regenerateCreativeOptions(
   taskId: string,
   payload: CreativeOptionsRegeneratePayload = {},
@@ -197,6 +201,12 @@ export function sendWorkflowMessage(
   return post<CreatorWorkflowMessage>(
     `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/messages`,
     cleanPayload(payload),
+  )
+}
+
+export function alignPrePublishIntent(taskId: string, sessionId: string) {
+  return post<CreatorWorkflowMessage>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/align`,
   )
 }
 

@@ -61,10 +61,11 @@ public class AgentAnswerAuditor {
                 %s
 
                 请检查：
-                1. 是否回答完用户问题。
-                2. 是否存在自相矛盾。
-                3. 是否存在没有证据 id 的事实性断言。
-                4. 是否把 Worker 推理当成外部事实。
+                1. 是否曲解、缩窄或擅自扩展了用户问题。
+                2. 是否回答完用户真正要求的内容。
+                3. 是否存在自相矛盾。
+                4. 是否存在没有证据 id 的事实性断言。
+                5. 是否把 Worker 推理当成外部事实。
                 """.formatted(
                 TextUtil.trimToDefault(userMessage, "（用户请求为空）"),
                 answer == null ? "（候选回答为空）" : answer.toString(),

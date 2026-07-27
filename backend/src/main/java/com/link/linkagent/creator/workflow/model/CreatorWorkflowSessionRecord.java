@@ -15,6 +15,8 @@ public class CreatorWorkflowSessionRecord {
     private String status;
     private String userId;
     private String confirmedResultId;
+    private String planContextHash;
+    private Integer planGenerationCount;
     private String errorMessage;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
@@ -73,6 +75,22 @@ public class CreatorWorkflowSessionRecord {
 
     public void setConfirmedResultId(String confirmedResultId) {
         this.confirmedResultId = confirmedResultId;
+    }
+
+    public String getPlanContextHash() {
+        return planContextHash;
+    }
+
+    public void setPlanContextHash(String planContextHash) {
+        this.planContextHash = planContextHash;
+    }
+
+    public Integer getPlanGenerationCount() {
+        return planGenerationCount;
+    }
+
+    public void setPlanGenerationCount(Integer planGenerationCount) {
+        this.planGenerationCount = planGenerationCount;
     }
 
     public String getErrorMessage() {

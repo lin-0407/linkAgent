@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * 带证据引用的结构化最终回答。
  * <p>
- * 先让模型输出结构化对象，再渲染成 Markdown，是为了让审查器能逐句检查引用是否存在。
+ * 先让模型输出结构化对象，再渲染成自然文本，是为了让审查器能逐句检查引用是否存在。
  */
 public record CitedAnswer(
         List<CitedStatement> statements,

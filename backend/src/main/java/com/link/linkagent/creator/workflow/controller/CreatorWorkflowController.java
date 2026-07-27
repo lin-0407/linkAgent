@@ -125,6 +125,20 @@ public class CreatorWorkflowController {
         return creatorWorkflowService.sendMessage(taskId, sessionId, request);
     }
 
+    @PostMapping("/sessions/{sessionId}/pre-publish/align")
+    public CreatorWorkflowMessageResponse alignPrePublishIntent(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            String taskId,
+
+            @PathVariable
+            @NotBlank(message = "工作流会话ID不能为空")
+            @Size(max = 64, message = "工作流会话ID长度不能超过64个字符")
+            String sessionId) {
+        return creatorWorkflowService.alignPrePublishIntent(taskId, sessionId);
+    }
+
     @PostMapping("/sessions/{sessionId}/pre-publish/analyze")
     public CreatorSuggestionResponse analyzePrePublishWorkflow(
             @PathVariable

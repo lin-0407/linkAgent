@@ -45,6 +45,7 @@ export interface WorkflowSseHandlers {
     status: string | undefined,
     confirmedResultId: string | undefined,
     errorMessage: string | undefined,
+    planGenerationCount: number | undefined,
   ) => void
   onResultReady?: (taskId: string) => void
   onHeartbeat?: () => void
@@ -147,6 +148,7 @@ export function useWorkflowSSE() {
           readStringField(payload, 'status'),
           readStringField(payload, 'confirmedResultId'),
           readStringField(payload, 'errorMessage'),
+          readNumberField(payload, 'planGenerationCount'),
         )
       },
       result_ready: (payload) => {
@@ -294,6 +296,12 @@ function readStringField(obj: unknown, key: string): string | undefined {
     return typeof value === 'string' ? value : undefined
   }
   return undefined
+}
+
+function readNumberField(obj: unknown, key: string): number | undefined {
+  if (!obj || typeof obj !== 'object') return undefined
+  const value = (obj as Record<string, unknown>)[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 /**

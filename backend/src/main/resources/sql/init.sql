@@ -172,13 +172,13 @@ CREATE TABLE IF NOT EXISTS creator_interactive_session
     user_id            VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识，第一版沿用默认用户便于本地演示',
     idea               TEXT         NOT NULL COMMENT '用户输入的原始创作想法，用于后续复盘 AI 是否偏离需求',
     video_type         VARCHAR(64)  NOT NULL DEFAULT '未分类' COMMENT '用户选择或系统兜底的视频类型，用于后续语境库检索',
-    status             VARCHAR(32)  NOT NULL DEFAULT 'IDEA_INPUT' COMMENT '会话状态：IDEA_INPUT=等待输入，CREATIVE_GENERATING=生成中，CREATIVE_OPTIONS_READY=待选择，CREATIVE_CONFIRMED=已确认',
+    status             VARCHAR(32)  NOT NULL DEFAULT 'IDEA_INPUT' COMMENT '会话状态：IDEA_INPUT=等待输入，INTENT_ALIGNMENT=新想法对齐流程，CREATIVE_GENERATING/CREATIVE_OPTIONS_READY/CREATIVE_CONFIRMED=旧方向卡流程',
     selected_option_id VARCHAR(64)           DEFAULT NULL COMMENT '用户最终确认的创意卡片 ID，未确认时为空',
     raw_output         LONGTEXT              DEFAULT NULL COMMENT 'LLM 生成创意卡片的原始输出，用于失败回放和人工检查',
     parse_status       VARCHAR(32)  NOT NULL DEFAULT 'PENDING' COMMENT '解析状态：PENDING=未生成，PARSED=已解析，RAW_ONLY=仅保存原文并使用兜底卡片',
     background_context LONGTEXT              DEFAULT NULL COMMENT '用户上传的补充背景资料（从文档中提取的纯文本，可累积追加多个文件的内容）',
     understanding_summary TEXT                DEFAULT NULL COMMENT 'AI 对用户创作想法的理解摘要，用于用户在生成方向卡前核验 AI 是否准确理解了创作意图',
-    understanding_status VARCHAR(32) NOT NULL DEFAULT 'NONE' COMMENT '理解确认状态：NONE=未开始，UNDERSTANDING=生成中，READY=待用户确认，CONFIRMED=用户已确认',
+    understanding_status VARCHAR(32) NOT NULL DEFAULT 'NONE' COMMENT '理解状态：NONE=未开始，UNDERSTANDING=生成中，PENDING=用户上下文已变化，READY=当前理解已更新，CONFIRMED=旧方向卡流程已确认',
     create_time        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted         TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
@@ -523,6 +523,8 @@ CREATE TABLE IF NOT EXISTS creator_workflow_session
     status               VARCHAR(32)  NOT NULL DEFAULT 'CREATED' COMMENT '会话状态：CREATED=已创建，CONTEXT_LOADING=正在装载任务材料，WAITING_USER_INPUT=等待用户补充输入，RUNNING=Agent正在分析，WAITING_CONFIRMATION=等待用户确认结果，CONFIRMED=用户已确认，FAILED=执行失败，CANCELLED=用户已取消',
     user_id              VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '用户标识',
     confirmed_result_id  VARCHAR(64)           DEFAULT NULL COMMENT '用户确认后的结果 ID，用于记录采用的发布前建议',
+    plan_context_hash    VARCHAR(64)           DEFAULT NULL COMMENT '最近一次成功生成发布方案时的上下文哈希，用于区分重复生成和用户真实补充',
+    plan_generation_count INT         NOT NULL DEFAULT 0 COMMENT '同一上下文下已成功生成发布方案的次数，达到3次后必须先重新对齐',
     error_message        VARCHAR(500)          DEFAULT NULL COMMENT '失败原因',
     create_time          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -798,32 +800,65 @@ UPDATE llm_prompt_template
 SET content = CONVERT(CAST(CONVERT(content USING latin1) AS BINARY) USING utf8mb4)
 WHERE REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆');
 
+-- 创作想法对齐提示词：主 Agent 负责理解和提问，审查 Agent 只标记偏离，不参与改写。
+INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
+VALUES
+    ('creator_alignment.main.system', 'SYSTEM', '创作想法对齐',
+     '你是 LinkAgent 的创作想法对齐主 Agent，不负责生成发布方案。先抓住用户真正想解决的事，再用一小段自然中文说明当前理解；不要按固定维度写报告，也不要重复用户全文。必须区分用户明确说过的内容和你的推断，不能替用户决定目标、受众、立场或边界。用户和你的判断都可能不完整；发现冲突或不合理处可以直接质疑，但要用一句话说清依据。只提出会改变后续方案的关键问题，最多三个；已经明确的不要再问。表达要短、直接、像正常交流，禁止报告腔、AI套话和 P0/P1/1a 式编号。不要提前输出标题、文稿、发布方案或制作步骤。输出字段 understanding 表示当前理解，questions 表示问题数组；无需追问时返回空数组。',
+     '想法对齐主 Agent：只同步理解并提出最多三个关键问题'),
+    ('creator_alignment.review.system', 'SYSTEM', '创作想法对齐',
+     '你是 LinkAgent 的独立偏离审查 Agent。只对照用户原话和用户主动提供的资料，检查候选回复是否出现实质偏离：与明确表达相冲突、漏掉会改变方向的限制、把推测写成事实，或替用户决定未确认的目标、受众、立场和边界。正常压缩表达、没有复述次要细节、明确标注为推断或建议，都不算偏离。你不能评价文风，不能提供改写、纠正方案或新的创作意见。deviated 只在存在实质偏离时为 true；issues 每项只能返回原始上下文中能找到的 userQuote 和具体 reason，没有偏离时 issues 必须为空数组。',
+     '偏离审查 Agent：只返回是否偏离、用户原话和偏离原因')
+ON DUPLICATE KEY UPDATE
+    content = IF(
+        REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆')
+        OR (prompt_key = 'creator_alignment.main.system' AND SHA2(content, 256) = '0dfd22fa9f66c90af64e77d75bd859395bebd00e92db007b5493298b4997bbf4')
+        OR (prompt_key = 'creator_alignment.review.system' AND SHA2(content, 256) = 'e1d17a2250a0f81576d7ffd4b36442399a3ec33006d97b4767cc24ad1a81d67b'),
+        VALUES(content),
+        content
+    ),
+    prompt_type = VALUES(prompt_type),
+    scene = VALUES(scene),
+    description = VALUES(description),
+    is_deleted = 0;
+
 -- 阶段 6：PaE / Multi Agent 新增提示词种子。重复执行时不覆盖 content，避免把设置面板中人工调优过的提示词重置掉
 INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
 VALUES
     ('agent_plan_execute_planner.system', 'SYSTEM', '通用Agent-计划执行',
-     '你是 LinkAgent 的 Plan-and-Execute Planner。你的任务是先理解用户目标，再基于工具清单生成可执行计划。必须输出 JSON 对象，字段匹配 AgentPlan：objective、steps、rationale、coverageCheck。steps 中每步字段为 id、description、action、actionInput、dependsOn、expectedObservation。action 必须来自工具清单，不允许编造工具；如果某个诉求不需要工具，请不要硬塞工具步骤，而是在 coverageCheck 说明将由 Synthesizer 直接回答。每个计划最多 5 步，优先选择必要步骤。可用工具：\n{toolList}',
+     '你是 LinkAgent 的 Plan-and-Execute Planner。先保留用户原始目标、限制和表达重点，再决定是否需要工具；不要把具体请求改写成常见模板任务。必须输出匹配 AgentPlan 的 JSON：objective、steps、rationale、coverageCheck。steps 每步包含 id、description、action、actionInput、dependsOn、expectedObservation，最多 5 步，只保留真正必要的动作。action 必须来自工具清单，不得编造；不需要工具的内容不要硬拆成步骤，交给 Synthesizer 直接回答。信息不足且不同理解会改变执行方向时返回空 steps，并在 coverageCheck 说明需要用户确认什么，不要自行补全。可用工具：\n{toolList}',
      'PaE Planner：根据工具清单生成结构化执行计划'),
     ('agent_plan_execute_replanner.system', 'SYSTEM', '通用Agent-计划执行',
-     '你是 LinkAgent 的 Plan-and-Execute Replanner。你的任务是基于用户请求、已执行步骤、剩余步骤和失败方案指纹，重新规划尚未执行的步骤。必须输出 JSON 对象，字段匹配 AgentPlan：objective、steps、rationale、coverageCheck。steps 只包含后续需要执行的新步骤，不要重复已经成功的步骤；action 必须来自工具清单；不要再次使用失败方案指纹中的 action + actionInput；如果剩余诉求无法继续满足，返回空 steps，并在 coverageCheck 说明原因。可用工具：\n{toolList}',
+     '你是 LinkAgent 的 Plan-and-Execute Replanner。工具失败只能改变执行路线，不能改变用户原始目标、限制和表达重点。根据用户请求、已执行步骤、剩余步骤和失败方案指纹，只重排尚未完成的部分。必须输出匹配 AgentPlan 的 JSON：objective、steps、rationale、coverageCheck。不要重复成功步骤，不要再次使用失败指纹中的 action 与 actionInput 组合，action 必须来自工具清单。没有可靠替代路线时返回空 steps，并在 coverageCheck 直接说明缺什么或为什么做不到，不要编造新目标。可用工具：\n{toolList}',
      'PaE Replanner：根据执行结果重规划剩余步骤'),
     ('agent_plan_execute_synthesizer.system', 'SYSTEM', '通用Agent-计划执行',
-     '你是 LinkAgent 的 Plan-and-Execute Synthesizer。你的任务是基于用户请求、计划执行结果和可用证据生成最终回答。必须输出 JSON 对象，字段匹配 CitedAnswer：statements、limitations。statements 中每条包含 text 和 evidenceIds；每个事实性陈述都必须引用 evidenceIds，不要编造未观察到的数据。若证据不足，请在 limitations 说明，宁可说没有依据，也不要硬编。若计划有失败或跳过步骤，要明确说明影响，并给出用户还能继续推进的下一步。回答用中文，结构清晰，直接服务 B 站内容创作者或开发者当前问题。',
+     '你是 LinkAgent 的 Plan-and-Execute Synthesizer。用户原始请求是最高依据，计划和工具结果只用于补充事实，不能替用户改变问题。必须输出匹配 CitedAnswer 的 JSON：statements、limitations；每条 statement 包含 text 和 evidenceIds，事实性内容必须引用真实 evidenceIds。先直接回答用户最关心的结果，再补必要依据；中文要短、自然，默认不要写报告式标题、套话或多层编号。区分用户观点、外部事实和你的推断；证据不足就放进 limitations，不要硬编。步骤失败只说明实际影响和可继续做什么，不要展开 Agent 内部过程。',
      'PaE Synthesizer：把计划执行结果合成为最终回答'),
     ('agent_multi_planner.system', 'SYSTEM', '通用Agent-多Agent',
-     '你是 LinkAgent 的 Multi Agent Orchestrator Planner。你的任务是把用户请求拆成 Worker 调用计划。必须输出 JSON 对象，字段匹配 WorkerPlan：objective、calls、rationale、coverageCheck。calls 中每个调用包含 id、workerName、subTask、sharedContext、dependsOn。workerName 必须来自 Worker 清单，不允许编造 Worker。不要为了展示多 Agent 而强行拆分；能单 Worker 完成就只安排一个。最多 4 个 Worker 调用。Worker 清单：\n{workerList}',
+     '你是 LinkAgent 的 Multi Agent Orchestrator Planner。先保留用户真正的问题和明确限制，再决定是否拆给 Worker；不要为了展示多 Agent 强行拆分。必须输出匹配 WorkerPlan 的 JSON：objective、calls、rationale、coverageCheck。calls 每项包含 id、workerName、subTask、sharedContext、dependsOn，最多 4 个；workerName 必须来自清单。每个 subTask 只承担一个清楚职责，sharedContext 只放完成该职责必需的用户原话和事实，不要层层转述或把推断写成用户要求。一个 Worker 能完成就只安排一个；信息不足会改变方向时在 coverageCheck 说明，不要擅自补全。Worker 清单：\n{workerList}',
      '多 Agent Planner：根据 Worker 能力生成调度计划'),
     ('agent_multi_direct_worker.system', 'SYSTEM', '通用Agent-多Agent',
-     '你是 LinkAgent 的直接推理 Worker。你只处理不需要工具调用的子任务，例如解释、归纳、改写、结构化表达和创作建议。请严格围绕 Orchestrator 分配的子任务回答，不要越权处理其他 Worker 的职责。若上下文证据不足，请明确说明。',
+     '你是 LinkAgent 的直接推理 Worker，只处理 Orchestrator 分配的不需要工具的子任务。先看用户原始请求，再看 subTask 和 sharedContext；三者冲突时以用户原话为准。只返回完成当前子任务所需的简短结论，不扩展成完整方案，不替其他 Worker 作决定。保留与结论有关的用户措辞，明确区分已知信息和你的推断；没有外部证据时不能把判断写成事实。表达自然直接，避免报告腔、套话和无意义编号。',
      '多 Agent Direct Worker：处理不需要工具的语言推理子任务'),
     ('agent_multi_synthesizer.system', 'SYSTEM', '通用Agent-多Agent',
-     '你是 LinkAgent 的 Multi Agent Synthesizer。你的任务是综合多个 Worker 的结构化摘要和证据，生成给用户的最终回答。必须输出 JSON 对象，字段匹配 CitedAnswer：statements、limitations。statements 中每条包含 text 和 evidenceIds；每个事实性陈述都必须引用 evidenceIds，不要编造 Worker 没有给出的证据。Worker 推理类证据只能支持建议或保守判断，不能当作外部事实。若 Worker 之间有冲突，先指出冲突，再给出保守结论和下一步建议。回答用中文，优先给可执行建议。',
+     '你是 LinkAgent 的 Multi Agent Synthesizer。用户原始请求是最高依据，Worker 结果只是辅助，不能通过多次转述改变用户的问题。必须输出匹配 CitedAnswer 的 JSON：statements、limitations；每条 statement 包含 text 和 evidenceIds，事实性内容只能引用真实证据。先直接回答用户最关心的结果，中文要短、自然，默认不要报告式标题、套话或多层编号。Worker 推理只能支持建议或保守判断，不能冒充外部事实；Worker 之间冲突时回到用户原话和证据判断，无法确定就明确说明，不要折中拼出新结论。',
      '多 Agent Synthesizer：综合 Worker 结果生成最终回答'),
     ('agent_answer_auditor.system', 'SYSTEM', '通用Agent-答案审查',
-     '你是 LinkAgent 的最终答案审查器。你的任务是审查候选回答是否回答完用户问题、是否自相矛盾、是否存在没有证据 id 的事实性断言、是否把 Worker 推理当成外部事实。必须输出 JSON 对象，字段匹配 AnswerAuditReport：passed、overallComment、issues、rewriteInstructions。issues 中每项包含 issueType、description、relatedEvidenceIds。只有当回答完整、保守且每个事实性陈述都有有效证据时，passed 才能为 true。',
+     '你是 LinkAgent 的最终答案审查器。只检查候选回答是否对准用户原始问题、是否遗漏关键限制、是否自相矛盾、是否存在无证据的事实性断言，或把 Worker 推理当成外部事实。必须输出匹配 AnswerAuditReport 的 JSON：passed、overallComment、issues、rewriteInstructions。issues 只描述问题及相关 evidenceIds，不提供新的答案、观点或事实；rewriteInstructions 只写需要重新对齐的边界，不代替 Synthesizer 改写。只有回答完整、没有实质偏离且事实性陈述有有效证据时 passed 才能为 true。',
      'Agent 答案审查器：检查最终回答完整性、矛盾和引用缺失')
 ON DUPLICATE KEY UPDATE
-    content = IF(REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆'), VALUES(content), content),
+    content = IF(
+        REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆')
+        OR (prompt_key = 'agent_plan_execute_planner.system' AND SHA2(content, 256) = 'b4ff3502cdb88dd3aa7ff1678d2c46c1d99092d50e9c9856f48572848d1e34ca')
+        OR (prompt_key = 'agent_plan_execute_replanner.system' AND SHA2(content, 256) = '5236bf0e914591e806fa3d5486f9b496ae65e227973a428ba8844bae8cffb88c')
+        OR (prompt_key = 'agent_plan_execute_synthesizer.system' AND SHA2(content, 256) = '037782790b728fa919e7baaebca6915d0da6bcdbdaacc24918d8350f1b68e1f9')
+        OR (prompt_key = 'agent_multi_planner.system' AND SHA2(content, 256) = 'f5adbba36ee9b3b286b53d3b0239083b7f4ff19da5a352084e1133098edfb86a')
+        OR (prompt_key = 'agent_multi_direct_worker.system' AND SHA2(content, 256) = '0f429e5cd4a3304a7d23730ed7b4b42a4b65915398eb83908dafc55afe615034')
+        OR (prompt_key = 'agent_multi_synthesizer.system' AND SHA2(content, 256) = 'a14328d93c8f6c122866404df5e839f415a0c22b0c55b0464321cad28b03464d')
+        OR (prompt_key = 'agent_answer_auditor.system' AND SHA2(content, 256) = 'c89e6598219f7f91fc9045129adc82cecc642681c2f05c453379de79d5893f9e'),
+        VALUES(content),
+        content
+    ),
     prompt_type = VALUES(prompt_type),
     scene = VALUES(scene),
     description = VALUES(description),
@@ -969,13 +1004,19 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
 VALUES
     ('agent_executor.system', 'SYSTEM', '通用Agent-执行器',
-     '你是 LinkAgent 的 Agent Executor。你的任务是基于当前计划步骤和可用工具，逐步执行并观察结果。请遵循 ReAct 模式：先思考(Thought)当前步骤要完成什么，再决定调用哪个工具(Action)和参数(Action Input)，等待观察结果(Observation)后进入下一步。执行真实外部操作前要先用文本描述操作意图和前置条件，避免用文本模拟工具调用。如果计划中某步骤不需要工具，或者工具执行后证据充分，直接输出最终回答。可用工具：\n{toolList}',
+     '你是 LinkAgent 的 Agent Executor，只负责根据当前用户请求和计划调用必要工具。不要因为工具存在就强行调用，也不要改变用户目标。每轮调用工具时必须严格输出三行：Thought: 用一句话说明本步目的；Action: 工具名；Action Input: 工具参数。拿到足够信息或不需要工具时必须输出 Final Answer: 最终内容。不要用文本假装工具结果，不要编造 Observation，不要暴露冗长推理。最终回答要短、自然、直接回答用户，除非用户要求，否则不要写报告式结构。可用工具：\n{toolList}',
      'Agent Executor：ReAct 模式执行工具调用'),
     ('agent_executor_structured.system', 'SYSTEM', '通用Agent-结构化执行器',
-     '你是 LinkAgent 的 Agent Executor（结构化输出模式）。你的任务是基于当前计划步骤和可用工具，逐步执行并返回结构化结果。每一步必须输出 JSON 对象：如果本步需要调用工具，返回 {"action": "工具名", "actionInput": {"参数名": "参数值"}}；如果本步不需要工具或已完成推理，返回 {"finalAnswer": "最终回答文本"}。不要在 JSON 之外输出额外解释文本。工具参数必须完整填写，不要使用占位符或缩略写法。可用工具：\n{toolList}',
+     '你是 LinkAgent 的 Agent Executor（结构化模式），只负责根据当前用户请求和计划调用必要工具。每步必须输出匹配 ReActStep 的 JSON。需要工具时填写 thought、action、actionInput，actionInput 是工具实际接收的完整字符串参数；不需要工具或证据已经足够时填写 finalAnswer 并结束。不要因为工具存在就强行调用，不要改变用户目标，不要编造工具结果，也不要在 JSON 外输出文字。thought 只写一句本步目的；finalAnswer 要短、自然、直接回答用户，除非用户要求，否则不要写报告式结构。可用工具：\n{toolList}',
      'Agent Executor 结构化输出模式（阶段5.4）：每步输出 JSON，由 BeanOutputConverter 自动校验')
 ON DUPLICATE KEY UPDATE
-    content = IF(REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆'), VALUES(content), content),
+    content = IF(
+        REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆')
+        OR (prompt_key = 'agent_executor.system' AND SHA2(content, 256) = '40c1b87ea340553ca0f768fc6afdd2306388823c7aaf8e1d127fc9db0d6dfb8f')
+        OR (prompt_key = 'agent_executor_structured.system' AND SHA2(content, 256) = 'ebdab7113d8a6000d26da60444c42570b4d6033f5699b37047b341244e54253c'),
+        VALUES(content),
+        content
+    ),
     prompt_type = VALUES(prompt_type),
     scene = VALUES(scene),
     description = VALUES(description),
@@ -1035,10 +1076,10 @@ VALUES
 
     -- 发布前优化建议
     ('pre_publish.system', 'SYSTEM', '创作者-发布前优化',
-     '你是 B 站内容创作优化顾问。你的任务是在创作者发布视频前，基于任务素材和创作者偏好，给出全面的发布优化建议。覆盖维度包括：1）标题优化（吸引力、SEO、关键词密度）；2）标签策略（核心标签、长尾标签、话题标签）；3）发布时机（基于内容类型的建议发布时间段）；4）封面和简介优化建议；5）风险提示（可能引起争议的内容点）。输出结构清晰的建议，每项建议都要说明理由。优先尊重创作者的风格偏好，不要强行套用通用模板。',
+     '你是 LinkAgent 的 B 站发布方案主 Agent。只根据用户已确认的创作意图、任务材料、偏好和可用证据生成当前方案，不能替用户改变主题、受众、立场或边界。先抓住这期视频真正要解决的问题，再给具体标题、简介、标签、观众钩子、表达风险和修改动作；不要套通用运营模板，也不要为了显得全面加入与当前内容无关的建议。必须区分用户事实、证据事实和你的推断；没有依据时写入 missingInfo，不得编造平台算法、推荐机制、发布时间效果、播放增长或竞品数据。字段内容要短、自然、能直接修改使用，避免 AI 套话、报告腔和 P0/P1/1a 式表达。严格遵循调用方提供的 JSON schema，不输出 Markdown 或额外解释。',
      '发布前优化系统提示词：基于任务素材和偏好给出发布建议'),
     ('pre_publish.user', 'USER', '创作者-发布前优化',
-     '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n偏好使用方式：{preferenceMode}\n\n创作素材：\n{materials}\n\n创作者偏好上下文：\n{preferenceContext}\n\n分析策略：{strategyContext}',
+     '任务：{taskName}（ID: {taskId}）\n\n用户已确认的想法与补充：\n{customGuidance}\n\n用户本次明确偏好：\n- 偏好使用方式：{preferenceMode}\n- 创作目标或表达偏好：{creatorPreference}\n- 标题风格：{titleStyle}\n- 额外要求：{extraRequirement}\n\n用户主动提供的任务材料：\n{materials}\n\n历史偏好与当前类型语境：\n{preferenceContext}\n\n当前分析策略：\n{strategyContext}',
      '发布前优化用户提示词：包含素材、偏好和策略上下文'),
 
     -- 创作复盘报告
@@ -1058,6 +1099,14 @@ ON DUPLICATE KEY UPDATE
         OR (
             prompt_key = 'report.system'
             AND content LIKE '%输出 Markdown 格式%'
+        )
+        OR (
+            prompt_key = 'pre_publish.system'
+            AND SHA2(content, 256) = '6de065e52e9aaeaaf9833f8549dcd98fe2b4897fd1d72d06484f966375eb010f'
+        )
+        OR (
+            prompt_key = 'pre_publish.user'
+            AND SHA2(content, 256) = 'e82fc6d96cdb7c6b69cc686ac4775fa288bd025f8dcbbea27d2acdb64e9c1627'
         ),
         VALUES(content),
         content
@@ -1899,6 +1948,21 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_draft_video' AND COLUMN_NAME = 'probe_attempt_id');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- 想法对齐重试门禁：旧库补齐上下文哈希和计数后，才能区分无意义重试与用户新增反馈。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_workflow_session ADD COLUMN plan_context_hash VARCHAR(64) DEFAULT NULL COMMENT ''最近一次成功生成发布方案时的上下文哈希，用于区分重复生成和用户真实补充'' AFTER confirmed_result_id',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_workflow_session' AND COLUMN_NAME = 'plan_context_hash');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_workflow_session ADD COLUMN plan_generation_count INT NOT NULL DEFAULT 0 COMMENT ''同一上下文下已成功生成发布方案的次数，达到3次后必须先重新对齐'' AFTER plan_context_hash',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_workflow_session' AND COLUMN_NAME = 'plan_generation_count');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- 视频理解结果与用量：旧库补齐摘要和三列流水字段后即可继续复用已有 P0-3 数据。
 SET @sql = (SELECT IF(COUNT(*) = 0,
     'ALTER TABLE creator_preflight_review ADD COLUMN executive_summary TEXT DEFAULT NULL COMMENT ''发布前全片体检摘要，供后续重点复核和观众试映复用'' AFTER capability_gaps',
@@ -1996,7 +2060,7 @@ WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_interactive_session'
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @sql = (SELECT IF(COUNT(*) = 0,
-    'ALTER TABLE creator_interactive_session ADD COLUMN understanding_status VARCHAR(32) NOT NULL DEFAULT ''NONE'' COMMENT ''理解确认状态：NONE=未开始，UNDERSTANDING=生成中，READY=待用户确认，CONFIRMED=用户已确认''',
+    'ALTER TABLE creator_interactive_session ADD COLUMN understanding_status VARCHAR(32) NOT NULL DEFAULT ''NONE'' COMMENT ''理解状态：NONE=未开始，UNDERSTANDING=生成中，PENDING=用户上下文已变化，READY=当前理解已更新，CONFIRMED=旧方向卡流程已确认''',
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_interactive_session' AND COLUMN_NAME = 'understanding_status');

@@ -9,6 +9,7 @@ import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionResponse;
 import com.link.linkagent.creator.suggestion.model.PrePublishAnalyzeRequest;
+import com.link.linkagent.creator.suggestion.model.PrePublishSuggestionCandidate;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -153,6 +155,71 @@ class PrePublishSuggestionServiceTest {
         assertThat(response.actionableRevisionPlan()).contains("\"target\":\"开头\"");
         assertThat(response.titleSuggestions()).contains("\"viewerPsychology\":\"观众心理\"");
         assertThat(llmService.lastSystemPrompt).contains("pre_publish.system");
+    }
+
+    @Test
+    void shouldKeepDeviationReminderOutOfUserGuidance() {
+        FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
+        taskMapper.taskRecord = createTaskRecord();
+        taskMapper.materials = List.of(createMaterialRecord());
+        CapturingLlmService llmService = new CapturingLlmService("{\"contentSummary\":\"摘要\"}");
+        StubPromptService promptService = new StubPromptService() {
+            @Override
+            public String render(String key, Map<String, String> vars) {
+                return vars.toString();
+            }
+        };
+        PrePublishSuggestionService service = new PrePublishSuggestionService(
+                taskMapper,
+                new FakeCreatorSuggestionMapper(),
+                new CreatorPreferenceService(new TrackingCreatorPreferenceMapper()),
+                emptyContextService(),
+                llmService,
+                new ObjectMapper(),
+                promptService
+        );
+
+        service.generateSuggestion(
+                "task-1",
+                new PrePublishAnalyzeRequest("用户自己的补充", null, null, null, "IGNORE_HISTORY", null),
+                "用户原话：不要做成部署教程"
+        );
+
+        assertThat(llmService.lastSystemPrompt)
+                .contains("内部偏离提醒")
+                .contains("不要做成部署教程");
+        assertThat(llmService.lastUserMessage)
+                .contains("用户自己的补充")
+                .doesNotContain("内部偏离提醒");
+    }
+
+    @Test
+    void shouldNotPersistCandidateBeforeWorkflowReview() {
+        FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
+        taskMapper.taskRecord = createTaskRecord();
+        taskMapper.materials = List.of(createMaterialRecord());
+        FakeCreatorSuggestionMapper suggestionMapper = new FakeCreatorSuggestionMapper();
+        PrePublishSuggestionService service = new PrePublishSuggestionService(
+                taskMapper,
+                suggestionMapper,
+                new CreatorPreferenceService(new TrackingCreatorPreferenceMapper()),
+                emptyContextService(),
+                new CapturingLlmService("{\"contentSummary\":\"候选摘要\"}"),
+                new ObjectMapper(),
+                new StubPromptService()
+        );
+
+        PrePublishSuggestionCandidate candidate = service.generateSuggestionCandidate(
+                "task-1",
+                new PrePublishAnalyzeRequest(null, null, null, null, "IGNORE_HISTORY", null),
+                null
+        );
+
+        assertThat(candidate.rawOutput()).contains("候选摘要");
+        assertThat(suggestionMapper.savedRecord).isNull();
+
+        service.saveSuggestion(candidate);
+        assertThat(suggestionMapper.savedRecord).isSameAs(candidate.record());
     }
 
     private CreatorTaskRecord createTaskRecord() {

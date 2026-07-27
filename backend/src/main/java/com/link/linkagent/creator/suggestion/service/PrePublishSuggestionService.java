@@ -13,6 +13,7 @@ import com.link.linkagent.creator.suggestion.model.AnalysisStrategy;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionResponse;
 import com.link.linkagent.creator.suggestion.model.PrePublishAnalyzeRequest;
+import com.link.linkagent.creator.suggestion.model.PrePublishSuggestionCandidate;
 import com.link.linkagent.creator.suggestion.model.PrePublishAuditReport;
 import com.link.linkagent.creator.suggestion.model.PrePublishEvidenceRef;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
@@ -182,6 +183,26 @@ public class PrePublishSuggestionService {
      */
     @Transactional
     public CreatorSuggestionResponse generateSuggestion(String taskId, PrePublishAnalyzeRequest request) {
+        return generateSuggestion(taskId, request, null);
+    }
+
+    /**
+     * 使用独立的内部偏离提醒重新生成方案。
+     * 该提醒不属于用户输入，必须放在系统提示词中，避免多 Agent 传递时被误当成用户的新需求。
+     */
+    @Transactional
+    public CreatorSuggestionResponse generateSuggestion(String taskId,
+                                                        PrePublishAnalyzeRequest request,
+                                                        String deviationReminder) {
+        return saveSuggestion(generateSuggestionCandidate(taskId, request, deviationReminder));
+    }
+
+    /**
+     * 只生成候选，不写数据库；工作流需要先让独立审查 Agent 检查该候选。
+     */
+    public PrePublishSuggestionCandidate generateSuggestionCandidate(String taskId,
+                                                                     PrePublishAnalyzeRequest request,
+                                                                     String deviationReminder) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
         if (materials.isEmpty()) {
@@ -194,13 +215,12 @@ public class PrePublishSuggestionService {
         String rawOutput;
         // 用 try-with-resources 打开用量上下文，确保 LLM 调用被 Langfuse 正确追踪
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "发布前优化")) {
-            rawOutput = llmService.chat(buildSystemPrompt(),
+            rawOutput = llmService.chat(buildSystemPrompt(deviationReminder),
                     buildUserPrompt(taskRecord, materials, safeRequest, preferenceContext, evidenceRefs));
         }
         CreatorSuggestionRecord suggestionRecord = buildSuggestionRecord(taskRecord.getTaskId(), rawOutput,
                 evidenceRefs, "DIRECT_LLM_EVIDENCE", "EVIDENCE_COLLECTED");
-        creatorSuggestionMapper.upsert(suggestionRecord);
-        return getSuggestion(taskRecord.getTaskId());
+        return new PrePublishSuggestionCandidate(suggestionRecord);
     }
 
     /**
@@ -226,6 +246,14 @@ public class PrePublishSuggestionService {
      */
     @Transactional
     public CreatorSuggestionResponse generateSuggestionByAgent(String taskId, PrePublishAnalyzeRequest request) {
+        return saveSuggestion(generateSuggestionCandidateByAgent(taskId, request));
+    }
+
+    /**
+     * Agent 路径同样先返回候选，避免审查前覆盖数据库里的上一版可用方案。
+     */
+    public PrePublishSuggestionCandidate generateSuggestionCandidateByAgent(String taskId,
+                                                                            PrePublishAnalyzeRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
         if (materials.isEmpty()) {
@@ -253,8 +281,17 @@ public class PrePublishSuggestionService {
         if (!"PARSED".equals(suggestionRecord.getParseStatus())) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化 Agent 输出无法解析为结构化 JSON");
         }
-        creatorSuggestionMapper.upsert(suggestionRecord);
-        return getSuggestion(taskRecord.getTaskId());
+        return new PrePublishSuggestionCandidate(suggestionRecord);
+    }
+
+    /**
+     * 候选通过工作流审查后再保存，并复用现有响应转换逻辑返回完整结果。
+     */
+    @Transactional
+    public CreatorSuggestionResponse saveSuggestion(PrePublishSuggestionCandidate candidate) {
+        CreatorSuggestionRecord record = candidate.record();
+        creatorSuggestionMapper.upsert(record);
+        return getSuggestion(record.getTaskId());
     }
 
     /**
@@ -421,8 +458,19 @@ public class PrePublishSuggestionService {
     }
 
     /** 从提示词模板服务中加载发布前优化的系统提示词 */
-    private String buildSystemPrompt() {
-        return promptService.get("pre_publish.system");
+    private String buildSystemPrompt(String deviationReminder) {
+        String basePrompt = promptService.get("pre_publish.system");
+        if (!TextUtil.hasText(deviationReminder)) {
+            return basePrompt;
+        }
+        return basePrompt + """
+
+
+                【内部偏离提醒】
+                下面内容来自独立审查，只指出上一版哪里偏离用户原话，不是用户新增的要求，也不是改写方案。
+                请重新阅读用户材料后自行调整；不得把提醒扩写成新的目标、受众、立场或限制。
+                %s
+                """.formatted(deviationReminder.trim());
     }
 
     /**
@@ -449,7 +497,8 @@ public class PrePublishSuggestionService {
                 "creatorPreference", TextUtil.trimToDefault(request.creatorPreference(), "未提供"),
                 "titleStyle", TextUtil.trimToDefault(request.titleStyle(), "未提供"),
                 "extraRequirement", TextUtil.trimToDefault(request.extraRequirement(), "未提供"),
-                "materials", buildMaterialPrompt(materials)
+                "materials", buildMaterialPrompt(materials),
+                "strategyContext", buildStrategyPrompt(request.analysisStrategy())
         ));
         return basePrompt + "\n\n" + buildEvidencePromptInstruction(evidenceRefs);
     }
@@ -496,14 +545,13 @@ public class PrePublishSuggestionService {
                 %s
 
                 你的目标：
-                1. 判断当前内容的核心卖点。
-                2. 可以继续调用 knowledge_search 补充案例，但最终结论必须优先引用“已收集的可引用证据”。
-                3. 如果 knowledge_search 不在工具列表中、知识库为空或检索失败，不要报错，按无案例降级生成。
-                4. 参考案例时必须说明借鉴点，而不是照搬标题或话术。
-                5. 输出标题建议、简介建议、标签建议、风险点、修改计划。标题建议和 HIGH 优先级修改计划必须尽量填写 evidenceIds。
-                6. 最终回答必须是一个 JSON 对象，不要使用 Markdown 代码块，不要输出 JSON 之外的解释。
-                7. 如果当前 Agent 内核要求通过 finalAnswer 字段结束，请把完整 JSON 对象作为 finalAnswer 的字符串内容，不要把 finalAnswer 写成嵌套对象。
-                8. 如果证据不足，请写入 missingInfo，不要编造 B 站算法、播放增长或竞品数据。
+                - 用户原话和已确认限制是最高依据，不要替用户改变主题、受众、立场或边界。
+                - 先判断当前内容真正要解决的问题和核心卖点，再给标题、简介、标签、风险点和修改动作；不要套通用运营模板。
+                - 可以调用 knowledge_search 补充案例，但最终结论优先引用“已收集的可引用证据”；工具不可用或检索失败时直接降级，不要假装查到结果。
+                - 参考案例只说明可借鉴之处，不照搬标题或话术。标题建议和 HIGH 优先级修改动作尽量填写 evidenceIds。
+                - 字段内容保持短、自然、能直接修改使用；不要写 AI 套话、报告腔或 P0/P1/1a 式表达。
+                - 最终回答必须是一个 JSON 对象，不使用 Markdown 代码块，不输出 JSON 之外的解释。若 Agent 内核要求 finalAnswer，请把完整 JSON 作为 finalAnswer 字符串。
+                - 证据不足时写入 missingInfo，不得编造 B 站算法、推荐机制、发布时间效果、播放增长或竞品数据。
 
                 JSON 字段固定如下：
                 {

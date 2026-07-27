@@ -181,6 +181,7 @@ export function createPrePublishLayoutPreviewFixture() {
     status: 'CONFIRMED',
     userId: 'default',
     confirmedResultId: suggestion.suggestionId,
+    planGenerationCount: 1,
     errorMessage: null,
     createTime,
     updateTime,

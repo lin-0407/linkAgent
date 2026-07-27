@@ -30,6 +30,8 @@ public interface CreatorWorkflowMapper {
                 status,
                 user_id,
                 confirmed_result_id,
+                plan_context_hash,
+                plan_generation_count,
                 error_message
             )
             VALUES (
@@ -39,6 +41,8 @@ public interface CreatorWorkflowMapper {
                 #{status},
                 #{userId},
                 #{confirmedResultId},
+                #{planContextHash},
+                #{planGenerationCount},
                 #{errorMessage}
             )
             """)
@@ -52,6 +56,8 @@ public interface CreatorWorkflowMapper {
                    status,
                    user_id,
                    confirmed_result_id,
+                   plan_context_hash,
+                   plan_generation_count,
                    error_message,
                    create_time,
                    update_time
@@ -70,6 +76,8 @@ public interface CreatorWorkflowMapper {
             @Result(column = "status", property = "status"),
             @Result(column = "user_id", property = "userId"),
             @Result(column = "confirmed_result_id", property = "confirmedResultId"),
+            @Result(column = "plan_context_hash", property = "planContextHash"),
+            @Result(column = "plan_generation_count", property = "planGenerationCount"),
             @Result(column = "error_message", property = "errorMessage"),
             @Result(column = "create_time", property = "createTime"),
             @Result(column = "update_time", property = "updateTime")
@@ -85,6 +93,8 @@ public interface CreatorWorkflowMapper {
                    status,
                    user_id,
                    confirmed_result_id,
+                   plan_context_hash,
+                   plan_generation_count,
                    error_message,
                    create_time,
                    update_time
@@ -112,6 +122,8 @@ public interface CreatorWorkflowMapper {
                    status,
                    user_id,
                    confirmed_result_id,
+                   plan_context_hash,
+                   plan_generation_count,
                    error_message,
                    create_time,
                    update_time
@@ -173,6 +185,34 @@ public interface CreatorWorkflowMapper {
     int updateSessionConfirmation(@Param("sessionId") String sessionId,
                                   @Param("status") String status,
                                   @Param("confirmedResultId") String confirmedResultId);
+
+    /**
+     * 用户补充了新信息后清空发布方案生成计数，避免把不同上下文误算成无意义重试。
+     */
+    @Update("""
+            UPDATE creator_workflow_session
+            SET plan_context_hash = NULL,
+                plan_generation_count = 0,
+                update_time = CURRENT_TIMESTAMP
+            WHERE session_id = #{sessionId}
+              AND is_deleted = 0
+            """)
+    int resetPlanGenerationState(@Param("sessionId") String sessionId);
+
+    /**
+     * 只在方案成功生成后记录本轮上下文和次数，模型调用失败不消耗用户的三次机会。
+     */
+    @Update("""
+            UPDATE creator_workflow_session
+            SET plan_context_hash = #{contextHash},
+                plan_generation_count = #{generationCount},
+                update_time = CURRENT_TIMESTAMP
+            WHERE session_id = #{sessionId}
+              AND is_deleted = 0
+            """)
+    int updatePlanGenerationState(@Param("sessionId") String sessionId,
+                                  @Param("contextHash") String contextHash,
+                                  @Param("generationCount") int generationCount);
 
     @Update("""
             UPDATE creator_workflow_session

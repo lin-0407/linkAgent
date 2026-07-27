@@ -11,6 +11,7 @@ public record CreatorWorkflowSessionResponse(
         String status,
         String userId,
         String confirmedResultId,
+        Integer planGenerationCount,
         String errorMessage,
         LocalDateTime createTime,
         LocalDateTime updateTime,

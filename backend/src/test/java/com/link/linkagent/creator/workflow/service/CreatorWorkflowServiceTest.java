@@ -1,5 +1,6 @@
 package com.link.linkagent.creator.workflow.service;
 
+import com.link.linkagent.creator.interactive.mapper.CreatorInteractiveMapper;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.profile.service.CreatorProfileService;
@@ -11,6 +12,7 @@ import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.workflow.event.CreatorWorkflowEventPublisher;
 import com.link.linkagent.creator.workflow.mapper.CreatorWorkflowMapper;
+import com.link.linkagent.creator.workflow.model.CreatorIntentAlignmentContext;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowSessionRecord;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStage;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStatus;
@@ -40,10 +42,41 @@ import static org.mockito.Mockito.when;
  */
 class CreatorWorkflowServiceTest {
     @Test
+    void shouldCountOnlySuccessfulPlansGeneratedFromTheSameContext() {
+        PrePublishAnalyzeRequest request = new PrePublishAnalyzeRequest(
+                "用户原始上下文",
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+        String contextHash = CreatorWorkflowService.buildPlanContextHash(
+                new CreatorIntentAlignmentContext("用户想展示当前流程为什么麻烦", "用户想展示当前流程为什么麻烦"),
+                request
+        );
+        CreatorWorkflowSessionRecord sessionRecord = new CreatorWorkflowSessionRecord();
+        sessionRecord.setPlanContextHash(contextHash);
+        sessionRecord.setPlanGenerationCount(3);
+
+        assertThat(CreatorWorkflowService.resolveSuccessfulGenerationCount(sessionRecord, contextHash))
+                .isEqualTo(3);
+
+        String changedHash = CreatorWorkflowService.buildPlanContextHash(
+                new CreatorIntentAlignmentContext("用户补充：重点不是部署，而是交互成本", "用户补充：重点不是部署，而是交互成本"),
+                request
+        );
+        assertThat(CreatorWorkflowService.resolveSuccessfulGenerationCount(sessionRecord, changedHash))
+                .isZero();
+    }
+
+    @Test
     void shouldRejectConfirmationBeforeAnyStateChangeWhenMediaFeatureIsDisabled() {
         CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
         CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
         CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        CreatorInteractiveMapper interactiveMapper = mock(CreatorInteractiveMapper.class);
+        CreatorIntentAlignmentService alignmentService = mock(CreatorIntentAlignmentService.class);
         PrePublishSuggestionService suggestionService = mock(PrePublishSuggestionService.class);
         CreatorWorkflowEventPublisher eventPublisher = mock(CreatorWorkflowEventPublisher.class);
         LlmApiUsageService usageService = mock(LlmApiUsageService.class);
@@ -57,6 +90,8 @@ class CreatorWorkflowServiceTest {
                 taskMapper,
                 suggestionMapper,
                 workflowMapper,
+                interactiveMapper,
+                alignmentService,
                 suggestionService,
                 eventPublisher,
                 usageService,
@@ -80,6 +115,8 @@ class CreatorWorkflowServiceTest {
                 taskMapper,
                 suggestionMapper,
                 workflowMapper,
+                interactiveMapper,
+                alignmentService,
                 suggestionService,
                 eventPublisher,
                 usageService,
@@ -108,6 +145,8 @@ class CreatorWorkflowServiceTest {
                 taskMapper,
                 suggestionMapper,
                 workflowMapper,
+                mock(CreatorInteractiveMapper.class),
+                mock(CreatorIntentAlignmentService.class),
                 suggestionService,
                 eventPublisher,
                 usageService,
@@ -171,6 +210,8 @@ class CreatorWorkflowServiceTest {
                 taskMapper,
                 suggestionMapper,
                 workflowMapper,
+                mock(CreatorInteractiveMapper.class),
+                mock(CreatorIntentAlignmentService.class),
                 suggestionService,
                 eventPublisher,
                 usageService,
@@ -225,6 +266,8 @@ class CreatorWorkflowServiceTest {
                 taskMapper,
                 suggestionMapper,
                 workflowMapper,
+                mock(CreatorInteractiveMapper.class),
+                mock(CreatorIntentAlignmentService.class),
                 suggestionService,
                 eventPublisher,
                 usageService,
@@ -283,6 +326,8 @@ class CreatorWorkflowServiceTest {
                 taskMapper,
                 suggestionMapper,
                 workflowMapper,
+                mock(CreatorInteractiveMapper.class),
+                mock(CreatorIntentAlignmentService.class),
                 suggestionService,
                 eventPublisher,
                 usageService,
@@ -314,6 +359,64 @@ class CreatorWorkflowServiceTest {
                 .hasMessageContaining("不可继续发送消息");
 
         verify(workflowMapper, never()).insertMessage(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void shouldResetPlanCountAndMarkIntentPendingWhenUserAddsNewFeedback() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        CreatorInteractiveMapper interactiveMapper = mock(CreatorInteractiveMapper.class);
+        CreatorWorkflowEventPublisher eventPublisher = mock(CreatorWorkflowEventPublisher.class);
+        CreatorWorkflowService service = new CreatorWorkflowService(
+                taskMapper,
+                suggestionMapper,
+                workflowMapper,
+                interactiveMapper,
+                mock(CreatorIntentAlignmentService.class),
+                mock(PrePublishSuggestionService.class),
+                eventPublisher,
+                mock(LlmApiUsageService.class),
+                mock(LLMService.class),
+                mock(RuntimeSettingService.class),
+                mock(CreatorPreferenceService.class),
+                mock(CreatorProfileService.class),
+                enabledMediaProperties()
+        );
+
+        CreatorTaskRecord taskRecord = new CreatorTaskRecord();
+        taskRecord.setTaskId("task-1");
+        CreatorWorkflowSessionRecord sessionRecord = new CreatorWorkflowSessionRecord();
+        sessionRecord.setSessionId("session-1");
+        sessionRecord.setTaskId("task-1");
+        sessionRecord.setStage(CreatorWorkflowStage.PRE_PUBLISH.name());
+        sessionRecord.setStatus(CreatorWorkflowStatus.WAITING_CONFIRMATION.name());
+        sessionRecord.setPlanGenerationCount(3);
+
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(taskRecord));
+        when(workflowMapper.findSessionForUpdate("task-1", "session-1"))
+                .thenReturn(Optional.of(sessionRecord));
+        when(workflowMapper.findSession("task-1", "session-1"))
+                .thenReturn(Optional.of(sessionRecord));
+        when(workflowMapper.nextMessageSequence("session-1")).thenReturn(1);
+        when(workflowMapper.findMessageByMessageId(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(Optional.empty());
+
+        service.sendMessage(
+                "task-1",
+                "session-1",
+                new com.link.linkagent.creator.workflow.model.CreatorWorkflowMessageCreateRequest(
+                        "我不是要做教程，而是要展示流程为什么麻烦。"
+                )
+        );
+
+        verify(workflowMapper).resetPlanGenerationState("session-1");
+        verify(interactiveMapper).markIntentAlignmentPending("task-1");
+        verify(workflowMapper).updateSessionStatus(
+                "session-1",
+                CreatorWorkflowStatus.WAITING_USER_INPUT.name(),
+                null
+        );
     }
 
     private static CreatorMediaProperties enabledMediaProperties() {
