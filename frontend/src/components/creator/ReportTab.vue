@@ -158,7 +158,7 @@ async function downloadCreatorReportMarkdown() {
     </p>
     <p v-if="reportError" class="creator-report-error">{{ reportError }}</p>
 
-    <template v-else>
+    <template v-else-if="validReport">
       <section class="creator-report-summary">
         <h4>总体结论</h4>
         <p>{{ validReport.overallConclusion }}</p>

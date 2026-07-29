@@ -305,6 +305,9 @@ const feedbackEvent = useCreatorFeedbackEvent(successMessage, errorMessage)
 
 const hasTaskHistory = computed(() => tasks.value.length > 0)
 const showDeveloperTools = computed(() => props.developerMode)
+const hasCompletedCreatorReport = computed(() =>
+  ['ANALYZED', 'ARCHIVED'].includes(selectedTask.value?.status ?? ''),
+)
 const hasFullScriptMaterial = computed(() =>
   Boolean(
     selectedTask.value?.materials.some(
@@ -1743,7 +1746,7 @@ provideCreatorWorkspace({
           <span :class="{ active: activeStep === 'production' || productionPlanReady }">制作蓝图</span>
           <span v-if="isMediaFeatureEnabled" :class="{ active: activeStep === 'preflight' }">成片试映</span>
           <span :class="{ active: Boolean(feedback || feedbackDashboard) }">观众反馈</span>
-          <span :class="{ active: ['ANALYZED', 'ARCHIVED'].includes(selectedTask?.status ?? '') }">总体复盘</span>
+          <span :class="{ active: hasCompletedCreatorReport }">总体复盘</span>
         </div>
         <button
           v-if="showDeveloperTools"
