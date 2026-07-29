@@ -11,6 +11,7 @@ import type {
   CreatorFeedbackFetchResult,
   CreatorFeedbackImportResult,
   CreatorFeedbackReport,
+  CreatorReport,
   CreatorEvalCase,
   CreatorEvalPromptVersionStats,
   CreatorEvalResult,
@@ -310,7 +311,18 @@ export function getCreatorFeedbackEvidenceIndexStatus(taskId: string) {
   )
 }
 
-// ── 报告导出 ──
+// ── 总体复盘 ──
+
+export function analyzeCreatorReport(taskId: string) {
+  return post<CreatorReport>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/report/analyze`,
+    {},
+  )
+}
+
+export function getCreatorReport(taskId: string) {
+  return get<CreatorReport>(`/creator/tasks/${encodeURIComponent(taskId)}/report`)
+}
 
 export function exportCreatorReportMarkdown(taskId: string) {
   return download(`/creator/tasks/${encodeURIComponent(taskId)}/report/markdown`)
@@ -440,5 +452,11 @@ export function analyzeCompetitorByReference(taskId: string, payload: Competitor
   return post<CreatorCompetitorReport>(
     `/creator/tasks/${encodeURIComponent(taskId)}/competitors/analyze-by-reference`,
     cleanPayload(payload),
+  )
+}
+
+export function getCreatorCompetitorReport(taskId: string) {
+  return get<CreatorCompetitorReport>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/competitors/report`,
   )
 }

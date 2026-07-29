@@ -12,6 +12,7 @@ import com.link.linkagent.creator.competitor.model.CreatorCompetitorSampleRespon
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorSaveRequest;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
+import com.link.linkagent.creator.report.mapper.CreatorReviewInvalidationMapper;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
@@ -62,8 +63,7 @@ import java.util.UUID;
  *   <li><b>内容截断策略</b>：素材最大 4000 字符、竞品样本最大 12000 字符。
  *       因为竞品样本通常包含完整视频文案（字幕），可能几万字，不截断会超 LLM 上下文窗口。
  *       截断阈值不是硬编码的上下文窗口限制，而是为 AI 保留足够空间给输出结论。</li>
- *   <li><b>解析兜底</b>：LLM 输出解析失败不抛异常，标记 RAW_ONLY 保留原始文本。
- *       后续改进解析器后可重新解析历史数据，不损失已花费的 AI 调用成本。</li>
+ *   <li><b>结构校验</b>：只有字段完整的结构化输出才会落库，避免空报告继续解锁总体复盘。</li>
  *   <li><b>LlmUsageContext</b>：通过 {@link LlmUsageContext#open} 包裹 LLM 调用，
  *       将 Token 用量自动上报到 Langfuse，实现每次竞品分析的成本追踪。</li>
  * </ul>
@@ -94,6 +94,8 @@ public class CreatorCompetitorService {
     private final CreatorFeedbackMapper creatorFeedbackMapper;
     /** 竞品数据的持久化映射器 */
     private final CreatorCompetitorMapper creatorCompetitorMapper;
+    /** 复盘链路失效映射器，竞品重做后清理依赖旧竞品的总体复盘和偏好 */
+    private final CreatorReviewInvalidationMapper reviewInvalidationMapper;
     /** 参考案例知识库映射器（P1-1：让竞品分析能读取 BV 导入管道采集的参考案例数据） */
     private final KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper;
     /** LLM 调用服务（发起竞品分析的 AI 请求） */
@@ -107,6 +109,7 @@ public class CreatorCompetitorService {
                                     CreatorSuggestionMapper creatorSuggestionMapper,
                                     CreatorFeedbackMapper creatorFeedbackMapper,
                                     CreatorCompetitorMapper creatorCompetitorMapper,
+                                    CreatorReviewInvalidationMapper reviewInvalidationMapper,
                                     KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper,
                                     LLMService llmService,
                                     ObjectMapper objectMapper,
@@ -115,6 +118,7 @@ public class CreatorCompetitorService {
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.creatorCompetitorMapper = creatorCompetitorMapper;
+        this.reviewInvalidationMapper = reviewInvalidationMapper;
         this.knowledgeReferenceVideoMapper = knowledgeReferenceVideoMapper;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
@@ -148,6 +152,14 @@ public class CreatorCompetitorService {
         record.setCompareDimension(TextUtil.trimToNull(request.compareDimension()));
         record.setExtraContext(TextUtil.trimToNull(request.extraContext()));
         creatorCompetitorMapper.upsertCompetitorVideo(record);
+        // 样本一旦保存，所有依赖旧样本的结论都必须在同一事务内失效，避免页面继续展示旧分析。
+        reviewInvalidationMapper.invalidateCompetitorReport(taskRecord.getTaskId());
+        reviewInvalidationMapper.invalidateCreatorReport(taskRecord.getTaskId());
+        reviewInvalidationMapper.invalidateGeneratedPreference(taskRecord.getTaskId());
+        if (CreatorTaskStatus.COMPETITOR_ANALYZED.name().equals(taskRecord.getStatus())
+                || CreatorTaskStatus.ANALYZED.name().equals(taskRecord.getStatus())) {
+            creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.FEEDBACK_ANALYZED.name());
+        }
         return getCompetitorVideo(taskRecord.getTaskId());
     }
 
@@ -184,17 +196,9 @@ public class CreatorCompetitorService {
      *   <li><b>LLM 调用</b>：通过 {@link LlmUsageContext} 包裹以追踪 Token 用量；
      *       system prompt 从模板加载（competitor.system），user prompt 通过 PromptService#render
      *       按模板渲染（competitor.user），保证 prompt 内容可配置、可版本管理。</li>
-     *   <li><b>结果解析</b>：尝试从 LLM 的 JSON 输出中提取结构化字段
-     *       （竞品优势、自身优劣势、差距分析、改进建议、差异化策略），
-     *       解析失败不抛异常——保留原始输出（RAW_ONLY），后续可改进解析器重新解析。</li>
+     *   <li><b>结果校验</b>：使用强类型结构化输出校验字段和必填内容，失败时不落库也不推进状态。</li>
      *   <li><b>状态更新</b>：持久化分析报告 + 将任务状态推进至 COMPETITOR_ANALYZED。</li>
      * </ol>
-     * <p>
-     * 设计权衡：反馈报告和选题建议用 Optional.orElse(null)，而非强校验。
-     * 因为竞品分析可能在创作流程的任何阶段执行——发布前没有反馈报告，
-     * 早期阶段没有选题建议。让这些上下文作为可选的"加分项"而非"必需项"，
-     * 能保证竞品分析在任何阶段都可用（只是信息越全，分析越有深度）。
-     *
      * @param taskId 关联的创作任务标识
      * @param request 分析请求，含可选的 customGuidance、analysisFocus、extraRequirement
      * @return 完整的竞品分析报告响应（含解析后的结构化字段）
@@ -202,13 +206,20 @@ public class CreatorCompetitorService {
     @Transactional
     public CreatorCompetitorReportResponse analyze(String taskId, CreatorCompetitorAnalyzeRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord);
         // 手动竞品分析要求先登记竞品视频（BV + 文稿），与参考案例路径不同
         CreatorCompetitorSampleRecord sampleRecord = creatorCompetitorMapper.findCompetitorVideoByTaskId(taskRecord.getTaskId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先提交同类型竞品视频"));
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
         CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId()).orElse(null);
-        CreatorFeedbackReportRecord feedbackReportRecord = creatorFeedbackMapper.findReportByTaskId(taskRecord.getTaskId()).orElse(null);
-        return executeAnalyze(taskRecord, materials, suggestionRecord, feedbackReportRecord, sampleRecord, request);
+        return executeAnalyze(
+                taskRecord,
+                materials,
+                suggestionRecord,
+                feedbackReportRecord,
+                sampleRecord,
+                request
+        );
     }
 
     /**
@@ -240,6 +251,7 @@ public class CreatorCompetitorService {
             String taskId, String referenceVideoId, CreatorCompetitorAnalyzeRequest request) {
         // 1. 校验任务存在
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord);
         // 2. 从知识库读取参考案例视频数据
         ReferenceVideoRecord refVideo = knowledgeReferenceVideoMapper.findByVideoId(referenceVideoId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "参考案例不存在"));
@@ -248,11 +260,17 @@ public class CreatorCompetitorService {
         // 4. 加载任务的其他上下文数据（素材、选题建议、数据反馈）
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
         CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId()).orElse(null);
-        CreatorFeedbackReportRecord feedbackReportRecord = creatorFeedbackMapper.findReportByTaskId(taskRecord.getTaskId()).orElse(null);
         // 5. 将参考案例数据组装为虚拟竞品样本记录，复用已有 prompt 拼装逻辑
         CreatorCompetitorSampleRecord virtualSample = buildVirtualSampleFromReference(refVideo, refItems);
         // 6. 执行分析（复用核心引擎）
-        return executeAnalyze(taskRecord, materials, suggestionRecord, feedbackReportRecord, virtualSample, request);
+        return executeAnalyze(
+                taskRecord,
+                materials,
+                suggestionRecord,
+                feedbackReportRecord,
+                virtualSample,
+                request
+        );
     }
 
     /**
@@ -269,7 +287,7 @@ public class CreatorCompetitorService {
      * @param taskRecord           已校验存在的创作任务
      * @param materials            任务的创作素材列表
      * @param suggestionRecord     选题建议（可为 null）
-     * @param feedbackReportRecord 数据反馈报告（可为 null）
+     * @param feedbackReportRecord 已完成且结构完整的数据反馈报告
      * @param sampleRecord         竞品样本记录（实体或虚拟）
      * @param request              分析请求参数
      * @return 完整的竞品分析报告响应
@@ -289,6 +307,9 @@ public class CreatorCompetitorService {
             );
         }
         CreatorCompetitorReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
+        // 新竞品结果一旦确认可用，旧总体复盘和它生成的偏好就失去依据，必须在同一事务内先失效。
+        reviewInvalidationMapper.invalidateCreatorReport(taskRecord.getTaskId());
+        reviewInvalidationMapper.invalidateGeneratedPreference(taskRecord.getTaskId());
         creatorCompetitorMapper.upsertReport(reportRecord);
         creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.COMPETITOR_ANALYZED.name());
         return getReport(taskRecord.getTaskId());
@@ -321,68 +342,87 @@ public class CreatorCompetitorService {
     }
 
     /**
-     * 构建竞品分析报告记录（含原始输出和解析后的结构化字段）。
+     * 竞品分析必须建立在当前有效反馈报告上，不能仅凭任务曾经到过某个阶段继续执行。
+     */
+    private CreatorFeedbackReportRecord requireParsedFeedbackReport(CreatorTaskRecord taskRecord) {
+        String status = taskRecord.getStatus();
+        if (!CreatorTaskStatus.FEEDBACK_ANALYZED.name().equals(status)
+                && !CreatorTaskStatus.COMPETITOR_ANALYZED.name().equals(status)
+                && !CreatorTaskStatus.ANALYZED.name().equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "请先完成评论弹幕分析，再进行竞品分析");
+        }
+        CreatorFeedbackReportRecord record = creatorFeedbackMapper.findReportByTaskId(taskRecord.getTaskId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "当前反馈分析报告不存在，请重新完成评论弹幕分析"
+                ));
+        if (!"PARSED".equals(record.getParseStatus())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "当前反馈分析报告不完整，请重新完成评论弹幕分析"
+            );
+        }
+        return record;
+    }
+
+    /**
+     * 构建竞品分析报告记录；格式或必填内容不完整时直接拒绝落库。
      * <p>
      * reportId 使用 UUID：报告是独立的业务实体，UUID 避免自增 ID 猜测，
      * 且支持未来扩展到分享功能（如生成分享链接包含报告 ID）。
      *
      * @param taskId 关联的创作任务标识
-     * @param rawOutput LLM 的原始输出文本
+     * @param rawOutput 模型原始输出
      * @return 填充了基础字段和解析字段的报告记录
      */
     private CreatorCompetitorReportRecord buildReportRecord(String taskId, String rawOutput) {
         CreatorCompetitorReportRecord record = new CreatorCompetitorReportRecord();
         record.setReportId(UUID.randomUUID().toString());
         record.setTaskId(taskId);
-        // 始终保留原始输出：解析失败时可回溯原始数据
         record.setRawOutput(rawOutput);
         fillParsedFields(record, rawOutput);
         return record;
     }
 
-    /**
-     * 从 LLM 的原始输出中提取结构化字段。
-     * <p>
-     * 解析流程：
-     * <ol>
-     *   <li>{@link LlmJsonUtil#extractJsonObject} —— 从可能包含 markdown 包裹的文本中
-     *       提取纯净的 JSON 对象（去除 ```json 代码块、前后说明文字等噪音）。</li>
-     *   <li>{@link ObjectMapper#readTree} —— 将 JSON 字符串解析为 Jackson 的树模型（JsonNode），
-     *       树模型比强类型 POJO 更宽容：字段缺失返回 null 而非抛异常。</li>
-     *   <li>{@link LlmJsonUtil#text} / {@link LlmJsonUtil#json} —— 从 JsonNode 中安全提取
-     *       各字段值。text() 用于简单字符串字段，json() 用于嵌套对象/数组字段
-     *       （通过 ObjectMapper.writeValueAsString 序列化回 JSON 字符串存储）。</li>
-     * </ol>
-     * <p>
-     * 为什么用 JsonNode 树模型而非强类型 POJO 反序列化？
-     * 竞品分析的输出字段有 7 个，其中 4 个是嵌套结构（advantages/disadvantages/gap/suggestions），
-     * 每个的结构松散且可能因 prompt 版本变化而变化。强类型 POJO 容错性差——
-     * 任一字段结构不匹配就会导致整个反序列化失败，丢失所有可解析字段。
-     * JsonNode 的宽松模式：只解析能解析的部分，缺失的字段自动为 null。
-     * <p>
-     * 异常处理策略：解析失败不抛异常，标记 RAW_ONLY 保留原始数据。
-     * 这样即使本次 prompt 产出的 JSON 格式有 bug，已消耗的 Token 不会白费——
-     * 修复 prompt 后可通过后台任务重新解析历史报告。
-     *
-     * @param record 待填充的报告记录（原地修改）
-     * @param rawOutput LLM 的原始输出文本
-     */
     private void fillParsedFields(CreatorCompetitorReportRecord record, String rawOutput) {
         try {
-            // 第一步：从可能被 markdown 包裹的文本中提取纯净 JSON
-            JsonNode rootNode = objectMapper.readTree(LlmJsonUtil.extractJsonObject(rawOutput));
-            // 第二步：逐字段安全提取。text() 用于简单字符串，json() 用于嵌套结构（序列化回 JSON 字符串存储）
-            record.setCompetitorSummary(LlmJsonUtil.text(rootNode, "competitorSummary"));
-            record.setCompetitorAdvantages(LlmJsonUtil.json(objectMapper, rootNode, "competitorAdvantages"));
-            record.setOwnAdvantages(LlmJsonUtil.json(objectMapper, rootNode, "ownAdvantages"));
-            record.setOwnDisadvantages(LlmJsonUtil.json(objectMapper, rootNode, "ownDisadvantages"));
-            record.setGapAnalysis(LlmJsonUtil.json(objectMapper, rootNode, "gapAnalysis"));
-            record.setImprovementSuggestions(LlmJsonUtil.json(objectMapper, rootNode, "improvementSuggestions"));
-            record.setDifferentiationStrategy(LlmJsonUtil.text(rootNode, "differentiationStrategy"));
+            JsonNode root = objectMapper.readTree(LlmJsonUtil.extractJsonObject(rawOutput));
+            requireText(root, "competitorSummary");
+            requireArray(root, "competitorAdvantages", "advantage", "evidence", "lesson");
+            requireArray(root, "ownAdvantages", "advantage", "evidence");
+            requireArray(root, "ownDisadvantages", "disadvantage", "evidence", "risk");
+            requireArray(root, "gapAnalysis", "dimension", "gap", "priority");
+            requireArray(root, "improvementSuggestions", "suggestion", "reason", "action");
+            requireText(root, "differentiationStrategy");
+            record.setCompetitorSummary(LlmJsonUtil.text(root, "competitorSummary"));
+            record.setCompetitorAdvantages(LlmJsonUtil.json(objectMapper, root, "competitorAdvantages"));
+            record.setOwnAdvantages(LlmJsonUtil.json(objectMapper, root, "ownAdvantages"));
+            record.setOwnDisadvantages(LlmJsonUtil.json(objectMapper, root, "ownDisadvantages"));
+            record.setGapAnalysis(LlmJsonUtil.json(objectMapper, root, "gapAnalysis"));
+            record.setImprovementSuggestions(LlmJsonUtil.json(objectMapper, root, "improvementSuggestions"));
+            record.setDifferentiationStrategy(LlmJsonUtil.text(root, "differentiationStrategy"));
             record.setParseStatus("PARSED");
         } catch (JsonProcessingException | IllegalArgumentException exception) {
-            // 解析失败不抛异常：保留原始输出，后续可改进解析器重新处理
-            record.setParseStatus("RAW_ONLY");
+            throw new IllegalArgumentException("竞品分析输出格式或内容不完整", exception);
+        }
+    }
+
+    private void requireText(JsonNode root, String fieldName) {
+        JsonNode value = root.get(fieldName);
+        if (value == null || !value.isTextual() || value.asText().isBlank()) {
+            throw new IllegalArgumentException(fieldName);
+        }
+    }
+
+    private void requireArray(JsonNode root, String fieldName, String... itemFields) {
+        JsonNode value = root.get(fieldName);
+        if (value == null || !value.isArray() || value.isEmpty()) {
+            throw new IllegalArgumentException(fieldName);
+        }
+        for (JsonNode item : value) {
+            for (String itemField : itemFields) {
+                requireText(item, itemField);
+            }
         }
     }
 
@@ -521,13 +561,10 @@ public class CreatorCompetitorService {
      * <p>
      * 同样经过 normalizeSection 处理每个字段，防止单个字段溢出。
      *
-     * @param record 反馈报告记录，可能为 null（发布前竞品分析时不存在）
-     * @return 格式化的反馈报告文本块，或"未提供"
+     * @param record 已完成且结构完整的反馈报告记录
+     * @return 格式化的反馈报告文本块
      */
     private String buildFeedbackReportPrompt(CreatorFeedbackReportRecord record) {
-        if (record == null) {
-            return "未提供";
-        }
         return """
                 反馈摘要：%s
                 创作者反馈困境：%s

@@ -72,6 +72,21 @@ class ProductionPlanGateServiceTest {
         assertThat(plan.planId()).isEqualTo("plan-1");
     }
 
+    @Test
+    void shouldRejectRepositionWhenVideoIsPublishedOrBvIsBound() {
+        ProductionPlanMapper planMapper = mock(ProductionPlanMapper.class);
+        when(planMapper.countFinalizedPublishingFacts("task-1", "default")).thenReturn(1);
+        ProductionPlanGateService service = new ProductionPlanGateService(
+                planMapper, mock(CreatorWorkflowMapper.class), mock(CreatorSuggestionMapper.class));
+
+        ResponseStatusException exception = catchThrowableOfType(
+                () -> service.ensureRepositionAllowed("task-1", "default"),
+                ResponseStatusException.class);
+
+        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(exception.getReason()).contains("BV 绑定").contains("修订任务");
+    }
+
     private ProductionPlanRecord readyPlan() {
         return new ProductionPlanRecord(
                 1L, "plan-1", "task-1", "default", 1,

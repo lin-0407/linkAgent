@@ -3,7 +3,6 @@ import type { Ref } from 'vue'
 import {
   analyzeCreatorFeedback,
   chatCreatorFeedback,
-  exportCreatorReportMarkdown,
   fetchCreatorFeedbackByBv,
   getCreatorFeedback,
   getCreatorFeedbackDashboard,
@@ -75,6 +74,8 @@ export function useCreatorFeedback(
     maxDanmaku: 500,
     format: 'both' as 'json' | 'both',
   })
+  const savedFeedbackFormSnapshot = ref(feedbackFormSnapshot())
+  const submittedScriptFormSnapshot = reactive(currentFeedbackScriptForm())
 
   // UI
   const isFeedbackChatDrawerOpen = ref(false)
@@ -87,7 +88,6 @@ export function useCreatorFeedback(
   const isAskingFeedbackChat = ref(false)
   const isRebuildingFeedbackEvidenceIndex = ref(false)
   const isLoadingFeedbackEvidenceIndexStatus = ref(false)
-  const isExportingReportMarkdown = ref(false)
 
   // ── 计算 ──
 
@@ -123,6 +123,14 @@ export function useCreatorFeedback(
   })
 
   const feedbackScriptBv = computed(() => extractBvid(feedbackScriptForm.bvInput))
+  const hasUnsavedTaskFeedbackInput = computed(() =>
+    Boolean(
+      feedbackFormSnapshot() !== savedFeedbackFormSnapshot.value ||
+        feedbackChatForm.question.trim() ||
+        feedbackImportFile.value ||
+        feedbackScriptFormSnapshot() !== JSON.stringify(submittedScriptFormSnapshot),
+    ),
+  )
 
   // ── 工具 ──
   function showError(error: unknown) {
@@ -189,6 +197,7 @@ export function useCreatorFeedback(
       feedbackDashboard.value = null
       feedbackFetchResult.value = null
       feedbackImportWarnings.value = []
+      savedFeedbackFormSnapshot.value = feedbackFormSnapshot()
       return result
     } catch (error) {
       if (isCurrentRequest(taskId, version)) showError(error)
@@ -226,6 +235,7 @@ export function useCreatorFeedback(
       const loadedDashboard = await optionalRequest(() => getCreatorFeedbackDashboard(taskId))
       if (!isCurrentRequest(taskId, version)) return null
       feedbackDashboard.value = loadedDashboard
+      feedbackImportFile.value = null
       return result
     } catch (error) {
       if (isCurrentRequest(taskId, version)) showError(error)
@@ -267,6 +277,7 @@ export function useCreatorFeedback(
       const loadedDashboard = await optionalRequest(() => getCreatorFeedbackDashboard(taskId))
       if (!isCurrentRequest(taskId, version)) return null
       feedbackDashboard.value = loadedDashboard
+      Object.assign(submittedScriptFormSnapshot, currentFeedbackScriptForm())
       return result
     } catch (error) {
       if (isCurrentRequest(taskId, version)) showError(error)
@@ -343,26 +354,6 @@ export function useCreatorFeedback(
     if (clearQuestion) feedbackChatForm.question = ''
   }
 
-  async function downloadReportMarkdown() {
-    const taskId = selectedTaskId.value
-    if (!taskId || isExportingReportMarkdown.value) return false
-    const version = requestVersion
-    isExportingReportMarkdown.value = true
-    beginRequest()
-    try {
-      const { blob, filename } = await exportCreatorReportMarkdown(taskId)
-      if (!isCurrentRequest(taskId, version)) return false
-      triggerBrowserDownload(blob, filename || `creator-report-${taskId}.md`)
-      successRef.value = '报告已下载。'
-      return true
-    } catch (error) {
-      if (isCurrentRequest(taskId, version)) showError(error)
-      return false
-    } finally {
-      if (requestVersion === version) isExportingReportMarkdown.value = false
-    }
-  }
-
   async function loadEvidenceIndexStatus(): Promise<CreatorFeedbackEvidenceIndexStatus | null> {
     const taskId = selectedTaskId.value
     if (!taskId || isLoadingFeedbackEvidenceIndexStatus.value) return null
@@ -404,7 +395,7 @@ export function useCreatorFeedback(
         feedbackEvidenceIndexStatus.value = status
       }
       clearFeedbackChatState(false)
-      successRef.value = '证据索引重建已触发，可在反馈报告弹窗查看最新状态。'
+      successRef.value = '证据索引重建已触发，可在反馈分析弹窗查看最新状态。'
       return result
     } catch (error) {
       if (isCurrentRequest(taskId, version)) showError(error)
@@ -424,6 +415,16 @@ export function useCreatorFeedback(
     feedbackImportWarnings.value = []
     feedbackEvidenceIndexStatus.value = null
     feedbackEvidenceIndexWarnings.value = []
+    feedbackForm.commentSamples = ''
+    feedbackForm.danmakuSamples = ''
+    feedbackForm.extraContext = ''
+    feedbackScriptForm.bvInput = ''
+    feedbackScriptForm.maxComments = 50
+    feedbackScriptForm.maxRepliesPerComment = 20
+    feedbackScriptForm.maxDanmaku = 500
+    feedbackScriptForm.format = 'both'
+    savedFeedbackFormSnapshot.value = feedbackFormSnapshot()
+    Object.assign(submittedScriptFormSnapshot, currentFeedbackScriptForm())
     isFeedbackChatDrawerOpen.value = false
     clearFeedbackChatState()
     isSavingFeedback.value = false
@@ -433,7 +434,6 @@ export function useCreatorFeedback(
     isAskingFeedbackChat.value = false
     isRebuildingFeedbackEvidenceIndex.value = false
     isLoadingFeedbackEvidenceIndexStatus.value = false
-    isExportingReportMarkdown.value = false
   }
 
   return {
@@ -447,25 +447,35 @@ export function useCreatorFeedback(
     isSavingFeedback, isImportingFeedback, isFetchingFeedback,
     isAnalyzingFeedback, isAskingFeedbackChat,
     isRebuildingFeedbackEvidenceIndex, isLoadingFeedbackEvidenceIndexStatus,
-    isExportingReportMarkdown,
     // 计算
     hasFeedbackSampleInput, canRunFeedbackAnalyze, canAskFeedbackChat,
-    feedbackDashboardWarnings, feedbackScriptBv,
+    feedbackDashboardWarnings, feedbackScriptBv, hasUnsavedTaskFeedbackInput,
     // 方法
     loadFeedbackData, resetFeedbackData, submitFeedback,
     handleFeedbackFileChange, importFeedbackFile,
     fetchFeedbackByBv, runAnalyze, askChat,
-    downloadReportMarkdown, loadEvidenceIndexStatus, rebuildEvidenceIndex,
+    loadEvidenceIndexStatus, rebuildEvidenceIndex,
   }
-}
 
-function triggerBrowserDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  document.body.appendChild(anchor)
-  anchor.click()
-  document.body.removeChild(anchor)
-  URL.revokeObjectURL(url)
+  function feedbackFormSnapshot() {
+    return JSON.stringify({
+      commentSamples: feedbackForm.commentSamples,
+      danmakuSamples: feedbackForm.danmakuSamples,
+      extraContext: feedbackForm.extraContext,
+    })
+  }
+
+  function feedbackScriptFormSnapshot() {
+    return JSON.stringify(currentFeedbackScriptForm())
+  }
+
+  function currentFeedbackScriptForm() {
+    return {
+      bvInput: feedbackScriptForm.bvInput,
+      maxComments: feedbackScriptForm.maxComments,
+      maxRepliesPerComment: feedbackScriptForm.maxRepliesPerComment,
+      maxDanmaku: feedbackScriptForm.maxDanmaku,
+      format: feedbackScriptForm.format,
+    }
+  }
 }

@@ -9,7 +9,7 @@
  * 弹窗逻辑包含任务列表加载、分析触发、报告展示三块独立状态，
  * 内联会使 KnowledgeWorkspace 的 script 和 template 过于臃肿。
  */
-import { onMounted, ref, computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { analyzeCompetitorByReference, listCreatorTasks } from '@/api/creator'
 import type { ReferenceVideo } from '@/types/knowledge'
 import type { CreatorCompetitorReport, CreatorTaskSummary } from '@/types/creator'
@@ -32,14 +32,17 @@ const tasks = ref<CreatorTaskSummary[]>([])
 const tasksLoading = ref(false)
 const tasksError = ref('')
 const selectedTaskId = ref('')
+const eligibleStatuses = new Set(['FEEDBACK_ANALYZED', 'COMPETITOR_ANALYZED', 'ANALYZED'])
 
 /** 加载创作任务列表，供用户选择要对比哪个任务 */
 async function loadTasks() {
   tasksLoading.value = true
   tasksError.value = ''
   try {
-    tasks.value = await listCreatorTasks(50)
+    tasks.value = (await listCreatorTasks(50))
+      .filter((task) => eligibleStatuses.has(task.status))
   } catch (err) {
+    tasks.value = []
     tasksError.value = err instanceof Error ? err.message : String(err)
   } finally {
     tasksLoading.value = false
@@ -70,6 +73,8 @@ const hasAnalyzed = ref(false)
 /** 触发竞品分析 */
 async function startAnalysis() {
   if (!props.target || !selectedTaskId.value) return
+  const selectedTask = tasks.value.find((task) => task.taskId === selectedTaskId.value)
+  if (!selectedTask || !eligibleStatuses.has(selectedTask.status)) return
   analyzing.value = true
   analyzeError.value = ''
   report.value = null
@@ -89,17 +94,31 @@ async function startAnalysis() {
 }
 
 /** 是否可以开始分析：必须选择了任务且有目标视频 */
-const canAnalyze = computed(() => !!selectedTaskId.value && !!props.target && !analyzing.value)
+const canAnalyze = computed(() =>
+  Boolean(
+    props.target &&
+      tasks.value.some((task) => task.taskId === selectedTaskId.value) &&
+      !analyzing.value,
+  ),
+)
 
-// ── 生命周期 ──
-
-onMounted(() => {
-  loadTasks()
-})
+watch(
+  () => props.target?.videoId ?? '',
+  (videoId) => {
+    resetAnalysisState()
+    if (videoId) void loadTasks()
+  },
+  { immediate: true },
+)
 
 // ── 关闭时重置内部状态（下次打开时是全新的一次分析） ──
 
 function handleClose() {
+  resetAnalysisState()
+  emit('close')
+}
+
+function resetAnalysisState() {
   selectedTaskId.value = ''
   customGuidance.value = ''
   analysisFocus.value = ''
@@ -107,7 +126,6 @@ function handleClose() {
   analyzeError.value = ''
   report.value = null
   hasAnalyzed.value = false
-  emit('close')
 }
 
 // ── 格式化工具 ──
@@ -159,6 +177,9 @@ function formatJsonField(value: string | null): string {
             </label>
             <p v-if="tasksLoading" class="creator-muted">加载任务列表…</p>
             <p v-else-if="tasksError" class="creator-muted error-text">加载失败：{{ tasksError }}</p>
+            <p v-else-if="tasks.length === 0" class="creator-muted">
+              暂无已完成反馈分析的任务。
+            </p>
             <p v-else-if="selectedTaskName" class="creator-muted">
               将对「{{ selectedTaskName }}」进行竞品对比分析
             </p>

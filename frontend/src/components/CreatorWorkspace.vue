@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { onBeforeRouteLeave } from 'vue-router'
 import { ApiError } from '@/api/http'
 import {
   getCreatorTask,
@@ -49,6 +50,7 @@ import type {
   CreatorContextTermPayload,
   CreatorContextTermType,
   CreatorPreferenceMode,
+  CreatorReport,
   CreatorTask,
   CreatorTaskSummary,
   CreatorWorkflowStage,
@@ -110,8 +112,10 @@ const guidance = useCreatorGuidance()
 const {
   prePublishForm, feedbackAnalyzeForm,
   guidanceEditorTarget, lastPrePublishPreferenceMode, hasPrePublishPreferenceModeSnapshot,
+  hasTaskGuidanceInput,
   loadGuidanceSettings, openGuidanceEditor, closeGuidanceEditor,
-  resetCurrentGuidance, resetPrePublishPreferenceMode,
+  resetCurrentGuidance, resetTaskGuidanceFields,
+  markPrePublishGuidanceSubmitted, markFeedbackGuidanceSubmitted,
 } = guidance
 const preferenceModeOptions: Array<{
   value: CreatorPreferenceMode
@@ -169,6 +173,7 @@ const {
   taskForm, pendingDeleteTask,
   isLoadingTasks, isCreatingTask, isUpdatingTask, isDeletingTask,
   selectedTaskId, hasSelectedTask, hasSelectedTaskMaterials, hasTaskMaterialInput,
+  hasUnsavedTaskFormInput,
   filteredTasks, taskSummaryStats, taskSubmitLabel, taskFormTitle, taskFormHint,
   currentVideoType,
   taskStatusOptions, videoTypeOptions,
@@ -268,7 +273,7 @@ const creatorStepMetas = computed<CreatorStepMeta[]>(() => {
   }
   steps.push(
     { key: 'feedback', label: '观众反馈', shortLabel: '反馈', description: '收集观众意见与反馈' },
-    { key: 'report', label: '复盘报告', shortLabel: '复盘', description: '生成复盘总结报告' },
+    { key: 'report', label: '总体复盘', shortLabel: '复盘', description: '汇总反馈与竞品结论' },
   )
   return steps
 })
@@ -360,10 +365,19 @@ const {
   isSavingFeedback, isImportingFeedback, isFetchingFeedback,
   isAnalyzingFeedback, isAskingFeedbackChat,
   isRebuildingFeedbackEvidenceIndex, isLoadingFeedbackEvidenceIndexStatus,
-  isExportingReportMarkdown,
   hasFeedbackSampleInput, canRunFeedbackAnalyze, canAskFeedbackChat,
-  feedbackDashboardWarnings, feedbackScriptBv,
+  feedbackDashboardWarnings, feedbackScriptBv, hasUnsavedTaskFeedbackInput,
 } = feedbackModule
+const hasUnsavedCurrentTaskInput = computed(() =>
+  hasUnsavedTaskFormInput.value ||
+    hasUnsavedTaskFeedbackInput.value ||
+    hasTaskGuidanceInput.value ||
+    Boolean(
+      workflowMessageDraft.value.trim() ||
+        contextTermForm.term.trim() ||
+        contextTermForm.evidenceText.trim(),
+    ),
+)
 const canGeneratePrePublishDraft = computed(() => {
   const status = workflowSession.value?.status
   return Boolean(
@@ -481,7 +495,7 @@ const resultModalTitle = computed(() => {
     return '观众反馈导入结果'
   }
   if (resultModalTarget.value === 'feedbackReport') {
-    return '复盘报告'
+    return '反馈分析结果'
   }
   return ''
 })
@@ -544,6 +558,14 @@ onBeforeUnmount(() => {
   closeWorkflowEventSource()
   window.removeEventListener('keydown', handleWorkspaceKeydown)
 })
+
+function confirmDiscardUnsavedInput(message: string) {
+  return !hasUnsavedCurrentTaskInput.value || window.confirm(message)
+}
+
+onBeforeRouteLeave(() =>
+  confirmDiscardUnsavedInput('当前任务还有未保存的输入，离开后会清空。确定继续吗？'),
+)
 
 watch(
   () => props.developerMode,
@@ -640,6 +662,11 @@ function resetGeneratedTaskResults() {
   hasPrePublishPreferenceModeSnapshot.value = false
 }
 
+function resetTaskLocalDrafts() {
+  resetContextTermForm()
+  isContextLibraryOpen.value = false
+}
+
 async function submitTask() {
   if (taskManageMode.value === 'edit') {
     await updateTask()
@@ -649,8 +676,9 @@ async function submitTask() {
   const task = await taskModule.submitTask()
   if (!task) return
   // 编排层：跨域操作 + UI 状态
-  resetPrePublishPreferenceMode()
+  resetTaskGuidanceFields()
   resetGeneratedTaskResults()
+  resetTaskLocalDrafts()
   taskModule.resetTaskForm()
   restoredTaskId.value = task.taskId
   activeStep.value = 'prePublish'
@@ -691,6 +719,9 @@ async function updateTask() {
 }
 
 function startCreateTask() {
+  if (!confirmDiscardUnsavedInput('当前任务还有未保存的输入，新建任务后会清空。确定继续吗？')) {
+    return
+  }
   taskModule.startCreateTask()
   taskManageMode.value = 'create'
   isTaskComposerOpen.value = true
@@ -702,6 +733,9 @@ function startCreateTask() {
 }
 
 function returnToAiCreation() {
+  if (!confirmDiscardUnsavedInput('当前任务还有未保存的输入，离开后会清空。确定继续吗？')) {
+    return
+  }
   resetSelectedWorkspace()
   // 主动返回创意入口时清空恢复标记，避免任务列表刷新后又自动进入刚离开的项目。
   restoredTaskId.value = ''
@@ -881,8 +915,21 @@ async function confirmDeleteTask() {
 }
 
 async function selectTask(taskId: string) {
+  if (selectedTaskId.value === taskId && !hasUnsavedCurrentTaskInput.value) {
+    closeTaskManager()
+    return
+  }
+  const discardMessage = selectedTaskId.value === taskId
+    ? '当前任务还有未保存的输入，重新载入后会清空。确定继续吗？'
+    : '当前任务还有未保存的输入，切换后会清空。确定继续吗？'
+  if (!confirmDiscardUnsavedInput(discardMessage)) {
+    return
+  }
   errorMessage.value = ''
   successMessage.value = ''
+  const task = await taskModule.loadTask(taskId)
+  if (!task) return
+
   resultModalTarget.value = null
   pendingDeleteTask.value = null
   taskManageMode.value = 'create'
@@ -891,15 +938,14 @@ async function selectTask(taskId: string) {
   currentMediaProcessingStatus.value = null
   currentPreflightReviewStatus.value = null
   productionPlanReady.value = false
-  // 委托 taskModule 加载完整任务（内部已处理 selectedTask / store）
-  const task = await taskModule.loadTask(taskId)
-  if (!task) return
   workflowModule.resetWorkflowState()
   feedbackModule.resetFeedbackData()
+  resetTaskLocalDrafts()
   // 编排层：跨域操作
   isTaskComposerOpen.value = true
   activeStep.value = resolveTaskEntryStep(task)
-  resetPrePublishPreferenceMode()
+  taskModule.fillTaskForm(task)
+  resetTaskGuidanceFields()
   if (requiresPreflight(task) && isMediaFeatureAvailabilityResolved.value && !isMediaFeatureEnabled.value) {
     errorMessage.value = mediaFeatureUnavailableMessage
   }
@@ -990,8 +1036,28 @@ async function refreshCurrentDraftVideo(taskId = selectedTask.value?.taskId) {
   }
 }
 
+async function handleProductionPlanRegenerated() {
+  const taskId = selectedTaskId.value
+  if (!taskId) return
+  // 后端已经使旧发布后链路失效，本地必须同步清空，避免刷新前仍展示旧报告和完成态。
+  currentDraftRefreshGeneration += 1
+  currentDraftVideo.value = null
+  currentMediaProcessingStatus.value = null
+  currentPreflightReviewStatus.value = null
+  feedbackModule.resetFeedbackData()
+
+  if (selectedTask.value?.taskId === taskId) {
+    selectedTask.value = {
+      ...selectedTask.value,
+      status: 'PRE_PUBLISH_ANALYZED',
+    }
+  }
+  await taskModule.refreshTasks()
+}
+
 async function handleCreativeOptionConfirmed(taskId: string) {
   await selectTask(taskId)
+  if (selectedTaskId.value !== taskId) return
   activeStep.value = 'production'
   successMessage.value = '发布方案已确认，下一步生成制作蓝图。'
 }
@@ -1171,6 +1237,7 @@ async function runPrePublishAnalyze() {
     if (!result) return
     lastPrePublishPreferenceMode.value = prePublishForm.preferenceMode
     hasPrePublishPreferenceModeSnapshot.value = true
+    markPrePublishGuidanceSubmitted()
     successMessage.value = '发布前优化建议已生成，请确认采用后进入制作蓝图。'
   } finally {
     await refreshUsageStats(1, false)
@@ -1208,6 +1275,8 @@ async function sendWorkflowSupplement() {
 async function submitFeedback() {
   const result = await feedbackModule.submitFeedback()
   if (!result) return
+  await syncTaskAfterFeedbackChange(result.taskId)
+  if (selectedTaskId.value !== result.taskId) return
   resultModalTarget.value = null
   activeStep.value = 'feedback'
   successMessage.value = '评论弹幕样例已保存，可以开始分析。'
@@ -1218,19 +1287,42 @@ function handleFeedbackFileChange(event: Event) {
 }
 
 async function importFeedbackFile() {
+  if (!feedbackImportFile.value) return
+  const taskId = selectedTaskId.value
+  if (!taskId) return
   const result = await feedbackModule.importFeedbackFile()
   if (!result) return
+  await syncTaskAfterFeedbackChange(taskId)
+  if (selectedTaskId.value !== taskId) return
   successMessage.value = `已导入 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，仪表盘已更新。`
   openResultModal('feedbackDashboard')
 }
 
 async function fetchFeedbackByBv() {
+  if (!feedbackScriptBv.value) return
+  const taskId = selectedTaskId.value
+  if (!taskId) return
   const result = await feedbackModule.fetchFeedbackByBv()
   if (!result) return
+  await syncTaskAfterFeedbackChange(taskId)
+  if (selectedTaskId.value !== taskId) return
   successMessage.value = showDeveloperTools.value
     ? `已读取 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕，文件已保存到 ${result.outputDirectory}。`
     : `已读取 ${result.commentCount} 条评论、${result.danmakuCount} 条弹幕。`
   openResultModal('feedbackDashboard')
+}
+
+async function syncTaskAfterFeedbackChange(taskId: string) {
+  if (selectedTaskId.value !== taskId) return
+  feedbackReport.value = null
+  if (selectedTask.value?.taskId === taskId) {
+    selectedTask.value = { ...selectedTask.value, status: 'FEEDBACK_COLLECTING' }
+  }
+  await Promise.all([
+    taskModule.refreshTasks(),
+    selectedTask.value ? loadCreatorPreferences(selectedTask.value.userId) : Promise.resolve(),
+  ])
+  if (selectedTaskId.value === taskId) activeStep.value = 'feedback'
 }
 
 async function runFeedbackAnalyze() {
@@ -1243,13 +1335,13 @@ async function runFeedbackAnalyze() {
       extraRequirement: feedbackAnalyzeForm.extraRequirement,
     })
     if (!report || selectedTaskId.value !== taskId) return
-    const task = await getCreatorTask(report.taskId)
-    if (selectedTaskId.value !== report.taskId) return
-    selectedTask.value = task
+    markFeedbackGuidanceSubmitted()
+    if (selectedTask.value?.taskId === report.taskId) {
+      selectedTask.value = { ...selectedTask.value, status: 'FEEDBACK_ANALYZED' }
+    }
     activeStep.value = 'report'
-    successMessage.value = '评论弹幕分析完成，反馈报告已保存。'
-    openResultModal('feedbackReport')
-    await refreshTasks()
+    successMessage.value = '反馈分析完成，可以继续选择参考案例进行竞品分析。'
+    await taskModule.refreshTasks()
   } catch (error) {
     showError(error)
   } finally {
@@ -1259,20 +1351,32 @@ async function runFeedbackAnalyze() {
   }
 }
 
-async function askFeedbackChat() {
-  if (!canAskFeedbackChat.value) return
-  const taskId = selectedTaskId.value
-  const result = await feedbackModule.askChat()
-  if (result) {
-    successMessage.value = '反馈追问已生成，回答基于当前任务报告和评论弹幕证据。'
+async function handleCreatorReportGenerated(report: CreatorReport) {
+  const taskId = report.taskId
+  if (selectedTaskId.value !== taskId) return
+  if (selectedTask.value?.taskId === report.taskId) {
+    selectedTask.value = { ...selectedTask.value, status: 'ANALYZED' }
   }
+  successMessage.value = '总体复盘已生成。'
+  await Promise.all([
+    taskModule.refreshTasks(),
+    selectedTask.value ? loadCreatorPreferences(selectedTask.value.userId) : Promise.resolve(),
+  ])
   if (selectedTaskId.value === taskId) {
     await refreshUsageStats(1, false)
   }
 }
 
-async function downloadReportMarkdown() {
-  await feedbackModule.downloadReportMarkdown()
+async function askFeedbackChat() {
+  if (!canAskFeedbackChat.value) return
+  const taskId = selectedTaskId.value
+  const result = await feedbackModule.askChat()
+  if (result) {
+    successMessage.value = '反馈追问已生成，回答基于当前反馈分析和评论弹幕证据。'
+  }
+  if (selectedTaskId.value === taskId) {
+    await refreshUsageStats(1, false)
+  }
 }
 
 async function loadFeedbackEvidenceIndexStatus() {
@@ -1292,6 +1396,9 @@ function requiresPreflight(task: Pick<CreatorTask, 'status'>) {
 function resolveTaskEntryStep(task: Pick<CreatorTask, 'status'>): CreatorWorkStep {
   if (hasFeedbackResult(task.status)) {
     return 'report'
+  }
+  if (task.status === 'FEEDBACK_COLLECTING') {
+    return 'feedback'
   }
   if (hasPrePublishResult(task.status) && hasConfirmedPrePublish.value) {
     return 'production'
@@ -1358,6 +1465,8 @@ function resolveRefreshTargetTask() {
 function resetSelectedWorkspace() {
   workflowModule.resetWorkflowState()
   feedbackModule.resetFeedbackData()
+  resetTaskGuidanceFields()
+  resetTaskLocalDrafts()
   selectedTask.value = null
   currentDraftVideo.value = null
   currentMediaProcessingStatus.value = null
@@ -1372,7 +1481,6 @@ function resetSelectedWorkspace() {
   usageCallPage.value = null
   usageCurrentPage.value = 1
   usageCategoryFilter.value = 'ALL'
-  resetPrePublishPreferenceMode()
   resultModalTarget.value = null
   isTaskComposerOpen.value = false
   activeStep.value = 'task'
@@ -1517,7 +1625,6 @@ provideCreatorWorkspace({
     currentMediaProcessingStatus,
     currentPreflightReviewStatus,
     currentVideoType,
-    downloadReportMarkdown,
     feedback,
     feedbackAnalyzeForm,
     feedbackDashboard,
@@ -1547,7 +1654,6 @@ provideCreatorWorkspace({
     isAnalyzingPrePublish,
     isConfirmingPrePublish,
     isCreatingTask,
-    isExportingReportMarkdown,
     isFetchingFeedback,
     isGeneratingPrePublishDraft,
     isImportingFeedback,
@@ -1637,7 +1743,7 @@ provideCreatorWorkspace({
           <span :class="{ active: activeStep === 'production' || productionPlanReady }">制作蓝图</span>
           <span v-if="isMediaFeatureEnabled" :class="{ active: activeStep === 'preflight' }">成片试映</span>
           <span :class="{ active: Boolean(feedback || feedbackDashboard) }">观众反馈</span>
-          <span :class="{ active: Boolean(feedbackReport) }">复盘报告</span>
+          <span :class="{ active: ['ANALYZED', 'ARCHIVED'].includes(selectedTask?.status ?? '') }">总体复盘</span>
         </div>
         <button
           v-if="showDeveloperTools"
@@ -1766,13 +1872,14 @@ provideCreatorWorkspace({
         <ProductionPlanTab
           v-if="activeStep === 'production'"
           @ready-change="productionPlanReady = $event"
+          @regenerated="handleProductionPlanRegenerated"
         />
 
         <PreflightTab v-if="isMediaFeatureEnabled && activeStep === 'preflight'" />
 
         <FeedbackTab v-if="activeStep === 'feedback'" />
 
-        <ReportTab v-if="activeStep === 'report'" />
+        <ReportTab v-if="activeStep === 'report'" @generated="handleCreatorReportGenerated" />
 
         <UsageTab v-if="activeStep === 'usage'" />
       </section>

@@ -3,7 +3,6 @@ package com.link.linkagent.creator.feedback.model;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CreatorFeedbackAnalysisOutputTest {
@@ -50,7 +49,7 @@ class CreatorFeedbackAnalysisOutputTest {
     }
 
     @Test
-    void shouldAcceptCompleteOutputWithEmptyOptionalFindingLists() throws Exception {
+    void shouldRejectCompleteOutputWhenRequiredAnalysisListsAreEmpty() {
         String json = """
                 {
                   "feedbackSummary": "整体反馈",
@@ -67,12 +66,9 @@ class CreatorFeedbackAnalysisOutputTest {
                 }
                 """;
 
-        CreatorFeedbackAnalysisOutput output = objectMapper.readValue(
-                json,
-                CreatorFeedbackAnalysisOutput.class
-        );
-
-        assertThat(output.feedbackSummary()).isEqualTo("整体反馈");
-        assertThat(output.hotTopics()).isEmpty();
+        assertThatThrownBy(() -> objectMapper.readValue(json, CreatorFeedbackAnalysisOutput.class))
+                .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                .hasStackTraceContaining("hotTopics");
     }
+
 }

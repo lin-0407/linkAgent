@@ -3,7 +3,6 @@ package com.link.linkagent.creator.report.model;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CreatorReportAnalysisOutputTest {
@@ -30,7 +29,7 @@ class CreatorReportAnalysisOutputTest {
     }
 
     @Test
-    void shouldAcceptCompleteOutputWithEmptyFindingLists() throws Exception {
+    void shouldRejectCompleteOutputWhenRequiredAnalysisListsAreEmpty() {
         String json = """
                 {
                   "contentSummary": "内容总结",
@@ -55,9 +54,9 @@ class CreatorReportAnalysisOutputTest {
                 }
                 """;
 
-        CreatorReportAnalysisOutput output = objectMapper.readValue(json, CreatorReportAnalysisOutput.class);
-
-        assertThat(output.overallConclusion()).isEqualTo("总体判断");
-        assertThat(output.nextActionSuggestions()).isEmpty();
+        assertThatThrownBy(() -> objectMapper.readValue(json, CreatorReportAnalysisOutput.class))
+                .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                .hasStackTraceContaining("coreSellingPoints");
     }
+
 }

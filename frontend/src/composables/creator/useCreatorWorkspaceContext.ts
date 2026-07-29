@@ -66,7 +66,6 @@ export interface CreatorWorkspaceShell {
   currentMediaProcessingStatus: Ref<MediaProcessingJob['status'] | null>
   currentPreflightReviewStatus: Ref<PreflightReviewStatus | null>
   currentVideoType: WorkspaceRef<string>
-  downloadReportMarkdown: () => Promise<void>
   feedback: WorkspaceRef<CreatorFeedback | null>
   feedbackAnalyzeForm: GuidanceModule['feedbackAnalyzeForm']
   feedbackDashboard: WorkspaceRef<CreatorFeedbackDashboard | null>
@@ -106,7 +105,6 @@ export interface CreatorWorkspaceShell {
   isAnalyzingPrePublish: WorkspaceRef<boolean>
   isConfirmingPrePublish: WorkspaceRef<boolean>
   isCreatingTask: WorkspaceRef<boolean>
-  isExportingReportMarkdown: WorkspaceRef<boolean>
   isFetchingFeedback: WorkspaceRef<boolean>
   isGeneratingPrePublishDraft: WorkspaceRef<boolean>
   isImportingFeedback: WorkspaceRef<boolean>

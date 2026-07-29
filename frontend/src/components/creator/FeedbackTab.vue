@@ -10,7 +10,6 @@ const {
   feedbackDashboard,
   feedbackFetchResult,
   openResultModal,
-  feedbackReport,
   canEnterFeedback,
   feedbackImportFile,
   isImportingFeedback,
@@ -87,14 +86,6 @@ function refreshBindingAfterSync() {
           @click="openResultModal('feedbackDashboard')"
         >
           查看导入结果
-        </button>
-        <button
-          v-if="feedbackReport"
-          type="button"
-          class="creator-secondary-action"
-          @click="openResultModal('feedbackReport')"
-        >
-          查看分析结果
         </button>
         <button
           type="button"
@@ -336,7 +327,7 @@ function refreshBindingAfterSync() {
     </div>
 
     <p v-if="feedback" class="creator-inline-note">
-      样例已于 {{ formatDate(feedback.updateTime) }} 保存，导入结果和分析报告请通过上方按钮查看。
+      样例已于 {{ formatDate(feedback.updateTime) }} 保存，导入结果可通过上方按钮查看。
     </p>
   </section>
 </template>

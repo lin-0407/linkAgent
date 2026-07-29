@@ -37,6 +37,15 @@ public record CreatorFeedbackAnalysisOutput(
         nextContentSuggestions = requireList(nextContentSuggestions, "nextContentSuggestions");
         interactionSuggestions = requireList(interactionSuggestions, "interactionSuggestions");
         feedbackActionPlan = requireList(feedbackActionPlan, "feedbackActionPlan");
+        if (hotTopics.isEmpty()) {
+            throw new IllegalArgumentException("结构化输出缺少必要分析内容：hotTopics");
+        }
+        if (nextContentSuggestions.isEmpty()) {
+            throw new IllegalArgumentException("结构化输出缺少必要分析内容：nextContentSuggestions");
+        }
+        if (feedbackActionPlan.isEmpty()) {
+            throw new IllegalArgumentException("结构化输出缺少必要分析内容：feedbackActionPlan");
+        }
     }
 
     public record HotTopic(

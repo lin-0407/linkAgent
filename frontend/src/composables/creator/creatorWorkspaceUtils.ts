@@ -282,7 +282,7 @@ export function evalStageLabel(stage: CreatorWorkflowStage) {
   const labels: Record<CreatorWorkflowStage, string> = {
     PRE_PUBLISH: '发布前优化',
     FEEDBACK: '评论弹幕',
-    REPORT: '复盘报告',
+    REPORT: '总体复盘',
   }
   return labels[stage]
 }
@@ -302,6 +302,7 @@ export function isPrePublishSuggestionVisible(status: string) {
 export function hasPrePublishResult(status: string) {
   return [
     'PRE_PUBLISH_ANALYZED',
+    'FEEDBACK_COLLECTING',
     'FEEDBACK_ANALYZED',
     'COMPETITOR_ANALYZED',
     'ANALYZED',
@@ -327,9 +328,10 @@ export function statusLabel(status: string) {
   const labels: Record<string, string> = {
     DRAFT: '草稿',
     PRE_PUBLISH_ANALYZED: '已发布前优化',
+    FEEDBACK_COLLECTING: '反馈待分析',
     FEEDBACK_ANALYZED: '已反馈分析',
     COMPETITOR_ANALYZED: '已竞品分析',
-    ANALYZED: '已分析',
+    ANALYZED: '总体复盘完成',
     ARCHIVED: '已归档',
   }
   return labels[status] ?? status

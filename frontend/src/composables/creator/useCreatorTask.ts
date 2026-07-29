@@ -58,6 +58,25 @@ export function useCreatorTask(errorRef: Ref<string>) {
       hasText(taskForm.subtitle),
   )
 
+  const hasUnsavedTaskFormInput = computed(() => {
+    if (taskManageMode.value === 'edit' && selectedTask.value) {
+      return taskForm.taskName.trim() !== selectedTask.value.taskName.trim() ||
+        hasTaskAnalysisInputChanged(selectedTask.value)
+    }
+    if (
+      selectedTask.value &&
+      taskForm.taskName.trim() === selectedTask.value.taskName.trim() &&
+      !hasTaskAnalysisInputChanged(selectedTask.value)
+    ) {
+      return false
+    }
+    return Boolean(
+      taskForm.taskName.trim() ||
+        normalizeVideoType(taskForm.videoType) !== '未分类' ||
+        hasTaskMaterialInput.value,
+    )
+  })
+
   const filteredTasks = computed(() => {
     const keyword = taskSearchQuery.value.trim().toLowerCase()
     return tasks.value.filter((task) => {
@@ -299,9 +318,10 @@ export function useCreatorTask(errorRef: Ref<string>) {
     { value: 'ALL', label: '全部状态' },
     { value: 'DRAFT', label: '草稿' },
     { value: 'PRE_PUBLISH_ANALYZED', label: '发布前完成' },
+    { value: 'FEEDBACK_COLLECTING', label: '反馈待分析' },
     { value: 'FEEDBACK_ANALYZED', label: '反馈分析完成' },
     { value: 'COMPETITOR_ANALYZED', label: '竞品分析完成' },
-    { value: 'ANALYZED', label: '复盘完成' },
+    { value: 'ANALYZED', label: '总体复盘完成' },
   ]
 
   const videoTypeOptions = [
@@ -316,7 +336,7 @@ export function useCreatorTask(errorRef: Ref<string>) {
     isLoadingTasks, isCreatingTask, isUpdatingTask, isDeletingTask,
     // 计算
     selectedTaskId, hasSelectedTask, hasSelectedTaskMaterials,
-    hasTaskMaterialInput, filteredTasks, taskSummaryStats,
+    hasTaskMaterialInput, hasUnsavedTaskFormInput, filteredTasks, taskSummaryStats,
     taskSubmitLabel, taskFormTitle, taskFormHint, pendingDeleteTaskName,
     currentVideoType,
     // 选项

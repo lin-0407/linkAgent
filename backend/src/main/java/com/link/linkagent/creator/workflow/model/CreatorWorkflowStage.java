@@ -11,7 +11,7 @@ public enum CreatorWorkflowStage {
     PRE_PUBLISH,
 
     /**
-     * 评论弹幕分析阶段：围绕用户主动提供的评论和弹幕样例做反馈复盘。
+     * 评论弹幕分析阶段：围绕用户主动提供的评论和弹幕样例生成反馈分析中间结果。
      */
     FEEDBACK,
 

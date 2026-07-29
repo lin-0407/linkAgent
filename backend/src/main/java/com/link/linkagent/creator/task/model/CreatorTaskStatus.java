@@ -17,6 +17,12 @@ public enum CreatorTaskStatus {
     PRE_PUBLISH_ANALYZED,
 
     /**
+     * 已进入观众反馈阶段，但当前反馈数据尚未完成分析。
+     * 单独保留该状态是为了让反馈变化后回到反馈页，而不是误回制作蓝图阶段。
+     */
+    FEEDBACK_COLLECTING,
+
+    /**
      * 评论弹幕分析完成后先停在这个状态，便于复盘报告判断前置数据是否准备好。
      */
     FEEDBACK_ANALYZED,

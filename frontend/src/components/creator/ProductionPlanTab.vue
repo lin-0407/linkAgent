@@ -6,11 +6,15 @@ import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorksp
 import { useProductionPlan } from '@/composables/creator/useProductionPlan'
 import type { CreateProductionPlanPayload } from '@/types/creatorProduction'
 
-const emit = defineEmits<{ readyChange: [ready: boolean] }>()
-const { selectedTaskId } = useCreatorWorkspaceShell()
+const emit = defineEmits<{
+  readyChange: [ready: boolean]
+  regenerated: []
+}>()
+const { selectedTaskId, currentDraftVideo } = useCreatorWorkspaceShell()
 const production = useProductionPlan()
 const selectedStepId = ref('')
 const isBlueprintOpen = ref(false)
+const isRegenerating = ref(false)
 const selectedStep = computed(
   () =>
     production.workspace.value?.steps.find((step) => step.stepId === selectedStepId.value) ??
@@ -19,11 +23,17 @@ const selectedStep = computed(
 )
 const plan = computed(() => production.workspace.value?.plan ?? null)
 const showForm = computed(
-  () => !plan.value || plan.value.status === 'FAILED' || plan.value.status === 'STALE',
+  () =>
+    isRegenerating.value ||
+    !plan.value ||
+    plan.value.status === 'FAILED' ||
+    plan.value.status === 'STALE',
 )
 
 async function load() {
   if (!selectedTaskId.value) return
+  isRegenerating.value = false
+  isBlueprintOpen.value = false
   await production.load(selectedTaskId.value)
   selectedStepId.value = production.workspace.value?.steps[0]?.stepId ?? ''
   isBlueprintOpen.value = false
@@ -32,17 +42,26 @@ async function load() {
 
 async function generate(payload: CreateProductionPlanPayload) {
   if (!selectedTaskId.value) return
+  const wasRegenerating = isRegenerating.value
   if (await production.generate(selectedTaskId.value, payload)) {
     selectedStepId.value = production.workspace.value?.steps[0]?.stepId ?? ''
     isBlueprintOpen.value = true
     emit('readyChange', production.workspace.value?.readyForMedia ?? false)
+    if (wasRegenerating) emit('regenerated')
   }
+  // 重新定位失败时回到仍保留的旧蓝图，避免错误响应把既有工作区一起丢掉。
+  if (wasRegenerating) isRegenerating.value = false
 }
 
 function restartGeneration() {
+  if (
+    currentDraftVideo.value &&
+    !window.confirm('生成新蓝图后，当前成片、媒体处理和试映结果都会失效。确定继续吗？')
+  ) {
+    return
+  }
+  isRegenerating.value = Boolean(plan.value)
   isBlueprintOpen.value = false
-  production.workspace.value = null
-  emit('readyChange', false)
 }
 
 async function updateStep(
@@ -78,6 +97,7 @@ onMounted(() => {
     <p v-if="production.isLoading.value" class="production-loading">正在读取制作蓝图...</p>
     <ProductionPositioningForm
       v-else-if="showForm"
+      :key="selectedTaskId"
       :busy="production.isGenerating.value"
       @submit="generate"
     />

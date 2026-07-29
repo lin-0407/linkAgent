@@ -46,6 +46,12 @@ public class ProductionPlanGateService {
         }
     }
 
+    public void ensureRepositionAllowed(String taskId, String ownerId) {
+        if (planMapper.countFinalizedPublishingFacts(taskId.trim(), ownerId) > 0) {
+            throw conflict("视频已经发布或完成 BV 绑定，不能重新定位制作蓝图，请创建修订任务。");
+        }
+    }
+
     public ProductionPlanRecord requireReady(String taskId, String ownerId) {
         ProductionPlanRecord plan = planMapper.findCurrentPlan(taskId.trim(), ownerId)
                 .orElseThrow(() -> conflict("请先生成制作蓝图，才能进入成片试映阶段。"));

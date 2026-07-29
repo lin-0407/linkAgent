@@ -1,7 +1,6 @@
 package com.link.linkagent.creator.report.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportRecord;
@@ -98,7 +97,6 @@ public class CreatorReportService {
     private final PromptService promptService;
     /** 发布后流程门禁，避免存量前置数据绕过成片试映重新生成复盘报告。 */
     private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
-
     public CreatorReportService(CreatorTaskMapper creatorTaskMapper,
                                 CreatorSuggestionMapper creatorSuggestionMapper,
                                 CreatorFeedbackMapper creatorFeedbackMapper,
@@ -143,7 +141,7 @@ public class CreatorReportService {
      * @param taskId  创作任务 ID
      * @param request 用户对复盘分析的自定义要求（聚焦方向、补充说明等）
      * @return 结构化的复盘报告
-     * @throws ResponseStatusException 前序阶段任一未完成时抛 BAD_REQUEST
+     * @throws ResponseStatusException 前序产物不存在时抛 BAD_REQUEST，阶段或产物不完整时抛 CONFLICT
      */
     @Transactional
     public CreatorReportResponse analyze(String taskId, CreatorReportAnalyzeRequest request) {
@@ -151,10 +149,8 @@ public class CreatorReportService {
         // 三道前序关口强制校验：缺一不可，保证复盘报告的综合性和客观性
         CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先生成发布前优化建议"));
-        CreatorFeedbackReportRecord feedbackReportRecord = creatorFeedbackMapper.findReportByTaskId(taskRecord.getTaskId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先完成评论弹幕分析"));
-        CreatorCompetitorReportRecord competitorReportRecord = creatorCompetitorMapper.findReportByTaskId(taskRecord.getTaskId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先完成同类型视频竞品分析"));
+        CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord.getTaskId());
+        CreatorCompetitorReportRecord competitorReportRecord = requireParsedCompetitorReport(taskRecord.getTaskId());
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
 
         // 拉取同一创作者最近几期复盘报告摘要，供 LLM 识别"反复出现的问题"和"持续进步的方向"
@@ -221,7 +217,36 @@ public class CreatorReportService {
                 taskRecord.getUserId(),
                 "创作复盘"
         );
+        String status = taskRecord.getStatus();
+        if (!CreatorTaskStatus.COMPETITOR_ANALYZED.name().equals(status)
+                && !CreatorTaskStatus.ANALYZED.name().equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "请先完成同类型视频竞品分析，再生成总体复盘");
+        }
         return taskRecord;
+    }
+
+    private CreatorFeedbackReportRecord requireParsedFeedbackReport(String taskId) {
+        CreatorFeedbackReportRecord record = creatorFeedbackMapper.findReportByTaskId(taskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先完成评论弹幕分析"));
+        if (!"PARSED".equals(record.getParseStatus())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "当前反馈分析报告不完整，请重新完成评论弹幕分析"
+            );
+        }
+        return record;
+    }
+
+    private CreatorCompetitorReportRecord requireParsedCompetitorReport(String taskId) {
+        CreatorCompetitorReportRecord record = creatorCompetitorMapper.findReportByTaskId(taskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先完成同类型视频竞品分析"));
+        if (!"PARSED".equals(record.getParseStatus())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "当前竞品分析报告不完整，请重新完成竞品分析"
+            );
+        }
+        return record;
     }
 
     /** 按任务 ID 查复盘报告记录，不存在抛 404 */

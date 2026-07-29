@@ -4,6 +4,7 @@ import com.link.linkagent.creator.production.model.ProductionPlanRecord;
 import com.link.linkagent.creator.production.model.ProductionStepRecord;
 import com.link.linkagent.creator.production.model.ToolCatalogRecord;
 import com.link.linkagent.creator.production.model.ToolKnowledgeRecord;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -28,6 +29,125 @@ public interface ProductionPlanMapper {
               AND is_deleted = 0
             """)
     int countTaskByOwner(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
+    @Select("""
+            SELECT CASE WHEN
+                EXISTS (
+                    SELECT 1
+                    FROM creator_task_video_binding
+                    WHERE task_id = #{taskId}
+                      AND user_id = #{ownerId}
+                      AND binding_status = 'BOUND'
+                      AND is_deleted = 0
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM creator_draft_video
+                    WHERE task_id = #{taskId}
+                      AND owner_id = #{ownerId}
+                      AND published_flag = 1
+                      AND is_deleted = 0
+                )
+                THEN 1 ELSE 0 END
+            """)
+    int countFinalizedPublishingFacts(@Param("taskId") String taskId,
+                                      @Param("ownerId") String ownerId);
+
+    /**
+     * 重新定位后旧的待校验 BV 已不再对应当前成片；逻辑删除记录也必须硬删除，
+     * 因为任务唯一键不包含 is_deleted，残留行仍会阻止后续绑定新 BV。
+     */
+    @Delete("""
+            DELETE FROM creator_task_video_binding
+            WHERE task_id = #{taskId}
+              AND user_id = #{ownerId}
+              AND (
+                  is_deleted = 1
+                  OR binding_status IS NULL
+                  OR binding_status <> 'BOUND'
+              )
+            """)
+    int deleteUnboundVideoBindingsForReposition(@Param("taskId") String taskId,
+                                                 @Param("ownerId") String ownerId);
+
+    @Update("""
+            UPDATE creator_media_upload
+            SET status = 'SUPERSEDED',
+                failure_message = '制作蓝图已重新定位，请重新上传成片',
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND status <> 'SUPERSEDED'
+              AND is_deleted = 0
+            """)
+    int invalidateMediaUploads(@Param("taskId") String taskId,
+                               @Param("ownerId") String ownerId);
+
+    @Update("""
+            UPDATE creator_media_processing_job
+            SET status = 'FAILED',
+                failure_message = '制作蓝图已重新定位，原处理任务已失效',
+                is_deleted = 1,
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND is_deleted = 0
+            """)
+    int invalidateMediaProcessingJobs(@Param("taskId") String taskId,
+                                      @Param("ownerId") String ownerId);
+
+    @Update("""
+            UPDATE creator_preflight_review
+            SET status = 'CANCELLED',
+                cancel_requested = 1,
+                is_deleted = 1,
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND is_deleted = 0
+            """)
+    int invalidatePreflightReviews(@Param("taskId") String taskId,
+                                   @Param("ownerId") String ownerId);
+
+    @Update("""
+            UPDATE creator_draft_video
+            SET duration_ms = NULL,
+                width = NULL,
+                height = NULL,
+                frame_rate = NULL,
+                video_codec = NULL,
+                audio_codec = NULL,
+                has_audio = NULL,
+                probe_attempt_id = NULL,
+                current_review_id = NULL,
+                status = 'UPLOAD_ABORTED',
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND is_deleted = 0
+            """)
+    int resetDraftVideosForReposition(@Param("taskId") String taskId,
+                                      @Param("ownerId") String ownerId);
+
+    /**
+     * 只回退已经进入反馈或复盘的任务，避免把 DRAFT 等更早状态错误推进到发布前完成。
+     */
+    @Update("""
+            UPDATE creator_task
+            SET status = 'PRE_PUBLISH_ANALYZED',
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND user_id = #{ownerId}
+              AND status IN (
+                  'FEEDBACK_COLLECTING',
+                  'FEEDBACK_ANALYZED',
+                  'COMPETITOR_ANALYZED',
+                  'ANALYZED'
+              )
+              AND is_deleted = 0
+            """)
+    int resetTaskStatusForReposition(@Param("taskId") String taskId,
+                                     @Param("ownerId") String ownerId);
 
     @Select("""
             SELECT COALESCE(MAX(plan_version), 0)

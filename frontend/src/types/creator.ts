@@ -516,6 +516,26 @@ export type CreatorFeedbackReport = {
   updateTime: string
 }
 
+/** 发布前方案、反馈分析和竞品分析汇总后的唯一总体复盘。 */
+export type CreatorReport = {
+  id: number
+  reportId: string
+  taskId: string
+  contentSummary: string | null
+  coreSellingPoints: string | null
+  titleDescriptionReview: string | null
+  audienceFeedbackSummary: string | null
+  competitorComparison: string | null
+  controversyAndMisunderstanding: string | null
+  nextActionSuggestions: string | null
+  creatorPreferenceInsight: string | null
+  overallConclusion: string | null
+  rawOutput: string
+  parseStatus: string
+  createTime: string
+  updateTime: string
+}
+
 export type CreatorFeedbackChatResult = {
   taskId: string
   question: string

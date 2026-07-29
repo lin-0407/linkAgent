@@ -20,7 +20,6 @@ import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.creator.task.model.CreatorMaterialType;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
-import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.usage.LlmUsageContext;
@@ -152,26 +151,10 @@ public class PrePublishSuggestionService {
     }
 
     /**
-     * 分析 + 推进任务状态（对外主入口）。
-     * 生成优化建议后自动将任务状态推进到 PRE_PUBLISH_ANALYZED。
-     *
-     * @param taskId  创作任务 ID
-     * @param request 用户的分析要求（自定义指导、偏好模式、标题风格等）
-     * @return 结构化的发布前优化建议
-     */
-    @Transactional
-    public CreatorSuggestionResponse analyze(String taskId, PrePublishAnalyzeRequest request) {
-        CreatorSuggestionResponse response = generateSuggestion(taskId, request);
-        creatorTaskMapper.updateTaskStatus(response.taskId(), CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name());
-        return response;
-    }
-
-    /**
      * 生成并保存发布前优化建议（单次 LLM 调用路径），但不推进任务状态。
      *
-     * <p>为什么与 {@link #analyze} 分离：analyze 是一步到位的快捷模式（分析+推进状态），
-     * 而 generateSuggestion 支持"先预览建议、用户确认后再推进"的工作流模式。
-     * 工作流模式需要用户看到建议后手动确认，确认后才改变任务状态进入下一阶段。
+     * <p>该方法只负责生成候选并保存，任务状态必须等用户在工作流中确认后再推进，
+     * 避免模型刚生成内容就绕过发布方案确认门禁。
      *
      * <p>使用单次 LLM 调用（buildSystemPrompt + buildUserPrompt），
      * 适合不需要外部数据取证的常规分析场景。性能比 Agent 路径高（一次调用完成），

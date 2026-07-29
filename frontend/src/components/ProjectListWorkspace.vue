@@ -15,9 +15,10 @@ const taskStatusOptions: Array<{
   { value: 'ALL', label: '全部项目' },
   { value: 'DRAFT', label: '草稿' },
   { value: 'PRE_PUBLISH_ANALYZED', label: '已有发布方案' },
+  { value: 'FEEDBACK_COLLECTING', label: '反馈待分析' },
   { value: 'FEEDBACK_ANALYZED', label: '已有反馈分析' },
   { value: 'COMPETITOR_ANALYZED', label: '已有参考分析' },
-  { value: 'ANALYZED', label: '已完成复盘' },
+  { value: 'ANALYZED', label: '已完成总体复盘' },
 ]
 
 const tasks = ref<CreatorTaskSummary[]>([])
@@ -105,6 +106,8 @@ function statusLabel(status: string) {
       return '草稿'
     case 'PRE_PUBLISH_ANALYZED':
       return '已有发布方案'
+    case 'FEEDBACK_COLLECTING':
+      return '反馈待分析'
     case 'FEEDBACK_ANALYZED':
       return '已有反馈分析'
     case 'COMPETITOR_ANALYZED':

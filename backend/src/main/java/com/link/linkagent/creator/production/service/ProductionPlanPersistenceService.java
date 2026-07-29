@@ -3,6 +3,7 @@ package com.link.linkagent.creator.production.service;
 import com.link.linkagent.creator.production.mapper.ProductionPlanMapper;
 import com.link.linkagent.creator.production.model.ProductionPlanRecord;
 import com.link.linkagent.creator.production.model.ProductionStepRecord;
+import com.link.linkagent.creator.report.mapper.CreatorReviewInvalidationMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,13 +17,26 @@ import java.util.List;
 public class ProductionPlanPersistenceService {
 
     private final ProductionPlanMapper mapper;
+    private final CreatorReviewInvalidationMapper reviewInvalidationMapper;
 
-    public ProductionPlanPersistenceService(ProductionPlanMapper mapper) {
+    public ProductionPlanPersistenceService(ProductionPlanMapper mapper,
+                                            CreatorReviewInvalidationMapper reviewInvalidationMapper) {
         this.mapper = mapper;
+        this.reviewInvalidationMapper = reviewInvalidationMapper;
     }
 
     @Transactional
     public ProductionPlanRecord startGenerating(ProductionPlanRecord record) {
+        mapper.deleteUnboundVideoBindingsForReposition(record.taskId(), record.ownerId());
+        mapper.invalidateMediaUploads(record.taskId(), record.ownerId());
+        mapper.invalidateMediaProcessingJobs(record.taskId(), record.ownerId());
+        mapper.invalidatePreflightReviews(record.taskId(), record.ownerId());
+        mapper.resetDraftVideosForReposition(record.taskId(), record.ownerId());
+        reviewInvalidationMapper.invalidateFeedbackReport(record.taskId());
+        reviewInvalidationMapper.invalidateCompetitorReport(record.taskId());
+        reviewInvalidationMapper.invalidateCreatorReport(record.taskId());
+        reviewInvalidationMapper.invalidateGeneratedPreference(record.taskId());
+        mapper.resetTaskStatusForReposition(record.taskId(), record.ownerId());
         mapper.markCurrentPlansStale(record.taskId(), record.ownerId());
         mapper.insertPlan(record);
         return record;

@@ -210,6 +210,7 @@ class CreatorReportServiceTest {
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
 
         verify(mediaWorkflowGateService).ensureMediaEnabled("创作复盘");
+        verify(mediaWorkflowGateService).ensureReadyForPostPublish("task-1", "default", "创作复盘");
         assertThat(reportMapper.savedRecord).isNull();
         assertThat(taskMapper.updatedStatus).isNull();
     }
@@ -220,7 +221,7 @@ class CreatorReportServiceTest {
         record.setTaskId("task-1");
         record.setUserId("default");
         record.setTaskName("复盘任务");
-        record.setStatus(CreatorTaskStatus.FEEDBACK_ANALYZED.name());
+        record.setStatus(CreatorTaskStatus.COMPETITOR_ANALYZED.name());
         record.setCreateTime(LocalDateTime.now());
         record.setUpdateTime(LocalDateTime.now());
         return record;
@@ -549,6 +550,7 @@ class CreatorReportServiceTest {
         public Optional<CreatorCompetitorReportRecord> findReportByTaskId(String taskId) {
             return Optional.ofNullable(reportRecord);
         }
+
     }
 
     private static class FakeCreatorReportMapper implements CreatorReportMapper {

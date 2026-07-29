@@ -1,4 +1,4 @@
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import type { CreatorPreferenceMode } from '@/types/creator'
 
 type GuidanceEditorTarget = 'prePublish' | 'feedback'
@@ -32,6 +32,12 @@ export function useCreatorGuidance() {
   const guidanceEditorTarget = ref<GuidanceEditorTarget | null>(null)
   const lastPrePublishPreferenceMode = ref<CreatorPreferenceMode>('USE_HISTORY')
   const hasPrePublishPreferenceModeSnapshot = ref(false)
+  const submittedPrePublishTaskGuidance = ref(prePublishTaskGuidanceSnapshot())
+  const submittedFeedbackTaskGuidance = ref(feedbackTaskGuidanceSnapshot())
+  const hasTaskGuidanceInput = computed(() =>
+    prePublishTaskGuidanceSnapshot() !== submittedPrePublishTaskGuidance.value ||
+      feedbackTaskGuidanceSnapshot() !== submittedFeedbackTaskGuidance.value,
+  )
 
   // ── 初始化 ──
 
@@ -89,12 +95,33 @@ export function useCreatorGuidance() {
     hasPrePublishPreferenceModeSnapshot.value = false
   }
 
+  function markPrePublishGuidanceSubmitted() {
+    submittedPrePublishTaskGuidance.value = prePublishTaskGuidanceSnapshot()
+  }
+
+  function markFeedbackGuidanceSubmitted() {
+    submittedFeedbackTaskGuidance.value = feedbackTaskGuidanceSnapshot()
+  }
+
+  /** 切换任务时只清任务专属要求，全局指导词继续由 localStorage 跨任务复用。 */
+  function resetTaskGuidanceFields() {
+    prePublishForm.creatorPreference = ''
+    prePublishForm.titleStyle = ''
+    prePublishForm.extraRequirement = ''
+    feedbackAnalyzeForm.analysisFocus = ''
+    feedbackAnalyzeForm.extraRequirement = ''
+    resetPrePublishPreferenceMode()
+    markPrePublishGuidanceSubmitted()
+    markFeedbackGuidanceSubmitted()
+  }
+
   return {
     prePublishForm,
     feedbackAnalyzeForm,
     guidanceEditorTarget,
     lastPrePublishPreferenceMode,
     hasPrePublishPreferenceModeSnapshot,
+    hasTaskGuidanceInput,
     defaultPrePublishGuidance,
     defaultFeedbackGuidance,
     loadGuidanceSettings,
@@ -102,5 +129,24 @@ export function useCreatorGuidance() {
     closeGuidanceEditor,
     resetCurrentGuidance,
     resetPrePublishPreferenceMode,
+    markPrePublishGuidanceSubmitted,
+    markFeedbackGuidanceSubmitted,
+    resetTaskGuidanceFields,
+  }
+
+  function prePublishTaskGuidanceSnapshot() {
+    return JSON.stringify({
+      creatorPreference: prePublishForm.creatorPreference,
+      titleStyle: prePublishForm.titleStyle,
+      extraRequirement: prePublishForm.extraRequirement,
+      preferenceMode: prePublishForm.preferenceMode,
+    })
+  }
+
+  function feedbackTaskGuidanceSnapshot() {
+    return JSON.stringify({
+      analysisFocus: feedbackAnalyzeForm.analysisFocus,
+      extraRequirement: feedbackAnalyzeForm.extraRequirement,
+    })
   }
 }

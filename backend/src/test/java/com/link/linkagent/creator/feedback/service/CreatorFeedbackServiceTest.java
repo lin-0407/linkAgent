@@ -8,6 +8,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalysisOutput;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackFetchRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackRecord;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackSaveRequest;
@@ -18,6 +19,7 @@ import com.link.linkagent.creator.media.probe.service.DraftVideoProbeRecoverySer
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
 import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
+import com.link.linkagent.creator.report.mapper.CreatorReviewInvalidationMapper;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
@@ -87,6 +89,7 @@ class CreatorFeedbackServiceTest {
                 taskMapper,
                 bilibiliMapper,
                 feedbackMapper,
+                mock(CreatorReviewInvalidationMapper.class),
                 llmService,
                 objectMapper,
                 transactionTemplate,
@@ -152,6 +155,7 @@ class CreatorFeedbackServiceTest {
                 taskMapper,
                 bilibiliMapper,
                 feedbackMapper,
+                mock(CreatorReviewInvalidationMapper.class),
                 llmService,
                 objectMapper,
                 transactionTemplate,
@@ -196,6 +200,7 @@ class CreatorFeedbackServiceTest {
                 mock(CreatorFeedbackEvidenceRetrievalService.class);
         PromptService promptService = mock(PromptService.class);
         CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
+        CreatorReviewInvalidationMapper reviewInvalidationMapper = mock(CreatorReviewInvalidationMapper.class);
         ObjectMapper objectMapper = new ObjectMapper();
         CreatorFeedbackRecord feedbackRecord = feedback();
         CreatorFeedbackAnalysisOutput analysisOutput = analysisOutput();
@@ -223,6 +228,7 @@ class CreatorFeedbackServiceTest {
                 taskMapper,
                 bilibiliMapper,
                 feedbackMapper,
+                reviewInvalidationMapper,
                 llmService,
                 objectMapper,
                 transactionTemplate,
@@ -246,7 +252,55 @@ class CreatorFeedbackServiceTest {
                 eq(CreatorFeedbackAnalysisOutput.class)
         );
         verify(llmService, never()).chat(anyString(), anyString());
-        verify(taskMapper).updateTaskStatus("task-1", CreatorTaskStatus.ANALYZED.name());
+        verify(reviewInvalidationMapper).invalidateCompetitorReport("task-1");
+        verify(reviewInvalidationMapper).invalidateCreatorReport("task-1");
+        verify(reviewInvalidationMapper).invalidateGeneratedPreference("task-1");
+        verify(reviewInvalidationMapper, never()).invalidateFeedbackReport("task-1");
+        verify(taskMapper).updateTaskStatus("task-1", CreatorTaskStatus.FEEDBACK_ANALYZED.name());
+    }
+
+    @Test
+    void shouldInvalidateExistingReviewChainWhenFeedbackChanges() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
+        CreatorReviewInvalidationMapper reviewInvalidationMapper = mock(CreatorReviewInvalidationMapper.class);
+        AtomicReference<CreatorFeedbackRecord> savedFeedback = new AtomicReference<>();
+
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(task("task-1")));
+        when(bilibiliMapper.findBindingByTaskId("task-1"))
+                .thenReturn(Optional.of(boundBinding("BV1xx411c7mD")));
+        when(feedbackMapper.upsertFeedback(any(CreatorFeedbackRecord.class))).thenAnswer(invocation -> {
+            savedFeedback.set(invocation.getArgument(0));
+            return 1;
+        });
+        when(feedbackMapper.findFeedbackByTaskId("task-1"))
+                .thenAnswer(invocation -> Optional.ofNullable(savedFeedback.get()));
+
+        CreatorFeedbackService service = new CreatorFeedbackService(
+                taskMapper,
+                bilibiliMapper,
+                feedbackMapper,
+                reviewInvalidationMapper,
+                mock(LLMService.class),
+                mock(ObjectMapper.class),
+                mock(TransactionTemplate.class),
+                mock(CreatorFeedbackEvidenceRetrievalService.class),
+                mock(PromptService.class),
+                mock(CreatorMediaWorkflowGateService.class)
+        );
+
+        CreatorFeedbackResponse response = service.saveFeedback(
+                "task-1",
+                new CreatorFeedbackSaveRequest("新评论样例", null, null)
+        );
+
+        assertThat(response.commentSamples()).isEqualTo("新评论样例");
+        verify(reviewInvalidationMapper).invalidateFeedbackReport("task-1");
+        verify(reviewInvalidationMapper).invalidateCompetitorReport("task-1");
+        verify(reviewInvalidationMapper).invalidateCreatorReport("task-1");
+        verify(reviewInvalidationMapper).invalidateGeneratedPreference("task-1");
+        verify(taskMapper).updateTaskStatus("task-1", CreatorTaskStatus.FEEDBACK_COLLECTING.name());
     }
 
     @Test
@@ -260,6 +314,7 @@ class CreatorFeedbackServiceTest {
                 taskMapper,
                 bilibiliMapper,
                 feedbackMapper,
+                mock(CreatorReviewInvalidationMapper.class),
                 mock(LLMService.class),
                 mock(ObjectMapper.class),
                 mock(TransactionTemplate.class),
@@ -291,6 +346,7 @@ class CreatorFeedbackServiceTest {
                 taskMapper,
                 bilibiliMapper,
                 feedbackMapper,
+                mock(CreatorReviewInvalidationMapper.class),
                 mock(LLMService.class),
                 mock(ObjectMapper.class),
                 mock(TransactionTemplate.class),
@@ -315,6 +371,7 @@ class CreatorFeedbackServiceTest {
         task.setTaskId(taskId);
         task.setUserId("default");
         task.setTaskName("反馈任务");
+        task.setStatus(CreatorTaskStatus.FEEDBACK_COLLECTING.name());
         return task;
     }
 
@@ -353,7 +410,12 @@ class CreatorFeedbackServiceTest {
                 List.of(),
                 List.of(),
                 List.of(),
-                List.of(),
+                List.of(new CreatorFeedbackAnalysisOutput.NextContentSuggestion(
+                        "完整示例后续篇",
+                        "评论高频请求",
+                        "补充可运行项目",
+                        "避免重复本期内容"
+                )),
                 List.of(),
                 List.of(new CreatorFeedbackAnalysisOutput.FeedbackAction(
                         "HIGH",

@@ -13,6 +13,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord;
+import com.link.linkagent.creator.report.mapper.CreatorReviewInvalidationMapper;
 import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
 import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
@@ -31,21 +32,32 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class CreatorCompetitorServiceTest {
+
+    private static final String COMPLETE_COMPETITOR_OUTPUT = """
+            {"competitorSummary":"竞品更强调结果","competitorAdvantages":[{"advantage":"标题更直接","evidence":"样例标题都突出收益","lesson":"标题前置结果"}],"ownAdvantages":[{"advantage":"解释更细","evidence":"文稿结构完整"}],"ownDisadvantages":[{"disadvantage":"卖点不够前置","evidence":"标题偏平","risk":"点击弱"}],"gapAnalysis":[{"dimension":"标题","gap":"结果感弱","priority":"HIGH"}],"improvementSuggestions":[{"suggestion":"标题突出收益","reason":"竞品样例有效","action":"重写标题"}],"differentiationStrategy":"主打可复制步骤"}
+            """;
 
     @Test
     void shouldSaveCompetitorVideo() {
         FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
         taskMapper.taskRecord = createTaskRecord();
+        taskMapper.taskRecord.setStatus(CreatorTaskStatus.ANALYZED.name());
 
         FakeCreatorCompetitorMapper competitorMapper = new FakeCreatorCompetitorMapper();
+        CreatorReviewInvalidationMapper invalidationMapper = mock(CreatorReviewInvalidationMapper.class);
 
         CreatorCompetitorService service = new CreatorCompetitorService(
                 taskMapper,
                 new FakeCreatorSuggestionMapper(),
                 new FakeCreatorFeedbackMapper(),
                 competitorMapper,
+                invalidationMapper,
                 null,
                 new FixedLlmService("{}"),
                 new ObjectMapper(),
@@ -69,6 +81,10 @@ class CreatorCompetitorServiceTest {
         assertThat(competitorMapper.savedSample).isNotNull();
         assertThat(competitorMapper.savedSample.getCompetitorBvId()).isEqualTo("BV1xK4y1a7Bc");
         assertThat(competitorMapper.savedSample.getCompetitorVideoName()).isEqualTo("竞品视频A");
+        verify(invalidationMapper).invalidateCompetitorReport("task-1");
+        verify(invalidationMapper).invalidateCreatorReport("task-1");
+        verify(invalidationMapper).invalidateGeneratedPreference("task-1");
+        assertThat(taskMapper.updatedStatus).isEqualTo(CreatorTaskStatus.FEEDBACK_ANALYZED.name());
     }
 
     @Test
@@ -79,16 +95,18 @@ class CreatorCompetitorServiceTest {
 
         FakeCreatorCompetitorMapper competitorMapper = new FakeCreatorCompetitorMapper();
         competitorMapper.competitorVideoRecord = createCompetitorVideoRecord();
+        FakeCreatorFeedbackMapper feedbackMapper = new FakeCreatorFeedbackMapper();
+        feedbackMapper.reportRecord = createFeedbackReportRecord();
+        CreatorReviewInvalidationMapper invalidationMapper = mock(CreatorReviewInvalidationMapper.class);
 
         CreatorCompetitorService service = new CreatorCompetitorService(
                 taskMapper,
                 new FakeCreatorSuggestionMapper(),
-                new FakeCreatorFeedbackMapper(),
+                feedbackMapper,
                 competitorMapper,
+                invalidationMapper,
                 null,
-                new FixedLlmService("""
-                        {"competitorSummary":"竞品更强调结果","competitorAdvantages":[{"advantage":"标题更直接","evidence":"样例标题都突出收益","lesson":"标题前置结果"}],"ownAdvantages":[{"advantage":"解释更细","evidence":"文稿结构完整"}],"ownDisadvantages":[{"disadvantage":"卖点不够前置","evidence":"标题偏平","risk":"点击弱"}],"gapAnalysis":[{"dimension":"标题","gap":"结果感弱","priority":"HIGH"}],"improvementSuggestions":[{"suggestion":"标题突出收益","reason":"竞品样例有效","action":"重写标题"}],"differentiationStrategy":"主打可复制步骤"}
-                        """),
+                new FixedLlmService(COMPLETE_COMPETITOR_OUTPUT),
                 new ObjectMapper(),
                 new StubPromptService());
 
@@ -101,18 +119,23 @@ class CreatorCompetitorServiceTest {
         assertThat(response.ownDisadvantages()).contains("卖点不够前置");
         assertThat(response.parseStatus()).isEqualTo("PARSED");
         assertThat(taskMapper.updatedStatus).isEqualTo(CreatorTaskStatus.COMPETITOR_ANALYZED.name());
+        verify(invalidationMapper).invalidateCreatorReport("task-1");
+        verify(invalidationMapper).invalidateGeneratedPreference("task-1");
     }
 
     @Test
     void shouldFailWhenSampleMissing() {
         FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
         taskMapper.taskRecord = createTaskRecord();
+        FakeCreatorFeedbackMapper feedbackMapper = new FakeCreatorFeedbackMapper();
+        feedbackMapper.reportRecord = createFeedbackReportRecord();
 
         CreatorCompetitorService service = new CreatorCompetitorService(
                 taskMapper,
                 new FakeCreatorSuggestionMapper(),
-                new FakeCreatorFeedbackMapper(),
+                feedbackMapper,
                 new FakeCreatorCompetitorMapper(),
+                mock(CreatorReviewInvalidationMapper.class),
                 null,
                 new FixedLlmService("{}"),
                 new ObjectMapper(),
@@ -121,6 +144,69 @@ class CreatorCompetitorServiceTest {
         assertThatThrownBy(() -> service.analyze("task-1", new CreatorCompetitorAnalyzeRequest(null, null, null)))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("请先提交同类型竞品视频");
+    }
+
+    @Test
+    void shouldRejectBeforeFeedbackAnalysisCompletes() {
+        FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
+        taskMapper.taskRecord = createTaskRecord();
+        taskMapper.taskRecord.setStatus(CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name());
+        FakeCreatorCompetitorMapper competitorMapper = new FakeCreatorCompetitorMapper();
+        competitorMapper.competitorVideoRecord = createCompetitorVideoRecord();
+        CreatorReviewInvalidationMapper invalidationMapper = mock(CreatorReviewInvalidationMapper.class);
+        FixedLlmService llmService = new FixedLlmService("{}");
+
+        CreatorCompetitorService service = new CreatorCompetitorService(
+                taskMapper,
+                new FakeCreatorSuggestionMapper(),
+                new FakeCreatorFeedbackMapper(),
+                competitorMapper,
+                invalidationMapper,
+                null,
+                llmService,
+                new ObjectMapper(),
+                new StubPromptService());
+
+        assertThatThrownBy(() -> service.analyze("task-1", new CreatorCompetitorAnalyzeRequest(null, null, null)))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("请先完成评论弹幕分析");
+
+        assertThat(competitorMapper.savedReport).isNull();
+        assertThat(taskMapper.updatedStatus).isNull();
+        assertThat(llmService.callCount).isZero();
+        verifyNoInteractions(invalidationMapper);
+    }
+
+    @Test
+    void shouldNotPersistWhenStructuredContentIsIncomplete() {
+        FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
+        taskMapper.taskRecord = createTaskRecord();
+        FakeCreatorFeedbackMapper feedbackMapper = new FakeCreatorFeedbackMapper();
+        feedbackMapper.reportRecord = createFeedbackReportRecord();
+        FakeCreatorCompetitorMapper competitorMapper = new FakeCreatorCompetitorMapper();
+        competitorMapper.competitorVideoRecord = createCompetitorVideoRecord();
+        CreatorReviewInvalidationMapper invalidationMapper = mock(CreatorReviewInvalidationMapper.class);
+
+        CreatorCompetitorService service = new CreatorCompetitorService(
+                taskMapper,
+                new FakeCreatorSuggestionMapper(),
+                feedbackMapper,
+                competitorMapper,
+                invalidationMapper,
+                null,
+                new FixedLlmService("""
+                        {"competitorSummary":"竞品总结","competitorAdvantages":[],"ownAdvantages":[],"ownDisadvantages":[],"gapAnalysis":[],"improvementSuggestions":[],"differentiationStrategy":"差异化策略"}
+                        """),
+                new ObjectMapper(),
+                new StubPromptService());
+
+        assertThatThrownBy(() -> service.analyze("task-1", new CreatorCompetitorAnalyzeRequest(null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("格式或内容不完整");
+
+        assertThat(competitorMapper.savedReport).isNull();
+        assertThat(taskMapper.updatedStatus).isNull();
+        verifyNoInteractions(invalidationMapper);
     }
 
     private CreatorTaskRecord createTaskRecord() {
@@ -146,6 +232,17 @@ class CreatorCompetitorServiceTest {
         return record;
     }
 
+    private CreatorFeedbackReportRecord createFeedbackReportRecord() {
+        CreatorFeedbackReportRecord record = new CreatorFeedbackReportRecord();
+        record.setId(1L);
+        record.setReportId("feedback-report-1");
+        record.setTaskId("task-1");
+        record.setParseStatus("PARSED");
+        record.setCreateTime(LocalDateTime.now());
+        record.setUpdateTime(LocalDateTime.now());
+        return record;
+    }
+
     private CreatorCompetitorSampleRecord createCompetitorVideoRecord() {
         CreatorCompetitorSampleRecord record = new CreatorCompetitorSampleRecord();
         record.setId(1L);
@@ -164,6 +261,7 @@ class CreatorCompetitorServiceTest {
     private static class FixedLlmService extends LLMService {
 
         private final String response;
+        private int callCount;
 
         FixedLlmService(String response) {
             super();
@@ -172,6 +270,7 @@ class CreatorCompetitorServiceTest {
 
         @Override
         public String chat(String systemPrompt, String userMessage) {
+            callCount++;
             return response;
         }
     }
@@ -264,6 +363,8 @@ class CreatorCompetitorServiceTest {
 
     private static class FakeCreatorFeedbackMapper implements CreatorFeedbackMapper {
 
+        private CreatorFeedbackReportRecord reportRecord;
+
         @Override
         public int upsertFeedback(CreatorFeedbackRecord record) {
             throw new UnsupportedOperationException();
@@ -281,7 +382,7 @@ class CreatorCompetitorServiceTest {
 
         @Override
         public Optional<CreatorFeedbackReportRecord> findReportByTaskId(String taskId) {
-            return Optional.empty();
+            return Optional.ofNullable(reportRecord);
         }
 
         @Override
@@ -410,5 +511,6 @@ class CreatorCompetitorServiceTest {
         public Optional<CreatorCompetitorReportRecord> findReportByTaskId(String taskId) {
             return Optional.ofNullable(savedReport);
         }
+
     }
 }

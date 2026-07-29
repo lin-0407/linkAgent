@@ -38,6 +38,15 @@ public record CreatorReportAnalysisOutput(
         nextActionSuggestions = requireList(nextActionSuggestions, "nextActionSuggestions");
         creatorPreferenceInsight = requireTextList(creatorPreferenceInsight, "creatorPreferenceInsight");
         overallConclusion = requireText(overallConclusion, "overallConclusion");
+        if (coreSellingPoints.isEmpty()) {
+            throw new IllegalArgumentException("结构化输出缺少必要分析内容：coreSellingPoints");
+        }
+        if (nextActionSuggestions.isEmpty()) {
+            throw new IllegalArgumentException("结构化输出缺少必要分析内容：nextActionSuggestions");
+        }
+        if (creatorPreferenceInsight.isEmpty()) {
+            throw new IllegalArgumentException("结构化输出缺少必要分析内容：creatorPreferenceInsight");
+        }
     }
 
     public record TitleDescriptionReview(
@@ -71,6 +80,16 @@ public record CreatorReportAnalysisOutput(
                     differentiationStrategy,
                     "competitorComparison.differentiationStrategy"
             );
+            if (ownAdvantages.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "结构化输出缺少必要分析内容：competitorComparison.ownAdvantages"
+                );
+            }
+            if (ownDisadvantages.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "结构化输出缺少必要分析内容：competitorComparison.ownDisadvantages"
+                );
+            }
         }
     }
 

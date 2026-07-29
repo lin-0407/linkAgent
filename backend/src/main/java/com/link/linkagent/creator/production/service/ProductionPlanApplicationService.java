@@ -76,6 +76,7 @@ public class ProductionPlanApplicationService {
                 && !ProductionPlanStatus.STALE.name().equals(current.status())) {
             return toWorkspace(current);
         }
+        gateService.ensureRepositionAllowed(normalizedTaskId, DEFAULT_OWNER_ID);
         int nextVersion = mapper.findMaxPlanVersion(normalizedTaskId, DEFAULT_OWNER_ID) + 1;
         String planId = UUID.randomUUID().toString();
         ProductionPlanRecord generating = new ProductionPlanRecord(

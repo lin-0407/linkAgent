@@ -31,6 +31,7 @@ import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatResponse;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackTimelineResponse;
 import com.link.linkagent.creator.feedback.util.CreatorFeedbackLabelUtil;
 import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
+import com.link.linkagent.creator.report.mapper.CreatorReviewInvalidationMapper;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
@@ -59,8 +60,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -73,7 +72,7 @@ import java.util.stream.Collectors;
  * 本服务是创作者反馈分析的中央编排器，统一承载：
  * <ol>
  *   <li><b>反馈录入</b>：支持手动粘贴、文件上传（JSON/TXT）和 BV 号驱动脚本采集三种数据来源</li>
- *   <li><b>LLM 分析</b>：调用 LLM 对评论弹幕做结构化分析，产出多维度复盘报告</li>
+ *   <li><b>LLM 分析</b>：调用 LLM 对评论弹幕做结构化分析，产出供竞品分析和总体复盘使用的中间结果</li>
  *   <li><b>反馈追问</b>：基于分析报告和已导入明细，支持用户向 AI 追问反馈细节</li>
  *   <li><b>仪表盘</b>：从已落库明细恢复统计数据、分类分布、关键词热度、弹幕时间线</li>
  *   <li><b>批量分类</b>：LLM 批量分类评论/弹幕（分批次 + 失败降级关键词规则）</li>
@@ -144,6 +143,8 @@ public class CreatorFeedbackService {
     private final CreatorBilibiliMapper creatorBilibiliMapper;
     /** 反馈数据访问层，负责评论弹幕明细、报告、指标的 CRUD */
     private final CreatorFeedbackMapper creatorFeedbackMapper;
+    /** 复盘链路失效访问层，反馈变化后清理不再可信的下游分析结果 */
+    private final CreatorReviewInvalidationMapper reviewInvalidationMapper;
     /** LLM 调用入口，统一通过本服务内的 chat/chatStructured 方法调用模型 */
     private final LLMService llmService;
     /** JSON 处理器，用于解析采集/分类结果并序列化结构化反馈报告 */
@@ -160,6 +161,7 @@ public class CreatorFeedbackService {
     public CreatorFeedbackService(CreatorTaskMapper creatorTaskMapper,
                                   CreatorBilibiliMapper creatorBilibiliMapper,
                                   CreatorFeedbackMapper creatorFeedbackMapper,
+                                  CreatorReviewInvalidationMapper reviewInvalidationMapper,
                                   LLMService llmService,
                                   ObjectMapper objectMapper,
                                   TransactionTemplate transactionTemplate,
@@ -169,6 +171,7 @@ public class CreatorFeedbackService {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorBilibiliMapper = creatorBilibiliMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
+        this.reviewInvalidationMapper = reviewInvalidationMapper;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
         this.transactionTemplate = transactionTemplate;
@@ -201,6 +204,7 @@ public class CreatorFeedbackService {
         // 手动粘贴代表用户切换了数据来源，旧导入明细不能继续驱动仪表盘，否则前端会展示过期分类结果。
         creatorFeedbackMapper.softDeleteItemsByTaskId(taskRecord.getTaskId());
         creatorFeedbackMapper.softDeleteMetricByTaskId(taskRecord.getTaskId());
+        invalidateAfterFeedbackChange(taskRecord.getTaskId());
         return getFeedback(taskRecord.getTaskId());
     }
 
@@ -227,7 +231,7 @@ public class CreatorFeedbackService {
      *   <li>构建 system + user prompt（含任务信息、自定义指导、分析焦点、额外要求）</li>
      *   <li>调用 LLM 产出结构化 JSON 分析报告</li>
      *   <li>解析并落库报告（含 feedbackSummary、hotTopics、sentimentSummary 等字段）</li>
-     *   <li>更新任务状态为 ANALYZED，表示评论弹幕复盘结果已经产出</li>
+     *   <li>更新任务状态为 FEEDBACK_ANALYZED，表示反馈中间结果已经产出</li>
      * </ol>
      * <p>
      * LLM 调用包裹在 LlmUsageContext 中，用于 Langfuse 追踪和 Token 用量统计。
@@ -253,8 +257,8 @@ public class CreatorFeedbackService {
         }
         CreatorFeedbackReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), analysisOutput);
         creatorFeedbackMapper.upsertReport(reportRecord);
-        // 评论弹幕分析产出的报告即是创作者工作流定义的复盘结果，因此在报告落库后直接进入完毕状态。
-        creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.ANALYZED.name());
+        invalidateAfterFeedbackAnalysis(taskRecord.getTaskId());
+        creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.FEEDBACK_ANALYZED.name());
         return getReport(taskRecord.getTaskId());
     }
 
@@ -510,6 +514,7 @@ public class CreatorFeedbackService {
         }
         // 旧 LLM 分析接口仍读取整段样例；这里回填旧表，是为了让"导入后直接分析反馈"这条链路不断。
         upsertLegacyFeedbackFromItems(taskRecord.getTaskId(), sourceDescription, items);
+        invalidateAfterFeedbackChange(taskRecord.getTaskId());
 
         int commentCount = countBySource(items, "COMMENT");
         int danmakuCount = countBySource(items, "DANMAKU");
@@ -735,6 +740,24 @@ public class CreatorFeedbackService {
         );
         getBoundVideoBinding(taskRecord.getTaskId());
         return taskRecord;
+    }
+
+    /**
+     * 反馈原始数据变化后，旧反馈报告及其全部下游结论都必须失效。
+     */
+    private void invalidateAfterFeedbackChange(String taskId) {
+        reviewInvalidationMapper.invalidateFeedbackReport(taskId);
+        invalidateAfterFeedbackAnalysis(taskId);
+        creatorTaskMapper.updateTaskStatus(taskId, CreatorTaskStatus.FEEDBACK_COLLECTING.name());
+    }
+
+    /**
+     * 反馈分析结果变化时只清理依赖它的下游结果，当前反馈报告由调用方随后覆盖。
+     */
+    private void invalidateAfterFeedbackAnalysis(String taskId) {
+        reviewInvalidationMapper.invalidateCompetitorReport(taskId);
+        reviewInvalidationMapper.invalidateCreatorReport(taskId);
+        reviewInvalidationMapper.invalidateGeneratedPreference(taskId);
     }
 
     /**
