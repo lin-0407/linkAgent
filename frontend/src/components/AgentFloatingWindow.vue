@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { MessageCircle, X } from '@lucide/vue'
 import ChatComposer from '@/components/ChatComposer.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
@@ -76,6 +77,7 @@ const executionModeOptions: Array<{
   { value: 'MULTI_AGENT', label: 'Multi', description: '多 Agent 协作' },
 ]
 const viewportMargin = 18
+const statusBarViewportMargin = 48
 const minWindowWidth = 520
 const minWindowHeight = 420
 const maxWindowWidth = 1040
@@ -416,7 +418,10 @@ function constrainRect(rect: WindowRect): WindowRect {
   const height = clampNumber(rect.height, minWindowHeight, maxSize.height)
   const visibleHeight = isMinimized.value ? 66 : height
   const maxLeft = Math.max(viewportMargin, window.innerWidth - width - viewportMargin)
-  const maxTop = Math.max(viewportMargin, window.innerHeight - visibleHeight - viewportMargin)
+  const maxTop = Math.max(
+    viewportMargin,
+    window.innerHeight - visibleHeight - getViewportBottomMargin(),
+  )
 
   return {
     left: clampNumber(rect.left, viewportMargin, maxLeft),
@@ -476,13 +481,20 @@ function constrainResizeRect(state: ResizeState, event: PointerEvent): WindowRec
 }
 
 function getViewportBoundedSize() {
-  // 拖拽和缩放都依赖同一组上限，避免 CSS 限制尺寸但脚本仍把窗口拖出视口。
+  // 拖拽和缩放共用底部边界，避免桌面状态栏压住浮窗输入区。
   const availableWidth = Math.max(320, window.innerWidth - viewportMargin * 2)
-  const availableHeight = Math.max(minWindowHeight, window.innerHeight - viewportMargin * 2)
+  const availableHeight = Math.max(
+    minWindowHeight,
+    window.innerHeight - viewportMargin - getViewportBottomMargin(),
+  )
   return {
     width: Math.min(maxWindowWidth, availableWidth),
     height: Math.min(maxWindowHeight, availableHeight),
   }
+}
+
+function getViewportBottomMargin() {
+  return window.innerWidth <= 640 ? viewportMargin : statusBarViewportMargin
 }
 
 function clampNumber(value: number, min: number, max: number) {
@@ -569,10 +581,10 @@ function clipText(value: string, maxLength: number) {
       type="button"
       class="agent-floating-launcher"
       aria-label="打开问问 AI 浮窗"
+      title="问问 AI"
       @click="openFloatingWindow"
     >
-      <strong>AI</strong>
-      <span>问问</span>
+      <MessageCircle :size="21" :stroke-width="1.8" aria-hidden="true" />
     </button>
 
     <section
@@ -603,7 +615,7 @@ function clipText(value: string, maxLength: number) {
             {{ isMinimized ? '展开' : '收起' }}
           </button>
           <button type="button" title="关闭浮窗" aria-label="关闭问问 AI" @click.stop="closeFloatingWindow">
-            ×
+            <X :size="16" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </div>
       </header>

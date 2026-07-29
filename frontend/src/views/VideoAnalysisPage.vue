@@ -6,6 +6,7 @@
  * P0-3 为页壳，P0-4 补全点击卡片后的完整分析报告和追问能力。
  */
 import { computed, onMounted, ref } from 'vue'
+import { RefreshCw } from '@lucide/vue'
 import { listCreatorTasks } from '@/api/creator'
 import BilibiliAccountPanel from '@/components/creator/BilibiliAccountPanel.vue'
 import BvBindingPanel from '@/components/creator/BvBindingPanel.vue'
@@ -86,6 +87,7 @@ function onVideoBound(_binding: TaskVideoBinding) {
           :disabled="loadingTasks"
           @click="loadTasks"
         >
+          <RefreshCw :size="16" :stroke-width="1.8" aria-hidden="true" />
           {{ loadingTasks ? '读取中...' : '刷新任务' }}
         </button>
       </header>
@@ -145,18 +147,20 @@ function onVideoBound(_binding: TaskVideoBinding) {
 .video-analysis-page {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 32px 24px 64px;
+  padding: 22px 24px 72px;
 }
 
 .video-analysis-header {
   margin-bottom: 24px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
 }
 
 .video-analysis-header h2 {
   margin: 0 0 8px;
   font-size: 24px;
   font-weight: 700;
-  color: var(--creator-text, #1d1d1f);
+  color: var(--ink);
 }
 
 .video-analysis-subtitle {
@@ -167,9 +171,9 @@ function onVideoBound(_binding: TaskVideoBinding) {
 }
 
 .video-binding-section {
-  background: var(--creator-panel);
-  border: 1px solid var(--creator-line);
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
   margin-bottom: 20px;
   padding: 16px 20px 4px;
 }
@@ -186,7 +190,7 @@ function onVideoBound(_binding: TaskVideoBinding) {
   margin: 0 0 6px;
   font-size: 16px;
   font-weight: 600;
-  color: var(--creator-text, #1d1d1f);
+  color: var(--ink);
 }
 
 .video-binding-header p,
@@ -216,13 +220,25 @@ function onVideoBound(_binding: TaskVideoBinding) {
 }
 
 .video-binding-task-field select {
-  border: 1px solid var(--creator-line);
-  border-radius: 8px;
-  background: var(--creator-surface, #fff);
-  color: var(--creator-text, #1d1d1f);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink);
   font-size: 14px;
   min-height: 38px;
   padding: 0 12px;
+}
+
+.video-binding-task-field select:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.video-binding-header .creator-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
 
 .video-binding-empty {
@@ -242,7 +258,7 @@ function onVideoBound(_binding: TaskVideoBinding) {
   margin-top: 24px;
   background: var(--creator-panel);
   border: 1px solid var(--creator-line);
-  border-radius: 12px;
+  border-radius: var(--r);
   padding: 24px;
 }
 

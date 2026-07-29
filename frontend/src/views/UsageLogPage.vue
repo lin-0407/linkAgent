@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ChevronDown, ChevronUp, RefreshCw, RotateCcw, Search } from '@lucide/vue'
 import { listLlmApiCallLogs } from '@/api/usage'
 import type {
   LlmApiCallRecord,
@@ -210,9 +211,11 @@ onMounted(() => {
         </label>
         <div class="usage-log-actions">
           <button type="button" class="usage-log-button secondary" :disabled="loading" @click="resetFilters">
+            <RotateCcw :size="15" :stroke-width="1.8" aria-hidden="true" />
             重置
           </button>
           <button type="submit" class="usage-log-button primary" :disabled="loading">
+            <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
             {{ loading ? '查询中...' : '查询' }}
           </button>
         </div>
@@ -245,6 +248,7 @@ onMounted(() => {
           <span>共 {{ formatNumber(result?.total ?? 0) }} 条</span>
         </div>
         <button type="button" class="usage-log-refresh" :disabled="loading" @click="loadLogs">
+          <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
           {{ loading ? '刷新中...' : '刷新' }}
         </button>
       </header>
@@ -306,6 +310,13 @@ onMounted(() => {
                     :aria-expanded="expandedCallIds.has(record.callId)"
                     @click="toggleDetails(record.callId)"
                   >
+                    <ChevronUp
+                      v-if="expandedCallIds.has(record.callId)"
+                      :size="14"
+                      :stroke-width="1.8"
+                      aria-hidden="true"
+                    />
+                    <ChevronDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
                     {{ expandedCallIds.has(record.callId) ? '收起' : '展开' }}
                   </button>
                 </td>
@@ -356,7 +367,7 @@ onMounted(() => {
   min-height: calc(100vh - var(--surface-topbar-height));
   padding: 22px clamp(14px, 2vw, 28px) 72px;
   color: var(--text);
-  background: #f7f9fc;
+  background: var(--canvas);
 }
 
 .usage-log-heading,
@@ -371,7 +382,8 @@ onMounted(() => {
   align-items: end;
   justify-content: space-between;
   gap: 20px;
-  padding: 0 2px 16px;
+  padding: 0 2px 14px;
+  border-bottom: 1px solid var(--border);
 }
 
 .usage-log-heading > div {
@@ -410,7 +422,7 @@ onMounted(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
-  box-shadow: var(--sh-sm);
+  box-shadow: none;
 }
 
 .usage-log-filter-grid {
@@ -436,11 +448,11 @@ onMounted(() => {
 .usage-log-field input,
 .usage-log-field select {
   width: 100%;
-  height: 38px;
+  height: 40px;
   min-width: 0;
   padding: 0 10px;
   color: var(--ink);
-  background: #fbfcfe;
+  background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
   outline: none;
@@ -461,7 +473,11 @@ onMounted(() => {
 .usage-log-refresh,
 .usage-log-detail-button,
 .usage-log-pagination button {
-  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
   padding: 0 14px;
   color: var(--text);
   background: var(--surface);
@@ -596,7 +612,7 @@ onMounted(() => {
 
 .usage-log-table th {
   color: var(--muted);
-  background: #fbfcfe;
+  background: var(--surface-sub);
   font-size: 11px;
   font-weight: var(--fw-semibold);
 }
@@ -610,7 +626,7 @@ onMounted(() => {
 .usage-log-table th:nth-child(7) { width: 70px; }
 
 .usage-log-row:hover td {
-  background: rgba(0, 174, 236, 0.035);
+  background: #f4fafc;
 }
 
 .usage-log-table td > strong,
@@ -824,6 +840,7 @@ onMounted(() => {
 
   .usage-log-actions .usage-log-button {
     flex: 1;
+    min-height: 44px;
   }
 
   .usage-log-summary {

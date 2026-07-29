@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ArrowRight, Plus, RefreshCw } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import { listCreatorTasks } from '@/api/creator'
 import type { CreatorTaskSummary } from '@/types/creator'
@@ -153,6 +154,7 @@ function formatDate(value: string) {
         </div>
         <div class="creator-header-actions project-list-actions">
           <button type="button" class="creator-primary-button creator-mini-button" @click="createNewTask">
+            <Plus :size="16" :stroke-width="1.8" aria-hidden="true" />
             开始优化一条视频
           </button>
           <button
@@ -161,6 +163,7 @@ function formatDate(value: string) {
             :disabled="isLoading"
             @click="loadTasks"
           >
+            <RefreshCw :size="16" :stroke-width="1.8" aria-hidden="true" />
             {{ isLoading ? '刷新中...' : '刷新列表' }}
           </button>
         </div>
@@ -222,6 +225,7 @@ function formatDate(value: string) {
             </div>
             <button type="button" class="creator-primary-button creator-mini-button" @click="continueTask(task)">
               继续复盘
+              <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </article>
         </div>
@@ -231,6 +235,7 @@ function formatDate(value: string) {
           <span>可以调整搜索条件，或新建一条视频项目，把标题、简介和文稿先放进去。</span>
           <div class="project-empty-actions">
             <button type="button" class="creator-primary-button creator-mini-button" @click="createNewTask">
+              <Plus :size="16" :stroke-width="1.8" aria-hidden="true" />
               新建视频项目
             </button>
             <button
@@ -239,6 +244,7 @@ function formatDate(value: string) {
               :disabled="isLoading"
               @click="loadTasks"
             >
+              <RefreshCw :size="16" :stroke-width="1.8" aria-hidden="true" />
               重新读取
             </button>
           </div>
@@ -250,13 +256,13 @@ function formatDate(value: string) {
 
 <style scoped>
 .project-list-shell {
-  min-height: calc(100vh - 72px);
+  min-height: calc(100vh - var(--surface-topbar-height));
   padding-bottom: 96px;
 }
 
 .project-list-page {
   display: grid;
-  width: min(1540px, calc(100vw - 96px));
+  width: min(1440px, calc(100vw - 48px));
   gap: var(--s4);
   margin: 0 auto;
 }
@@ -341,10 +347,10 @@ function formatDate(value: string) {
   gap: 3px;
   padding: 12px 14px 12px 16px;
   overflow: hidden;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 252, 255, 0.86));
-  border: 1px solid rgba(23, 32, 51, 0.08);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--r);
-  box-shadow: var(--sh-sm);
+  box-shadow: none;
 }
 
 .project-stat-card::before {
@@ -363,7 +369,7 @@ function formatDate(value: string) {
 }
 
 .project-stat-card.tone-progress::before {
-  background: var(--bili-pink);
+  background: var(--accent);
 }
 
 .project-stat-card.tone-done::before {
@@ -386,7 +392,7 @@ function formatDate(value: string) {
 .project-list {
   display: grid;
   gap: 0;
-  border-top: 1px solid rgba(23, 32, 51, 0.08);
+  border-top: 1px solid var(--border);
 }
 
 .project-list-item {
@@ -398,7 +404,7 @@ function formatDate(value: string) {
   gap: var(--s4);
   padding: var(--s3) 0 var(--s3) var(--s4);
   background: transparent;
-  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
+  border-bottom: 1px solid var(--border);
   transition:
     background-color 180ms ease,
     box-shadow 180ms ease;
@@ -420,8 +426,12 @@ function formatDate(value: string) {
 }
 
 .project-list-item:hover {
-  background: rgba(0, 174, 236, 0.045);
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: #f4fafc;
+  box-shadow: none;
+}
+
+.project-list-item:hover::before {
+  background: var(--accent);
 }
 
 .project-list-item-main {
@@ -561,10 +571,6 @@ function formatDate(value: string) {
     gap: var(--s4);
   }
 
-  .project-list-summary {
-    grid-template-columns: 1fr;
-  }
-
   .project-list-item button {
     width: 100%;
   }
@@ -584,6 +590,10 @@ function formatDate(value: string) {
     display: grid;
     grid-template-columns: 1fr;
     width: 100%;
+  }
+
+  .project-list-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

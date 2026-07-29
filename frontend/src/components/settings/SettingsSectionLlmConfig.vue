@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { CircleCheck, CircleX } from '@lucide/vue'
 import {
   deleteLlmConfig,
   listLlmConfigs,
@@ -238,10 +239,12 @@ async function testConfigConnectivity(configId: string) {
               :class="llmTestResult.success ? 'success' : 'failed'"
             >
               <span v-if="llmTestResult.success">
-                ✓ 连接成功（{{ llmTestResult.elapsedMs }}ms）
+                <CircleCheck :size="15" :stroke-width="1.8" aria-hidden="true" />
+                连接成功（{{ llmTestResult.elapsedMs }}ms）
               </span>
               <span v-else>
-                ✗ 连接失败：{{ llmTestResult.error }}
+                <CircleX :size="15" :stroke-width="1.8" aria-hidden="true" />
+                连接失败：{{ llmTestResult.error }}
               </span>
             </div>
 
@@ -600,6 +603,12 @@ async function testConfigConnectivity(configId: string) {
   padding: var(--s1) var(--s2);
   border-radius: var(--r-sm);
   font-size: 13px;
+}
+
+.llm-config-test-result span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
 }
 
 .llm-config-test-result.success {

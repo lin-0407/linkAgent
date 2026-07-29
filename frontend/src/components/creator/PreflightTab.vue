@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { Check, CircleAlert, CircleCheck, LoaderCircle, Minus, X } from '@lucide/vue'
 import { ApiError } from '@/api/http'
 import {
   cancelPreflightReview,
@@ -204,12 +205,6 @@ const resultPanelStatus = computed(() => {
     return 'success'
   if (currentUpload.value) return 'working'
   return 'idle'
-})
-const resultPanelIcon = computed(() => {
-  if (resultPanelStatus.value === 'error') return '!'
-  if (resultPanelStatus.value === 'success') return '✓'
-  if (resultPanelStatus.value === 'working') return '···'
-  return '—'
 })
 const resultModalTitle = computed(() =>
   resultModalKind.value === 'probe' ? '媒体探测完成' : '成片上传完成',
@@ -1283,7 +1278,12 @@ function toMessage(error: unknown) {
         aria-label="当前成片状态"
         aria-live="polite"
       >
-        <span class="preflight-result-icon" aria-hidden="true">{{ resultPanelIcon }}</span>
+        <span class="preflight-result-icon" aria-hidden="true">
+          <CircleAlert v-if="resultPanelStatus === 'error'" :size="20" :stroke-width="1.8" />
+          <CircleCheck v-else-if="resultPanelStatus === 'success'" :size="20" :stroke-width="1.8" />
+          <LoaderCircle v-else-if="resultPanelStatus === 'working'" :size="20" :stroke-width="1.8" />
+          <Minus v-else :size="20" :stroke-width="1.8" />
+        </span>
         <div class="preflight-result-copy">
           <small>当前成片状态</small>
           <strong>{{ resultPanelTitle }}</strong>
@@ -1878,13 +1878,15 @@ function toMessage(error: unknown) {
                 aria-label="关闭结果窗口"
                 @click="closeResultModal()"
               >
-                ×
+                <X :size="19" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </header>
 
             <div class="creator-result-modal-body preflight-modal-body">
               <div class="preflight-modal-status">
-                <span aria-hidden="true">✓</span>
+                <span aria-hidden="true">
+                  <Check :size="19" :stroke-width="2" />
+                </span>
                 <div>
                   <strong>{{ resultModalTitle }}</strong>
                   <p>
@@ -3462,6 +3464,153 @@ button:disabled {
   .preflight-modal-enter-active .preflight-result-modal,
   .preflight-modal-leave-active .preflight-result-modal {
     transition: none;
+  }
+}
+
+/* 成片试映是高频操作面板，使用稳定的白底层级，避免实验室海报式装饰干扰状态判断。 */
+.preflight-studio {
+  --lab-ink: var(--ink);
+  --lab-cyan: var(--accent);
+  background: var(--surface);
+  background-image: none;
+}
+
+.preflight-studio::before {
+  display: none;
+}
+
+.preflight-hero {
+  gap: var(--s5);
+  padding-bottom: var(--s4);
+  border-bottom-color: var(--border);
+}
+
+.preflight-hero h3 {
+  font-size: 24px;
+}
+
+.preflight-limit-plate {
+  min-width: 132px;
+  color: var(--ink);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+.preflight-limit-plate span,
+.preflight-limit-plate small {
+  color: var(--muted);
+}
+
+.preflight-route {
+  color: var(--muted);
+  text-transform: none;
+}
+
+.preflight-route i {
+  background: var(--border-strong);
+}
+
+.preflight-file-card,
+.preflight-meter-card,
+.preflight-processing-panel,
+.preflight-review-panel {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.preflight-index {
+  color: var(--faint);
+}
+
+.preflight-dropzone {
+  background: var(--surface-sub);
+  background-image: none;
+  border-color: rgba(8, 126, 167, 0.4);
+}
+
+.preflight-dropzone:hover:not(:disabled) {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  transform: none;
+}
+
+.preflight-progress-track span {
+  background: var(--accent);
+}
+
+.preflight-result-dock,
+.preflight-result-dock.is-success,
+.preflight-modal-status {
+  background: var(--surface-sub);
+  background-image: none;
+}
+
+.preflight-report {
+  color: #eef2f5;
+  background: #27323c;
+  background-image: none;
+  border-color: #3d4a55;
+}
+
+.preflight-report-head span,
+.preflight-completion-card span,
+.preflight-section-title span,
+.preflight-audience-card dt,
+.preflight-issue-action span,
+.preflight-edit-card header span,
+.preflight-issue-seek {
+  color: #91d2e8;
+}
+
+.preflight-report-head > strong {
+  color: #ffd6a0;
+  background: rgba(180, 83, 9, 0.18);
+  border-color: rgba(255, 214, 160, 0.3);
+}
+
+.preflight-completion-card {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.preflight-audience-card,
+.preflight-issue-card,
+.preflight-edit-card {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.preflight-audience-card[data-persona='CORE_FAN'] {
+  border-top-color: #68b984;
+}
+
+.preflight-issue-card[data-severity='BLOCKER'],
+.preflight-issue-card[data-severity='HIGH'] {
+  border-left-color: #e07777;
+}
+
+.preflight-compact-primary {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.preflight-compact-primary:hover:not(:disabled) {
+  color: #fff;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.preflight-modal-status,
+.preflight-result-dock.is-success {
+  border-color: rgba(22, 128, 59, 0.22);
+}
+
+@media (max-width: 560px) {
+  .preflight-hero h3 {
+    font-size: 22px;
   }
 }
 </style>

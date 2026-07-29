@@ -13,7 +13,7 @@ import { useSystemStatus } from '@/composables/useSystemStatus'
  * 三个灯 + 一句摘要，用三色（绿/黄/红）表达 online/degraded/offline。
  * 点击状态栏可手动刷新连通性，不必等下一个轮询周期。
  *
- * ⚠️ 不展示"本月调用次数/花费"——后端无此跨任务汇总接口，避免编造数字。
+ * 不展示"本月调用次数/花费"，因为后端无此跨任务汇总接口，避免编造数字。
  */
 
 const {
@@ -172,9 +172,9 @@ function sseHealth(): 'online' | 'degraded' | 'offline' {
   color: var(--accent);
 }
 
-/* 窄屏：隐藏摘要文字，只保留指示灯，避免底栏拥挤 */
+/* 窄屏隐藏固定状态栏，避免它遮挡表单和列表；完整状态仍可在设置中查看。 */
 @media (max-width: 640px) {
-  .status-summary {
+  .system-status-bar {
     display: none;
   }
 }

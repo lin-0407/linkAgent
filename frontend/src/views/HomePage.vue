@@ -1,1718 +1,633 @@
 <script setup lang="ts">
-const workflowSteps = [
-  {
-    index: '01',
-    stage: 'IDEA',
-    title: '创意输入',
-    description: '从一个选题想法开始，补齐受众、表达方向和已有材料。',
-  },
-  {
-    index: '02',
-    stage: 'PLAN',
-    title: '发布方案',
-    description: '结合创作者偏好与案例证据，生成标题、简介、标签和风险建议。',
-  },
-  {
-    index: '03',
-    stage: 'PREVIEW',
-    title: '成片试映',
-    description: '方案确认后上传成片，先完成私有媒体校验和发布前检查。',
-  },
-  {
-    index: '04',
-    stage: 'PUBLISH',
-    title: '公开视频绑定',
-    description: '正式发布后绑定对应 BV，让创作任务与真实作品建立关联。',
-  },
-  {
-    index: '05',
-    stage: 'INSIGHT',
-    title: '反馈分析',
-    description: '聚合评论与弹幕证据，识别观众共鸣、争议和理解偏差。',
-  },
-  {
-    index: '06',
-    stage: 'MEMORY',
-    title: '复盘沉淀',
-    description: '把有效结论写入创作者偏好，让下一次发布不再从零开始。',
-  },
-]
+import {
+  Activity,
+  ArrowRight,
+  BarChart3,
+  BookOpen,
+  BrainCircuit,
+  Clapperboard,
+  FolderOpen,
+  Library,
+  MessageSquareText,
+  PenTool,
+  PlayCircle,
+  ShieldCheck,
+} from '@lucide/vue'
 
-const capabilityCards = [
+const quickEntries = [
   {
-    key: 'strategy',
-    eyebrow: 'AI PUBLISHING PLAN',
-    title: '把零散想法，变成可执行的发布方案',
-    description:
-      'Agent 同时理解任务材料、历史偏好、视频语境和案例证据，输出的不只是文案，还有选择理由与风险边界。',
+    title: '开始创作',
+    description: '整理创意与素材，生成发布方案',
     route: '/creator',
-    action: '生成发布方案',
-    screenshot: '/screenshots/publishing-plan-detail.png',
-    screenshotAlt: 'LinkAgent 真实发布方案页面，展示创作者偏好、标题建议和采用状态',
-    previewLabel: '发布方案 · 演示任务',
-    iconPaths: ['M5 4.5h14v15H5z', 'M8 9h8M8 13h5M8 16.5h7', 'M16.5 3v4M18.5 5h-4'],
+    icon: PenTool,
   },
   {
-    key: 'knowledge',
-    eyebrow: 'EVIDENCE LIBRARY',
-    title: '案例不是收藏，是决策证据',
-    description: '从 B 站参考案例中检索标题打法、内容定位与观众反馈，为本期建议提供可回看的依据。',
+    title: '检索案例',
+    description: '从参考视频中查找可复用证据',
     route: '/knowledge',
-    action: '浏览参考案例',
-    screenshot: '/screenshots/knowledge-library.png',
-    screenshotAlt: 'LinkAgent 真实参考案例页面，展示案例导入、检索和视频案例列表',
-    previewLabel: '参考案例 · 真实数据',
-    iconPaths: [
-      'M4.5 5.5h6.5a3 3 0 013 3v10a3 3 0 00-3-3H4.5z',
-      'M19.5 5.5H13a3 3 0 00-3 3v10a3 3 0 013-3h6.5z',
-    ],
+    icon: Library,
   },
   {
-    key: 'media',
-    eyebrow: 'PRIVATE MEDIA',
-    title: '先试映成片，再进入发布后分析',
-    description:
-      'MP4 分片直传私有对象存储，支持断点恢复与媒体探测，避免发布方案确认后直接跳过成片检查。',
-    route: '/creator',
-    action: '进入成片试映',
-    screenshot: '/screenshots/media-preflight.png',
-    screenshotAlt: 'LinkAgent 真实成片试映页面，展示分片传输、媒体探测和预处理状态',
-    previewLabel: '成片试映 · 演示任务',
-    iconPaths: ['M4 6h16v12H4z', 'M9.5 9l5 3-5 3z', 'M7 21h10'],
-  },
-  {
-    key: 'feedback',
-    eyebrow: 'AUDIENCE LOOP',
-    title: '让真实反馈，回到下一次创作',
-    description:
-      '将公开视频与创作任务关联，从评论弹幕中提炼共鸣、争议和选题机会，再沉淀为长期创作偏好。',
+    title: '视频复盘',
+    description: '绑定公开视频并查看观众反馈',
     route: '/video-analysis',
-    action: '查看视频分析',
-    screenshot: '/screenshots/audience-feedback.png',
-    screenshotAlt: 'LinkAgent 真实观众反馈页面，展示 BV 绑定、自动读取反馈和文件导入入口',
-    previewLabel: '观众反馈 · 实际流程',
-    iconPaths: ['M4.5 5.5h15v10h-8l-4 3v-3h-3z', 'M8 9.5h8M8 12.5h5'],
+    icon: BarChart3,
+  },
+  {
+    title: '调用记录',
+    description: '核对模型用量、耗时与失败原因',
+    route: '/usage-logs',
+    icon: Activity,
   },
 ]
 
-const architectureNodes = [
-  { label: '创作者输入', detail: '创意 / 文稿 / 成片', tone: 'source' },
-  { label: '工作流编排', detail: 'Vue 3 + SSE', tone: 'flow' },
-  { label: 'Agent 推理', detail: 'Spring AI + DeepSeek', tone: 'agent' },
-  { label: '私有资产', detail: 'MySQL / Milvus / OSS', tone: 'data' },
+const workflowSteps = [
+  { index: '01', title: '确认发布方案', detail: '把创意、受众和已有材料收敛成明确方向', icon: PenTool },
+  { index: '02', title: '生成制作蓝图', detail: '拆解内容结构、镜头和制作步骤', icon: Clapperboard },
+  { index: '03', title: '完成成片试映', detail: '上传私有成片并执行发布前检查', icon: PlayCircle },
+  { index: '04', title: '发布并绑定 BV', detail: '让公开视频与本次创作任务建立关联', icon: BookOpen },
+  { index: '05', title: '分析观众反馈', detail: '从评论和弹幕中识别共鸣与偏差', icon: MessageSquareText },
+  { index: '06', title: '沉淀长期偏好', detail: '把有效结论用于下一次发布决策', icon: BrainCircuit },
+]
+
+const managementEntries = [
+  { title: '项目列表', detail: '继续历史发布方案与复盘', route: '/projects', icon: FolderOpen },
+  { title: '记忆管理', detail: '查看系统沉淀的长期偏好', route: '/memory', icon: BrainCircuit },
+  { title: '参考案例', detail: '管理案例并执行主题检索', route: '/knowledge', icon: Library },
+  { title: '使用日志', detail: '查看每一次模型调用记录', route: '/usage-logs', icon: Activity },
 ]
 </script>
 
 <template>
-  <main class="home-page">
-    <section class="home-hero" aria-labelledby="home-title">
-      <div class="home-hero-grid" aria-hidden="true"></div>
-
-      <div class="home-hero-copy">
-        <p class="home-eyebrow">
-          <span aria-hidden="true"></span>
-          为 B 站创作者打造的个人 AI 工作台
-        </p>
-        <h1 id="home-title">
-          从创意到发布，
-          <span>每一步都有依据</span>
-        </h1>
-        <p class="home-hero-description">
-          把创意输入、发布方案、成片试映、观众反馈和复盘沉淀到同一条工作流。AI
-          不只生成内容，也保留过程、证据和你的创作偏好。
-        </p>
-
-        <div class="home-hero-actions">
-          <RouterLink to="/creator" class="home-primary-action">
-            开始一条创作
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M4 10h11M11 6l4 4-4 4" />
-            </svg>
-          </RouterLink>
-          <RouterLink to="/projects" class="home-secondary-action"> 继续历史项目 </RouterLink>
+  <main class="home-dashboard">
+    <section class="home-overview" aria-labelledby="home-title">
+      <div class="home-container home-overview-inner">
+        <div class="home-intro">
+          <p class="home-kicker">创作总览</p>
+          <h1 id="home-title">下一条视频，从明确的发布方案开始</h1>
+          <p>
+            LinkAgent 把创意、制作、成片试映、公开反馈和复盘放进同一条工作流，过程与依据都可以随时回看。
+          </p>
         </div>
+        <div class="home-overview-actions">
+          <RouterLink to="/creator" class="home-action home-action-primary">
+            <PenTool :size="17" :stroke-width="1.8" aria-hidden="true" />
+            开始一条创作
+          </RouterLink>
+          <RouterLink to="/projects" class="home-action home-action-secondary">
+            <FolderOpen :size="17" :stroke-width="1.8" aria-hidden="true" />
+            继续历史项目
+          </RouterLink>
+        </div>
+      </div>
+    </section>
 
-        <ul class="home-trust-list" aria-label="产品特性">
-          <li>个人自托管</li>
-          <li>私有媒体直传</li>
-          <li>Agent 过程可追溯</li>
-        </ul>
+    <div class="home-container">
+      <nav class="home-quick-grid" aria-label="常用入口">
+        <RouterLink
+          v-for="entry in quickEntries"
+          :key="entry.route"
+          :to="entry.route"
+          class="home-quick-entry"
+        >
+          <span class="home-entry-icon" aria-hidden="true">
+            <component :is="entry.icon" :size="20" :stroke-width="1.7" />
+          </span>
+          <span class="home-entry-copy">
+            <strong>{{ entry.title }}</strong>
+            <small>{{ entry.description }}</small>
+          </span>
+          <ArrowRight class="home-entry-arrow" :size="17" :stroke-width="1.8" aria-hidden="true" />
+        </RouterLink>
+      </nav>
+
+      <div class="home-workspace-grid">
+        <section class="home-workflow" aria-labelledby="workflow-title">
+          <header class="home-section-header">
+            <div>
+              <p class="home-kicker">创作流程</p>
+              <h2 id="workflow-title">从发布前决策到发布后复盘</h2>
+            </div>
+            <RouterLink to="/creator" class="home-inline-link">
+              打开创作台
+              <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
+            </RouterLink>
+          </header>
+
+          <ol class="home-workflow-list">
+            <li v-for="step in workflowSteps" :key="step.index">
+              <span class="home-step-index">{{ step.index }}</span>
+              <span class="home-step-icon" aria-hidden="true">
+                <component :is="step.icon" :size="18" :stroke-width="1.7" />
+              </span>
+              <span class="home-step-copy">
+                <strong>{{ step.title }}</strong>
+                <small>{{ step.detail }}</small>
+              </span>
+            </li>
+          </ol>
+        </section>
+
+        <aside class="home-management" aria-labelledby="management-title">
+          <header class="home-section-header">
+            <div>
+              <p class="home-kicker">管理与追溯</p>
+              <h2 id="management-title">常用工作区</h2>
+            </div>
+          </header>
+
+          <nav class="home-management-list" aria-label="管理入口">
+            <RouterLink
+              v-for="entry in managementEntries"
+              :key="entry.title"
+              :to="entry.route"
+            >
+              <component :is="entry.icon" :size="18" :stroke-width="1.7" aria-hidden="true" />
+              <span>
+                <strong>{{ entry.title }}</strong>
+                <small>{{ entry.detail }}</small>
+              </span>
+              <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
+            </RouterLink>
+          </nav>
+
+          <div class="home-private-note">
+            <ShieldCheck :size="19" :stroke-width="1.7" aria-hidden="true" />
+            <div>
+              <strong>个人自托管</strong>
+              <p>项目材料、媒体处理记录和创作偏好保存在自己的部署中。</p>
+            </div>
+          </div>
+        </aside>
       </div>
 
-      <div class="home-product-stage" aria-label="LinkAgent 产品能力预览">
-        <figure class="home-product-shot">
+      <section class="home-preview" aria-labelledby="preview-title">
+        <header class="home-section-header">
+          <div>
+            <p class="home-kicker">当前工作台</p>
+            <h2 id="preview-title">发布方案与创作依据在同一界面完成</h2>
+          </div>
+          <RouterLink to="/creator" class="home-inline-link">
+            进入完整界面
+            <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </RouterLink>
+        </header>
+        <figure class="home-preview-figure">
           <img
             src="/screenshots/creator-publishing-plan.png"
-            alt="LinkAgent 真实创作台截图，展示发布方案、创作者偏好和六阶段视频发布流程"
+            alt="LinkAgent 创作台界面，展示发布方案、创作者偏好和视频发布流程"
             width="1440"
             height="900"
           />
-          <figcaption>
-            <span><i aria-hidden="true"></i> 真实项目界面</span>
-            <strong>发布方案 · 当前演示任务</strong>
-          </figcaption>
+          <figcaption>创作台实际界面</figcaption>
         </figure>
-      </div>
-    </section>
-
-    <dl class="home-proof-strip" aria-label="LinkAgent 核心能力">
-      <div>
-        <dt>完整创作闭环</dt>
-        <dd>发布前到发布后</dd>
-      </div>
-      <div>
-        <dt>私有媒体链路</dt>
-        <dd>成片分片直传 OSS</dd>
-      </div>
-      <div>
-        <dt>Agent 可追溯</dt>
-        <dd>步骤、证据与用量可回看</dd>
-      </div>
-      <div>
-        <dt>长期偏好记忆</dt>
-        <dd>每次复盘服务下一次创作</dd>
-      </div>
-    </dl>
-
-    <section class="home-section home-workflow" aria-labelledby="workflow-title">
-      <header class="home-section-heading">
-        <div>
-          <p class="home-section-kicker"><span>01</span> CREATOR WORKFLOW</p>
-          <h2 id="workflow-title">不是一次生成，<br />是一条创作闭环</h2>
-        </div>
-        <p>
-          LinkAgent
-          把发布前决策和发布后反馈接在一起。每个阶段都承接上一步的真实材料，不让复盘停在一份孤立报告里。
-        </p>
-      </header>
-
-      <ol class="home-workflow-list">
-        <li v-for="step in workflowSteps" :key="step.index">
-          <div class="home-workflow-index">
-            <span>{{ step.index }}</span>
-            <i aria-hidden="true"></i>
-          </div>
-          <small>{{ step.stage }}</small>
-          <h3>{{ step.title }}</h3>
-          <p>{{ step.description }}</p>
-        </li>
-      </ol>
-    </section>
-
-    <section class="home-capability-stage" aria-labelledby="capability-title">
-      <div class="home-section home-capabilities">
-        <header class="home-section-heading home-section-heading-light">
-          <div>
-            <p class="home-section-kicker"><span>02</span> ONE CREATOR OS</p>
-            <h2 id="capability-title">创作前后，<br />都在同一个上下文里</h2>
-          </div>
-          <p>
-            不是把几个 AI 工具拼在一起，而是围绕同一条视频任务保存材料、决策、成片和反馈，让 Agent
-            真正理解“这一期”发生了什么。
-          </p>
-        </header>
-
-        <div class="home-capability-grid">
-          <article
-            v-for="capability in capabilityCards"
-            :key="capability.key"
-            class="home-capability-card"
-            :class="`is-${capability.key}`"
-          >
-            <div class="home-capability-copy">
-              <div class="home-capability-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path v-for="path in capability.iconPaths" :key="path" :d="path" />
-                </svg>
-              </div>
-              <p>{{ capability.eyebrow }}</p>
-              <h3>{{ capability.title }}</h3>
-              <span>{{ capability.description }}</span>
-            </div>
-
-            <figure class="home-capability-visual home-capability-screenshot">
-              <img
-                :src="capability.screenshot"
-                :alt="capability.screenshotAlt"
-                width="1190"
-                height="748"
-                loading="lazy"
-              />
-              <figcaption>
-                <span><i aria-hidden="true"></i> 真实页面截图</span>
-                <b>{{ capability.previewLabel }}</b>
-              </figcaption>
-            </figure>
-
-            <RouterLink :to="capability.route" class="home-capability-link">
-              {{ capability.action }}
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" /></svg>
-            </RouterLink>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section class="home-section home-ownership" aria-labelledby="ownership-title">
-      <div class="home-ownership-copy">
-        <p class="home-section-kicker"><span>03</span> SELF-HOSTED BY DESIGN</p>
-        <h2 id="ownership-title">你的创作资产，<br />由你的工作台管理</h2>
-        <p>
-          LinkAgent
-          面向个人自托管场景设计。项目材料、工作流记录和复盘资产保存在你的部署中；成片由浏览器分片直传私有对象存储，业务服务不转发大文件。
-        </p>
-        <ul>
-          <li>单人工作台，不强加注册、租户和复杂权限体系</li>
-          <li>模型、向量库和数据服务按自己的环境配置</li>
-          <li>开发者模式下可查看 Agent 步骤、证据与调用开销</li>
-        </ul>
-        <RouterLink to="/creator" class="home-inline-action">
-          打开我的创作台
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" /></svg>
-        </RouterLink>
-      </div>
-
-      <div class="home-architecture-card" aria-label="LinkAgent 自托管架构概览">
-        <header>
-          <div><i aria-hidden="true"></i><span>linkagent.local</span></div>
-          <b>由你控制</b>
-        </header>
-        <div class="home-architecture-map">
-          <template v-for="(node, index) in architectureNodes" :key="node.label">
-            <div class="home-architecture-node" :class="`is-${node.tone}`">
-              <span>{{ node.label }}</span>
-              <strong>{{ node.detail }}</strong>
-            </div>
-            <svg v-if="index < architectureNodes.length - 1" viewBox="0 0 28 20" aria-hidden="true">
-              <path d="M2 10h22M19 5l5 5-5 5" />
-            </svg>
-          </template>
-        </div>
-        <div class="home-stack-list" aria-label="技术栈">
-          <span>Spring AI</span>
-          <span>DeepSeek</span>
-          <span>Milvus</span>
-          <span>Redis</span>
-          <span>MySQL</span>
-          <span>Vue 3 + SSE</span>
-        </div>
-        <footer>
-          <span><i aria-hidden="true"></i> 服务状态可观测</span>
-          <span>Open source · Self-hosted</span>
-        </footer>
-      </div>
-    </section>
-
-    <section class="home-final-cta" aria-labelledby="final-cta-title">
-      <p>YOUR NEXT VIDEO STARTS HERE</p>
-      <h2 id="final-cta-title">下一条视频，从有依据的决策开始</h2>
-      <span>不必先准备完整文稿，一个选题想法就能开始。</span>
-      <div>
-        <RouterLink to="/creator" class="home-primary-action">
-          进入 LinkAgent
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M11 6l4 4-4 4" /></svg>
-        </RouterLink>
-        <RouterLink to="/knowledge" class="home-secondary-action home-secondary-action-dark">
-          先看看参考案例
-        </RouterLink>
-      </div>
-    </section>
-
-    <footer class="home-footer">
-      <RouterLink to="/" class="home-footer-brand">
-        <span aria-hidden="true"></span>
-        <strong>LinkAgent</strong>
-      </RouterLink>
-      <p>为 B 站创作者构建的开源个人 AI 工作台</p>
-      <nav aria-label="页脚导航">
-        <RouterLink to="/creator">创作台</RouterLink>
-        <RouterLink to="/knowledge">参考案例</RouterLink>
-        <RouterLink to="/projects">项目列表</RouterLink>
-        <RouterLink to="/memory">记忆管理</RouterLink>
-      </nav>
-    </footer>
+      </section>
+    </div>
   </main>
 </template>
 
 <style scoped>
 :global(.surface-root-home) {
-  background: #f4f8fb;
+  padding-bottom: 0;
+  background: var(--canvas);
 }
 
-:global(.surface-topbar-home) {
-  background: rgba(248, 251, 253, 0.9);
-  border-bottom-color: rgba(16, 31, 48, 0.08);
-  box-shadow: none;
+.home-dashboard {
+  min-height: calc(100vh - var(--surface-topbar-height));
+  color: var(--text);
+  background: var(--canvas);
 }
 
-:global(.surface-topbar-home .surface-switch) {
-  min-width: 0;
-  background: rgba(255, 255, 255, 0.7);
-  border-color: rgba(16, 31, 48, 0.08);
-  box-shadow: none;
+.home-container {
+  width: min(1280px, calc(100% - 48px));
+  margin-inline: auto;
 }
 
-:global(.surface-topbar-home .surface-switch button.active) {
-  color: #071827;
-  background: #fff;
-  border-color: rgba(16, 31, 48, 0.1);
-  box-shadow: 0 4px 12px rgba(16, 31, 48, 0.08);
+.home-overview {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
-.home-page {
-  --home-cyan: #19c3f1;
-  --home-cyan-deep: #009fd5;
-  --home-paper: #f4f8fb;
-  position: relative;
-  z-index: 1;
-  min-height: 100vh;
-  overflow: hidden;
-  color: #26394a;
-  background: var(--home-paper);
-}
-
-.home-hero {
-  position: relative;
+.home-overview-inner {
   display: grid;
-  width: 100%;
-  min-height: 680px;
-  grid-template-columns: minmax(410px, 0.86fr) minmax(560px, 1.14fr);
-  align-items: center;
-  gap: clamp(34px, 5vw, 76px);
-  margin: 0;
-  padding: 64px max(24px, calc((100vw - 1260px) / 2));
-  overflow: hidden;
-  color: #eaf4fa;
-  background: #071522;
-  border-block: 1px solid rgba(169, 221, 238, 0.13);
-  box-shadow: 0 24px 64px rgba(4, 18, 30, 0.16);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 40px;
+  padding-block: 44px 40px;
 }
 
-.home-hero-grid {
-  position: absolute;
-  inset: 0;
-  opacity: 0.24;
-  background-image:
-    linear-gradient(rgba(118, 196, 220, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(118, 196, 220, 0.08) 1px, transparent 1px);
-  background-size: 46px 46px;
-  mask-image: linear-gradient(90deg, #000 0%, transparent 68%);
+.home-intro {
+  max-width: 760px;
 }
 
-.home-hero-copy,
-.home-product-stage {
-  position: relative;
-  z-index: 2;
-  min-width: 0;
-}
-
-.home-hero-copy {
-  max-width: 620px;
-}
-
-.home-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  min-height: 34px;
-  gap: 9px;
-  margin: 0 0 24px;
-  padding: 0 13px;
-  color: #c5e8f4;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(149, 221, 242, 0.17);
-  border-radius: 999px;
+.home-kicker {
+  margin: 0 0 7px;
+  color: var(--accent-strong);
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0;
+  font-weight: var(--fw-semibold);
 }
 
-.home-eyebrow span {
-  width: 7px;
-  height: 7px;
-  background: var(--home-cyan);
-  border-radius: 50%;
-  box-shadow: 0 0 0 5px rgba(25, 195, 241, 0.12);
-}
-
-.home-hero h1 {
-  max-width: 650px;
+.home-intro h1 {
   margin: 0;
-  color: #f7fbfd;
-  font-family: 'Segoe UI Variable Display', 'Microsoft YaHei UI', sans-serif;
-  font-size: 60px;
-  font-weight: 730;
+  color: var(--ink);
+  font-size: 36px;
+  font-weight: var(--fw-bold);
   letter-spacing: 0;
-  line-height: 1.1;
+  line-height: 1.24;
 }
 
-.home-hero h1 span {
-  display: block;
-  color: var(--home-cyan);
+.home-intro > p:last-child {
+  max-width: 700px;
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.75;
 }
 
-.home-hero-description {
-  max-width: 580px;
-  margin: 25px 0 0;
-  color: rgba(222, 238, 246, 0.72);
-  font-size: 16px;
-  line-height: 1.85;
-}
-
-.home-hero-actions,
-.home-final-cta > div:last-child {
+.home-overview-actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  margin-top: 32px;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
-.home-primary-action,
-.home-secondary-action {
+.home-action {
   display: inline-flex;
-  min-height: 48px;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 0 20px;
-  border-radius: 8px;
+  gap: 8px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
   font-size: 14px;
-  font-weight: 700;
+  font-weight: var(--fw-semibold);
   text-decoration: none;
   transition:
-    color 180ms ease,
-    background-color 180ms ease,
-    border-color 180ms ease,
-    box-shadow 180ms ease,
-    transform 180ms ease;
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease;
 }
 
-.home-primary-action {
-  color: #042133;
-  background: var(--home-cyan);
-  border: 1px solid var(--home-cyan);
-  box-shadow: 0 12px 26px rgba(25, 195, 241, 0.2);
-}
-
-.home-primary-action:hover {
-  background: #54d8f7;
-  border-color: #54d8f7;
-  box-shadow: 0 16px 32px rgba(25, 195, 241, 0.28);
-  transform: translateY(-2px);
-}
-
-.home-secondary-action {
-  color: #e4f1f6;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(199, 228, 238, 0.18);
-}
-
-.home-secondary-action:hover {
+.home-action-primary {
   color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(199, 228, 238, 0.34);
-  transform: translateY(-2px);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
-.home-primary-action svg,
-.home-capability-link svg,
-.home-inline-action svg {
-  width: 18px;
-  height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
+.home-action-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
-.home-trust-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 18px;
-  margin: 28px 0 0;
-  padding: 0;
-  color: rgba(207, 229, 237, 0.62);
-  font-size: 12px;
-  list-style: none;
+.home-action-secondary {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border-strong);
 }
 
-.home-trust-list li {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+.home-action-secondary:hover {
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  border-color: rgba(8, 126, 167, 0.35);
 }
 
-.home-trust-list li::before {
-  width: 12px;
-  height: 12px;
-  background:
-    linear-gradient(135deg, transparent 45%, var(--home-cyan) 46% 56%, transparent 57%) 1px 1px /
-      7px 7px no-repeat,
-    linear-gradient(45deg, transparent 45%, var(--home-cyan) 46% 56%, transparent 57%) 5px 0 / 7px
-      10px no-repeat;
-  content: '';
-}
-
-.home-product-stage {
-  width: 100%;
-  padding: 34px 14px 28px 0;
-}
-
-.home-product-stage::before {
-  content: none;
-}
-
-.home-product-shot {
-  position: relative;
-  margin: 0;
-  padding: 10px 10px 8px;
-  overflow: hidden;
-  background: rgba(231, 246, 251, 0.08);
-  border: 1px solid rgba(199, 229, 239, 0.24);
-  border-radius: 12px;
-  box-shadow:
-    0 42px 70px rgba(0, 5, 12, 0.38),
-    0 0 0 7px rgba(255, 255, 255, 0.025);
-  transform: perspective(1400px) rotateY(-2deg) rotateX(0.8deg);
-  transform-origin: center left;
-}
-
-.home-product-shot img {
-  display: block;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 8 / 5;
-  object-fit: cover;
-  object-position: top left;
-  background: #f7fafc;
-  border-radius: 7px;
-}
-
-.home-product-shot figcaption,
-.home-capability-screenshot figcaption {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.home-product-shot figcaption {
-  min-height: 39px;
-  padding: 8px 4px 0;
-  color: rgba(222, 238, 246, 0.68);
-  font-size: 10px;
-}
-
-.home-product-shot figcaption span,
-.home-capability-screenshot figcaption span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.home-product-shot figcaption i,
-.home-capability-screenshot figcaption i {
-  width: 7px;
-  height: 7px;
-  background: #45c78a;
-  border-radius: 50%;
-  box-shadow: 0 0 0 4px rgba(69, 199, 138, 0.12);
-}
-
-.home-product-shot figcaption strong {
-  color: #d9edf4;
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.home-proof-strip {
-  position: relative;
-  z-index: 3;
+.home-quick-grid {
   display: grid;
-  width: min(1260px, calc(100% - 80px));
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: -22px auto 0;
-  padding: 0;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid rgba(16, 48, 66, 0.1);
-  border-radius: 8px;
-  box-shadow: 0 18px 45px rgba(22, 55, 72, 0.1);
-  backdrop-filter: blur(16px);
+  gap: 12px;
+  padding-block: 20px 28px;
 }
 
-.home-proof-strip > div {
+.home-quick-entry {
   display: grid;
-  gap: 5px;
-  padding: 20px 24px;
+  grid-template-columns: 40px minmax(0, 1fr) 18px;
+  min-width: 0;
+  min-height: 86px;
+  align-items: center;
+  gap: 11px;
+  padding: 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  text-decoration: none;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
 }
 
-.home-proof-strip > div + div {
-  border-left: 1px solid #e8eef2;
+.home-quick-entry:hover {
+  background: #f9fcfd;
+  border-color: rgba(8, 126, 167, 0.32);
 }
 
-.home-proof-strip dt {
-  color: #17374c;
-  font-size: 13px;
-  font-weight: 700;
+.home-entry-icon,
+.home-step-icon {
+  display: inline-grid;
+  place-items: center;
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  border: 1px solid rgba(8, 126, 167, 0.16);
+  border-radius: var(--r-sm);
 }
 
-.home-proof-strip dd {
-  margin: 0;
-  color: #718392;
-  font-size: 11px;
-  line-height: 1.5;
+.home-entry-icon {
+  width: 40px;
+  height: 40px;
 }
 
-.home-section {
-  width: min(1260px, calc(100% - 48px));
-  margin: 0 auto;
+.home-entry-copy,
+.home-step-copy,
+.home-management-list a > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.home-entry-copy strong,
+.home-step-copy strong,
+.home-management-list strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: var(--fw-semibold);
+}
+
+.home-entry-copy small,
+.home-step-copy small,
+.home-management-list small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.home-entry-arrow {
+  color: var(--faint);
+}
+
+.home-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.72fr);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.home-workflow,
+.home-management,
+.home-preview {
+  min-width: 0;
 }
 
 .home-workflow {
-  padding: 120px 0 132px;
+  padding: 30px 34px 34px 0;
+  border-right: 1px solid var(--border);
 }
 
-.home-section-heading {
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 0.58fr);
-  align-items: end;
-  gap: clamp(40px, 8vw, 120px);
+.home-management {
+  padding: 30px 0 34px 34px;
 }
 
-.home-section-kicker {
+.home-section-header {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0 0 18px;
-  color: #598094;
-  font-family: var(--font-code);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
+  min-width: 0;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
 }
 
-.home-section-kicker span {
-  color: var(--home-cyan-deep);
-}
-
-.home-section-heading h2,
-.home-ownership-copy h2 {
+.home-section-header h2 {
   margin: 0;
-  color: #0b2335;
-  font-family: 'Segoe UI Variable Display', 'Microsoft YaHei UI', sans-serif;
-  font-size: 48px;
-  font-weight: 720;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: var(--fw-bold);
   letter-spacing: 0;
-  line-height: 1.16;
+  line-height: 1.35;
 }
 
-.home-section-heading > p {
-  max-width: 490px;
-  margin: 0 0 3px;
-  color: #647989;
-  font-size: 14px;
-  line-height: 1.85;
+.home-inline-link {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+  text-decoration: none;
+}
+
+.home-inline-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 
 .home-workflow-list {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0;
-  margin: 68px 0 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
   padding: 0;
   list-style: none;
+  border-top: 1px solid var(--border);
 }
 
 .home-workflow-list li {
-  position: relative;
+  display: grid;
+  grid-template-columns: 28px 36px minmax(0, 1fr);
   min-width: 0;
-  padding: 0 20px 0 0;
-}
-
-.home-workflow-list li:not(:last-child)::after {
-  position: absolute;
-  top: 17px;
-  right: 0;
-  left: 48px;
-  height: 1px;
-  background: #cadae2;
-  content: '';
-}
-
-.home-workflow-index {
-  position: relative;
-  z-index: 1;
-  display: flex;
+  min-height: 82px;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding: 12px 14px 12px 0;
+  border-bottom: 1px solid var(--border);
 }
 
-.home-workflow-index span {
-  display: grid;
-  width: 35px;
-  height: 35px;
-  place-items: center;
-  color: #087ca6;
-  background: #e5f8fc;
-  border: 1px solid #b9e9f3;
-  border-radius: 9px;
+.home-workflow-list li:nth-child(odd) {
+  padding-right: 18px;
+  border-right: 1px solid var(--border);
+}
+
+.home-workflow-list li:nth-child(even) {
+  padding-left: 18px;
+}
+
+.home-step-index {
+  color: var(--faint);
   font-family: var(--font-code);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
 }
 
-.home-workflow-index i {
-  width: 5px;
-  height: 5px;
-  background: #91c8d7;
-  border-radius: 50%;
+.home-step-icon {
+  width: 36px;
+  height: 36px;
 }
 
-.home-workflow-list small {
-  display: block;
-  margin-top: 24px;
-  color: #87a0ae;
-  font-family: var(--font-code);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
-.home-workflow-list h3 {
-  margin: 8px 0 0;
-  color: #16374d;
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.home-workflow-list p {
-  margin: 11px 0 0;
-  color: #728594;
-  font-size: 12px;
-  line-height: 1.75;
-}
-
-.home-capability-stage {
-  position: relative;
-  padding: 116px 0 124px;
-  overflow: hidden;
-  background: #071522;
-}
-
-.home-capability-stage::before {
-  position: absolute;
-  inset: 0;
-  opacity: 0.2;
-  background-image:
-    linear-gradient(rgba(129, 199, 221, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(129, 199, 221, 0.08) 1px, transparent 1px);
-  background-size: 54px 54px;
-  content: '';
-  mask-image: linear-gradient(180deg, #000, transparent 72%);
-}
-
-.home-capabilities {
-  position: relative;
-  z-index: 1;
-}
-
-.home-section-heading-light h2 {
-  color: #f2f8fb;
-}
-
-.home-section-heading-light > p {
-  color: #91a9b6;
-}
-
-.home-section-heading-light .home-section-kicker {
-  color: #7ba5b6;
-}
-
-.home-section-heading-light .home-section-kicker span {
-  color: var(--home-cyan);
-}
-
-.home-capability-grid {
+.home-management-list {
   display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 16px;
-  margin-top: 64px;
+  border-top: 1px solid var(--border);
 }
 
-.home-capability-card {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  min-height: 420px;
-  flex-direction: column;
-  padding: 30px;
-  overflow: hidden;
-  background: #102536;
-  border: 1px solid rgba(159, 211, 228, 0.12);
-  border-radius: 8px;
-  box-shadow: 0 24px 50px rgba(0, 6, 12, 0.16);
-  transition:
-    border-color 220ms ease,
-    box-shadow 220ms ease,
-    transform 220ms ease;
-}
-
-.home-capability-card:hover {
-  border-color: rgba(93, 210, 240, 0.3);
-  box-shadow: 0 30px 60px rgba(0, 5, 12, 0.25);
-  transform: translateY(-4px);
-}
-
-.home-capability-card.is-strategy,
-.home-capability-card.is-feedback {
-  grid-column: span 7;
-}
-
-.home-capability-card.is-knowledge,
-.home-capability-card.is-media {
-  grid-column: span 5;
-}
-
-.home-capability-card.is-strategy {
-  background: #102536;
-}
-
-.home-capability-card.is-knowledge {
-  background: #eaf7fa;
-  border-color: #cde7ed;
-}
-
-.home-capability-card.is-media {
-  background: #f5f8fa;
-  border-color: #dce7ec;
-}
-
-.home-capability-card.is-feedback {
-  background: #0d2233;
-}
-
-.home-capability-copy {
-  position: relative;
-  z-index: 1;
-  max-width: 560px;
-}
-
-.home-capability-icon {
+.home-management-list a {
   display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  color: var(--home-cyan);
-  background: rgba(25, 195, 241, 0.09);
-  border: 1px solid rgba(25, 195, 241, 0.17);
-  border-radius: 10px;
+  grid-template-columns: 24px minmax(0, 1fr) 16px;
+  min-height: 64px;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  text-decoration: none;
 }
 
-.home-capability-icon svg {
-  width: 22px;
-  height: 22px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.55;
+.home-management-list a:hover {
+  color: var(--accent-strong);
+  background: #f9fcfd;
 }
 
-.home-capability-copy > p {
-  margin: 21px 0 0;
-  color: #5bd0ee;
-  font-family: var(--font-code);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0;
+.home-private-note {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 20px;
+  padding: 14px;
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  border: 1px solid rgba(8, 126, 167, 0.16);
+  border-radius: var(--r);
 }
 
-.home-capability-copy h3 {
-  max-width: 520px;
-  margin: 11px 0 0;
-  color: #f2f8fb;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: 0;
-  line-height: 1.3;
-}
-
-.home-capability-copy > span {
-  display: block;
-  max-width: 560px;
-  margin-top: 12px;
-  color: #9db2bd;
+.home-private-note strong {
+  color: var(--ink);
   font-size: 13px;
-  line-height: 1.75;
 }
 
-.is-knowledge .home-capability-icon,
-.is-media .home-capability-icon {
-  color: #0781aa;
-  background: #fff;
-  border-color: #d3e8ee;
+.home-private-note p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
-.is-knowledge .home-capability-copy > p,
-.is-media .home-capability-copy > p {
-  color: #0781aa;
+.home-preview {
+  padding-block: 34px 64px;
 }
 
-.is-knowledge .home-capability-copy h3,
-.is-media .home-capability-copy h3 {
-  color: #123247;
-}
-
-.is-knowledge .home-capability-copy > span,
-.is-media .home-capability-copy > span {
-  color: #647c8c;
-}
-
-.home-capability-visual {
+.home-preview-figure {
   position: relative;
-  z-index: 1;
-  margin: 24px 0 0;
-}
-
-.home-capability-screenshot {
+  margin: 0;
   overflow: hidden;
-  background: #fff;
-  border: 1px solid rgba(160, 199, 212, 0.24);
-  border-radius: 10px;
-  box-shadow: 0 14px 34px rgba(0, 10, 18, 0.18);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
 }
 
-.home-capability-screenshot img {
+.home-preview-figure img {
   display: block;
   width: 100%;
   height: auto;
   aspect-ratio: 16 / 9;
   object-fit: cover;
-  object-position: top left;
-  background: #f7fafc;
+  object-position: top;
 }
 
-.home-capability-screenshot figcaption {
-  min-height: 38px;
-  padding: 8px 11px;
-  color: #68808e;
-  background: #f9fbfc;
-  border-top: 1px solid #e5edf1;
-  font-size: 9px;
-}
-
-.home-capability-screenshot figcaption b {
-  color: #25465a;
-  font-size: 9px;
-  font-weight: 700;
-}
-
-.is-feedback .home-capability-screenshot img {
-  object-position: center top;
-}
-
-.home-capability-link {
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 22px;
-  color: #60d4ef;
+.home-preview-figure figcaption {
+  padding: 10px 14px;
+  color: var(--muted);
+  background: var(--surface-sub);
+  border-top: 1px solid var(--border);
   font-size: 12px;
-  font-weight: 700;
-  text-decoration: none;
 }
 
-.home-capability-link:hover {
-  color: #fff;
-}
-
-.is-knowledge .home-capability-link,
-.is-media .home-capability-link {
-  color: #087fa6;
-}
-
-.is-knowledge .home-capability-link:hover,
-.is-media .home-capability-link:hover {
-  color: #064f6b;
-}
-
-.home-ownership {
-  display: grid;
-  grid-template-columns: minmax(0, 0.82fr) minmax(500px, 1.18fr);
-  align-items: center;
-  gap: clamp(56px, 8vw, 112px);
-  padding: 126px 0;
-}
-
-.home-ownership-copy > p:not(.home-section-kicker) {
-  max-width: 550px;
-  margin: 24px 0 0;
-  color: #647a89;
-  font-size: 14px;
-  line-height: 1.85;
-}
-
-.home-ownership-copy ul {
-  display: grid;
-  gap: 12px;
-  margin: 26px 0 0;
-  padding: 0;
-  color: #496273;
-  font-size: 13px;
-  list-style: none;
-}
-
-.home-ownership-copy li {
-  position: relative;
-  padding-left: 22px;
-  line-height: 1.6;
-}
-
-.home-ownership-copy li::before {
-  position: absolute;
-  top: 5px;
-  left: 0;
-  width: 12px;
-  height: 12px;
-  background: #e3f7fb;
-  border: 1px solid #a8e4f0;
-  border-radius: 4px;
-  content: '';
-}
-
-.home-ownership-copy li::after {
-  position: absolute;
-  top: 8px;
-  left: 3px;
-  width: 6px;
-  height: 3px;
-  border-bottom: 1.5px solid #087fa6;
-  border-left: 1.5px solid #087fa6;
-  content: '';
-  transform: rotate(-45deg);
-}
-
-.home-inline-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 31px;
-  color: #087da4;
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
-}
-
-.home-inline-action:hover {
-  color: #055875;
-}
-
-.home-architecture-card {
-  overflow: hidden;
-  background: #fff;
-  border: 1px solid #dbe7ec;
-  border-radius: 8px;
-  box-shadow: 0 26px 70px rgba(25, 58, 75, 0.12);
-}
-
-.home-architecture-card > header,
-.home-architecture-card > footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 15px 18px;
-  background: #f8fafb;
-}
-
-.home-architecture-card > header {
-  border-bottom: 1px solid #e5ecef;
-}
-
-.home-architecture-card > header div,
-.home-architecture-card > footer span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.home-architecture-card > header i,
-.home-architecture-card > footer i {
-  width: 7px;
-  height: 7px;
-  background: #45c78a;
-  border-radius: 50%;
-  box-shadow: 0 0 0 4px rgba(69, 199, 138, 0.11);
-}
-
-.home-architecture-card > header span {
-  color: #576e7d;
-  font-family: var(--font-code);
-  font-size: 10px;
-}
-
-.home-architecture-card > header b {
-  padding: 5px 8px;
-  color: #08799f;
-  background: #e9f8fb;
-  border-radius: 999px;
-  font-size: 9px;
-}
-
-.home-architecture-map {
-  display: grid;
-  grid-template-columns:
-    minmax(94px, 1fr) 28px minmax(94px, 1fr) 28px minmax(94px, 1fr)
-    28px minmax(94px, 1fr);
-  align-items: center;
-  gap: 7px;
-  padding: 32px 20px 24px;
-}
-
-.home-architecture-node {
-  display: grid;
-  min-height: 92px;
-  align-content: center;
-  gap: 8px;
-  padding: 12px;
-  text-align: center;
-  background: #f4f8fa;
-  border: 1px solid #dce7ec;
-  border-radius: 8px;
-}
-
-.home-architecture-node span {
-  color: #708493;
-  font-size: 9px;
-}
-
-.home-architecture-node strong {
-  color: #27495d;
-  font-size: 10px;
-  line-height: 1.45;
-}
-
-.home-architecture-node.is-agent {
-  background: #e9f9fc;
-  border-color: #aee7f2;
-  box-shadow: 0 9px 20px rgba(19, 157, 195, 0.08);
-}
-
-.home-architecture-node.is-agent strong {
-  color: #087ca4;
-}
-
-.home-architecture-map > svg {
-  width: 24px;
-  fill: none;
-  stroke: #9fb1bb;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.4;
-}
-
-.home-stack-list {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 7px;
-  padding: 0 20px 30px;
-}
-
-.home-stack-list span {
-  padding: 6px 9px;
-  color: #667c8b;
-  background: #f3f7f9;
-  border: 1px solid #e0e8ec;
-  border-radius: 999px;
-  font-family: var(--font-code);
-  font-size: 8px;
-}
-
-.home-architecture-card > footer {
-  color: #82929c;
-  border-top: 1px solid #e5ecef;
-  font-size: 9px;
-}
-
-.home-final-cta {
-  position: relative;
-  display: flex;
-  width: 100%;
-  min-height: 380px;
-  align-items: center;
-  flex-direction: column;
-  justify-content: center;
-  margin: 0;
-  padding: 70px 24px;
-  overflow: hidden;
-  color: #fff;
-  text-align: center;
-  background: #071522;
-  border-block: 1px solid rgba(139, 208, 229, 0.13);
-  box-shadow: 0 26px 70px rgba(12, 38, 54, 0.18);
-}
-
-.home-final-cta > p,
-.home-final-cta > h2,
-.home-final-cta > span,
-.home-final-cta > div:last-child {
-  position: relative;
-  z-index: 2;
-}
-
-.home-final-cta > p {
-  margin: 0;
-  color: #5dd2ee;
-  font-family: var(--font-code);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
-.home-final-cta h2 {
-  max-width: 780px;
-  margin: 15px 0 0;
-  color: #f5fafc;
-  font-family: 'Segoe UI Variable Display', 'Microsoft YaHei UI', sans-serif;
-  font-size: 52px;
-  font-weight: 720;
-  letter-spacing: 0;
-  line-height: 1.25;
-}
-
-.home-final-cta > span {
-  margin-top: 14px;
-  color: #9fb4bf;
-  font-size: 14px;
-}
-
-.home-final-cta > div:last-child {
-  margin-top: 28px;
-}
-
-.home-secondary-action-dark {
-  color: #d9e8ee;
-}
-
-.home-footer {
-  display: grid;
-  width: min(1260px, calc(100% - 48px));
-  min-height: 118px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 24px;
-  margin: 0 auto;
-  color: #718492;
-}
-
-.home-footer-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  color: #17364a;
-  text-decoration: none;
-}
-
-.home-footer-brand > span {
-  position: relative;
-  width: 28px;
-  height: 28px;
-  background: var(--home-cyan-deep);
-  border-radius: 8px;
-  box-shadow: 0 8px 18px rgba(0, 159, 213, 0.16);
-}
-
-.home-footer-brand > span::after {
-  position: absolute;
-  top: 8px;
-  left: 10px;
-  width: 0;
-  height: 0;
-  border-top: 6px solid transparent;
-  border-bottom: 6px solid transparent;
-  border-left: 8px solid #fff;
-  content: '';
-}
-
-.home-footer-brand strong {
-  font-size: 15px;
-}
-
-.home-footer p {
-  margin: 0;
-  font-size: 11px;
-}
-
-.home-footer nav {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 18px;
-}
-
-.home-footer nav a {
-  color: #617785;
-  font-size: 11px;
-  text-decoration: none;
-}
-
-.home-footer nav a:hover {
-  color: #087da4;
-}
-
-.home-primary-action:focus-visible,
-.home-secondary-action:focus-visible,
-.home-capability-link:focus-visible,
-.home-inline-action:focus-visible,
-.home-footer a:focus-visible {
-  outline: 3px solid rgba(25, 195, 241, 0.32);
-  outline-offset: 3px;
-}
-
-.home-hero-copy > * {
-  animation: home-rise 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.home-hero-copy > :nth-child(2) {
-  animation-delay: 70ms;
-}
-
-.home-hero-copy > :nth-child(3) {
-  animation-delay: 130ms;
-}
-
-.home-hero-copy > :nth-child(4) {
-  animation-delay: 190ms;
-}
-
-.home-hero-copy > :nth-child(5) {
-  animation-delay: 240ms;
-}
-
-.home-product-stage {
-  animation: home-stage-in 760ms 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-@keyframes home-rise {
-  from {
-    transform: translateY(18px);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-
-@keyframes home-stage-in {
-  from {
-    transform: translateX(28px) scale(0.98);
-  }
-  to {
-    transform: translateX(0) scale(1);
-  }
-}
-
-@media (max-width: 1180px) {
-  .home-hero {
-    min-height: auto;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 54px;
-  }
-
-  .home-hero h1 {
-    font-size: 54px;
-  }
-
-  .home-hero-copy {
-    max-width: 760px;
-  }
-
-  .home-hero h1 {
-    max-width: 760px;
-  }
-
-  .home-product-stage {
-    width: min(760px, 100%);
-    justify-self: center;
-  }
-
-  .home-proof-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .home-proof-strip > div:nth-child(3) {
-    border-top: 1px solid #e8eef2;
-    border-left: 0;
-  }
-
-  .home-proof-strip > div:nth-child(4) {
-    border-top: 1px solid #e8eef2;
-  }
-
-  .home-workflow-list {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 42px 0;
-  }
-
-  .home-workflow-list li:nth-child(3)::after,
-  .home-workflow-list li:last-child::after {
-    display: none;
-  }
-
-  .home-ownership {
+@media (max-width: 1040px) {
+  .home-overview-inner {
     grid-template-columns: 1fr;
-  }
-
-  .home-ownership-copy {
-    max-width: 720px;
-  }
-
-  .home-architecture-card {
-    width: min(760px, 100%);
-  }
-}
-
-@media (max-width: 900px) {
-  .home-hero {
-    gap: 34px;
-    padding-block: 48px;
-  }
-
-  .home-hero h1 {
-    font-size: 48px;
-  }
-
-  .home-product-stage {
-    height: auto;
-    padding: 0;
-  }
-
-  .home-section-heading {
-    grid-template-columns: 1fr;
+    align-items: start;
     gap: 24px;
   }
 
-  .home-section-heading > p {
-    max-width: 680px;
+  .home-overview-actions {
+    justify-content: flex-start;
   }
 
-  .home-section-heading h2,
-  .home-ownership-copy h2 {
-    font-size: 44px;
-  }
-
-  .home-capability-card.is-strategy,
-  .home-capability-card.is-feedback,
-  .home-capability-card.is-knowledge,
-  .home-capability-card.is-media {
-    grid-column: span 6;
-  }
-
-  .home-architecture-map {
+  .home-quick-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .home-architecture-map > svg {
-    display: none;
+  .home-workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .home-workflow {
+    padding-right: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .home-management {
+    padding-left: 0;
   }
 }
 
-@media (max-width: 680px) {
-  .home-section,
-  .home-footer {
-    width: min(100% - 24px, 1260px);
+@media (max-width: 640px) {
+  .home-container {
+    width: min(100% - 20px, 1280px);
   }
 
-  .home-hero {
-    gap: 28px;
-    margin: 0;
-    padding: 32px 24px 24px;
+  .home-overview-inner {
+    padding-block: 28px 30px;
   }
 
-  .home-hero h1 {
-    overflow-wrap: anywhere;
-    font-size: 38px;
-    letter-spacing: 0;
+  .home-intro h1 {
+    font-size: 28px;
   }
 
-  .home-hero-description {
-    font-size: 14px;
-  }
-
-  .home-hero-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: stretch;
-  }
-
-  .home-primary-action,
-  .home-secondary-action {
+  .home-overview-actions,
+  .home-action {
     width: 100%;
   }
 
-  .home-product-stage {
-    height: auto;
-    padding: 0;
+  .home-quick-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding-block: 12px 22px;
   }
 
-  .home-product-shot {
-    padding: 7px 7px 6px;
-    transform: none;
-  }
-
-  .home-product-shot figcaption,
-  .home-capability-screenshot figcaption {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .home-proof-strip {
-    width: min(100% - 36px, 1260px);
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-top: -17px;
-  }
-
-  .home-proof-strip > div:nth-child(3),
-  .home-proof-strip > div:nth-child(4) {
-    border-top: 1px solid #e8eef2;
-  }
-
-  .home-proof-strip > div:nth-child(3) {
-    border-left: 0;
-  }
-
-  .home-proof-strip > div {
-    padding: 16px;
+  .home-quick-entry {
+    min-height: 76px;
   }
 
   .home-workflow,
-  .home-ownership {
-    padding: 88px 0;
+  .home-management {
+    padding-block: 24px;
+  }
+
+  .home-section-header {
+    align-items: start;
   }
 
   .home-workflow-list {
     grid-template-columns: 1fr;
-    gap: 0;
-    margin-top: 48px;
   }
 
-  .home-workflow-list li {
-    padding: 0 0 34px 54px;
+  .home-workflow-list li,
+  .home-workflow-list li:nth-child(odd),
+  .home-workflow-list li:nth-child(even) {
+    min-height: 76px;
+    padding: 10px 0;
+    border-right: 0;
   }
 
-  .home-workflow-list li:not(:last-child)::after {
-    top: 36px;
-    bottom: 0;
-    left: 17px;
-    width: 1px;
-    height: auto;
-  }
-
-  .home-workflow-index {
-    position: absolute;
-    top: 0;
-    left: 0;
-  }
-
-  .home-workflow-index i {
-    display: none;
-  }
-
-  .home-workflow-list small {
-    margin-top: 0;
-  }
-
-  .home-workflow-list h3 {
-    margin-top: 5px;
-  }
-
-  .home-workflow-list p {
-    margin-top: 7px;
-  }
-
-  .home-capability-stage {
-    padding: 86px 0;
-  }
-
-  .home-capability-grid {
-    margin-top: 44px;
-  }
-
-  .home-capability-card.is-strategy,
-  .home-capability-card.is-feedback,
-  .home-capability-card.is-knowledge,
-  .home-capability-card.is-media {
-    grid-column: 1 / -1;
-  }
-
-  .home-capability-card {
-    min-height: 390px;
-    padding: 23px;
-  }
-
-  .home-capability-copy h3 {
-    font-size: 24px;
-  }
-
-  .home-architecture-map {
-    grid-template-columns: 1fr;
-    padding-inline: 16px;
-  }
-
-  .home-architecture-node {
-    min-height: 74px;
-  }
-
-  .home-architecture-card > footer {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .home-final-cta {
-    min-height: 420px;
-    padding: 60px 20px;
-  }
-
-  .home-section-heading h2,
-  .home-ownership-copy h2,
-  .home-final-cta h2 {
-    font-size: 36px;
-  }
-
-  .home-final-cta > div:last-child {
-    width: 100%;
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .home-footer {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    gap: 14px;
-    padding: 34px 0 52px;
-    text-align: center;
-  }
-
-  .home-footer nav {
-    justify-content: center;
+  .home-preview {
+    padding-block: 28px 48px;
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .home-hero-copy > *,
-  .home-product-stage {
-    animation: none;
-  }
-
-  .home-primary-action,
-  .home-secondary-action,
-  .home-capability-card {
-    transition: none;
+@media (max-width: 420px) {
+  .home-section-header {
+    display: grid;
+    gap: 8px;
   }
 }
 </style>

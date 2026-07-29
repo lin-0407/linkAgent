@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { SlidersHorizontal, X } from '@lucide/vue'
 import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AgentFloatingWindow from '@/components/AgentFloatingWindow.vue'
@@ -112,12 +113,7 @@ watch(
           aria-label="打开设置"
           @click="settingsOpen = true"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 7h16M4 12h16M4 17h16" />
-            <circle cx="9" cy="7" r="2" />
-            <circle cx="15" cy="12" r="2" />
-            <circle cx="11" cy="17" r="2" />
-          </svg>
+          <SlidersHorizontal :size="18" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
     </header>
@@ -147,7 +143,7 @@ watch(
                 aria-label="关闭使用指南"
                 @click="guideOpen = false"
               >
-                ×
+                <X :size="19" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </header>
 

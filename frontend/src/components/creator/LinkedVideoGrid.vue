@@ -106,7 +106,7 @@ defineExpose({ refresh: loadVideos })
 .grid-error {
   background: rgba(255, 59, 48, 0.06);
   border: 1px solid rgba(255, 59, 48, 0.15);
-  border-radius: 10px;
+  border-radius: var(--r);
   padding: 16px;
   display: flex;
   flex-direction: column;

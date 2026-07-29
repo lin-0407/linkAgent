@@ -184,9 +184,9 @@ async function handleSync() {
 
 <style scoped>
 .bilibili-account-panel {
-  background: var(--creator-panel);
-  border: 1px solid var(--creator-line);
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
   padding: 16px 20px;
   margin-bottom: 20px;
 }

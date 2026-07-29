@@ -5,6 +5,7 @@
  * 参照 B 站个人主页视频列表的信息密度，但更简洁，只保留创作者复盘需要的字段。
  */
 import type { BilibiliVideo } from '@/types/creator'
+import { Play, ThumbsUp } from '@lucide/vue'
 
 defineProps<{
   video: BilibiliVideo
@@ -69,11 +70,11 @@ function formatCount(n: number | null): string {
       <!-- 指标行：只展示播放量和点赞量 — 这两个是创作者最关心的基本指标 -->
       <div class="card-stats">
         <span class="card-stat">
-          <span class="card-stat-icon" aria-hidden="true">▶</span>
+          <Play class="card-stat-icon" :size="14" :stroke-width="1.8" aria-hidden="true" />
           {{ formatCount(video.viewCount) }}
         </span>
         <span class="card-stat">
-          <span class="card-stat-icon" aria-hidden="true">👍</span>
+          <ThumbsUp class="card-stat-icon" :size="14" :stroke-width="1.8" aria-hidden="true" />
           {{ formatCount(video.likeCount) }}
         </span>
       </div>
@@ -91,21 +92,21 @@ function formatCount(n: number | null): string {
 </template>
 
 <style scoped>
-/* 已绑定视频卡片 — 简洁信息密度，hover 上浮效果增强交互感知 */
+/* 已绑定视频卡片保持稳定位置，只用边界反馈点击状态，避免列表浏览时产生跳动。 */
 .linked-video-card {
-  background: var(--creator-panel);
-  border: 1px solid var(--creator-line);
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
+  transition: background-color 0.15s, border-color 0.15s;
   display: flex;
   flex-direction: column;
 }
 
 .linked-video-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  background: #f9fcfd;
+  border-color: rgba(8, 126, 167, 0.32);
 }
 
 .linked-video-card:focus-visible {
@@ -192,7 +193,7 @@ function formatCount(n: number | null): string {
 }
 
 .card-stat-icon {
-  font-size: 10px;
+  flex: 0 0 auto;
 }
 
 /* 底部标签 */

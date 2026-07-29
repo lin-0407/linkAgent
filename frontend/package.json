@@ -15,8 +15,9 @@
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
-    "axios": "^1.18.1",
+    "@lucide/vue": "^1.27.0",
     "@types/markdown-it": "^14.1.2",
+    "axios": "^1.18.1",
     "katex": "^0.17.0",
     "markdown-it": "^14.1.1",
     "markdown-it-katex": "^2.0.3",

@@ -14,6 +14,7 @@
  * 用户在任何页面都可能想查看或刷新自己的创作画像。
  */
 import { onMounted, ref } from 'vue'
+import { UserRound } from '@lucide/vue'
 import { useCreatorProfile } from '@/composables/creator/useCreatorProfile'
 import { formatDate } from '@/composables/creator/creatorWorkspaceUtils'
 
@@ -64,7 +65,7 @@ onMounted(() => {
       :title="hasProfile ? '查看创作者画像' : '暂无画像数据'"
       @click="togglePanel"
     >
-      <span class="profile-avatar-icon" aria-hidden="true">👤</span>
+      <UserRound class="profile-avatar-icon" :size="18" :stroke-width="1.8" aria-hidden="true" />
       <!-- 有画像时显示小绿点，暗示"已有数据" -->
       <span v-if="hasProfile" class="profile-avatar-dot" aria-hidden="true"></span>
     </button>
@@ -86,7 +87,7 @@ onMounted(() => {
           >
             <header class="profile-panel-head">
               <div>
-                <span class="profile-panel-icon" aria-hidden="true">👤</span>
+                <UserRound class="profile-panel-icon" :size="20" :stroke-width="1.8" aria-hidden="true" />
                 <h3>创作者画像</h3>
               </div>
               <button
@@ -213,8 +214,7 @@ onMounted(() => {
 }
 
 .profile-avatar-icon {
-  font-size: 18px;
-  line-height: 1;
+  color: var(--muted);
 }
 
 /* 已存在画像数据时的小绿点指示 */
@@ -251,7 +251,7 @@ onMounted(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--sh-lg);
 }
 
 .profile-panel-head {
@@ -268,7 +268,7 @@ onMounted(() => {
 }
 
 .profile-panel-icon {
-  font-size: 20px;
+  color: var(--accent-strong);
 }
 
 .profile-panel-head h3 {

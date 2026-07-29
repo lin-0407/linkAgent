@@ -175,7 +175,7 @@ function onCopy() {
 
 .suggestion-card:hover {
   border-color: var(--accent-ring);
-  box-shadow: var(--sh-md);
+  box-shadow: none;
 }
 
 /* 推荐卡片用更醒目的边框 */

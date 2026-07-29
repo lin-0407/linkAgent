@@ -11,6 +11,7 @@
  * 完整管理能力，设置面板的侧边抽屉空间不足以承载这些交互。
  */
 import { computed, onMounted, ref } from 'vue'
+import { BrainCircuit, RefreshCw, Search } from '@lucide/vue'
 import { deleteLongTermMemory, listLongTermMemories } from '@/api/memory'
 import { formatDate } from '@/composables/creator/creatorWorkspaceUtils'
 import type { LongTermMemoryRecord } from '@/types/memory'
@@ -145,6 +146,7 @@ onMounted(() => {
           :disabled="loading"
           @click="loadMemories"
         >
+          <RefreshCw :size="16" :stroke-width="1.8" aria-hidden="true" />
           {{ loading ? '加载中…' : '刷新' }}
         </button>
       </div>
@@ -152,26 +154,22 @@ onMounted(() => {
 
     <!-- 工具栏：搜索 + 排序 -->
     <div class="memory-toolbar">
-      <div class="memory-search-wrap">
-        <svg
+      <label class="memory-search-wrap">
+        <span class="sr-only">搜索记忆</span>
+        <Search
           class="memory-search-icon"
-          viewBox="0 0 24 24"
+          :size="18"
+          :stroke-width="1.8"
           aria-hidden="true"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <circle cx="11" cy="11" r="8" />
-          <path d="M21 21l-4.35-4.35" />
-        </svg>
+        />
         <input
           v-model="searchQuery"
           type="text"
           class="memory-search-input"
           placeholder="搜索记忆内容或键名…"
         />
-      </div>
-      <select v-model="sortMode" class="memory-sort-select">
+      </label>
+      <select v-model="sortMode" class="memory-sort-select" aria-label="记忆排序方式">
         <option value="newest">最近更新</option>
         <option value="oldest">最早更新</option>
       </select>
@@ -195,7 +193,7 @@ onMounted(() => {
 
     <!-- 空状态 -->
     <div v-else-if="memories.length === 0" class="memory-empty">
-      <div class="memory-empty-icon" aria-hidden="true">🧠</div>
+      <BrainCircuit class="memory-empty-icon" :size="40" :stroke-width="1.5" aria-hidden="true" />
       <h3>暂无长期记忆</h3>
       <p>完成几次对话后，系统会自动从对话中提取您的偏好和关键信息。</p>
     </div>
@@ -211,7 +209,10 @@ onMounted(() => {
         v-for="memory in filteredMemories"
         :key="memory.memoryKey"
         class="memory-card"
+        role="button"
+        tabindex="0"
         @click="openDetail(memory)"
+        @keydown.enter="openDetail(memory)"
       >
         <div class="memory-card-head">
           <span class="memory-card-key">{{ readableKey(memory.memoryKey) }}</span>
@@ -333,7 +334,7 @@ onMounted(() => {
 .memory-page {
   max-width: 1200px;
   margin: 0 auto;
-  padding: var(--s4) var(--s4) var(--s6);
+  padding: 22px var(--s4) 72px;
 }
 
 /* ── 头部 ── */
@@ -345,13 +346,15 @@ onMounted(() => {
   justify-content: space-between;
   gap: var(--s3);
   margin-bottom: var(--s4);
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
 }
 
 .memory-header-left h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: var(--fw-bold);
-  color: var(--text);
+  color: var(--ink);
 }
 
 .memory-subtitle {
@@ -376,6 +379,9 @@ onMounted(() => {
 }
 
 .memory-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
   font-size: 13px;
 }
 
@@ -386,6 +392,10 @@ onMounted(() => {
   gap: var(--s3);
   margin-bottom: var(--s4);
   align-items: center;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
 }
 
 .memory-search-wrap {
@@ -418,6 +428,7 @@ onMounted(() => {
 .memory-search-input:focus {
   outline: none;
   border-color: var(--accent, #1a73e8);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .memory-sort-select {
@@ -452,8 +463,8 @@ onMounted(() => {
 }
 
 .memory-empty-icon {
-  font-size: 48px;
-  margin-bottom: var(--s3);
+  margin: 0 auto var(--s3);
+  color: var(--accent-strong);
 }
 
 .memory-empty h3 {
@@ -487,12 +498,12 @@ onMounted(() => {
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .memory-card:hover {
   border-color: var(--accent, #1a73e8);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  background: #f9fcfd;
 }
 
 .memory-card-head {

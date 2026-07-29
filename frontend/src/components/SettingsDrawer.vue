@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { X } from '@lucide/vue'
 import { checkSettingsConnectivity, getSettingsStatus, updateRuntimeToggle } from '@/api/settings'
 import type { ConnectivityItem, SettingsStatus } from '@/types/settings'
 import KnowledgeIndexPanels from '@/components/KnowledgeIndexPanels.vue'
@@ -102,7 +103,7 @@ function closeDrawer() {
               <h2 id="settings-title">设置</h2>
             </div>
             <button type="button" class="settings-close" aria-label="关闭设置面板" @click="closeDrawer">
-              ×
+              <X :size="18" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </header>
 
@@ -207,7 +208,7 @@ function closeDrawer() {
   justify-content: center;
   padding: var(--s5);
   background: rgba(15, 23, 42, 0.42);
-  backdrop-filter: blur(6px);
+  backdrop-filter: none;
 }
 
 .settings-drawer {
@@ -218,7 +219,7 @@ function closeDrawer() {
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-lg);
-  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+  box-shadow: var(--sh-lg);
 }
 
 .settings-header {

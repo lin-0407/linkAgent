@@ -197,9 +197,9 @@ function cancelEdit() {
 <style scoped>
 /* BV 绑定面板 — 复用全局 creator-* CSS 类，scoped 只定义面板特有样式 */
 .creator-bv-binding-panel {
-  background: var(--creator-panel);
-  border: 1px solid var(--creator-line);
-  border-radius: 12px;
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
   padding: 20px;
   margin-bottom: 16px;
 }

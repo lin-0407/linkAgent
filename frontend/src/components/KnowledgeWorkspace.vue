@@ -210,7 +210,7 @@ onMounted(() => {
     <header class="creator-header">
       <div>
         <p class="creator-kicker">参考案例</p>
-        <h2>找灵感</h2>
+        <h2>案例检索</h2>
         <p>用一句话描述想借鉴的方向，查看相近视频为什么值得参考，以及观众是怎么反馈的。</p>
       </div>
       <div class="creator-header-actions">

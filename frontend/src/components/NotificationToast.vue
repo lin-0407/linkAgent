@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, watch } from 'vue'
+import { X } from '@lucide/vue'
 
 /**
  * 统一通知弹窗组件 —— 固定在视口右上角，替代原先分散在各处的内联提示。
@@ -124,7 +125,7 @@ onBeforeUnmount(() => {
           :aria-label="`关闭${resolvedTitle}`"
           @click="handleClose"
         >
-          ×
+          <X :size="16" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
     </Transition>
@@ -147,8 +148,8 @@ onBeforeUnmount(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
-  box-shadow: var(--sh-md);
-  backdrop-filter: blur(14px);
+  box-shadow: var(--sh-sm);
+  backdrop-filter: none;
 }
 
 /* ===== 左侧色条：按类型区分语义，比全背景色更克制、更易扫描 ===== */

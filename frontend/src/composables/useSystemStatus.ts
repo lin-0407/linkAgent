@@ -15,7 +15,7 @@ import { useWorkflowStore } from '@/stores/workflowStore'
  *    （MySQL/Redis/Embedding/ChatModel/3个向量库），返回 UP/DOWN/DISABLED。
  * 2. SSE 连接状态：复用 workflowStore.connectionStatus，反映创作台实时通道是否在线。
  *
- * ⚠️ 后端没有"本月调用次数/花费"的跨任务汇总接口（只有单任务粒度），
+ * 后端没有"本月调用次数/花费"的跨任务汇总接口（只有单任务粒度），
  * 因此本 composable 不提供这类数据，避免状态栏展示编造的数字。
  */
 

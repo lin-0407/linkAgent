@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { ArrowRight, Play } from '@lucide/vue'
 import type { ReferenceVideo } from '@/types/knowledge'
 import {
   formatKnowledgeCount,
@@ -157,7 +158,9 @@ function goToPage(targetPage: number | null) {
       <article v-for="item in items" :key="item.id" class="knowledge-card">
         <div class="knowledge-card-cover">
           <span class="knowledge-card-tier">{{ knowledgeTierLabel(item.tier) }}</span>
-          <span class="knowledge-card-play" aria-hidden="true"></span>
+          <span class="knowledge-card-play" aria-hidden="true">
+            <Play :size="20" :stroke-width="1.8" />
+          </span>
           <div class="knowledge-card-cover-stats">
             <span>播放 {{ formatKnowledgeCount(item.viewCount) }}</span>
             <span>弹幕 {{ formatKnowledgeCount(item.danmakuCount) }}</span>
@@ -181,7 +184,7 @@ function goToPage(targetPage: number | null) {
             @click="openDetail(item)"
           >
             查看详情
-            <span aria-hidden="true">→</span>
+            <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </div>
       </article>
@@ -383,17 +386,15 @@ function goToPage(targetPage: number | null) {
   background: var(--surface);
   border: 1px solid rgba(23, 32, 51, 0.1);
   border-radius: var(--r);
-  box-shadow: var(--sh-sm);
+  box-shadow: none;
   transition:
     border-color 180ms ease,
-    box-shadow 180ms ease,
-    transform 180ms ease;
+    background-color 180ms ease;
 }
 
 .knowledge-card:hover {
-  border-color: rgba(0, 174, 236, 0.3);
-  box-shadow: var(--sh-md);
-  transform: translateY(-2px);
+  background: #f9fcfd;
+  border-color: rgba(8, 126, 167, 0.32);
 }
 
 .knowledge-card-cover {
@@ -402,33 +403,13 @@ function goToPage(targetPage: number | null) {
   aspect-ratio: 16 / 9;
   overflow: hidden;
   place-items: center;
-  background:
-    linear-gradient(0deg, rgba(15, 36, 54, 0.72), transparent 38%),
-    radial-gradient(circle at 78% 20%, rgba(251, 114, 153, 0.22), transparent 24%),
-    radial-gradient(circle at 18% 24%, rgba(255, 255, 255, 0.9), transparent 24%),
-    linear-gradient(135deg, #dff5ff 0%, #edf9ff 48%, #d8effb 100%);
+  background: #edf2f5;
+  border-bottom: 1px solid var(--border);
 }
 
 .knowledge-card-cover::before,
 .knowledge-card-cover::after {
-  position: absolute;
-  content: '';
-  border: 1px solid rgba(0, 138, 197, 0.12);
-  border-radius: 50%;
-}
-
-.knowledge-card-cover::before {
-  width: 150px;
-  height: 150px;
-  top: -86px;
-  right: -30px;
-}
-
-.knowledge-card-cover::after {
-  width: 94px;
-  height: 94px;
-  bottom: -54px;
-  left: 18px;
+  display: none;
 }
 
 .knowledge-card-tier {
@@ -438,35 +419,23 @@ function goToPage(targetPage: number | null) {
   left: var(--s3);
   padding: 4px 8px;
   color: #fff;
-  background: rgba(23, 32, 51, 0.72);
+  background: #344054;
   border-radius: var(--r-sm);
   font-size: 11px;
   font-weight: var(--fw-semibold);
-  backdrop-filter: blur(6px);
 }
 
 .knowledge-card-play {
+  display: inline-grid;
+  place-items: center;
   position: relative;
   z-index: 1;
-  width: 46px;
-  height: 46px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.78);
-  border-radius: 50%;
-  box-shadow: 0 8px 22px rgba(0, 138, 197, 0.2);
-}
-
-.knowledge-card-play::after {
-  position: absolute;
-  top: 50%;
-  left: 52%;
-  width: 0;
-  height: 0;
-  content: '';
-  border-top: 7px solid transparent;
-  border-bottom: 7px solid transparent;
-  border-left: 11px solid var(--accent);
-  transform: translate(-40%, -50%);
+  width: 42px;
+  height: 42px;
+  color: var(--accent-strong);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
 }
 
 .knowledge-card-cover-stats {
@@ -478,9 +447,12 @@ function goToPage(targetPage: number | null) {
   display: flex;
   justify-content: space-between;
   gap: var(--s2);
-  color: #fff;
+  padding: 5px 7px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
   font-size: 11px;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
 }
 
 .knowledge-card-body {
@@ -582,8 +554,8 @@ function goToPage(targetPage: number | null) {
   display: grid;
   gap: var(--s2);
   padding: var(--s4);
-  background: linear-gradient(135deg, var(--accent-tint), rgba(251, 114, 153, 0.08));
-  border: 1px solid rgba(0, 174, 236, 0.14);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
   border-radius: var(--r);
 }
 
