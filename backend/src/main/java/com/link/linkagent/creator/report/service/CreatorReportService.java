@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.report.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportRecord;
