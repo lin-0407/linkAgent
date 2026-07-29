@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AgentFloatingWindow from '@/components/AgentFloatingWindow.vue'
@@ -14,7 +14,35 @@ const { settingsOpen, developerMode } = storeToRefs(appStore)
 const route = useRoute()
 const isHomeRoute = computed(() => route.path === '/')
 const isCreatorRoute = computed(() => route.path === '/creator')
+const isUsageLogRoute = computed(() => route.path === '/usage-logs')
 const guideOpen = ref(false)
+const surfaceSwitchRef = ref<HTMLElement | null>(null)
+
+function revealActiveNavigation() {
+  window.requestAnimationFrame(() => {
+    const navigation = surfaceSwitchRef.value
+    const activeButton = navigation?.querySelector<HTMLElement>('button.active')
+    if (!navigation || !activeButton) return
+    navigation.scrollLeft = Math.max(
+      0,
+      activeButton.offsetLeft - (navigation.clientWidth - activeButton.offsetWidth) / 2,
+    )
+  })
+}
+
+onMounted(() => {
+  revealActiveNavigation()
+  window.setTimeout(revealActiveNavigation, 100)
+})
+
+watch(
+  () => route.path,
+  async () => {
+    await nextTick()
+    // 移动端一级导航可横向滚动，需要主动露出当前页入口，避免新页面入口藏在屏幕外。
+    revealActiveNavigation()
+  },
+)
 </script>
 
 <template>
@@ -39,7 +67,7 @@ const guideOpen = ref(false)
         </nav>
       </div>
 
-      <nav class="surface-switch" aria-label="导航">
+      <nav ref="surfaceSwitchRef" class="surface-switch" aria-label="导航">
         <RouterLink to="/" custom v-slot="{ navigate, isExactActive }">
           <button type="button" :class="{ active: isExactActive }" @click="navigate">首页</button>
         </RouterLink>
@@ -59,6 +87,9 @@ const guideOpen = ref(false)
         <!-- P0-3: 视频分析独立页面入口 — 展示已绑定任务的视频并支持复盘追问 -->
         <RouterLink to="/video-analysis" custom v-slot="{ navigate, isActive }">
           <button type="button" :class="{ active: isActive }" @click="navigate">视频分析</button>
+        </RouterLink>
+        <RouterLink to="/usage-logs" custom v-slot="{ navigate, isActive }">
+          <button type="button" :class="{ active: isActive }" @click="navigate">使用日志</button>
         </RouterLink>
       </nav>
 
@@ -183,8 +214,11 @@ const guideOpen = ref(false)
       <component :is="Component" :developer-mode="developerMode" />
     </RouterView>
     <!-- 首页保持产品入口的视觉聚焦，诊断状态和悬浮 Agent 只在实际功能页出现。 -->
-    <AgentFloatingWindow v-if="!isCreatorRoute && !isHomeRoute" :developer-mode="developerMode" />
-    <SystemStatusBar v-if="!isHomeRoute" />
+    <AgentFloatingWindow
+      v-if="!isCreatorRoute && !isHomeRoute && !isUsageLogRoute"
+      :developer-mode="developerMode"
+    />
+    <SystemStatusBar v-if="!isHomeRoute && !isUsageLogRoute" />
     <SettingsDrawer v-model:open="settingsOpen" v-model:developer-mode="developerMode" />
   </div>
 </template>

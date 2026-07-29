@@ -37,6 +37,11 @@ const router = createRouter({
       name: 'memory',
       component: () => import('@/views/MemoryManagementPage.vue'),
     },
+    {
+      path: '/usage-logs',
+      name: 'usageLogs',
+      component: () => import('@/views/UsageLogPage.vue'),
+    },
   ],
 })
 

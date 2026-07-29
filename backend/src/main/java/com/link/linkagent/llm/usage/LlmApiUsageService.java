@@ -3,8 +3,11 @@ package com.link.linkagent.llm.usage;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -121,6 +124,65 @@ public class LlmApiUsageService {
         return new LlmApiCallPageResponse(taskId, safePage, safePageSize, total, items);
     }
 
+    public LlmApiCallLogPageResponse listCalls(LocalDateTime startTime,
+                                               LocalDateTime endTime,
+                                               String modelName,
+                                               String scene,
+                                               String modelCategory,
+                                               String status,
+                                               int page,
+                                               int pageSize) {
+        if (startTime != null && endTime != null && startTime.isAfter(endTime)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "开始时间不能晚于结束时间");
+        }
+        int safePage = Math.max(1, page);
+        int safePageSize = Math.min(Math.max(1, pageSize), 100);
+        int offset = (safePage - 1) * safePageSize;
+        String normalizedModelName = TextUtil.trimToNull(modelName);
+        String normalizedScene = TextUtil.trimToNull(scene);
+        String normalizedCategory = normalizeModelCategory(modelCategory);
+        String normalizedStatus = normalizeStatus(status);
+        LlmApiCallLogSummary summary = llmApiUsageMapper.summarizeCalls(
+                startTime,
+                endTime,
+                normalizedModelName,
+                normalizedScene,
+                normalizedCategory,
+                normalizedStatus
+        );
+        List<LlmApiCallRecord> items = llmApiUsageMapper.listCalls(
+                startTime,
+                endTime,
+                normalizedModelName,
+                normalizedScene,
+                normalizedCategory,
+                normalizedStatus,
+                safePageSize,
+                offset
+        );
+        Long averageElapsedMs = summary.getCallCount() == 0 || summary.getTotalElapsedMs() == null
+                ? null
+                : Math.round((double) summary.getTotalElapsedMs() / summary.getCallCount());
+        LlmApiCallLogSummaryResponse summaryResponse = new LlmApiCallLogSummaryResponse(
+                summary.getCallCount(),
+                summary.getSuccessCount(),
+                summary.getFailedCount(),
+                summary.getSkippedCount(),
+                summary.getTotalTokens(),
+                summary.getPromptTokens(),
+                summary.getCompletionTokens(),
+                summary.getTotalElapsedMs(),
+                averageElapsedMs
+        );
+        return new LlmApiCallLogPageResponse(
+                safePage,
+                safePageSize,
+                summary.getCallCount(),
+                summaryResponse,
+                items
+        );
+    }
+
     public WorkflowUsageResponse summarizeWorkflowSession(String taskId, String sessionId) {
         List<LlmApiCallRecord> calls = llmApiUsageMapper.listCallsByWorkflowSession(taskId, sessionId);
         long successCalls = 0;
@@ -223,6 +285,19 @@ public class LlmApiUsageService {
         String normalized = modelCategory.trim().toUpperCase();
         for (LlmApiModelCategory category : LlmApiModelCategory.values()) {
             if (category.name().equals(normalized)) {
+                return normalized;
+            }
+        }
+        return null;
+    }
+
+    private String normalizeStatus(String status) {
+        if (TextUtil.isBlank(status)) {
+            return null;
+        }
+        String normalized = status.trim().toUpperCase();
+        for (LlmApiCallStatus callStatus : LlmApiCallStatus.values()) {
+            if (callStatus.name().equals(normalized)) {
                 return normalized;
             }
         }
