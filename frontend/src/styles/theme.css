@@ -1776,14 +1776,6 @@ textarea:focus {
   border-color: var(--accent);
 }
 
-.creator-dev-test-button {
-  min-width: 118px;
-  color: var(--text);
-  white-space: nowrap;
-  background: var(--surface);
-  border-color: var(--border);
-}
-
 .creator-layout {
   display: grid;
   grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
@@ -4519,18 +4511,6 @@ textarea:focus {
   color: var(--accent);
   background: var(--accent-tint);
   border-color: var(--accent);
-}
-
-.creator-dev-test-button {
-  color: var(--text);
-  background: var(--surface);
-  border-color: var(--border);
-  box-shadow: none;
-}
-
-.creator-dev-test-button:hover {
-  color: var(--accent);
-  background: #fff;
 }
 
 .creator-layout {

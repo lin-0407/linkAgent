@@ -644,17 +644,6 @@ async function refreshTasks() {
   }
 }
 
-// openDeveloperTest 保留在组件：依赖 isDeveloperTestOpen (组件 UI 状态) + evalCases (composable)
-function openDeveloperTest() {
-  if (!showDeveloperTools.value) {
-    return
-  }
-  isDeveloperTestOpen.value = true
-  if (evalCases.value.length === 0 && !isLoadingEvalCases.value) {
-    void loadEvaluationCases()
-  }
-}
-
 function resetTaskForm() { taskModule.resetTaskForm() }
 function hasTaskAnalysisInputChanged(task: CreatorTask) { return taskModule.hasTaskAnalysisInputChanged(task) }
 
@@ -1733,7 +1722,7 @@ provideCreatorWorkspace({
         <p>围绕一条视频整理资料、生成发布方案、读懂观众反馈，并沉淀下一期行动。</p>
       </div>
       <div
-        v-if="selectedTask || isTaskComposerOpen || showDeveloperTools"
+        v-if="selectedTask || isTaskComposerOpen"
         class="creator-header-actions"
       >
         <div
@@ -1748,14 +1737,6 @@ provideCreatorWorkspace({
           <span :class="{ active: Boolean(feedback || feedbackDashboard) }">观众反馈</span>
           <span :class="{ active: hasCompletedCreatorReport }">总体复盘</span>
         </div>
-        <button
-          v-if="showDeveloperTools"
-          type="button"
-          class="creator-secondary-action creator-mini-button creator-dev-test-button"
-          @click="openDeveloperTest"
-        >
-          开发者测试
-        </button>
         <button
           v-if="selectedTask || isTaskComposerOpen"
           type="button"
