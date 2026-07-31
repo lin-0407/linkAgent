@@ -69,6 +69,7 @@ export type DraftVideo = {
   audioCodec: string | null
   hasAudio: boolean | null
   status: DraftVideoStatus
+  mediaDeletedAt: string | null
   createTime: string
   updateTime: string
 }

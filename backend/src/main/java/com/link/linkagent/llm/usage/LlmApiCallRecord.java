@@ -20,6 +20,7 @@ public class LlmApiCallRecord {
     private String modelCategory;
     private String scene;
     private String modelName;
+    private String reasoningEffort;
     private Integer promptTokens;
     private Integer completionTokens;
     private Integer totalTokens;
@@ -123,6 +124,14 @@ public class LlmApiCallRecord {
 
     public void setModelName(String modelName) {
         this.modelName = modelName;
+    }
+
+    public String getReasoningEffort() {
+        return reasoningEffort;
+    }
+
+    public void setReasoningEffort(String reasoningEffort) {
+        this.reasoningEffort = reasoningEffort;
     }
 
     public Integer getPromptTokens() {

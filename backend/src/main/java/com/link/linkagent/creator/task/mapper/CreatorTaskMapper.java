@@ -42,7 +42,7 @@ public interface CreatorTaskMapper {
     int deleteMaterialByType(@Param("taskId") String taskId, @Param("materialType") String materialType);
 
     @Select("""
-            SELECT id, task_id, user_id, task_name, video_type, status, create_time, update_time
+            SELECT id, task_id, user_id, task_name, video_type, status, planning_skipped, create_time, update_time
             FROM creator_task
             WHERE task_id = #{taskId}
               AND is_deleted = 0
@@ -130,6 +130,17 @@ public interface CreatorTaskMapper {
               AND is_deleted = 0
             """)
     int updateTaskStatus(@Param("taskId") String taskId, @Param("status") String status);
+
+    @Update("""
+            UPDATE creator_task
+            SET planning_skipped = 1,
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND status = 'DRAFT'
+              AND planning_skipped = 0
+              AND is_deleted = 0
+            """)
+    int markPlanningSkipped(@Param("taskId") String taskId);
 
     @Update("""
             UPDATE creator_task

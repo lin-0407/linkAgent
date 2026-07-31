@@ -9,6 +9,8 @@ import com.link.linkagent.creator.media.storage.ObjectStorageService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -16,8 +18,10 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -75,12 +79,45 @@ class MediaProcessingServiceTest {
         verify(processingMapper).clearCurrentReview("task-1", "default", "version-1");
     }
 
+    @Test
+    void shouldRejectRetryAfterMediaWasDeleted() {
+        CreatorMediaProperties properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        MediaProcessingMapper processingMapper = mock(MediaProcessingMapper.class);
+        MediaUploadMapper uploadMapper = mock(MediaUploadMapper.class);
+        when(processingMapper.lockDraftVersion("task-1", "default", "version-1"))
+                .thenReturn(Optional.of("version-1"));
+        when(uploadMapper.findDraftVideoByVersion("task-1", "default", "version-1"))
+                .thenReturn(Optional.of(readyDraft(LocalDateTime.now())));
+        MediaProcessingService service = new MediaProcessingService(
+                properties,
+                new MediaProcessingCostEstimator(properties),
+                processingMapper,
+                uploadMapper,
+                mock(ObjectStorageService.class),
+                new ObjectMapper()
+        );
+
+        ResponseStatusException exception = catchThrowableOfType(
+                () -> service.retryJob("default", "task-1", "version-1", "job-1"),
+                ResponseStatusException.class
+        );
+
+        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(exception.getReason()).contains("媒体文件已删除");
+        verify(processingMapper, never()).retryJob("task-1", "default", "version-1", "job-1");
+    }
+
     private DraftVideoRecord readyDraft() {
+        return readyDraft(null);
+    }
+
+    private DraftVideoRecord readyDraft(LocalDateTime mediaDeletedAt) {
         return new DraftVideoRecord(
                 1L, "version-1", "task-1", "default", 1, "V1 初剪", "source.mp4",
                 "linkagent-private-media", "users/default/tasks/task-1/versions/version-1/original/source.mp4",
                 "video/mp4", 1024L, 30_000L, 1920, 1080, null, "h264", "aac", true,
-                null, "READY_FOR_REVIEW", LocalDateTime.now(), LocalDateTime.now()
+                null, "READY_FOR_REVIEW", mediaDeletedAt, LocalDateTime.now(), LocalDateTime.now()
         );
     }
 }

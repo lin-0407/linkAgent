@@ -3,6 +3,7 @@ package com.link.linkagent.settings;
 import com.link.linkagent.settings.dto.ConnectivityCheckResponse;
 import com.link.linkagent.settings.dto.SettingsStatusResponse;
 import com.link.linkagent.settings.dto.UpdateRuntimeToggleRequest;
+import com.link.linkagent.settings.dto.UpdateRuntimeValueRequest;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.settings.service.SettingsConnectivityService;
 import jakarta.validation.Valid;
@@ -48,6 +49,16 @@ public class SettingsController {
             String settingKey,
             @RequestBody @Valid UpdateRuntimeToggleRequest request) {
         runtimeSettingService.updateToggle(settingKey, request.enabled());
+    }
+
+    @PutMapping("/values/{settingKey}")
+    public void updateValue(
+            @PathVariable
+            @NotBlank(message = "设置 key 不能为空")
+            @Size(max = 128, message = "设置 key 长度不能超过128个字符")
+            String settingKey,
+            @RequestBody @Valid UpdateRuntimeValueRequest request) {
+        runtimeSettingService.updateValue(settingKey, request.value());
     }
 
     @PostMapping("/connectivity/check")

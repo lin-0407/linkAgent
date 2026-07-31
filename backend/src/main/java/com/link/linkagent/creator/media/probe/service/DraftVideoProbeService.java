@@ -113,6 +113,9 @@ public class DraftVideoProbeService {
 
     private DraftVideoRecord requireProbeableDraft(String ownerId, String taskId, String versionId) {
         DraftVideoRecord draft = recoverStaleProbeIfNecessary(requireDraft(ownerId, taskId, versionId));
+        if (draft.mediaDeletedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "媒体文件已删除，不能重新检测成片信息");
+        }
         if (!DraftVideoStatus.UPLOADED.name().equals(draft.status())
                 && !DraftVideoStatus.PROBE_FAILED.name().equals(draft.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "当前成片状态不能执行媒体探测");
@@ -190,6 +193,7 @@ public class DraftVideoProbeService {
                 draft.audioCodec(),
                 draft.hasAudio(),
                 draft.status(),
+                draft.mediaDeletedAt(),
                 draft.createTime(),
                 draft.updateTime()
         );

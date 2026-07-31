@@ -76,6 +76,12 @@ export function getDraftVideo(taskId: string, versionId: string) {
   )
 }
 
+export function deleteDraftVideoMedia(taskId: string, versionId: string) {
+  return del<DraftVideo>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}/media`,
+  )
+}
+
 export function probeDraftVideo(taskId: string, versionId: string) {
   return post<DraftVideo>(
     `/creator/tasks/${encodeURIComponent(taskId)}/draft-videos/${encodeURIComponent(versionId)}:probe`,

@@ -79,7 +79,7 @@ flowchart LR
 
 ### 复盘与长期记忆
 
-- 汇总发布前建议、观众反馈和竞品分析，生成完整创作复盘。
+- 汇总发布后视频指标、观众反馈和竞品分析，生成完整创作复盘。
 - 将结构化报告导出为 Markdown，方便归档和分享。
 - 保存创作者偏好以及建议的采用、修改和拒绝记录。
 - 在后续创作中复用近期偏好和历史经验，减少重复输入。
@@ -153,6 +153,8 @@ docker compose logs -f backend
 | `LLM_API_KEY` | 空 | 模型服务密钥，使用 AI 功能时必填 |
 | `LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI 兼容接口地址 |
 | `LLM_MODEL` | `deepseek-chat` | 默认对话模型 |
+| `DEEPSEEK_THINKING_ENABLED` | `true` | DeepSeek Flash 是否发送 `thinking.type=enabled` |
+| `DEEPSEEK_REASONING_EFFORT` | `max` | DeepSeek Flash 思考强度，仅支持 `low`、`high`、`max` |
 | `LINKAGENT_AES_KEY` | 空 | 加密设置页保存的模型密钥 |
 | `LLM_GUARD_ENABLED` | `true` | 是否启用 Prompt 长度保护 |
 | `LLM_GUARD_MAX_PROMPT_CHARS` | `30000` | 单次模型输入字符上限 |

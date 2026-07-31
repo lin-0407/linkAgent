@@ -105,6 +105,9 @@ public class PreflightReviewService {
 
         DraftVideoRecord draft = uploadMapper.findDraftVideoByVersion(taskId, ownerId, request.versionId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        if (draft.mediaDeletedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "媒体文件已删除，不能开始新的发布前试映");
+        }
         MediaProcessingJobRecord processing = processingMapper.findCurrentJob(taskId, ownerId, request.versionId())
                 .filter(job -> "COMPLETED".equals(job.status()))
                 .orElseThrow(() -> new ResponseStatusException(
@@ -207,6 +210,7 @@ public class PreflightReviewService {
         if (!review.reviewId().equals(current.reviewId())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "只能重试当前成片的最新试映任务");
         }
+        requireMediaAvailableForNewWork(ownerId, taskId, review.versionId());
         if (mapper.retryReview(taskId, ownerId, reviewId) != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "试映任务状态已变化，请刷新后重试");
         }
@@ -232,12 +236,24 @@ public class PreflightReviewService {
                 .map(PreflightStepRecord::status).orElse(null))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务尚未完成全片体检");
         }
+        requireMediaAvailableForNewWork(ownerId, taskId, review.versionId());
         insertMissingStep(review, "REVIEW_SEGMENTS", 4);
         insertMissingStep(review, "SCREEN_AUDIENCE", 5);
         if (mapper.queueScreeningCompletion(taskId, ownerId, reviewId) != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "试映任务状态已变化，请刷新后重试");
         }
         return get(ownerId, taskId, reviewId);
+    }
+
+    /** 新增模型任务前锁定并确认媒体仍存在，历史报告读取不受这个门禁影响。 */
+    private void requireMediaAvailableForNewWork(String ownerId, String taskId, String versionId) {
+        mapper.lockDraftVersion(taskId, ownerId, versionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        DraftVideoRecord draft = uploadMapper.findDraftVideoByVersion(taskId, ownerId, versionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        if (draft.mediaDeletedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "媒体文件已删除，不能重新执行发布前试映");
+        }
     }
 
     @Transactional

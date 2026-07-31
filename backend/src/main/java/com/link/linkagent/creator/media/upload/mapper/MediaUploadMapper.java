@@ -49,6 +49,16 @@ public interface MediaUploadMapper {
             """)
     int countTaskByOwner(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
 
+    @Select("""
+            SELECT COUNT(1)
+            FROM creator_task
+            WHERE task_id = #{taskId}
+              AND user_id = #{ownerId}
+              AND planning_skipped = 1
+              AND is_deleted = 0
+            """)
+    int countPlanningSkippedTask(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
     // ========== 成片（creator_draft_video） ==========
 
     /**
@@ -78,6 +88,7 @@ public interface MediaUploadMapper {
                    has_audio,
                    probe_attempt_id,
                    status,
+                   media_deleted_at,
                    create_time,
                    update_time
             FROM creator_draft_video
@@ -115,6 +126,7 @@ public interface MediaUploadMapper {
                    has_audio,
                    probe_attempt_id,
                    status,
+                   media_deleted_at,
                    create_time,
                    update_time
             FROM creator_draft_video
@@ -127,6 +139,38 @@ public interface MediaUploadMapper {
     Optional<DraftVideoRecord> findDraftVideoByVersion(@Param("taskId") String taskId,
                                                        @Param("ownerId") String ownerId,
                                                        @Param("versionId") String versionId);
+
+    /** 查询当前版本的全部上传尝试，主动删除时据此清理历史对象和未完成分片。 */
+    @Select("""
+            SELECT id,
+                   upload_session_id,
+                   version_id,
+                   task_id,
+                   owner_id,
+                   storage_upload_id,
+                   object_key,
+                   content_type,
+                   expected_size,
+                   file_fingerprint,
+                   part_size,
+                   total_parts,
+                   status,
+                   idempotency_key,
+                   failure_message,
+                   expires_at,
+                   completed_at,
+                   create_time,
+                   update_time
+            FROM creator_media_upload
+            WHERE task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND version_id = #{versionId}
+              AND is_deleted = 0
+            ORDER BY id ASC
+            """)
+    List<MediaUploadRecord> listUploadsByVersion(@Param("taskId") String taskId,
+                                                  @Param("ownerId") String ownerId,
+                                                  @Param("versionId") String versionId);
 
     // ========== 上传会话（creator_media_upload） ==========
 
@@ -352,6 +396,7 @@ public interface MediaUploadMapper {
               AND owner_id = #{record.ownerId}
               AND object_key = #{previousObjectKey}         -- 旧对象键精确匹配
               AND status IN ('UPLOAD_FAILED', 'UPLOAD_ABORTED', 'PROBE_FAILED') -- CAS：仅允许从失败/取消/探测失败状态重置
+              AND media_deleted_at IS NULL
               AND is_deleted = 0
             """)
     int resetDraftVideoForUpload(@Param("record") DraftVideoRecord record,
@@ -643,6 +688,36 @@ public interface MediaUploadMapper {
                                @Param("contentType") String contentType,
                                @Param("fileSize") long fileSize);
 
+    /** 媒体对象删除后关闭全部上传会话，避免旧幂等键继续恢复一个已经不存在的文件。 */
+    @Update("""
+            UPDATE creator_media_upload
+            SET is_deleted = 1,
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND version_id = #{versionId}
+              AND is_deleted = 0
+            """)
+    int markUploadsDeleted(@Param("taskId") String taskId,
+                           @Param("ownerId") String ownerId,
+                           @Param("versionId") String versionId);
+
+    /** 只记录实际完成的用户删除，保留原状态供发布后流程继续识别既有试映结果。 */
+    @Update("""
+            UPDATE creator_draft_video
+            SET media_deleted_at = CURRENT_TIMESTAMP,
+                delete_reason = 'USER_REQUEST',
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND owner_id = #{ownerId}
+              AND version_id = #{versionId}
+              AND media_deleted_at IS NULL
+              AND is_deleted = 0
+            """)
+    int markDraftMediaDeleted(@Param("taskId") String taskId,
+                              @Param("ownerId") String ownerId,
+                              @Param("versionId") String versionId);
+
     /**
      * 原子领取一次媒体探测。
      * <p>
@@ -665,6 +740,7 @@ public interface MediaUploadMapper {
               AND task_id = #{taskId}
               AND owner_id = #{ownerId}
               AND status IN ('UPLOADED', 'PROBE_FAILED')
+              AND media_deleted_at IS NULL
               AND is_deleted = 0
             """)
     int claimDraftVideoProbe(@Param("taskId") String taskId,

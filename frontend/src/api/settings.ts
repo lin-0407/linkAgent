@@ -17,6 +17,11 @@ export function updateRuntimeToggle(settingKey: string, enabled: boolean) {
   return put(`/settings/toggles/${encodeURIComponent(settingKey)}`, { enabled })
 }
 
+/** 运行时枚举值切换，后端返回 204 No Content */
+export function updateRuntimeValue(settingKey: string, value: string) {
+  return put(`/settings/values/${encodeURIComponent(settingKey)}`, { value })
+}
+
 export function checkSettingsConnectivity() {
   return post<ConnectivityCheckResult>('/settings/connectivity/check', {})
 }

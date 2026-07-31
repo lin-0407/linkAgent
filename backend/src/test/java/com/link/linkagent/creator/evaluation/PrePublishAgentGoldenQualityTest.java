@@ -507,6 +507,11 @@ public class PrePublishAgentGoldenQualityTest {
         }
 
         @Override
+        public int markPlanningSkipped(String taskId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public int updateTaskName(String taskId, String taskName) {
             throw new UnsupportedOperationException();
         }

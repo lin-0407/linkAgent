@@ -26,8 +26,6 @@ public class CreatorMediaProperties {
     private long maxFileBytes = 1_500_000_000L;
     /** 单个媒体文件最大时长毫秒；默认 30 分钟 */
     private long maxDurationMs = 1_800_000L;
-    /** 未发布成片保留天数；供后续清理能力使用，当前不会自动删除原片对象 */
-    private int unpublishedRetentionDays = 30;
     /** 上传子配置（分片大小、签名 TTL） */
     private final Upload upload = new Upload();
     /** 媒体处理子配置（ffprobe 路径、超时、Provider 短签 TTL） */
@@ -45,9 +43,6 @@ public class CreatorMediaProperties {
 
     public long getMaxDurationMs() { return maxDurationMs; }
     public void setMaxDurationMs(long maxDurationMs) { this.maxDurationMs = maxDurationMs; }
-
-    public int getUnpublishedRetentionDays() { return unpublishedRetentionDays; }
-    public void setUnpublishedRetentionDays(int unpublishedRetentionDays) { this.unpublishedRetentionDays = unpublishedRetentionDays; }
 
     public Upload getUpload() { return upload; }
 
@@ -85,9 +80,6 @@ public class CreatorMediaProperties {
         }
         if (upload.abandonedTtl == null || upload.abandonedTtl.isZero() || upload.abandonedTtl.isNegative()) {
             throw new IllegalStateException("媒体上传会话有效期必须大于0");
-        }
-        if (unpublishedRetentionDays <= 0) {
-            throw new IllegalStateException("未发布媒体保留天数必须大于0");
         }
         if (processing.ffprobePath == null || processing.ffprobePath.isBlank()) {
             throw new IllegalStateException("ffprobe 命令路径不能为空");

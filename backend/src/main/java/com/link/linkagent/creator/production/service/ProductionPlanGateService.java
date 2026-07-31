@@ -13,7 +13,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-/** 阶段 7 P0-1/P0-2 流程门禁，后端强制执行，避免只靠前端导航顺序。 */
+/** 阶段 7 P0-1/P0-2 流程门禁；普通任务检查蓝图，已有成片任务检查显式跳过事实。 */
 @Service
 public class ProductionPlanGateService {
 
@@ -62,6 +62,14 @@ public class ProductionPlanGateService {
             throw conflict("请先完成或跳过制作蓝图中的全部步骤，才能进入成片试映阶段。");
         }
         return plan;
+    }
+
+    /** 已有成片任务允许跳过蓝图；普通任务继续使用原有完整性门禁。 */
+    public void ensureReadyForPreflight(String taskId, String ownerId) {
+        if (planMapper.countPlanningSkippedTask(taskId.trim(), ownerId) == 1) {
+            return;
+        }
+        requireReady(taskId, ownerId);
     }
 
     private ResponseStatusException conflict(String message) {

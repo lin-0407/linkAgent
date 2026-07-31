@@ -91,6 +91,16 @@ public interface PreflightReviewMapper {
                                                           @Param("ownerId") String ownerId,
                                                           @Param("versionId") String versionId);
 
+    /** 删除媒体后只关闭证据的素材入口，转写文本、问题和修改清单仍可继续查看。 */
+    @Update("""
+            UPDATE creator_timeline_evidence
+            SET asset_available = 0
+            WHERE version_id = #{versionId}
+              AND asset_available = 1
+              AND is_deleted = 0
+            """)
+    int markVersionEvidenceUnavailable(@Param("versionId") String versionId);
+
     @Select("""
             SELECT version_id
             FROM creator_draft_video

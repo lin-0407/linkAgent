@@ -153,7 +153,7 @@ public class PreflightSegmentReviewService {
                 } finally {
                     if (uploaded) {
                         try {
-                            storage.deleteObject(objectKey);
+                            storage.deleteObject(preview.bucketName(), objectKey);
                         } catch (RuntimeException exception) {
                             log.warn("重点复核临时片段删除失败 objectKey={}", objectKey, exception);
                         }

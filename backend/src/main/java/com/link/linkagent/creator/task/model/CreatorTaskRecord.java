@@ -14,6 +14,7 @@ public class CreatorTaskRecord {
     private String taskName;
     private String videoType;
     private String status;
+    private boolean planningSkipped;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 
@@ -63,6 +64,14 @@ public class CreatorTaskRecord {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public boolean isPlanningSkipped() {
+        return planningSkipped;
+    }
+
+    public void setPlanningSkipped(boolean planningSkipped) {
+        this.planningSkipped = planningSkipped;
     }
 
     public LocalDateTime getCreateTime() {

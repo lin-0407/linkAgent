@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 创作复盘报告接口。
- * 复盘报告挂在 taskId 下，是为了把发布前建议、观众反馈和后续偏好沉淀串成同一条业务链路。
+ * 复盘报告挂在 taskId 下，是为了把发布后视频表现、观众反馈和后续偏好沉淀串成同一条业务链路。
  */
 @Validated
 @RestController

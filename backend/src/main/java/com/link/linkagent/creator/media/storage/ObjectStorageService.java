@@ -103,10 +103,11 @@ public interface ObjectStorageService {
      * <p>
      * 必须幂等实现：如果上传已被自动清理，不应抛出异常。
      *
-     * @param objectKey 对象键
-     * @param uploadId  要取消的 Multipart Upload ID
+     * @param bucketName 对象所在 Bucket；删除历史记录时不能依赖当前部署配置
+     * @param objectKey  对象键
+     * @param uploadId   要取消的 Multipart Upload ID
      */
-    void abortMultipartUpload(String objectKey, String uploadId);
+    void abortMultipartUpload(String bucketName, String objectKey, String uploadId);
 
     /**
      * 获取对象元数据（HEAD 请求，轻量，不下载内容）。
@@ -119,7 +120,8 @@ public interface ObjectStorageService {
     /**
      * 删除对象。
      *
-     * @param objectKey 对象键
+     * @param bucketName 对象所在 Bucket；删除历史记录时不能依赖当前部署配置
+     * @param objectKey  对象键
      */
-    void deleteObject(String objectKey);
+    void deleteObject(String bucketName, String objectKey);
 }

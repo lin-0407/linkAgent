@@ -28,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -69,6 +70,22 @@ class CreatorMediaWorkflowGateServiceTest {
         CreatorMediaWorkflowGateService service = service(properties, mapper, workflowMapper);
 
         service.ensureReadyForPostPublish("task-1", "default", "观众反馈");
+    }
+
+    @Test
+    void shouldAllowPostPublishAfterPlanningSkipAndCompletedPreflight() {
+        CreatorMediaProperties properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        when(mapper.countPlanningSkippedTask("task-1", "default")).thenReturn(1);
+        when(mapper.findDraftVideo("task-1", "default"))
+                .thenReturn(Optional.of(draft("READY_FOR_REVIEW")));
+        CreatorMediaWorkflowGateService service = service(properties, mapper, workflowMapper);
+
+        service.ensureReadyForPostPublish("task-1", "default", "观众反馈");
+
+        verifyNoInteractions(workflowMapper);
     }
 
     @Test
@@ -273,7 +290,8 @@ class CreatorMediaWorkflowGateServiceTest {
 
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(exception.getReason()).contains("请先确认发布方案");
-        verifyNoInteractions(mapper);
+        verify(mapper).countPlanningSkippedTask("task-1", "default");
+        verify(mapper, never()).findDraftVideo("task-1", "default");
     }
 
     @Test
@@ -293,7 +311,8 @@ class CreatorMediaWorkflowGateServiceTest {
 
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(exception.getReason()).contains("请先确认发布方案");
-        verifyNoInteractions(mapper);
+        verify(mapper).countPlanningSkippedTask("task-1", "default");
+        verify(mapper, never()).findDraftVideo("task-1", "default");
     }
 
     private DraftVideoRecord draft(String status) {
@@ -322,6 +341,7 @@ class CreatorMediaWorkflowGateServiceTest {
                 true,
                 null,
                 status,
+                null,
                 LocalDateTime.now(),
                 updateTime
         );

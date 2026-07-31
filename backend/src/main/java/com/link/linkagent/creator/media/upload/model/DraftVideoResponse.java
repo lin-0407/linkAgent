@@ -24,6 +24,7 @@ import java.time.LocalDateTime;
  * @param audioCodec       音频编码，无音轨时为空
  * @param hasAudio         是否存在音轨，未探测时为空
  * @param status           成片状态（READY_FOR_REVIEW 表示探测通过，仍需完成媒体预处理）
+ * @param mediaDeletedAt   原片和派生媒体删除时间；删除后历史报告仍保留
  * @param createTime       创建时间
  * @param updateTime       最后更新时间
  */
@@ -43,6 +44,7 @@ public record DraftVideoResponse(
         String audioCodec,
         Boolean hasAudio,
         String status,
+        LocalDateTime mediaDeletedAt,
         LocalDateTime createTime,
         LocalDateTime updateTime
 ) {

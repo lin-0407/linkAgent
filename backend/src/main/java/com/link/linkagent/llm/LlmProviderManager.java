@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -50,6 +51,9 @@ public class LlmProviderManager {
     /** Jackson ObjectMapper：用于构建 OpenAI 兼容的 JSON 请求体，以及解析响应中的 content 和 model 字段。 */
     private final ObjectMapper objectMapper;
 
+    /** DeepSeek Flash 思考参数工厂，保证备用 HTTP 请求也使用官方字段。 */
+    private final DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory;
+
     /**
      * Provider 冷却结束时间记录。
      * <p>
@@ -68,8 +72,16 @@ public class LlmProviderManager {
      * @param objectMapper Jackson ObjectMapper（由 Spring Boot 自动配置的共享实例）
      */
     public LlmProviderManager(LlmFallbackProperties fallbackProperties, ObjectMapper objectMapper) {
+        this(fallbackProperties, objectMapper, null);
+    }
+
+    @Autowired
+    public LlmProviderManager(LlmFallbackProperties fallbackProperties,
+                              ObjectMapper objectMapper,
+                              DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory) {
         this.fallbackProperties = fallbackProperties;
         this.objectMapper = objectMapper;
+        this.deepSeekThinkingOptionsFactory = deepSeekThinkingOptionsFactory;
     }
 
     /**
@@ -226,6 +238,9 @@ public class LlmProviderManager {
         messages.add(userMsg);
 
         requestBody.set("messages", messages);
+        if (deepSeekThinkingOptionsFactory != null) {
+            deepSeekThinkingOptionsFactory.applyToRequest(requestBody, provider.getModel());
+        }
 
         // 发送 HTTP 请求
         RestClient restClient = RestClient.builder()

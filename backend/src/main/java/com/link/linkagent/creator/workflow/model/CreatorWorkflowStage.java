@@ -16,7 +16,7 @@ public enum CreatorWorkflowStage {
     FEEDBACK,
 
     /**
-     * 创作复盘报告阶段：汇总发布前建议、反馈分析和竞品分析生成最终报告。
+     * 创作复盘报告阶段：汇总发布后视频指标、反馈分析和竞品分析生成最终报告。
      */
     REPORT
 }

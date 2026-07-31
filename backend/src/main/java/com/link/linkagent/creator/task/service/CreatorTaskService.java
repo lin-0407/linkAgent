@@ -39,8 +39,8 @@ import java.util.UUID;
  * 不调用 LLM/Agent 或记忆层——保证任务管理的纯粹性和低耦合。
  * <p>
  * 材料变更的回退策略（updateTask / importMaterial）：任务仍处于 DRAFT 时，材料或视频类型发生变化会
- * 自动将任务状态保持为 DRAFT。发布方案确认后，任务材料会成为反馈和复盘的事实基线，
- * 不再允许原地修改，避免历史建议、反馈结论与实际输入发生错位。
+ * 自动将任务状态保持为 DRAFT。发布方案确认后，任务材料会成为后续制作和竞品分析的事实基线，
+ * 不再允许原地修改，避免历史建议、制作结果与任务输入发生错位。
  */
 @Service
 public class CreatorTaskService {
@@ -189,6 +189,27 @@ public class CreatorTaskService {
     }
 
     /**
+     * 将已有成片的草稿任务直接切换到成片试映路径。
+     * <p>
+     * 这里只保存用户主动跳过前期策划的事实，不生成虚假的发布方案或制作蓝图。
+     */
+    @Transactional
+    public CreatorTaskResponse skipToPreflight(String taskId) {
+        String safeTaskId = normalizeTaskId(taskId);
+        CreatorTaskRecord taskRecord = getTaskRecord(safeTaskId);
+        if (taskRecord.isPlanningSkipped()) {
+            return getTask(safeTaskId);
+        }
+        if (!CreatorTaskStatus.DRAFT.name().equals(taskRecord.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "只有尚未确认发布方案的草稿任务可以直接进入成片试映");
+        }
+        if (creatorTaskMapper.markPlanningSkipped(safeTaskId) != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "任务状态已经变化，请刷新后重试");
+        }
+        return getTask(safeTaskId);
+    }
+
+    /**
      * 删除创作任务（逻辑删除：标记为 ARCHIVED，同时物理删除关联材料）。
      * <p>
      * 为什么用逻辑删除 + 物理删材料：任务本身保留为 ARCHIVED（方便后续恢复或排障追溯），
@@ -303,6 +324,7 @@ public class CreatorTaskService {
                 record.getTaskName(),
                 normalizeVideoType(record.getVideoType()),
                 record.getStatus(),
+                record.isPlanningSkipped(),
                 record.getCreateTime(),
                 record.getUpdateTime(),
                 materials

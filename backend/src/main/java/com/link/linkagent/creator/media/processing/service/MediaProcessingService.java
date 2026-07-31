@@ -176,7 +176,10 @@ public class MediaProcessingService {
                                                String taskId,
                                                String versionId,
                                                String jobId) {
-        requireDraft(ownerId, taskId, versionId);
+        // 重试也锁定成片记录，避免用户删除媒体的同时把失败任务重新排队。
+        processingMapper.lockDraftVersion(taskId, ownerId, versionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        requireReadyDraft(ownerId, taskId, versionId);
         MediaProcessingJobRecord job = requireJob(ownerId, taskId, versionId, jobId);
         if (!"FAILED".equals(job.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "只有失败的媒体预处理任务可以重试");
@@ -223,6 +226,9 @@ public class MediaProcessingService {
     private DraftVideoRecord requireReadyDraft(String ownerId, String taskId, String versionId) {
         validateEnabledConfiguration();
         DraftVideoRecord draft = requireDraft(ownerId, taskId, versionId);
+        if (draft.mediaDeletedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "媒体文件已删除，不能重新生成预览和关键画面");
+        }
         if (!DraftVideoStatus.READY_FOR_REVIEW.name().equals(draft.status())
                 || draft.durationMs() == null
                 || draft.width() == null

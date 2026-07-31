@@ -32,7 +32,15 @@ public enum RuntimeSettingKey {
     CREATOR_FEEDBACK_RAG_ENABLED(
             "creator.feedback.rag.enabled",
             "反馈追问 RAG",
-            "评论弹幕追问优先使用向量证据检索，基础设施不可用时仍会降级 SQL");
+            "评论弹幕追问优先使用向量证据检索，基础设施不可用时仍会降级 SQL"),
+    DEEPSEEK_THINKING_ENABLED(
+            "deepseek.thinking.enabled",
+            "DeepSeek 深度思考",
+            "DeepSeek Flash 调用发送 thinking.type=enabled，关闭后发送 disabled"),
+    DEEPSEEK_REASONING_EFFORT(
+            "deepseek.thinking.reasoning-effort",
+            "DeepSeek 思考强度",
+            "DeepSeek Flash 思考强度，仅允许 low、high、max");
 
     private final String key;
     private final String name;

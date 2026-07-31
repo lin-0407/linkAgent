@@ -375,7 +375,7 @@ public class CreatorEvaluationService {
      * <ul>
      *   <li>PRE_PUBLISH：发布前评测，检查内容质量（标题、封面、内容结构）</li>
      *   <li>FEEDBACK：发布后反馈期评测，分析观众反馈和互动数据</li>
-     *   <li>REPORT：最终复盘报告，综合对比预发布预期与实际表现</li>
+     *   <li>REPORT：最终复盘报告，检查发布后视频表现、观众反馈与行动建议</li>
      * </ul>
      *
      * @param stage 待校验的阶段字符串

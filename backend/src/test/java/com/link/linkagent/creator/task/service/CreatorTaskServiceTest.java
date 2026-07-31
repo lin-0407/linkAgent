@@ -65,6 +65,32 @@ class CreatorTaskServiceTest {
     }
 
     @Test
+    void shouldMarkDraftTaskAsPlanningSkipped() {
+        FakeCreatorTaskMapper mapper = new FakeCreatorTaskMapper();
+        mapper.taskRecord = createTaskRecord();
+        CreatorTaskService service = new CreatorTaskService(mapper);
+
+        CreatorTaskResponse response = service.skipToPreflight("task-1");
+
+        assertThat(response.planningSkipped()).isTrue();
+        assertThat(mapper.taskRecord.isPlanningSkipped()).isTrue();
+    }
+
+    @Test
+    void shouldRejectPlanningSkipAfterPrePublishWasConfirmed() {
+        FakeCreatorTaskMapper mapper = new FakeCreatorTaskMapper();
+        mapper.taskRecord = createTaskRecord();
+        mapper.taskRecord.setStatus(CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name());
+        CreatorTaskService service = new CreatorTaskService(mapper);
+
+        assertThatThrownBy(() -> service.skipToPreflight("task-1"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(mapper.taskRecord.isPlanningSkipped()).isFalse();
+    }
+
+    @Test
     void shouldRejectMissingTaskWhenUpdating() {
         CreatorTaskService service = new CreatorTaskService(new FakeCreatorTaskMapper());
 
@@ -84,8 +110,8 @@ class CreatorTaskServiceTest {
         mapper.taskRecord.setStatus(CreatorTaskStatus.PRE_PUBLISH_ANALYZED.name());
         CreatorTaskService service = new CreatorTaskService(mapper);
 
-        // 已确认的发布方案会作为后续反馈和复盘的事实基线，
-        // 不能再通过普通任务保存覆盖视频类型或文稿，否则历史结论会失去对应输入。
+        // 已确认的发布方案会作为后续制作和竞品分析的事实基线，
+        // 不能再通过普通任务保存覆盖视频类型或文稿，否则历史结果会失去对应输入。
         assertThatThrownBy(() -> service.updateTask(
                 "task-1",
                 new CreatorTaskUpdateRequest("新任务名", "游戏攻略", "新标题", "新简介", "新文稿", null)
@@ -205,6 +231,17 @@ class CreatorTaskServiceTest {
             if (taskRecord != null) {
                 taskRecord.setStatus(status);
             }
+            return 1;
+        }
+
+        @Override
+        public int markPlanningSkipped(String taskId) {
+            if (taskRecord == null
+                    || !CreatorTaskStatus.DRAFT.name().equals(taskRecord.getStatus())
+                    || taskRecord.isPlanningSkipped()) {
+                return 0;
+            }
+            taskRecord.setPlanningSkipped(true);
             return 1;
         }
 

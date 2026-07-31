@@ -143,7 +143,7 @@ public class MediaUploadService {
         if (mediaUploadMapper.countTaskByOwner(normalizedTaskId, ownerId) != 1) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在");
         }
-        // 在读取或复用幂等上传会话前确认发布方案，避免旧会话成为绕过成片试映顺序的入口。
+        // 在读取或复用幂等上传会话前确认正常策划链路或已有成片跳过事实，避免前端单独绕过门禁。
         mediaWorkflowGateService.ensurePrePublishConfirmed(normalizedTaskId, ownerId, "成片试映");
         ensureProductionPlanReady(normalizedTaskId, ownerId);
 
@@ -162,6 +162,12 @@ public class MediaUploadService {
         // 查是否已有该任务的成片记录：没有则新建，有则需判断是否能复用
         DraftVideoRecord currentDraft = mediaUploadMapper.findDraftVideo(normalizedTaskId, ownerId).orElse(null);
         boolean createDraft = currentDraft == null;
+        if (!createDraft && currentDraft.mediaDeletedAt() != null) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "当前任务的媒体文件已删除；为避免旧报告对应新视频，本版本不支持重新上传"
+            );
+        }
         if (!createDraft && !canReuseDraft(currentDraft.status())) {
             // 成片正在上传中或已完成，不允许覆盖
             throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务已经存在上传中或已完成的成片");
@@ -209,6 +215,7 @@ public class MediaUploadService {
                 null,
                 null,
                 DraftVideoStatus.UPLOADING.name(),             // 初始状态：上传中
+                null,
                 createDraft ? null : currentDraft.createTime(),
                 createDraft ? null : currentDraft.updateTime()
         );
@@ -245,7 +252,7 @@ public class MediaUploadService {
             );
             if (replacedUpload != null) {
                 // 新旧尝试使用不同对象键（每次 attempt 不同 uploadSessionId）；
-                // 事务提交后再清理旧尝试的 OSS 资源，清理失败由 Bucket 生命周期兜底
+                // 事务提交后再清理旧尝试的 OSS 资源，避免外部请求占用数据库事务。
                 safeAbort(replacedUpload.objectKey(), replacedUpload.storageUploadId());
                 safeDelete(replacedUpload.objectKey());
             }
@@ -541,7 +548,7 @@ public class MediaUploadService {
     /** P0-1 未接入的旧单元测试允许跳过；生产 Bean 一定由 Spring 注入门禁服务。 */
     private void ensureProductionPlanReady(String taskId, String ownerId) {
         if (productionPlanGateService != null) {
-            productionPlanGateService.requireReady(taskId, ownerId);
+            productionPlanGateService.ensureReadyForPreflight(taskId, ownerId);
         }
     }
 
@@ -746,7 +753,8 @@ public class MediaUploadService {
      */
     private void abortStorageUpload(MediaUploadRecord upload) {
         try {
-            objectStorageService.abortMultipartUpload(upload.objectKey(), upload.storageUploadId());
+            objectStorageService.abortMultipartUpload(
+                    storageProperties.getBucket(), upload.objectKey(), upload.storageUploadId());
         } catch (MediaStorageException exception) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "对象存储暂时不可用，取消状态已保存，请稍后重试清理");
         }
@@ -786,7 +794,7 @@ public class MediaUploadService {
      */
     private void safeAbort(String objectKey, String storageUploadId) {
         try {
-            objectStorageService.abortMultipartUpload(objectKey, storageUploadId);
+            objectStorageService.abortMultipartUpload(storageProperties.getBucket(), objectKey, storageUploadId);
         } catch (MediaStorageException ignored) {
             // 原业务异常优先返回；遗留 Multipart Upload 由 Bucket 生命周期规则兜底清理
         }
@@ -798,9 +806,9 @@ public class MediaUploadService {
      */
     private void safeDelete(String objectKey) {
         try {
-            objectStorageService.deleteObject(objectKey);
+            objectStorageService.deleteObject(storageProperties.getBucket(), objectKey);
         } catch (MediaStorageException ignored) {
-            // 删除失败不能覆盖原业务事实；对象保留策略和后续清理能力负责最终收敛
+            // 删除失败不能覆盖原业务异常；必要时根据对象存储记录人工核查遗留对象。
         }
     }
 
@@ -913,6 +921,7 @@ public class MediaUploadService {
                 draft.audioCodec(),
                 draft.hasAudio(),
                 draft.status(),
+                draft.mediaDeletedAt(),
                 draft.createTime(),
                 draft.updateTime()
         );

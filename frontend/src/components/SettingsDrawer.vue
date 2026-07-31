@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { X } from '@lucide/vue'
-import { checkSettingsConnectivity, getSettingsStatus, updateRuntimeToggle } from '@/api/settings'
+import { checkSettingsConnectivity, getSettingsStatus, updateRuntimeToggle, updateRuntimeValue } from '@/api/settings'
 import type { ConnectivityItem, SettingsStatus } from '@/types/settings'
 import KnowledgeIndexPanels from '@/components/KnowledgeIndexPanels.vue'
 import SettingsSectionRuntime from '@/components/settings/SettingsSectionRuntime.vue'
@@ -38,6 +38,7 @@ function toggleSection(key: string) {
 }
 
 const dynamicToggles = computed(() => settings.value?.dynamicToggles ?? [])
+const dynamicValues = computed(() => settings.value?.dynamicValues ?? [])
 const readonlySettings = computed(() => settings.value?.readonlySettings ?? [])
 
 watch([open, developerMode], ([isOpen, isDeveloperMode]) => {
@@ -67,6 +68,22 @@ async function toggleSetting(key: string, enabled: boolean) {
   loadError.value = ''
   try {
     await updateRuntimeToggle(key, enabled)
+    await loadSettings()
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    savingKey.value = ''
+  }
+}
+
+async function updateSettingValue(key: string, value: string) {
+  if (savingKey.value) {
+    return
+  }
+  savingKey.value = key
+  loadError.value = ''
+  try {
+    await updateRuntimeValue(key, value)
     await loadSettings()
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error)
@@ -132,11 +149,13 @@ function closeDrawer() {
             <template v-if="developerMode">
               <SettingsSectionRuntime
                 :toggles="dynamicToggles"
+                :values="dynamicValues"
                 :saving-key="savingKey"
                 :collapsed="collapsedSections.runtime ?? false"
                 :loading="loading"
                 :error="loadError"
                 @toggle="toggleSetting"
+                @value-change="updateSettingValue"
                 @load="loadSettings"
                 @toggle-section="toggleSection('runtime')"
               />

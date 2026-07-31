@@ -3,6 +3,7 @@ package com.link.linkagent.knowledge.service;
 import com.link.linkagent.knowledge.config.KnowledgeRagProperties;
 import com.link.linkagent.knowledge.model.QueryEnhanceStrategy;
 import com.link.linkagent.knowledge.rag.HydeQueryTransformer;
+import com.link.linkagent.llm.DeepSeekThinkingOptionsFactory;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
@@ -76,43 +77,37 @@ public class KnowledgeQueryEnhancer {
             变体查询：
             """;
 
-    /** Rewrite 策略的查询改写组件——调用 LLM 将口语化查询改写为更精确的检索文本（单结果）。 */
-    private final RewriteQueryTransformer rewriteQueryTransformer;
+    /** 原始 Builder，用于每次查询按运行期设置创建带思考参数的独立组件。 */
+    private final ChatClient.Builder chatClientBuilder;
 
-    /** Multi-query 策略的查询扩展组件——调用 LLM 生成多条不同角度的变体查询（多结果，含原始 query）。 */
-    private final MultiQueryExpander multiQueryExpander;
+    /** Multi-query 变体数量，组件按请求创建但配置保持固定。 */
+    private final int multiQueryCount;
 
-    /** HyDE 策略的假设文档生成组件——调用 LLM 生成"如果存在完美答案，它看起来像什么"的虚拟文档文本。 */
-    private final HydeQueryTransformer hydeQueryTransformer;
+    /** HyDE 组件需要的提示词服务。 */
+    private final PromptService promptService;
+
+    /** DeepSeek Flash 思考参数工厂，设置页修改后下一次查询即可生效。 */
+    private final DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory;
 
     /**
-     * 构造三套查询增强组件，一次性完成初始化以避免运行期延迟。
+     * 保存查询增强所需的 Builder 和固定参数；实际组件按查询创建，以便运行期思考设置无需重启即可生效。
      * <p>
-     * 每个组件基于同一个 ChatClient.Builder 各自 build 出独立的 ChatClient 实例——
-     * 这是 Spring AI 框架文档推荐的隔离用法，避免一个组件的配置（如 temperature、maxTokens）
-     * 污染另一个组件的行为。
+     * 每次创建都会 clone 原始 Builder 并独立 build ChatClient，避免一个策略的请求选项污染另一个策略。
      *
      * @param chatClientBuilder Spring AI ChatClient 构造器（通过 Spring 自动注入）
      * @param knowledgeRagProperties RAG 运行期配置，取 multiQueryCount 等参数
      * @param promptService 提示词模板服务，供 HyDE 组件渲染中文提示词模板
+     * @param deepSeekThinkingOptionsFactory DeepSeek Flash 思考参数工厂
      */
     public KnowledgeQueryEnhancer(ChatClient.Builder chatClientBuilder,
                                   KnowledgeRagProperties knowledgeRagProperties,
-                                  PromptService promptService) {
+                                  PromptService promptService,
+                                  DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory) {
         // numberOfQueries 至少为 1：二次防御配置被误设成 0 或负数导致框架组件构造异常
-        int multiQueryCount = Math.max(1, knowledgeRagProperties.getQueryEnhancement().getMultiQueryCount());
-        this.rewriteQueryTransformer = RewriteQueryTransformer.builder()
-                .chatClientBuilder(chatClientBuilder)
-                .targetSearchSystem("视频案例知识库")  // 作为 {target} 占位符的值注入提示词
-                .promptTemplate(new PromptTemplate(REWRITE_PROMPT))
-                .build();
-        this.multiQueryExpander = MultiQueryExpander.builder()
-                .chatClientBuilder(chatClientBuilder)
-                .numberOfQueries(multiQueryCount)
-                .includeOriginal(true)  // 框架自动将原始 query 作为变体之一，避免丢失原始检索意图
-                .promptTemplate(new PromptTemplate(MULTI_QUERY_PROMPT))
-                .build();
-        this.hydeQueryTransformer = new HydeQueryTransformer(chatClientBuilder, promptService);
+        this.chatClientBuilder = chatClientBuilder;
+        this.multiQueryCount = Math.max(1, knowledgeRagProperties.getQueryEnhancement().getMultiQueryCount());
+        this.promptService = promptService;
+        this.deepSeekThinkingOptionsFactory = deepSeekThinkingOptionsFactory;
     }
 
     /**
@@ -150,9 +145,9 @@ public class KnowledgeQueryEnhancer {
         List<String> texts;
         try {
             texts = switch (strategy) {
-                case REWRITE -> singletonText(rewriteQueryTransformer.transform(new Query(original)));
-                case HYDE -> singletonText(hydeQueryTransformer.transform(new Query(original)));
-                case MULTI_QUERY -> multiQueryExpander.expand(new Query(original)).stream()
+                case REWRITE -> singletonText(createRewriteTransformer().transform(new Query(original)));
+                case HYDE -> singletonText(createHydeQueryTransformer().transform(new Query(original)));
+                case MULTI_QUERY -> createMultiQueryExpander().expand(new Query(original)).stream()
                         .filter(Objects::nonNull)
                         .map(Query::text)
                         .collect(Collectors.toCollection(ArrayList::new));
@@ -186,5 +181,30 @@ public class KnowledgeQueryEnhancer {
      */
     private List<String> singletonText(Query transformed) {
         return Collections.singletonList(transformed == null ? null : transformed.text());
+    }
+
+    private RewriteQueryTransformer createRewriteTransformer() {
+        return RewriteQueryTransformer.builder()
+                .chatClientBuilder(configuredBuilder())
+                .targetSearchSystem("视频案例知识库")
+                .promptTemplate(new PromptTemplate(REWRITE_PROMPT))
+                .build();
+    }
+
+    private MultiQueryExpander createMultiQueryExpander() {
+        return MultiQueryExpander.builder()
+                .chatClientBuilder(configuredBuilder())
+                .numberOfQueries(multiQueryCount)
+                .includeOriginal(true)
+                .promptTemplate(new PromptTemplate(MULTI_QUERY_PROMPT))
+                .build();
+    }
+
+    private HydeQueryTransformer createHydeQueryTransformer() {
+        return new HydeQueryTransformer(configuredBuilder(), promptService);
+    }
+
+    private ChatClient.Builder configuredBuilder() {
+        return deepSeekThinkingOptionsFactory.configureDefaultBuilder(chatClientBuilder);
     }
 }

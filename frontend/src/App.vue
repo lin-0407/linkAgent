@@ -16,6 +16,20 @@ const route = useRoute()
 const isHomeRoute = computed(() => route.path === '/')
 const isCreatorRoute = computed(() => route.path === '/creator')
 const isUsageLogRoute = computed(() => route.path === '/usage-logs')
+const routeDirectory = computed(
+  () =>
+    (
+      {
+        '/': { label: '首页', detail: '创作总览' },
+        '/creator': { label: '创作台', detail: '视频发布与复盘助手' },
+        '/knowledge': { label: '参考案例', detail: '案例检索' },
+        '/projects': { label: '项目列表', detail: '历史视频项目' },
+        '/memory': { label: '记忆管理', detail: '长期偏好与关键信息' },
+        '/video-analysis': { label: '视频分析', detail: '视频分析与复盘' },
+        '/usage-logs': { label: '使用日志', detail: '模型调用记录' },
+      } as Record<string, { label: string; detail: string }>
+    )[route.path],
+)
 const guideOpen = ref(false)
 const surfaceSwitchRef = ref<HTMLElement | null>(null)
 
@@ -61,10 +75,10 @@ watch(
           <strong>LinkAgent</strong>
           <b>AI</b>
         </RouterLink>
-        <nav v-if="isCreatorRoute" class="surface-breadcrumb" aria-label="当前位置">
-          <RouterLink to="/creator">创作台</RouterLink>
+        <nav v-if="routeDirectory" class="surface-breadcrumb" aria-label="当前位置">
+          <RouterLink :to="route.path">{{ routeDirectory.label }}</RouterLink>
           <span>/</span>
-          <strong>视频发布与复盘助手</strong>
+          <strong>{{ routeDirectory.detail }}</strong>
         </nav>
       </div>
 
@@ -196,7 +210,7 @@ watch(
                 <div>
                   <strong>复盘并沉淀偏好</strong>
                   <p>
-                    综合发布建议、反馈分析和竞品/案例结论生成复盘报告，把有效偏好沉淀到下一次发布前优化中。
+                    根据发布后视频表现、观众反馈和竞品结论生成复盘报告，把有效偏好沉淀到下一次创作中。
                   </p>
                 </div>
               </li>

@@ -7,6 +7,7 @@ import java.util.List;
  */
 public record SettingsStatusResponse(
         List<RuntimeToggleResponse> dynamicToggles,
+        List<RuntimeValueResponse> dynamicValues,
         List<ReadonlySettingResponse> readonlySettings
 ) {
 }

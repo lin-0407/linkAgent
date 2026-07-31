@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import type { RuntimeToggle } from '@/types/settings'
+import type { RuntimeToggle, RuntimeValue } from '@/types/settings'
 
-defineProps<{
+const props = defineProps<{
   toggles: RuntimeToggle[]
+  values: RuntimeValue[]
   savingKey: string
   collapsed: boolean
   loading: boolean
@@ -11,9 +12,17 @@ defineProps<{
 
 const emit = defineEmits<{
   toggle: [key: string, enabled: boolean]
+  valueChange: [key: string, value: string]
   load: []
   toggleSection: []
 }>()
+
+function handleValueChange(key: string, event: Event) {
+  const target = event.target
+  if (target instanceof HTMLSelectElement) {
+    emit('valueChange', key, target.value)
+  }
+}
 </script>
 
 <template>
@@ -62,6 +71,24 @@ const emit = defineEmits<{
           >
             <span>{{ savingKey === toggle.key ? '保存中' : toggle.enabled ? '已开启' : '开启' }}</span>
           </button>
+        </article>
+      </div>
+      <div v-if="props.values.length" class="settings-value-list">
+        <article v-for="setting in props.values" :key="setting.key" class="settings-value-card">
+          <div>
+            <strong>{{ setting.name }}</strong>
+            <small>{{ setting.key }}</small>
+            <p>{{ setting.description }}</p>
+          </div>
+          <select
+            class="settings-value-select"
+            :value="setting.value"
+            :disabled="savingKey === setting.key"
+            :aria-label="setting.name"
+            @change="handleValueChange(setting.key, $event)"
+          >
+            <option v-for="option in setting.options" :key="option" :value="option">{{ option }}</option>
+          </select>
         </article>
       </div>
     </div>
@@ -135,6 +162,60 @@ const emit = defineEmits<{
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
+.settings-value-list {
+  display: grid;
+  gap: var(--s3);
+  margin-top: var(--s3);
+}
+
+.settings-value-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--s3);
+  padding: 10px var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.settings-value-card strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: var(--fw-semibold);
+}
+
+.settings-value-card small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-value-card p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.settings-value-select {
+  min-width: 92px;
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  font-family: var(--font-code);
+  font-size: 13px;
+}
+
+.settings-value-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .settings-toggle-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
@@ -202,7 +283,8 @@ const emit = defineEmits<{
 
 @media (max-width: 640px) {
   .settings-toggle-list,
-  .settings-toggle-card {
+  .settings-toggle-card,
+  .settings-value-card {
     grid-template-columns: 1fr;
   }
 }

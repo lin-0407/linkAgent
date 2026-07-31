@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Check, CircleAlert, CircleCheck, LoaderCircle, Minus, X } from '@lucide/vue'
+import { Check, CircleAlert, CircleCheck, LoaderCircle, Minus, Trash2, X } from '@lucide/vue'
 import { ApiError } from '@/api/http'
 import {
   cancelPreflightReview,
@@ -8,6 +8,7 @@ import {
   createPreflightReview,
   createMediaProcessingAssetReadUrl,
   createMediaProcessingJob,
+  deleteDraftVideoMedia,
   estimateMediaProcessing,
   getCurrentDraftVideo,
   getCurrentMediaProcessingJob,
@@ -89,6 +90,8 @@ const preflightDisclosureConfirmed = ref(false)
 const preflightReviewFocus = ref('')
 const preflightBusy = ref(false)
 const preflightError = ref('')
+const mediaDeleteBusy = ref(false)
+const mediaDeleteError = ref('')
 const newPreflightIdempotencyKey = ref('')
 const openIssueIgnoreId = ref('')
 const openEditIgnoreId = ref('')
@@ -96,11 +99,12 @@ const issueIgnoreReasons = reactive<Record<string, string>>({})
 const editIgnoreReasons = reactive<Record<string, string>>({})
 
 const taskId = computed(() => selectedTaskId.value ?? '')
+const mediaDeleted = computed(() => Boolean(completedDraft.value?.mediaDeletedAt))
 const fileSummary = computed(() => {
   if (!selectedFile.value) return '尚未选择文件'
   return `${selectedFile.value.name} · ${formatBytes(selectedFile.value.size)}`
 })
-const visibleError = computed(() => localError.value || errorMessage.value)
+const visibleError = computed(() => localError.value || errorMessage.value || mediaDeleteError.value)
 const completedPartRatio = computed(() => {
   const upload = currentUpload.value
   if (!upload || upload.totalParts <= 0) return '0 / 0'
@@ -125,7 +129,7 @@ const currentProcessingOptionsFingerprint = computed(() =>
   ].join('|'),
 )
 const canProbeDraft = computed(() => {
-  if (!activeVersionId.value || isUploading.value || isProbing.value) return false
+  if (mediaDeleted.value || !activeVersionId.value || isUploading.value || isProbing.value) return false
   if (completedDraft.value) {
     return (
       completedDraft.value.status === 'UPLOADED' || completedDraft.value.status === 'PROBE_FAILED'
@@ -134,6 +138,7 @@ const canProbeDraft = computed(() => {
   return currentUpload.value?.status === 'COMPLETED'
 })
 const canStartUpload = computed(() => {
+  if (mediaDeleted.value) return false
   if (currentUpload.value?.status === 'VERIFYING') return !isUploading.value && !isProbing.value
   return (
     Boolean(selectedFile.value) &&
@@ -143,6 +148,7 @@ const canStartUpload = computed(() => {
   )
 })
 const showProbeButton = computed(() => {
+  if (mediaDeleted.value) return false
   const status = completedDraft.value?.status
   return (
     status === 'UPLOADED' ||
@@ -175,6 +181,7 @@ const hasCompletedUpload = computed(() =>
   Boolean(completedDraft.value || currentUpload.value?.status === 'COMPLETED'),
 )
 const resultPanelTitle = computed(() => {
+  if (mediaDeleted.value) return '媒体文件已删除'
   if (visibleError.value) return '媒体处理需要检查'
   if (completedDraft.value?.status === 'READY_FOR_REVIEW') return '媒体探测已完成'
   if (completedDraft.value?.status === 'PROBING' || isProbing.value) return '正在读取成片信息'
@@ -184,6 +191,9 @@ const resultPanelTitle = computed(() => {
   return '等待成片上传'
 })
 const resultPanelDescription = computed(() => {
+  if (mediaDeleted.value) {
+    return '云端原片、预览、音频和关键画面已删除；试映报告、问题和修改清单仍保留。'
+  }
   if (visibleError.value) return visibleError.value
   if (completedDraft.value?.status === 'READY_FOR_REVIEW') {
     return '视频参数已经就绪，可查看本次媒体探测详情。'
@@ -199,6 +209,7 @@ const resultPanelDescription = computed(() => {
   return '上传与探测结果会固定显示在这里，不再向页面底部追加。'
 })
 const resultPanelStatus = computed(() => {
+  if (mediaDeleted.value) return 'success'
   if (visibleError.value || completedDraft.value?.status === 'PROBE_FAILED') return 'error'
   if (completedDraft.value?.status === 'PROBING' || isProbing.value) return 'working'
   if (completedDraft.value?.status === 'READY_FOR_REVIEW' || hasCompletedUpload.value)
@@ -209,17 +220,23 @@ const resultPanelStatus = computed(() => {
 const resultModalTitle = computed(() =>
   resultModalKind.value === 'probe' ? '媒体探测完成' : '成片上传完成',
 )
-const canProcessDraft = computed(() => completedDraft.value?.status === 'READY_FOR_REVIEW')
+const hasProbeResult = computed(() => completedDraft.value?.status === 'READY_FOR_REVIEW')
+const canProcessDraft = computed(() => hasProbeResult.value && !mediaDeleted.value)
 const processingIsActive = computed(
   () => processingJob.value?.status === 'QUEUED' || processingJob.value?.status === 'RUNNING',
 )
 const processingPreviewAsset = computed(() =>
-  processingJob.value?.assets.find((asset) => asset.assetType === 'PREVIEW_VIDEO'),
+  mediaDeleted.value
+    ? undefined
+    : processingJob.value?.assets.find((asset) => asset.assetType === 'PREVIEW_VIDEO'),
 )
 const processingFrameAssets = computed(
   () =>
-    processingJob.value?.assets.filter((asset) => asset.assetType === 'KEYFRAME').slice(0, 24) ??
-    [],
+    mediaDeleted.value
+      ? []
+      : (processingJob.value?.assets
+          .filter((asset) => asset.assetType === 'KEYFRAME')
+          .slice(0, 24) ?? []),
 )
 const processingStepLabel = computed(() => {
   const step = processingJob.value?.steps.find(
@@ -243,6 +260,7 @@ const processingEstimateMatchesOptions = computed(
     processingEstimateFingerprint.value === currentProcessingOptionsFingerprint.value,
 )
 const canStartProcessing = computed(() => {
+  if (mediaDeleted.value) return false
   const job = processingJob.value
   return (
     !job ||
@@ -262,7 +280,7 @@ const processingSignalFacts = computed(() => {
   ]
 })
 const canStartPreflight = computed(
-  () => processingJob.value?.status === 'COMPLETED' && !preflightReview.value,
+  () => !mediaDeleted.value && processingJob.value?.status === 'COMPLETED' && !preflightReview.value,
 )
 const preflightIsActive = computed(() => {
   const status = preflightReview.value?.status
@@ -281,7 +299,24 @@ const audienceScreeningCompleted = computed(
     ) && audienceScreenings.value.length === 3,
 )
 const needsAudienceCompletion = computed(
-  () => preflightReview.value?.status === 'COMPLETED' && !audienceScreeningCompleted.value,
+  () =>
+    !mediaDeleted.value &&
+    preflightReview.value?.status === 'COMPLETED' &&
+    !audienceScreeningCompleted.value,
+)
+const uploadBlocksMediaDeletion = computed(() => {
+  const status = currentUpload.value?.status
+  return status === 'CREATED' || status === 'UPLOADING' || status === 'VERIFYING'
+})
+const canDeleteMedia = computed(
+  () =>
+    Boolean(completedDraft.value) &&
+    !mediaDeleted.value &&
+    !mediaDeleteBusy.value &&
+    !uploadBlocksMediaDeletion.value &&
+    !isProbing.value &&
+    !processingIsActive.value &&
+    !preflightIsActive.value,
 )
 const preflightProviderTaskId = computed(
   () => preflightReview.value?.steps.find((item) => item.stepType === 'TRANSCRIBE')?.providerTaskId ?? null,
@@ -380,6 +415,8 @@ watch(taskId, async (nextTaskId) => {
   preflightReviewFocus.value = ''
   preflightBusy.value = false
   preflightError.value = ''
+  mediaDeleteBusy.value = false
+  mediaDeleteError.value = ''
   openIssueIgnoreId.value = ''
   openEditIgnoreId.value = ''
   Object.keys(issueIgnoreReasons).forEach((key) => delete issueIgnoreReasons[key])
@@ -487,6 +524,52 @@ async function cancelCurrentUpload() {
   }
 }
 
+async function deleteCurrentMedia() {
+  const currentTaskId = taskId.value
+  const versionId = activeVersionId.value
+  if (!currentTaskId || !versionId || !canDeleteMedia.value) return
+  const confirmed = window.confirm(
+    '确定删除这个版本的云端媒体吗？\n\n原片、预览、音频和关键画面会永久删除；试映报告、问题和修改清单会保留。当前版本删除后不能重新上传。',
+  )
+  if (!confirmed) return
+
+  const generation = viewGeneration
+  mediaDeleteBusy.value = true
+  mediaDeleteError.value = ''
+  try {
+    const draft = await deleteDraftVideoMedia(currentTaskId, versionId)
+    if (
+      isDisposed ||
+      generation !== viewGeneration ||
+      currentTaskId !== taskId.value ||
+      versionId !== activeVersionId.value
+    ) {
+      return
+    }
+    completedDraft.value = draft
+    currentDraftVideo.value = draft
+    processingEstimateGeneration += 1
+    processingEstimate.value = null
+    processingEstimateFingerprint.value = ''
+    processingAssetUrls.value = {}
+    if (processingJob.value) {
+      processingJob.value = { ...processingJob.value, assets: [] }
+    }
+    selectedFile.value = null
+    if (fileInput.value) fileInput.value.value = ''
+    localError.value = ''
+    errorMessage.value = ''
+    statusMessage.value = '媒体文件已由你主动删除，历史报告仍可查看。'
+    closeResultModal(false)
+  } catch (error) {
+    if (!isDisposed && generation === viewGeneration && currentTaskId === taskId.value) {
+      mediaDeleteError.value = toMessage(error)
+    }
+  } finally {
+    if (generation === viewGeneration) mediaDeleteBusy.value = false
+  }
+}
+
 async function restorePersistedDraft(currentTaskId: string, generation: number) {
   if (currentUpload.value) return
   try {
@@ -500,7 +583,11 @@ async function restorePersistedDraft(currentTaskId: string, generation: number) 
     ) {
       completedDraft.value = draft
       currentDraftVideo.value = draft
-      updateProbeStatusMessage(draft.status)
+      if (draft.mediaDeletedAt) {
+        statusMessage.value = '媒体文件已由你主动删除，历史报告仍可查看。'
+      } else {
+        updateProbeStatusMessage(draft.status)
+      }
       if (draft.status === 'PROBING') scheduleProbeRefreshIfNecessary(generation)
     }
   } catch (error) {
@@ -617,7 +704,7 @@ async function refreshProcessingEstimate() {
 async function restoreProcessingState() {
   const currentTaskId = taskId.value
   const versionId = activeVersionId.value
-  if (!currentTaskId || !versionId || !canProcessDraft.value) return
+  if (!currentTaskId || !versionId || !hasProbeResult.value) return
   const generation = viewGeneration
   try {
     const job = await getCurrentMediaProcessingJob(currentTaskId, versionId)
@@ -751,6 +838,10 @@ async function loadProcessingAssetUrls() {
   const currentTaskId = taskId.value
   const versionId = activeVersionId.value
   const job = processingJob.value
+  if (mediaDeleted.value) {
+    processingAssetUrls.value = {}
+    return
+  }
   if (!currentTaskId || !versionId || !job || job.status !== 'COMPLETED') return
   const generation = viewGeneration
   const assets = [processingPreviewAsset.value, ...processingFrameAssets.value].filter(Boolean)
@@ -876,7 +967,14 @@ async function cancelCurrentPreflight() {
 async function retryCurrentPreflight() {
   const currentTaskId = taskId.value
   const reviewId = preflightReview.value?.reviewId
-  if (!currentTaskId || !reviewId || preflightReview.value?.status !== 'FAILED') return
+  if (
+    mediaDeleted.value ||
+    !currentTaskId ||
+    !reviewId ||
+    preflightReview.value?.status !== 'FAILED'
+  ) {
+    return
+  }
   preflightBusy.value = true
   preflightError.value = ''
   try {
@@ -986,6 +1084,7 @@ function applyPreflightSnapshot(review: Awaited<ReturnType<typeof getPreflightRe
 }
 
 function prepareNewPreflight() {
+  if (mediaDeleted.value) return
   preflightReview.value = null
   currentPreflightReviewStatus.value = null
   preflightDisclosureConfirmed.value = false
@@ -1186,23 +1285,30 @@ function toMessage(error: unknown) {
             <h4>选择成片</h4>
             <p>{{ selectedTask?.taskName || '当前创作任务' }}</p>
           </div>
-          <span v-if="currentUpload" class="preflight-state-chip">{{ currentUpload.status }}</span>
+          <span v-if="currentUpload && !mediaDeleted" class="preflight-state-chip">{{ currentUpload.status }}</span>
         </div>
 
         <label class="preflight-version-field">
           <span>版本名称</span>
-          <input v-model="versionName" type="text" maxlength="128" :disabled="isUploading" />
+          <input
+            v-model="versionName"
+            type="text"
+            maxlength="128"
+            :disabled="isUploading || mediaDeleted"
+          />
         </label>
 
         <button
           type="button"
           class="preflight-dropzone"
-          :disabled="isUploading"
+          :disabled="isUploading || mediaDeleted"
           @click="selectFile"
         >
           <span class="preflight-reel" aria-hidden="true">◉</span>
-          <strong>{{ selectedFile ? '已选择成片' : '选择 MP4 文件' }}</strong>
-          <small>{{ fileSummary }}</small>
+          <strong>{{
+            mediaDeleted ? '媒体文件已删除' : selectedFile ? '已选择成片' : '选择 MP4 文件'
+          }}</strong>
+          <small>{{ mediaDeleted ? '试映报告和修改清单仍可查看' : fileSummary }}</small>
         </button>
         <input
           ref="fileInput"
@@ -1227,15 +1333,15 @@ function toMessage(error: unknown) {
             <h4>分片传输</h4>
             <p>支持暂停与继续</p>
           </div>
-          <strong>{{ progressPercent.toFixed(1) }}%</strong>
+          <strong>{{ mediaDeleted ? '已删除' : `${progressPercent.toFixed(1)}%` }}</strong>
         </div>
 
         <div class="preflight-progress-track" aria-label="上传进度">
-          <span :style="{ width: `${progressPercent}%` }"></span>
+          <span :style="{ width: mediaDeleted ? '0%' : `${progressPercent}%` }"></span>
         </div>
         <div class="preflight-meter-meta">
-          <span>分片 {{ completedPartRatio }}</span>
-          <span>{{ currentUpload ? formatBytes(currentUpload.expectedSize) : '等待文件' }}</span>
+          <span>{{ mediaDeleted ? '分片记录已关闭' : `分片 ${completedPartRatio}` }}</span>
+          <span>{{ mediaDeleted ? '云端文件已移除' : currentUpload ? formatBytes(currentUpload.expectedSize) : '等待文件' }}</span>
         </div>
 
         <p class="preflight-status-copy">
@@ -1244,7 +1350,7 @@ function toMessage(error: unknown) {
 
         <div class="preflight-actions">
           <button
-            v-if="!isUploading"
+            v-if="!mediaDeleted && !isUploading"
             type="button"
             class="preflight-primary"
             :disabled="!canStartUpload"
@@ -1306,6 +1412,23 @@ function toMessage(error: unknown) {
             @click="handleProbeAction"
           >
             {{ probeButtonLabel }}
+          </button>
+          <button
+            v-if="completedDraft && !mediaDeleted"
+            type="button"
+            class="preflight-danger-action"
+            :disabled="!canDeleteMedia"
+            :title="canDeleteMedia ? '删除云端媒体' : '请等待当前媒体操作完成后再删除'"
+            @click="deleteCurrentMedia"
+          >
+            <LoaderCircle
+              v-if="mediaDeleteBusy"
+              :size="15"
+              :stroke-width="1.8"
+              aria-hidden="true"
+            />
+            <Trash2 v-else :size="15" :stroke-width="1.8" aria-hidden="true" />
+            {{ mediaDeleteBusy ? '删除中...' : '删除媒体' }}
           </button>
         </div>
       </section>
@@ -1475,7 +1598,7 @@ function toMessage(error: unknown) {
           <span v-if="preflightReview" class="preflight-state-chip">{{ preflightReview.status }}</span>
         </div>
 
-        <template v-if="!preflightReview">
+        <template v-if="!preflightReview && !mediaDeleted">
           <label class="preflight-focus-field">
             <span>后续试映重点（可选）</span>
             <textarea
@@ -1505,6 +1628,10 @@ function toMessage(error: unknown) {
             </button>
           </div>
         </template>
+
+        <p v-else-if="!preflightReview" class="preflight-deleted-note">
+          媒体文件已删除，不能开始新的试映；已有的处理记录仍保留。
+        </p>
 
         <template v-else>
           <div class="preflight-processing-status" aria-live="polite">
@@ -1557,7 +1684,11 @@ function toMessage(error: unknown) {
               {{ preflightReview.status === 'CANCEL_REQUESTED' ? '正在取消' : '取消任务' }}
             </button>
             <button
-              v-if="preflightReview.status === 'FAILED' && preflightReview.errorCode !== 'ASR_SUBMISSION_AMBIGUOUS'"
+              v-if="
+                !mediaDeleted &&
+                preflightReview.status === 'FAILED' &&
+                preflightReview.errorCode !== 'ASR_SUBMISSION_AMBIGUOUS'
+              "
               type="button"
               class="preflight-primary"
               :disabled="preflightBusy"
@@ -1566,7 +1697,7 @@ function toMessage(error: unknown) {
               人工重试
             </button>
             <button
-              v-if="preflightReview.status === 'CANCELLED'"
+              v-if="!mediaDeleted && preflightReview.status === 'CANCELLED'"
               type="button"
               class="preflight-primary"
               :disabled="preflightBusy"
@@ -1667,7 +1798,12 @@ function toMessage(error: unknown) {
                 <p v-if="issue.affectedPersonas.length" class="preflight-affected-personas">
                   可能影响：{{ issue.affectedPersonas.map(personaLabel).join('、') }}
                 </p>
-                <button type="button" class="preflight-issue-seek" @click="seekPreview(issue.startMs)">
+                <button
+                  v-if="!mediaDeleted"
+                  type="button"
+                  class="preflight-issue-seek"
+                  @click="seekPreview(issue.startMs)"
+                >
                   定位到 {{ formatDuration(issue.startMs) }} 播放
                 </button>
                 <small v-if="issue.needsHumanReview" class="preflight-human-review">需要作者人工确认</small>
@@ -1753,7 +1889,12 @@ function toMessage(error: unknown) {
                       <span>{{ editTaskStatusLabel(editTask.status) }}</span>
                       <time>{{ formatDuration(editTask.startMs) }} - {{ formatDuration(editTask.endMs) }}</time>
                     </div>
-                    <button type="button" class="preflight-issue-seek" @click="seekPreview(editTask.startMs)">
+                    <button
+                      v-if="!mediaDeleted"
+                      type="button"
+                      class="preflight-issue-seek"
+                      @click="seekPreview(editTask.startMs)"
+                    >
                       去看这一段
                     </button>
                   </header>
@@ -1964,9 +2105,7 @@ function toMessage(error: unknown) {
 
     <footer class="preflight-privacy-note">
       <strong>隐私边界</strong>
-      <span
-        >原片使用私有存储和短时读取签名；当前切片尚未实现发布后自动删除，请按部署保留策略清理。</span
-      >
+      <span>原片使用私有存储和短时读取签名；媒体只由你主动删除，不会按时间自动清理。</span>
     </footer>
   </section>
 </template>
@@ -2276,10 +2415,32 @@ function toMessage(error: unknown) {
   cursor: pointer;
 }
 
+.preflight-danger-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 10px 14px;
+  color: var(--danger);
+  background: #fff;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: var(--r-sm);
+  font: inherit;
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.preflight-danger-action:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.06);
+  border-color: rgba(220, 38, 38, 0.5);
+}
+
 .preflight-primary:focus-visible,
 .preflight-secondary:focus-visible,
 .preflight-ghost:focus-visible,
 .preflight-ghost-action:focus-visible,
+.preflight-danger-action:focus-visible,
 .preflight-modal-close:focus-visible {
   outline: 3px solid var(--accent-ring);
   outline-offset: 2px;
@@ -2565,6 +2726,16 @@ button:disabled {
 .preflight-privacy-note strong {
   flex: 0 0 auto;
   color: var(--ink);
+}
+
+.preflight-deleted-note {
+  margin: 0;
+  padding: var(--s4);
+  color: var(--muted);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  line-height: 1.6;
 }
 
 .preflight-processing-panel,

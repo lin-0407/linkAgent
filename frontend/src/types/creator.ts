@@ -15,6 +15,7 @@ export type CreatorTask = {
   taskName: string
   videoType: string
   status: string
+  planningSkipped: boolean
   createTime: string
   updateTime: string
   materials: CreatorMaterial[]
@@ -516,7 +517,7 @@ export type CreatorFeedbackReport = {
   updateTime: string
 }
 
-/** 发布前方案、反馈分析和竞品分析汇总后的唯一总体复盘。 */
+/** 发布后视频指标、反馈分析和竞品分析汇总后的唯一总体复盘。 */
 export type CreatorReport = {
   id: number
   reportId: string
@@ -637,6 +638,7 @@ export type LlmApiCallRecord = {
   modelCategory: LlmApiModelCategory
   scene: string | null
   modelName: string | null
+  reasoningEffort: string | null
   promptTokens: number | null
   completionTokens: number | null
   totalTokens: number | null

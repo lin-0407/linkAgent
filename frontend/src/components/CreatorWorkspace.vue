@@ -8,6 +8,7 @@ import {
   disableCreatorContextTerm,
   recordCreatorContextTermFeedback,
   saveCreatorContextTerm,
+  skipCreatorTaskToPreflight,
 } from '@/api/creator'
 import {
   getCurrentDraftVideo,
@@ -182,6 +183,7 @@ const {
 // 任务列表是导航型信息，默认收进弹窗，避免持续挤占创作主流程空间。
 const isTaskManagerOpen = ref(false)
 const isTaskComposerOpen = ref(false)
+const isSkippingToPreflight = ref(false)
 // 任务编辑会临时进入资料页，记录编辑前阶段，避免取消或保存后把用户困在第一阶段。
 const editReturnStep = ref<CreatorWorkStep>('prePublish')
 // 评测域状态迁移至 useCreatorEvaluation
@@ -251,6 +253,7 @@ const currentDraftVideo = ref<DraftVideo | null>(null)
 const currentMediaProcessingStatus = ref<MediaProcessingJob['status'] | null>(null)
 const currentPreflightReviewStatus = ref<PreflightReviewStatus | null>(null)
 const productionPlanReady = ref(false)
+const hasSkippedPlanning = computed(() => Boolean(selectedTask.value?.planningSkipped))
 let currentDraftRefreshGeneration = 0
 const mediaFeatureUnavailableMessage =
   '发布前试映未启用，任务不能进入观众反馈阶段。请先完成媒体配置并开启该能力。'
@@ -265,8 +268,18 @@ type CreatorStepMeta = {
 const creatorStepMetas = computed<CreatorStepMeta[]>(() => {
   const steps: CreatorStepMeta[] = [
     { key: 'task', label: '视频资料', shortLabel: '资料', description: '填写视频基础信息' },
-    { key: 'prePublish', label: '发布方案', shortLabel: '发布', description: '生成发布计划与方案' },
-    { key: 'production', label: '制作蓝图', shortLabel: '制作', description: '拆解制作步骤与工具' },
+    {
+      key: 'prePublish',
+      label: '发布方案',
+      shortLabel: '发布',
+      description: hasSkippedPlanning.value ? '已有成片，已跳过' : '生成发布计划与方案',
+    },
+    {
+      key: 'production',
+      label: '制作蓝图',
+      shortLabel: '制作',
+      description: hasSkippedPlanning.value ? '已有成片，已跳过' : '拆解制作步骤与工具',
+    },
   ]
   if (isMediaFeatureEnabled.value) {
     steps.push({ key: 'preflight', label: '成片试映', shortLabel: '试映', description: '上传成片并完成发布前体检' })
@@ -333,7 +346,9 @@ const hasPrePublishScriptMaterial = computed(
   () => hasFullScriptMaterial.value || hasGeneratedPrePublishDraft.value,
 )
 const canEnterPreflight = computed(() =>
-  hasSelectedTask.value && hasConfirmedPrePublish.value && productionPlanReady.value && isMediaFeatureEnabled.value,
+  hasSelectedTask.value
+    && isMediaFeatureEnabled.value
+    && (hasSkippedPlanning.value || (hasConfirmedPrePublish.value && productionPlanReady.value)),
 )
 const hasReadyPreflightDraft = computed(() => currentDraftVideo.value?.status === 'READY_FOR_REVIEW')
 const hasCompletedPreflightProcessing = computed(
@@ -346,8 +361,7 @@ const canEnterFeedback = computed(() =>
   Boolean(
     selectedTask.value
       && (hasFeedbackResult(selectedTask.value.status)
-        || (hasConfirmedPrePublish.value
-          && productionPlanReady.value
+        || ((hasSkippedPlanning.value || (hasConfirmedPrePublish.value && productionPlanReady.value))
           && isMediaFeatureEnabled.value
           && hasCompletedPreflightReview.value)),
   ),
@@ -549,12 +563,12 @@ async function refreshMediaFeatureAvailability() {
     return
   }
   if (!isMediaFeatureEnabled.value) {
-    activeStep.value = 'production'
+    activeStep.value = task.planningSkipped ? 'task' : 'production'
     errorMessage.value = mediaFeatureUnavailableMessage
     return
   }
   void refreshCurrentDraftVideo(task.taskId)
-  activeStep.value = 'production'
+  activeStep.value = task.planningSkipped ? 'preflight' : 'production'
 }
 
 onBeforeUnmount(() => {
@@ -793,6 +807,9 @@ function creatorStepIndex(stepKey: CreatorStepKey) {
 }
 
 function isCreatorStepCompleted(stepKey: CreatorStepKey) {
+  if ((stepKey === 'prePublish' || stepKey === 'production') && hasSkippedPlanning.value) {
+    return false
+  }
   // 成片试映必须完成媒体探测、预处理和 P0-3 试映，避免页面提前开放发布后流程。
   if (stepKey === 'preflight') {
     return hasCompletedPreflightReview.value
@@ -809,10 +826,10 @@ function canNavigateCreatorStep(stepKey: CreatorStepKey) {
     return Boolean(selectedTask.value || isTaskComposerOpen.value)
   }
   if (stepKey === 'prePublish') {
-    return hasSelectedTask.value
+    return hasSelectedTask.value && !hasSkippedPlanning.value
   }
   if (stepKey === 'production') {
-    return hasSelectedTask.value && hasConfirmedPrePublish.value
+    return hasSelectedTask.value && !hasSkippedPlanning.value && hasConfirmedPrePublish.value
   }
   if (stepKey === 'preflight') {
     return canEnterPreflight.value
@@ -950,8 +967,10 @@ async function selectTask(taskId: string) {
   if (selectedTaskId.value !== task.taskId) return
   await loadOptionalResults(task)
   if (selectedTaskId.value !== task.taskId) return
-  await loadPrePublishWorkflow(taskId)
-  if (selectedTaskId.value !== task.taskId) return
+  if (!task.planningSkipped) {
+    await loadPrePublishWorkflow(taskId)
+    if (selectedTaskId.value !== task.taskId) return
+  }
   activeStep.value = resolveTaskEntryStep(task)
   await refreshUsageStats(1)
   closeTaskManager()
@@ -1052,6 +1071,30 @@ async function handleCreativeOptionConfirmed(taskId: string) {
   if (selectedTaskId.value !== taskId) return
   activeStep.value = 'production'
   successMessage.value = '发布方案已确认，下一步生成制作蓝图。'
+}
+
+async function handleSkipToPreflight(taskId: string) {
+  if (!isMediaFeatureAvailabilityResolved.value) {
+    await refreshMediaFeatureAvailability()
+  }
+  if (!isMediaFeatureEnabled.value) {
+    errorMessage.value = mediaFeatureUnavailableMessage
+    return
+  }
+  isSkippingToPreflight.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    await skipCreatorTaskToPreflight(taskId)
+    await selectTask(taskId)
+    if (selectedTaskId.value !== taskId) return
+    activeStep.value = 'preflight'
+    successMessage.value = '已跳过发布方案和制作蓝图，可以直接上传成片。'
+  } catch (error) {
+    showError(error)
+  } finally {
+    isSkippingToPreflight.value = false
+  }
 }
 
 async function loadOptionalResults(task: CreatorTask) {
@@ -1381,16 +1424,19 @@ async function rebuildFeedbackEvidenceIndex() {
   await refreshUsageStats(1, false)
 }
 
-function requiresPreflight(task: Pick<CreatorTask, 'status'>) {
-  return hasPrePublishResult(task.status) && !hasFeedbackResult(task.status)
+function requiresPreflight(task: Pick<CreatorTask, 'status' | 'planningSkipped'>) {
+  return (task.planningSkipped || hasPrePublishResult(task.status)) && !hasFeedbackResult(task.status)
 }
 
-function resolveTaskEntryStep(task: Pick<CreatorTask, 'status'>): CreatorWorkStep {
+function resolveTaskEntryStep(task: Pick<CreatorTask, 'status' | 'planningSkipped'>): CreatorWorkStep {
   if (hasFeedbackResult(task.status)) {
     return 'report'
   }
   if (task.status === 'FEEDBACK_COLLECTING') {
     return 'feedback'
+  }
+  if (task.planningSkipped) {
+    return 'preflight'
   }
   if (hasPrePublishResult(task.status) && hasConfirmedPrePublish.value) {
     return 'production'
@@ -1399,17 +1445,17 @@ function resolveTaskEntryStep(task: Pick<CreatorTask, 'status'>): CreatorWorkSte
 }
 
 function normalizeReturnStepForTask(
-  task: Pick<CreatorTask, 'status'>,
+  task: Pick<CreatorTask, 'status' | 'planningSkipped'>,
   targetStep: CreatorWorkStep,
 ): CreatorWorkStep {
   // 下游阶段必须由任务状态支撑，避免旧的本地阶段把用户带到不可用页面。
   if (targetStep === 'report' && !hasFeedbackResult(task.status)) {
     return resolveTaskEntryStep(task)
   }
-  if (targetStep === 'feedback' && !hasPrePublishResult(task.status)) {
+  if (targetStep === 'feedback' && !task.planningSkipped && !hasPrePublishResult(task.status)) {
     return resolveTaskEntryStep(task)
   }
-  if (targetStep === 'preflight' && !hasPrePublishResult(task.status)) {
+  if (targetStep === 'preflight' && !task.planningSkipped && !hasPrePublishResult(task.status)) {
     return resolveTaskEntryStep(task)
   }
   if (targetStep === 'production' && !hasPrePublishResult(task.status)) {
@@ -1781,7 +1827,11 @@ provideCreatorWorkspace({
       class="creator-start-screen"
       aria-label="创作台入口"
     >
-      <AiCreationConsole @confirmed="handleCreativeOptionConfirmed" />
+      <AiCreationConsole
+        :skipping-to-preflight="isSkippingToPreflight"
+        @confirmed="handleCreativeOptionConfirmed"
+        @skip-to-preflight="handleSkipToPreflight"
+      />
       <div class="creator-start-actions" aria-label="其他创建方式">
         <button
           v-if="hasTaskHistory"

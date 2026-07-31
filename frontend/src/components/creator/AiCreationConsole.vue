@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { MonitorPlay } from '@lucide/vue'
 import {
   createInteractiveTask,
   getInteractiveTask,
@@ -9,8 +10,15 @@ import { parseJsonArray } from '@/composables/creator/creatorWorkspaceUtils'
 import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import type { InteractiveTask } from '@/types/creator'
 
+const props = withDefaults(defineProps<{
+  skippingToPreflight?: boolean
+}>(), {
+  skippingToPreflight: false,
+})
+
 const emit = defineEmits<{
   confirmed: [taskId: string]
+  skipToPreflight: [taskId: string]
 }>()
 
 const videoTypeOptions = [
@@ -78,7 +86,8 @@ const isBusy = computed(() =>
   isLoadingWorkflow.value ||
   isAligning.value ||
   isGeneratingPlan.value ||
-  isConfirming.value,
+  isConfirming.value ||
+  props.skippingToPreflight,
 )
 const canSubmitIdea = computed(() => form.idea.trim().length >= 10 && !isBusy.value)
 const hasBackgroundContext = computed(() =>
@@ -122,6 +131,7 @@ const canSendFeedback = computed(() =>
   !isBusy.value,
 )
 const statusText = computed(() => {
+  if (props.skippingToPreflight) return '正在进入成片试映...'
   if (isCreating.value) return '正在创建任务...'
   if (isUploading.value) return '正在解析补充资料...'
   if (isAligning.value) return 'AI 正在重新理解...'
@@ -150,6 +160,13 @@ async function submitIdea() {
   } finally {
     isCreating.value = false
   }
+}
+
+function requestSkipToPreflight() {
+  const taskId = interactiveTask.value?.taskId
+  if (!taskId || isBusy.value) return
+  clearMessages()
+  emit('skipToPreflight', taskId)
 }
 
 async function ensureWorkflow() {
@@ -341,6 +358,22 @@ function closePreview() {
         想法对齐
       </button>
     </nav>
+
+    <aside v-if="interactiveTask" class="ai-existing-video-entry" aria-labelledby="existing-video-entry-title">
+      <div>
+        <strong id="existing-video-entry-title">已经做好视频？</strong>
+        <p>跳过想法对齐、发布方案和制作蓝图，直接上传视频进行成片试映。</p>
+      </div>
+      <button
+        type="button"
+        class="ai-existing-video-button"
+        :disabled="isBusy"
+        @click="requestSkipToPreflight"
+      >
+        <MonitorPlay :size="18" :stroke-width="1.8" aria-hidden="true" />
+        {{ props.skippingToPreflight ? '正在进入...' : '直接进入成片试映' }}
+      </button>
+    </aside>
 
     <div class="ai-creation-panel" role="tabpanel">
       <form v-if="activePanel === 'idea'" class="ai-creation-composer" @submit.prevent="submitIdea">

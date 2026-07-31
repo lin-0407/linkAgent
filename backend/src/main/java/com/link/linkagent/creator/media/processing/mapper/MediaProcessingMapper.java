@@ -175,6 +175,28 @@ public interface MediaProcessingMapper {
             """)
     List<MediaProcessingAssetRecord> listAssets(@Param("jobId") String jobId);
 
+    /** 查询版本下全部派生媒体，主动删除时不能只清理最新一次处理结果。 */
+    @Select("""
+            SELECT id, asset_id, job_id, version_id, asset_type, bucket_name, object_key,
+                   content_type, file_size, sequence_no, timestamp_ms, width, height,
+                   duration_ms, create_time, update_time
+            FROM creator_media_processing_asset
+            WHERE version_id = #{versionId}
+              AND is_deleted = 0
+            ORDER BY id ASC
+            """)
+    List<MediaProcessingAssetRecord> listAssetsByVersion(@Param("versionId") String versionId);
+
+    /** OSS 对象确认删除后再隐藏素材，历史处理任务和信号摘要继续保留。 */
+    @Update("""
+            UPDATE creator_media_processing_asset
+            SET is_deleted = 1,
+                update_time = CURRENT_TIMESTAMP
+            WHERE version_id = #{versionId}
+              AND is_deleted = 0
+            """)
+    int markAssetsDeleted(@Param("versionId") String versionId);
+
     @Select("""
             SELECT a.id, a.asset_id, a.job_id, a.version_id, a.asset_type, a.bucket_name,
                    a.object_key, a.content_type, a.file_size, a.sequence_no, a.timestamp_ms,

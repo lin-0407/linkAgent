@@ -197,6 +197,7 @@ class DraftVideoProbeServiceTest {
                 hasAudio,
                 null,
                 status,
+                null,
                 LocalDateTime.now(),
                 LocalDateTime.now()
         );

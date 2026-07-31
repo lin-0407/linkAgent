@@ -79,6 +79,10 @@ export function getCreatorTask(taskId: string) {
   return get<CreatorTask>(`/creator/tasks/${encodeURIComponent(taskId)}`)
 }
 
+export function skipCreatorTaskToPreflight(taskId: string) {
+  return post<CreatorTask>(`/creator/tasks/${encodeURIComponent(taskId)}:skip-to-preflight`)
+}
+
 // ── AI 交互式创作 ──
 
 export function createInteractiveTask(payload: InteractiveTaskCreatePayload) {

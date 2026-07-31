@@ -4,7 +4,7 @@ import jakarta.validation.constraints.Size;
 
 /**
  * 创作复盘报告生成请求。
- * 核心数据从已保存的任务、发布前建议和反馈报告读取，这里只接收本次复盘的业务侧重点。
+ * 核心数据从已保存的发布后视频指标、反馈报告和竞品报告读取，这里只接收本次复盘的业务侧重点。
  */
 public record CreatorReportAnalyzeRequest(
         @Size(max = 2000, message = "自定义复盘指导长度不能超过2000个字符")

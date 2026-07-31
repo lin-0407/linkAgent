@@ -10,6 +10,7 @@ public record CreatorTaskResponse(
         String taskName,
         String videoType,
         String status,
+        boolean planningSkipped,
         LocalDateTime createTime,
         LocalDateTime updateTime,
         List<CreatorMaterialResponse> materials

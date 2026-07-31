@@ -2,10 +2,12 @@ package com.link.linkagent.settings.service;
 
 import com.link.linkagent.creator.feedback.config.CreatorFeedbackRagProperties;
 import com.link.linkagent.knowledge.config.KnowledgeRagProperties;
+import com.link.linkagent.llm.DeepSeekThinkingProperties;
 import com.link.linkagent.llm.LlmCallGuardProperties;
 import com.link.linkagent.memory.SummaryMemoryProperties;
 import com.link.linkagent.settings.dto.ReadonlySettingResponse;
 import com.link.linkagent.settings.dto.RuntimeToggleResponse;
+import com.link.linkagent.settings.dto.RuntimeValueResponse;
 import com.link.linkagent.settings.dto.SettingsStatusResponse;
 import com.link.linkagent.settings.mapper.RuntimeSettingMapper;
 import com.link.linkagent.settings.model.RuntimeSettingKey;
@@ -39,6 +41,7 @@ public class RuntimeSettingService {
     private final SummaryMemoryProperties summaryMemoryProperties;
     private final KnowledgeRagProperties knowledgeRagProperties;
     private final CreatorFeedbackRagProperties creatorFeedbackRagProperties;
+    private final DeepSeekThinkingProperties deepSeekThinkingProperties;
     private final Environment environment;
 
     public RuntimeSettingService(RuntimeSettingMapper runtimeSettingMapper,
@@ -46,23 +49,41 @@ public class RuntimeSettingService {
                                  SummaryMemoryProperties summaryMemoryProperties,
                                  KnowledgeRagProperties knowledgeRagProperties,
                                  CreatorFeedbackRagProperties creatorFeedbackRagProperties,
+                                 DeepSeekThinkingProperties deepSeekThinkingProperties,
                                  Environment environment) {
         this.runtimeSettingMapper = runtimeSettingMapper;
         this.llmCallGuardProperties = llmCallGuardProperties;
         this.summaryMemoryProperties = summaryMemoryProperties;
         this.knowledgeRagProperties = knowledgeRagProperties;
         this.creatorFeedbackRagProperties = creatorFeedbackRagProperties;
+        this.deepSeekThinkingProperties = deepSeekThinkingProperties;
         this.environment = environment;
     }
 
     public SettingsStatusResponse status() {
-        return new SettingsStatusResponse(dynamicToggles(), readonlySettings());
+        return new SettingsStatusResponse(dynamicToggles(), dynamicValues(), readonlySettings());
     }
 
     public void updateToggle(String settingKey, boolean enabled) {
         RuntimeSettingKey key = RuntimeSettingKey.fromKey(settingKey)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "不支持动态修改的设置项: " + settingKey));
+        if (key == RuntimeSettingKey.DEEPSEEK_REASONING_EFFORT) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "该设置项需要使用枚举值接口修改: " + settingKey);
+        }
         runtimeSettingMapper.upsert(key.key(), Boolean.toString(enabled), key.description());
+    }
+
+    public void updateValue(String settingKey, String value) {
+        RuntimeSettingKey key = RuntimeSettingKey.fromKey(settingKey)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "不支持动态修改的设置项: " + settingKey));
+        if (key != RuntimeSettingKey.DEEPSEEK_REASONING_EFFORT) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "该设置项不是可选值设置: " + settingKey);
+        }
+        String normalized = DeepSeekThinkingProperties.normalizeReasoningEffort(value);
+        if (normalized == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "DeepSeek 思考强度只支持 low、high、max");
+        }
+        runtimeSettingMapper.upsert(key.key(), normalized, key.description());
     }
 
     public boolean isLlmGuardEnabled() {
@@ -89,6 +110,24 @@ public class RuntimeSettingService {
         return isEnabled(RuntimeSettingKey.CREATOR_FEEDBACK_RAG_ENABLED, creatorFeedbackRagProperties.isEnabled());
     }
 
+    public boolean isDeepSeekThinkingEnabled() {
+        return isEnabled(RuntimeSettingKey.DEEPSEEK_THINKING_ENABLED, deepSeekThinkingProperties.isEnabled());
+    }
+
+    public String getDeepSeekReasoningEffort() {
+        String defaultValue = deepSeekThinkingProperties.resolvedReasoningEffort();
+        try {
+            return runtimeSettingMapper.findByKey(RuntimeSettingKey.DEEPSEEK_REASONING_EFFORT.key())
+                    .map(RuntimeSettingRecord::getSettingValue)
+                    .map(DeepSeekThinkingProperties::normalizeReasoningEffort)
+                    .filter(value -> value != null)
+                    .orElse(defaultValue);
+        } catch (DataAccessException exception) {
+            log.warn("读取运行期设置失败，回退配置默认值。key={}", RuntimeSettingKey.DEEPSEEK_REASONING_EFFORT.key(), exception);
+            return defaultValue;
+        }
+    }
+
     private List<RuntimeToggleResponse> dynamicToggles() {
         Map<RuntimeSettingKey, Boolean> defaults = dynamicDefaults();
         return List.of(
@@ -97,8 +136,19 @@ public class RuntimeSettingService {
                 toToggle(RuntimeSettingKey.AGENT_STRUCTURED_KERNEL_ENABLED, defaults),
                 toToggle(RuntimeSettingKey.PRE_PUBLISH_AGENT_ENABLED, defaults),
                 toToggle(RuntimeSettingKey.KNOWLEDGE_RAG_RERANK_ENABLED, defaults),
-                toToggle(RuntimeSettingKey.CREATOR_FEEDBACK_RAG_ENABLED, defaults)
+                toToggle(RuntimeSettingKey.CREATOR_FEEDBACK_RAG_ENABLED, defaults),
+                toToggle(RuntimeSettingKey.DEEPSEEK_THINKING_ENABLED, defaults)
         );
+    }
+
+    private List<RuntimeValueResponse> dynamicValues() {
+        return List.of(new RuntimeValueResponse(
+                RuntimeSettingKey.DEEPSEEK_REASONING_EFFORT.key(),
+                RuntimeSettingKey.DEEPSEEK_REASONING_EFFORT.displayName(),
+                getDeepSeekReasoningEffort(),
+                List.of("low", "high", "max"),
+                RuntimeSettingKey.DEEPSEEK_REASONING_EFFORT.description()
+        ));
     }
 
     private RuntimeToggleResponse toToggle(RuntimeSettingKey key, Map<RuntimeSettingKey, Boolean> defaults) {
@@ -118,6 +168,7 @@ public class RuntimeSettingService {
         defaults.put(RuntimeSettingKey.PRE_PUBLISH_AGENT_ENABLED, prePublishAgentDefaultEnabled());
         defaults.put(RuntimeSettingKey.KNOWLEDGE_RAG_RERANK_ENABLED, knowledgeRagProperties.getRerank().isEnabled());
         defaults.put(RuntimeSettingKey.CREATOR_FEEDBACK_RAG_ENABLED, creatorFeedbackRagProperties.isEnabled());
+        defaults.put(RuntimeSettingKey.DEEPSEEK_THINKING_ENABLED, deepSeekThinkingProperties.isEnabled());
         return defaults;
     }
 

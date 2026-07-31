@@ -75,6 +75,9 @@ public class LLMService {
      */
     private final LlmProviderManager llmProviderManager;
 
+    /** DeepSeek Flash 思考参数工厂，保证主请求、回退请求和日志使用同一套模型判断。 */
+    private final DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory;
+
     /**
      * 无参构造器：供 Spring 框架代理（CGLIB）使用，不用于生产环境的实际注入。
      * 所有字段置为 null/默认值，防止误用——真正的初始化由主构造器完成。
@@ -86,6 +89,7 @@ public class LLMService {
         this.llmApiUsageService = null;
         this.objectMapper = new ObjectMapper();
         this.llmProviderManager = null;
+        this.deepSeekThinkingOptionsFactory = null;
     }
 
     /**
@@ -97,6 +101,7 @@ public class LLMService {
      * @param llmApiUsageService API 用量统计服务
      * @param objectMapper Spring Boot 共享 JSON 解析器
      * @param llmProviderManager 多 Provider 回退链管理器，可为 null
+     * @param deepSeekThinkingOptionsFactory DeepSeek Flash 思考参数工厂
      */
     @Autowired
     public LLMService(ChatClient.Builder builder,
@@ -104,13 +109,15 @@ public class LLMService {
                       RuntimeSettingService runtimeSettingService,
                       LlmApiUsageService llmApiUsageService,
                       ObjectMapper objectMapper,
-                      LlmProviderManager llmProviderManager) {
+                      LlmProviderManager llmProviderManager,
+                      DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory) {
         this.chatClient = builder.build();
         this.guardProperties = guardProperties;
         this.runtimeSettingService = runtimeSettingService;
         this.llmApiUsageService = llmApiUsageService;
         this.objectMapper = objectMapper;
         this.llmProviderManager = llmProviderManager;
+        this.deepSeekThinkingOptionsFactory = deepSeekThinkingOptionsFactory;
     }
 
     /**
@@ -126,6 +133,7 @@ public class LLMService {
         this.llmApiUsageService = null;
         this.objectMapper = new ObjectMapper();
         this.llmProviderManager = null;
+        this.deepSeekThinkingOptionsFactory = null;
     }
 
     /**
@@ -192,6 +200,7 @@ public class LLMService {
                     .prompt()
                     .system(systemPrompt)
                     .user(userMessage)
+                    .options(defaultThinkingOptions())
                     .call()
                     .chatResponse();
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
@@ -200,12 +209,13 @@ public class LLMService {
             return result;
         } catch (RuntimeException exception) {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-            recordTextFailure(elapsedMs, exception);
+            recordTextFailure(null, elapsedMs, exception);
             // 方案四：主 Provider 失败时尝试备用 Provider 回退链
             if (llmProviderManager != null && llmProviderManager.hasAvailableProvider()) {
                 log.warn("主 LLM Provider 调用失败，尝试备用 Provider 回退链：{}", exception.getMessage());
                 try {
                     LlmCallResult fallbackResult = llmProviderManager.tryFallback(systemPrompt, userMessage);
+                    recordTextSuccess(fallbackResult);
                     log.info("备用 Provider 回退成功，使用模型：{}", fallbackResult.modelName());
                     return fallbackResult;
                 } catch (RuntimeException fallbackException) {
@@ -241,18 +251,16 @@ public class LLMService {
                     .prompt()
                     .system(systemPrompt)
                     .user(userMessage)
-                    .options(OpenAiChatOptions.builder()
-                            .model(modelName)
-                            .build())
+                    .options(thinkingOptions(modelName))
                     .call()
                     .chatResponse();
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
             LlmCallResult result = toCallResult(chatResponse, elapsedMs);
-            recordTextSuccess(result);
+            recordTextSuccess(result, modelName);
             return result.content();
         } catch (RuntimeException exception) {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-            recordTextFailure(elapsedMs, exception);
+            recordTextFailure(modelName, elapsedMs, exception);
             throw exception;
         }
     }
@@ -314,10 +322,9 @@ public class LLMService {
      */
     public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, String userMessage, Class<T> type) {
         validatePromptLength(systemPrompt, userMessage);
-        // 仅设 responseFormat；model 等默认项由 Spring AI 在模型层合并保留（见 5.4 文档 §9 运行期待确认）
-        OpenAiChatOptions options = OpenAiChatOptions.builder()
-                .responseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null))
-                .build();
+        // 保留 DeepSeek Flash 思考参数，再叠加结构化输出要求，避免 options 覆盖掉思考字段。
+        OpenAiChatOptions options = defaultThinkingOptions();
+        options.setResponseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null));
         BeanOutputConverter<T> outputConverter = new BeanOutputConverter<>(type);
         String structuredUserMessage = appendStructuredFormat(userMessage, outputConverter.getFormat());
         RuntimeException lastError = null;
@@ -344,7 +351,7 @@ public class LLMService {
                 );
             } catch (RuntimeException ex) {
                 long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-                recordTextFailure(elapsedMs, ex);
+                recordTextFailure(null, elapsedMs, ex);
                 // json_object 只保证语法、不保证字段，偶发字段不符或空内容时重试；保留最后一次异常向上抛
                 lastError = ex;
                 log.warn("结构化输出第 {}/{} 次解析失败：{}", attempt, STRUCTURED_MAX_ATTEMPTS, ex.getMessage());
@@ -539,14 +546,28 @@ public class LLMService {
      * 防御性检查避免 NPE 污染主调用链路——用量统计是旁路关注点，不应该影响 LLM 调用本身。
      */
     private void recordTextSuccess(LlmCallResult result) {
+        recordTextSuccess(result, null);
+    }
+
+    private void recordTextSuccess(LlmCallResult result, String requestedModelName) {
         if (llmApiUsageService == null || result == null) {
             return;
         }
+        String modelName = TextUtil.trimToNull(result.modelName());
+        if (modelName == null) {
+            modelName = TextUtil.trimToNull(requestedModelName);
+        }
+        // 日志展示优先保留接口返回的实际模型，但思考等级必须按本次请求指定的模型判断，避免网关返回别名时误记为未发送。
+        String thinkingModelName = TextUtil.trimToNull(requestedModelName);
+        if (thinkingModelName == null) {
+            thinkingModelName = modelName;
+        }
         llmApiUsageService.recordTextSuccess(
-                result.modelName(),
+                modelName,
                 result.promptTokens(),
                 result.completionTokens(),
                 result.totalTokens(),
+                reasoningEffortForLog(thinkingModelName),
                 result.elapsedMs()
         );
     }
@@ -556,11 +577,40 @@ public class LLMService {
      * <p>
      * 只在 llmApiUsageService 已注入时执行——测试场景可选择性注入 mock 用量服务来验证失败记录逻辑。
      */
-    private void recordTextFailure(long elapsedMs, RuntimeException exception) {
+    private void recordTextFailure(String modelName, long elapsedMs, RuntimeException exception) {
         if (llmApiUsageService == null) {
             return;
         }
-        llmApiUsageService.recordTextFailure(elapsedMs, exception);
+        llmApiUsageService.recordTextFailure(
+                effectiveModelName(modelName),
+                reasoningEffortForLog(modelName),
+                elapsedMs,
+                exception
+        );
+    }
+
+    private OpenAiChatOptions defaultThinkingOptions() {
+        return deepSeekThinkingOptionsFactory == null
+                ? OpenAiChatOptions.builder().build()
+                : deepSeekThinkingOptionsFactory.optionsForDefaultModel();
+    }
+
+    private OpenAiChatOptions thinkingOptions(String modelName) {
+        return deepSeekThinkingOptionsFactory == null
+                ? OpenAiChatOptions.builder().model(modelName).build()
+                : deepSeekThinkingOptionsFactory.optionsForModel(modelName);
+    }
+
+    private String effectiveModelName(String modelName) {
+        return deepSeekThinkingOptionsFactory == null
+                ? modelName
+                : deepSeekThinkingOptionsFactory.effectiveModelName(modelName);
+    }
+
+    private String reasoningEffortForLog(String modelName) {
+        return deepSeekThinkingOptionsFactory == null
+                ? null
+                : deepSeekThinkingOptionsFactory.reasoningEffortForLog(modelName);
     }
 
     /**

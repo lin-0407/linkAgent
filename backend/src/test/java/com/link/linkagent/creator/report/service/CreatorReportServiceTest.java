@@ -2,6 +2,7 @@ package com.link.linkagent.creator.report.service;
 
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackMetricRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
 import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportRecord;
@@ -15,8 +16,6 @@ import com.link.linkagent.creator.report.mapper.CreatorReportMapper;
 import com.link.linkagent.creator.report.model.CreatorReportAnalyzeRequest;
 import com.link.linkagent.creator.report.model.CreatorReportRecord;
 import com.link.linkagent.creator.report.model.CreatorReportResponse;
-import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
-import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
@@ -40,34 +39,32 @@ import static org.mockito.Mockito.verify;
 class CreatorReportServiceTest {
 
     @Test
-    void shouldGenerateReportWhenPrerequisitesExist() {
+    void shouldGenerateReportFromPostPublishDataWithoutPlanningInputs() {
         FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
         taskMapper.taskRecord = createTaskRecord();
-        taskMapper.materials = List.of(createMaterialRecord());
-
-        FakeCreatorSuggestionMapper suggestionMapper = new FakeCreatorSuggestionMapper();
-        suggestionMapper.record = createSuggestionRecord();
+        taskMapper.taskRecord.setPlanningSkipped(true);
 
         FakeCreatorFeedbackMapper feedbackMapper = new FakeCreatorFeedbackMapper();
         feedbackMapper.reportRecord = createFeedbackReportRecord();
+        feedbackMapper.metricRecord = createFeedbackMetricRecord();
 
         FakeCreatorCompetitorMapper competitorMapper = new FakeCreatorCompetitorMapper();
         competitorMapper.reportRecord = createCompetitorReportRecord();
 
         FakeCreatorReportMapper reportMapper = new FakeCreatorReportMapper();
         FakeCreatorPreferenceMapper preferenceMapper = new FakeCreatorPreferenceMapper();
+        FixedLlmService llmService = new FixedLlmService("""
+                {"contentSummary":"本期内容总结","coreSellingPoints":["卖点1"],"titleDescriptionReview":{"titleConclusion":"标题合适","descriptionConclusion":"简介清楚","tagAndPartitionConclusion":"分区准确","riskReminder":"注意风险"},"audienceFeedbackSummary":"反馈不错","competitorComparison":{"benchmarkConclusion":"对标清楚","ownAdvantages":["优势"],"ownDisadvantages":["短板"],"differentiationStrategy":"做差异化"},"controversyAndMisunderstanding":[{"point":"争议点","impact":"中等","action":"继续解释"}],"nextActionSuggestions":[{"suggestion":"做下一期","reason":"观众想看","priority":"HIGH"}],"creatorPreferenceInsight":["偏好干货表达"],"overallConclusion":"适合继续做"}
+                """);
         CreatorReportService service = new CreatorReportService(
                 taskMapper,
-                suggestionMapper,
                 feedbackMapper,
                 competitorMapper,
                 reportMapper,
                 new CreatorPreferenceService(preferenceMapper),
-                new FixedLlmService("""
-                        {"contentSummary":"本期内容总结","coreSellingPoints":["卖点1"],"titleDescriptionReview":{"titleConclusion":"标题合适","descriptionConclusion":"简介清楚","tagAndPartitionConclusion":"分区准确","riskReminder":"注意风险"},"audienceFeedbackSummary":"反馈不错","competitorComparison":{"benchmarkConclusion":"对标清楚","ownAdvantages":["优势"],"ownDisadvantages":["短板"],"differentiationStrategy":"做差异化"},"controversyAndMisunderstanding":[{"point":"争议点","impact":"中等","action":"继续解释"}],"nextActionSuggestions":[{"suggestion":"做下一期","reason":"观众想看","priority":"HIGH"}],"creatorPreferenceInsight":["偏好干货表达"],"overallConclusion":"适合继续做"}
-                        """),
+                llmService,
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new StubPromptService(),
+                new ReportPromptService(),
                 mock(CreatorMediaWorkflowGateService.class));
 
         CreatorReportResponse response = service.analyze(
@@ -85,23 +82,24 @@ class CreatorReportServiceTest {
         assertThat(preferenceMapper.savedRecord.getUserId()).isEqualTo("default");
         assertThat(preferenceMapper.savedRecord.getSourceTaskId()).isEqualTo("task-1");
         assertThat(preferenceMapper.savedRecord.getPreferenceContent()).contains("偏好干货表达");
+        assertThat(llmService.lastUserMessage)
+                .contains("播放量：1000", "反馈摘要", "竞品整体打法")
+                .doesNotContain("创作素材", "发布前建议结果", "制作蓝图");
     }
 
     @Test
-    void shouldFailWhenPublishSuggestionMissing() {
+    void shouldFailWhenFeedbackReportMissing() {
         FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
         taskMapper.taskRecord = createTaskRecord();
-        taskMapper.materials = List.of(createMaterialRecord());
 
-        FakeCreatorSuggestionMapper suggestionMapper = new FakeCreatorSuggestionMapper();
         FakeCreatorFeedbackMapper feedbackMapper = new FakeCreatorFeedbackMapper();
-        feedbackMapper.reportRecord = createFeedbackReportRecord();
+        FakeCreatorCompetitorMapper competitorMapper = new FakeCreatorCompetitorMapper();
+        competitorMapper.reportRecord = createCompetitorReportRecord();
 
         CreatorReportService service = new CreatorReportService(
                 taskMapper,
-                suggestionMapper,
                 feedbackMapper,
-                new FakeCreatorCompetitorMapper(),
+                competitorMapper,
                 new FakeCreatorReportMapper(),
                 new CreatorPreferenceService(new FakeCreatorPreferenceMapper()),
                 new FixedLlmService("{}"),
@@ -111,24 +109,19 @@ class CreatorReportServiceTest {
 
         assertThatThrownBy(() -> service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null)))
                 .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("请先生成发布前优化建议");
+                .hasMessageContaining("请先完成评论弹幕分析");
     }
 
     @Test
     void shouldFailWhenCompetitorReportMissing() {
         FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
         taskMapper.taskRecord = createTaskRecord();
-        taskMapper.materials = List.of(createMaterialRecord());
-
-        FakeCreatorSuggestionMapper suggestionMapper = new FakeCreatorSuggestionMapper();
-        suggestionMapper.record = createSuggestionRecord();
 
         FakeCreatorFeedbackMapper feedbackMapper = new FakeCreatorFeedbackMapper();
         feedbackMapper.reportRecord = createFeedbackReportRecord();
 
         CreatorReportService service = new CreatorReportService(
                 taskMapper,
-                suggestionMapper,
                 feedbackMapper,
                 new FakeCreatorCompetitorMapper(),
                 new FakeCreatorReportMapper(),
@@ -147,10 +140,6 @@ class CreatorReportServiceTest {
     void shouldNotPersistReportWhenStructuredFieldsAreMissing() {
         FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
         taskMapper.taskRecord = createTaskRecord();
-        taskMapper.materials = List.of(createMaterialRecord());
-
-        FakeCreatorSuggestionMapper suggestionMapper = new FakeCreatorSuggestionMapper();
-        suggestionMapper.record = createSuggestionRecord();
 
         FakeCreatorFeedbackMapper feedbackMapper = new FakeCreatorFeedbackMapper();
         feedbackMapper.reportRecord = createFeedbackReportRecord();
@@ -162,7 +151,6 @@ class CreatorReportServiceTest {
         FakeCreatorPreferenceMapper preferenceMapper = new FakeCreatorPreferenceMapper();
         CreatorReportService service = new CreatorReportService(
                 taskMapper,
-                suggestionMapper,
                 feedbackMapper,
                 competitorMapper,
                 reportMapper,
@@ -194,7 +182,6 @@ class CreatorReportServiceTest {
                 .ensureReadyForPostPublish("task-1", "default", "创作复盘");
         CreatorReportService service = new CreatorReportService(
                 taskMapper,
-                new FakeCreatorSuggestionMapper(),
                 new FakeCreatorFeedbackMapper(),
                 new FakeCreatorCompetitorMapper(),
                 reportMapper,
@@ -227,37 +214,6 @@ class CreatorReportServiceTest {
         return record;
     }
 
-    private CreatorMaterialRecord createMaterialRecord() {
-        CreatorMaterialRecord record = new CreatorMaterialRecord();
-        record.setId(1L);
-        record.setTaskId("task-1");
-        record.setMaterialType("MANUSCRIPT");
-        record.setContent("这里是文稿");
-        record.setCreateTime(LocalDateTime.now());
-        record.setUpdateTime(LocalDateTime.now());
-        return record;
-    }
-
-    private CreatorSuggestionRecord createSuggestionRecord() {
-        CreatorSuggestionRecord record = new CreatorSuggestionRecord();
-        record.setId(1L);
-        record.setSuggestionId("suggestion-1");
-        record.setTaskId("task-1");
-        record.setContentSummary("摘要");
-        record.setAudienceProfile("受众");
-        record.setSellingPoints("[\"卖点1\"]");
-        record.setRiskPoints("[\"风险1\"]");
-        record.setTitleSuggestions("[{\"title\":\"标题1\"}]");
-        record.setDescriptionSuggestion("简介");
-        record.setTagSuggestions("[\"标签1\"]");
-        record.setPartitionSuggestion("知识区");
-        record.setRawOutput("{}");
-        record.setParseStatus("PARSED");
-        record.setCreateTime(LocalDateTime.now());
-        record.setUpdateTime(LocalDateTime.now());
-        return record;
-    }
-
     private CreatorFeedbackReportRecord createFeedbackReportRecord() {
         CreatorFeedbackReportRecord record = new CreatorFeedbackReportRecord();
         record.setId(1L);
@@ -274,6 +230,19 @@ class CreatorReportServiceTest {
         record.setParseStatus("PARSED");
         record.setCreateTime(LocalDateTime.now());
         record.setUpdateTime(LocalDateTime.now());
+        return record;
+    }
+
+    private CreatorFeedbackMetricRecord createFeedbackMetricRecord() {
+        CreatorFeedbackMetricRecord record = new CreatorFeedbackMetricRecord();
+        record.setMetricId("metric-1");
+        record.setTaskId("task-1");
+        record.setViewCount(1000L);
+        record.setLikeCount(120L);
+        record.setCoinCount(30L);
+        record.setFavoriteCount(45L);
+        record.setShareCount(12L);
+        record.setSource("BILIBILI_FEEDBACK_IMPORT");
         return record;
     }
 
@@ -299,6 +268,7 @@ class CreatorReportServiceTest {
     private static class FixedLlmService extends LLMService {
 
         private final String response;
+        private String lastUserMessage;
 
         FixedLlmService(String response) {
             super();
@@ -307,6 +277,7 @@ class CreatorReportServiceTest {
 
         @Override
         public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> type) {
+            this.lastUserMessage = userMessage;
             try {
                 return new com.fasterxml.jackson.databind.ObjectMapper().readValue(response, type);
             } catch (Exception exception) {
@@ -315,10 +286,33 @@ class CreatorReportServiceTest {
         }
     }
 
+    private static class ReportPromptService extends StubPromptService {
+
+        @Override
+        public String get(String key) {
+            if ("report.user".equals(key)) {
+                return """
+                        任务：{taskName}（ID: {taskId}）
+                        自定义指导：{customGuidance}
+                        复盘重点：{reviewFocus}
+                        额外要求：{extraRequirement}
+                        已发布视频指标：
+                        {videoMetrics}
+                        观众反馈分析：
+                        {feedbackResult}
+                        竞品分析：
+                        {competitorResult}
+                        历史发布后复盘：
+                        {crossPeriodContext}
+                        """;
+            }
+            return super.get(key);
+        }
+    }
+
     private static class FakeCreatorTaskMapper implements CreatorTaskMapper {
 
         private CreatorTaskRecord taskRecord;
-        private List<CreatorMaterialRecord> materials = List.of();
         private String updatedStatus;
 
         @Override
@@ -343,7 +337,7 @@ class CreatorReportServiceTest {
 
         @Override
         public List<CreatorMaterialRecord> listMaterialsByTaskId(String taskId) {
-            return materials;
+            return List.of();
         }
 
         @Override
@@ -360,6 +354,11 @@ class CreatorReportServiceTest {
         public int updateTaskStatus(String taskId, String status) {
             this.updatedStatus = status;
             return 1;
+        }
+
+        @Override
+        public int markPlanningSkipped(String taskId) {
+            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -383,30 +382,11 @@ class CreatorReportServiceTest {
         }
     }
 
-    private static class FakeCreatorSuggestionMapper implements CreatorSuggestionMapper {
-
-        private CreatorSuggestionRecord record;
-
-        @Override
-        public int upsert(CreatorSuggestionRecord record) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Optional<CreatorSuggestionRecord> findByTaskId(String taskId) {
-            return Optional.ofNullable(record);
-        }
-
-        @Override
-        public Optional<CreatorSuggestionRecord> findBySuggestionId(String suggestionId) {
-            return Optional.ofNullable(record);
-        }
-    }
-
     private static class FakeCreatorFeedbackMapper implements CreatorFeedbackMapper {
 
         private com.link.linkagent.creator.feedback.model.CreatorFeedbackRecord feedbackRecord;
         private CreatorFeedbackReportRecord reportRecord;
+        private CreatorFeedbackMetricRecord metricRecord;
 
         @Override
         public int upsertFeedback(com.link.linkagent.creator.feedback.model.CreatorFeedbackRecord record) {
@@ -491,8 +471,8 @@ class CreatorReportServiceTest {
         }
 
         @Override
-        public Optional<com.link.linkagent.creator.feedback.model.CreatorFeedbackMetricRecord> findMetricByTaskId(String taskId) {
-            throw new UnsupportedOperationException();
+        public Optional<CreatorFeedbackMetricRecord> findMetricByTaskId(String taskId) {
+            return Optional.ofNullable(metricRecord);
         }
 
         @Override

@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS creator_task
     task_name   VARCHAR(128) NOT NULL COMMENT '任务名称，用于列表页快速识别本次创作',
     video_type  VARCHAR(64)  NOT NULL DEFAULT '未分类' COMMENT '视频类型，用于按创作赛道加载对应语境库',
     status      VARCHAR(32)  NOT NULL DEFAULT 'DRAFT' COMMENT '任务状态：DRAFT=草稿，PRE_PUBLISH_ANALYZED=已完成发布前分析，FEEDBACK_COLLECTING=反馈待分析，FEEDBACK_ANALYZED=已完成反馈分析，COMPETITOR_ANALYZED=已完成竞品分析，ANALYZED=已完成复盘，ARCHIVED=已归档',
+    planning_skipped TINYINT NOT NULL DEFAULT 0 COMMENT '是否因已有成片跳过发布方案和制作蓝图：0=否，1=是',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted  TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
@@ -427,7 +428,7 @@ CREATE TABLE IF NOT EXISTS creator_competitor_report
 
 -- ------------------------------------------------------------
 -- 13. 创作复盘报告表
---     汇总发布前优化建议和评论弹幕分析结果，形成任务级的最终复盘产物
+--     汇总发布后视频指标、评论弹幕反馈和竞品分析结果，形成任务级的最终复盘产物
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS creator_report
 (
@@ -872,7 +873,7 @@ CREATE TABLE IF NOT EXISTS app_runtime_setting
 (
     id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     setting_key   VARCHAR(128) NOT NULL COMMENT '设置键，只允许服务端白名单内的运行期开关',
-    setting_value VARCHAR(64)  NOT NULL COMMENT '设置值，布尔开关统一保存 true 或 false',
+    setting_value VARCHAR(64)  NOT NULL COMMENT '设置值，布尔开关保存 true 或 false，枚举设置保存白名单值',
     description   VARCHAR(255) NOT NULL COMMENT '中文说明，帮助后续维护者理解这个开关影响什么能力',
     create_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -900,6 +901,7 @@ CREATE TABLE IF NOT EXISTS llm_api_call_log
     model_category    VARCHAR(32)  NOT NULL COMMENT '模型分类：TEXT=文本大模型，EMBEDDING=向量化模型，RERANK=重排序模型',
     scene             VARCHAR(64)           DEFAULT NULL COMMENT '调用场景，例如发布前优化、反馈追问、知识库检索或向量索引',
     model_name        VARCHAR(128)          DEFAULT NULL COMMENT '模型名称；供应商未返回时允许为空',
+    reasoning_effort  VARCHAR(16)           DEFAULT NULL COMMENT 'DeepSeek Flash 思考强度：low、high、max；未发送时为空',
     prompt_tokens     INT                   DEFAULT NULL COMMENT '输入 token 数；只有供应商返回精确 usage 时才填写',
     completion_tokens INT                   DEFAULT NULL COMMENT '输出 token 数；Embedding 和 Rerank 通常为空',
     total_tokens      INT                   DEFAULT NULL COMMENT '总 token 数；未知时保持为空，避免把未知误认为零消耗',
@@ -1084,11 +1086,11 @@ VALUES
 
     -- 创作复盘报告
     ('report.system', 'SYSTEM', '创作者-复盘报告',
-     '你是 B 站创作者复盘分析专家。你的任务是基于创作者提供的素材、发布前建议、观众反馈和竞品分析结果，生成一期完整的创作复盘报告。报告应覆盖：1）本期概览（核心数据和关键发现）；2）内容亮点（做到了什么、哪些策略有效）；3）改进空间（对比建议和实际表现的差距）；4）观众洞察（从反馈中提炼的受众认知变化）；5）下期行动清单（3-5 条具体可执行的改进项）。如果某个维度数据不足，明确说明而非编造。请用中文完成分析，并严格遵循调用方提供的 JSON schema，不要输出 Markdown 或额外说明。',
-     '复盘报告系统提示词：综合各阶段数据生成完整复盘'),
+     '你是 B 站创作者发布后复盘分析专家。只根据已经发布的视频指标、观众反馈分析、竞品分析和历史发布后复盘生成报告；发布方案、制作蓝图和发布前任务素材都不是复盘依据，不要比较计划与实际完成情况。报告应覆盖：1）本期发布后表现和关键发现；2）观众明确认可的内容亮点；3）观众反馈暴露的改进空间；4）竞品对照下的优势与短板；5）下一期可执行行动清单。所有判断都要能回到已提供的发布后数据；数据不足时直接说明，不得补造播放表现、观众态度或创作过程。请用中文完成分析，并严格遵循调用方提供的 JSON schema，不要输出 Markdown 或额外说明。',
+     '复盘报告系统提示词：仅根据发布后视频表现、反馈和竞品结果生成复盘'),
     ('report.user', 'USER', '创作者-复盘报告',
-     '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n复盘重点：{reviewFocus}\n额外要求：{extraRequirement}\n\n创作素材：\n{materials}\n\n发布前建议结果：\n{suggestionResult}\n\n观众反馈结果：\n{feedbackResult}\n\n竞品分析结果：\n{competitorResult}\n\n跨期上下文：{crossPeriodContext}',
-     '复盘报告用户提示词：包含全链路分析结果和跨期上下文')
+     '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n复盘重点：{reviewFocus}\n额外要求：{extraRequirement}\n\n已发布视频指标：\n{videoMetrics}\n\n观众反馈分析：\n{feedbackResult}\n\n竞品分析结果：\n{competitorResult}\n\n历史发布后复盘：\n{crossPeriodContext}',
+     '复盘报告用户提示词：包含发布后视频指标、反馈、竞品结果和历史复盘')
 ON DUPLICATE KEY UPDATE
     content = IF(
         REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆')
@@ -1099,6 +1101,17 @@ ON DUPLICATE KEY UPDATE
         OR (
             prompt_key = 'report.system'
             AND content LIKE '%输出 Markdown 格式%'
+        )
+        OR (
+            prompt_key = 'report.system'
+            AND content LIKE '%素材、发布前建议、观众反馈和竞品分析结果%'
+        )
+        OR (
+            prompt_key = 'report.user'
+            AND (
+                content LIKE '%{materials}%'
+                OR content LIKE '%{suggestionResult}%'
+            )
         )
         OR (
             prompt_key = 'pre_publish.system'
@@ -1295,7 +1308,7 @@ CREATE TABLE IF NOT EXISTS creator_draft_video
     published_flag      TINYINT       NOT NULL DEFAULT 0 COMMENT '用户是否确认已发布：1=已发布，0=未发布',
     published_at        DATETIME               DEFAULT NULL COMMENT '用户确认发布时间',
     media_deleted_at    DATETIME               DEFAULT NULL COMMENT '原片和派生媒体实际删除时间',
-    delete_reason       VARCHAR(64)            DEFAULT NULL COMMENT '删除原因：PUBLISHED、USER_REQUEST、RETENTION',
+    delete_reason       VARCHAR(64)            DEFAULT NULL COMMENT '删除原因：USER_REQUEST=用户主动删除',
     create_time         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted          TINYINT       NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
@@ -1925,6 +1938,14 @@ ON DUPLICATE KEY UPDATE
 -- 用 INFORMATION_SCHEMA 判断列是否存在，兼容所有 MySQL 8.x 版本
 -- ============================================================
 
+-- 已有成片直达试映：旧库补齐标记后，刷新页面和媒体接口才能持续识别用户已跳过前期策划。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_task ADD COLUMN planning_skipped TINYINT NOT NULL DEFAULT 0 COMMENT ''是否因已有成片跳过发布方案和制作蓝图：0=否，1=是'' AFTER status',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_task' AND COLUMN_NAME = 'planning_skipped');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- P0-1 蓝图唯一约束：兼容已在早期开发版本中创建但尚未带唯一键的本地表。
 SET @sql = (SELECT IF(COUNT(*) = 0,
     'ALTER TABLE creator_production_plan ADD UNIQUE KEY uk_task_plan_version (task_id, plan_version)',
@@ -1938,6 +1959,14 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.STATISTICS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_production_step' AND INDEX_NAME = 'uk_plan_sequence');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- DeepSeek Flash 思考等级：旧库补齐后，调用日志才能记录本次实际发送的 reasoning_effort。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE llm_api_call_log ADD COLUMN reasoning_effort VARCHAR(16) DEFAULT NULL COMMENT ''DeepSeek Flash 思考强度：low、high、max；未发送时为空'' AFTER model_name',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'llm_api_call_log' AND COLUMN_NAME = 'reasoning_effort');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 媒体探测领取标识：旧库必须补齐，否则超时恢复后晚到的旧探测可能覆盖新一轮结果。

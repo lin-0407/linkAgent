@@ -60,6 +60,15 @@ public class CreatorTaskController {
         return creatorTaskService.updateTask(taskId, request);
     }
 
+    @PostMapping("/{taskId}:skip-to-preflight")
+    public CreatorTaskResponse skipToPreflight(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            String taskId) {
+        return creatorTaskService.skipToPreflight(taskId);
+    }
+
     @DeleteMapping("/{taskId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteTask(

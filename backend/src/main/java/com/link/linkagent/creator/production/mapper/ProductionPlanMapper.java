@@ -31,6 +31,16 @@ public interface ProductionPlanMapper {
     int countTaskByOwner(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
 
     @Select("""
+            SELECT COUNT(1)
+            FROM creator_task
+            WHERE task_id = #{taskId}
+              AND user_id = #{ownerId}
+              AND planning_skipped = 1
+              AND is_deleted = 0
+            """)
+    int countPlanningSkippedTask(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
+    @Select("""
             SELECT CASE WHEN
                 EXISTS (
                     SELECT 1

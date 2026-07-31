@@ -29,6 +29,7 @@ import java.time.LocalDateTime;
  * @param hasAudio         是否存在音轨
  * @param probeAttemptId   当前媒体探测领取标识
  * @param status           成片状态
+ * @param mediaDeletedAt   原片和派生媒体删除时间；为空表示媒体仍可读取
  * @param createTime       创建时间
  * @param updateTime       最后更新时间
  */
@@ -53,6 +54,7 @@ public record DraftVideoRecord(
         Boolean hasAudio,
         String probeAttemptId,
         String status,
+        LocalDateTime mediaDeletedAt,
         LocalDateTime createTime,
         LocalDateTime updateTime
 ) {

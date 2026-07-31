@@ -1,6 +1,7 @@
 package com.link.linkagent.llm.config.service;
 
 import com.link.linkagent.common.AesGcmUtil;
+import com.link.linkagent.llm.DeepSeekThinkingOptionsFactory;
 import com.link.linkagent.llm.config.mapper.UserLlmConfigMapper;
 import com.link.linkagent.llm.config.model.UserLlmConfigRecord;
 import com.link.linkagent.llm.config.model.UserLlmConfigResponse;
@@ -58,15 +59,20 @@ public class UserLlmConfigService {
      */
     private final String defaultLlmModelName;
 
+    /** 用户配置测试也复用全局 DeepSeek Flash 思考参数，避免测试请求与正式请求行为不一致。 */
+    private final DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory;
+
     public UserLlmConfigService(
             UserLlmConfigMapper mapper,
             @Value("${linkagent.secret.aes-key:}") String aesKey,
             @Value("${spring.ai.openai.base-url:}") String defaultLlmBaseUrl,
-            @Value("${spring.ai.openai.chat.options.model:}") String defaultLlmModelName) {
+            @Value("${spring.ai.openai.chat.options.model:}") String defaultLlmModelName,
+            DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory) {
         this.mapper = mapper;
         this.aesKey = aesKey;
         this.defaultLlmBaseUrl = defaultLlmBaseUrl;
         this.defaultLlmModelName = defaultLlmModelName;
+        this.deepSeekThinkingOptionsFactory = deepSeekThinkingOptionsFactory;
         if (aesKey == null || aesKey.isBlank()) {
             log.warn("linkagent.secret.aes-key 未配置——API Key 加密/解密功能不可用。" +
                     "生产环境必须通过 LINKAGENT_AES_KEY 环境变量注入 Base64 编码的 32 字节密钥。");
@@ -187,9 +193,7 @@ public class UserLlmConfigService {
                     .baseUrl(baseUrl)
                     .apiKey(llmKey)
                     .build();
-            OpenAiChatOptions tempOptions = OpenAiChatOptions.builder()
-                    .model(modelName)
-                    .build();
+            OpenAiChatOptions tempOptions = deepSeekThinkingOptionsFactory.optionsForModel(modelName);
             OpenAiChatModel tempModel = OpenAiChatModel.builder()
                     .openAiApi(tempApi)
                     .defaultOptions(tempOptions)

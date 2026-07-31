@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportRecord;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackMetricRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackReportRecord;
 import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
@@ -14,12 +15,7 @@ import com.link.linkagent.creator.report.model.CreatorReportAnalyzeRequest;
 import com.link.linkagent.creator.report.model.CreatorReportAnalysisOutput;
 import com.link.linkagent.creator.report.model.CreatorReportRecord;
 import com.link.linkagent.creator.report.model.CreatorReportResponse;
-import com.link.linkagent.creator.suggestion.mapper.CreatorSuggestionMapper;
-import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
-import com.link.linkagent.creator.suggestion.service.PrePublishSuggestionService;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
-import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
-import com.link.linkagent.creator.task.model.CreatorMaterialType;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
@@ -38,19 +34,18 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 创作复盘报告服务 —— 创作者工作流终段：聚合发布前优化建议、观众反馈分析和竞品对比结果，
- * 调用 LLM 生成一份结构化的全维度创作复盘报告。
+ * 创作复盘报告服务 —— 创作者工作流终段：聚合发布后视频指标、观众反馈分析和竞品对比结果，
+ * 调用 LLM 生成一份结构化的发布后创作复盘报告。
  *
  * <h3>架构定位</h3>
- * 位于创作者工作流管道的最末端（发布前优化 → 反馈分析/竞品分析 → 复盘报告）。该服务
- * 的角色是"汇总者"而非"入口"——它只读取已落库的前序阶段产物，不直接访问 B 站 API
- * 或原始评论数据，避免把复盘阶段变成新的数据入口，导致职责边界模糊和重复拉取开销。
+ * 位于创作者工作流管道的最末端（实际发布 → 反馈分析/竞品分析 → 复盘报告）。该服务
+ * 的角色是"汇总者"而非"入口"——它只读取已落库的发布后数据，不直接访问 B 站 API
+ * 或原始评论数据，也不读取发布方案、制作蓝图或任务原始素材。
  *
  * <h3>核心设计决策</h3>
  * <ol>
- *   <li><b>前置依赖校验</b>：analyze 方法强制要求发布前建议、反馈分析、竞品分析都已
- *       完成，任一缺失即报错。这是有意为之——缺环节的复盘是片面的，给创作者错误信号
- *       比不给信号更危险。</li>
+ *   <li><b>发布后依赖校验</b>：analyze 方法只强制要求反馈分析和竞品分析完成；视频指标
+ *       允许缺失，因为手动反馈不一定包含播放、点赞等公开指标。</li>
  *   <li><b>跨期趋势对比</b>：复盘报告不仅看当期表现，还会拉取同一创作者近期已完成
  *       复盘的历史报告，让 LLM 识别"反复出现的问题"和"持续进步的方向"，输出比单期
  *       复盘更有深度。</li>
@@ -61,13 +56,9 @@ import java.util.UUID;
  * </ol>
  *
  * @see CreatorPreferenceService 复盘完成后将偏好洞察写入该服务
- * @see PrePublishSuggestionService 复盘依赖的发布前优化建议来源
  */
 @Service
 public class CreatorReportService {
-
-    /** 素材内容在提示词中的最大长度（字符数），防止超长文稿撑爆 LLM 上下文窗口 */
-    private static final int MATERIAL_MAX_LENGTH = 4000;
 
     /** 单个段落（如摘要、总判断等）在提示词中的最大长度，防止某一段落过长挤压其他段落的 token 预算 */
     private static final int SECTION_MAX_LENGTH = 8000;
@@ -80,8 +71,6 @@ public class CreatorReportService {
 
     /** 任务 CRUD 的 DAO 层 */
     private final CreatorTaskMapper creatorTaskMapper;
-    /** 发布前优化建议的 DAO，用于读取前序阶段的产物 */
-    private final CreatorSuggestionMapper creatorSuggestionMapper;
     /** 观众反馈分析报告的 DAO */
     private final CreatorFeedbackMapper creatorFeedbackMapper;
     /** 竞品对比报告的 DAO */
@@ -99,17 +88,15 @@ public class CreatorReportService {
     /** 发布后流程门禁，避免存量前置数据绕过成片试映重新生成复盘报告。 */
     private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
     public CreatorReportService(CreatorTaskMapper creatorTaskMapper,
-                                CreatorSuggestionMapper creatorSuggestionMapper,
                                 CreatorFeedbackMapper creatorFeedbackMapper,
                                 CreatorCompetitorMapper creatorCompetitorMapper,
                                 CreatorReportMapper creatorReportMapper,
                                 CreatorPreferenceService creatorPreferenceService,
-                                 LLMService llmService,
-                                 ObjectMapper objectMapper,
-                                 PromptService promptService,
-                                 CreatorMediaWorkflowGateService mediaWorkflowGateService) {
+                                LLMService llmService,
+                                ObjectMapper objectMapper,
+                                PromptService promptService,
+                                CreatorMediaWorkflowGateService mediaWorkflowGateService) {
         this.creatorTaskMapper = creatorTaskMapper;
-        this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.creatorCompetitorMapper = creatorCompetitorMapper;
         this.creatorReportMapper = creatorReportMapper;
@@ -121,13 +108,13 @@ public class CreatorReportService {
     }
 
     /**
-     * 执行完整的创作复盘分析，聚合发布前建议、反馈分析和竞品对比结果，调用 LLM 生成结构化复盘报告。
+     * 执行完整的创作复盘分析，聚合发布后视频指标、反馈分析和竞品对比结果，调用 LLM 生成结构化复盘报告。
      *
      * <p>执行流程：
      * <ol>
      *   <li>校验任务存在性</li>
-     *   <li>强制校验三道前序关口：发布前建议、反馈分析、竞品分析均需已完成（缺一则抛错）</li>
-     *   <li>拉取任务关联的素材文件</li>
+     *   <li>强制校验两道发布后关口：反馈分析、竞品分析均需已完成（缺一则抛错）</li>
+     *   <li>读取反馈导入时保存的视频公开指标；指标缺失时明确标记，不阻止复盘</li>
      *   <li>构建跨期对比上下文（创作者历史报告摘要）</li>
      *   <li>调用 LLM 生成并校验结构化复盘报告</li>
      *   <li>将强类型输出映射为现有数据库字段，upsert 入库</li>
@@ -135,24 +122,23 @@ public class CreatorReportService {
      *   <li>将任务状态推进到 ANALYZED</li>
      * </ol>
      *
-     * <p>为什么三道关口缺一就必须报错：复盘报告需要综合多维度信息才能给出有价值的分析，
-     * 缺了任何一环（如没有反馈分析），报告就变成了"只看创作者自己说了什么"，失去了
-     * 复盘应有的客观性和全面性，给创作者错误信号比不给信号更危险。
+     * <p>反馈和竞品报告缺一就必须报错，因为它们共同描述发布后的观众反应和同类表现；
+     * 发布方案、制作蓝图和任务原始素材属于发布前决策，不作为复盘依据。
      *
      * @param taskId  创作任务 ID
      * @param request 用户对复盘分析的自定义要求（聚焦方向、补充说明等）
      * @return 结构化的复盘报告
-     * @throws ResponseStatusException 前序产物不存在时抛 BAD_REQUEST，阶段或产物不完整时抛 CONFLICT
+     * @throws ResponseStatusException 发布后分析结果不存在时抛 BAD_REQUEST，阶段或结果不完整时抛 CONFLICT
      */
     @Transactional
     public CreatorReportResponse analyze(String taskId, CreatorReportAnalyzeRequest request) {
         CreatorTaskRecord taskRecord = getTaskReadyForReport(taskId);
-        // 三道前序关口强制校验：缺一不可，保证复盘报告的综合性和客观性
-        CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先生成发布前优化建议"));
+        // 复盘只校验发布后分析结果，已有成片任务无需补造发布方案或制作蓝图。
         CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord.getTaskId());
         CreatorCompetitorReportRecord competitorReportRecord = requireParsedCompetitorReport(taskRecord.getTaskId());
-        List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
+        CreatorFeedbackMetricRecord videoMetricRecord = creatorFeedbackMapper
+                .findMetricByTaskId(taskRecord.getTaskId())
+                .orElse(null);
 
         // 拉取同一创作者最近几期复盘报告摘要，供 LLM 识别"反复出现的问题"和"持续进步的方向"
         String crossPeriodContext = buildCrossPeriodContext(taskRecord);
@@ -162,7 +148,7 @@ public class CreatorReportService {
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "创作复盘报告")) {
             analysisOutput = llmService.chatStructured(
                     buildSystemPrompt(),
-                    buildUserPrompt(taskRecord, materials, suggestionRecord, feedbackReportRecord, competitorReportRecord,
+                    buildUserPrompt(taskRecord, videoMetricRecord, feedbackReportRecord, competitorReportRecord,
                             crossPeriodContext, request),
                     CreatorReportAnalysisOutput.class
             );
@@ -372,12 +358,11 @@ public class CreatorReportService {
     }
 
     /**
-     * 构建复盘报告的用户提示词，将所有前序阶段产物 + 素材 + 跨期对比 + 用户自定义要求
+     * 构建复盘报告的用户提示词，将发布后视频指标、反馈分析、竞品分析、跨期对比和用户要求
      * 拼接为一个完整的 prompt，通过模板渲染确保格式一致。
      *
      * @param taskRecord          当前任务记录
-     * @param materials           任务关联的素材列表
-     * @param suggestionRecord    发布前优化建议
+     * @param videoMetricRecord   反馈导入时保存的发布后视频指标，可能为空
      * @param feedbackReportRecord 观众反馈分析报告
      * @param competitorReportRecord 竞品对比报告
      * @param crossPeriodContext  跨期对比上下文
@@ -385,8 +370,7 @@ public class CreatorReportService {
      * @return 完整的用户提示词字符串
      */
     private String buildUserPrompt(CreatorTaskRecord taskRecord,
-                                   List<CreatorMaterialRecord> materials,
-                                   CreatorSuggestionRecord suggestionRecord,
+                                   CreatorFeedbackMetricRecord videoMetricRecord,
                                    CreatorFeedbackReportRecord feedbackReportRecord,
                                    CreatorCompetitorReportRecord competitorReportRecord,
                                    String crossPeriodContext,
@@ -397,64 +381,37 @@ public class CreatorReportService {
                 "customGuidance", TextUtil.trimToDefault(request.customGuidance(), "未提供"),
                 "reviewFocus", TextUtil.trimToDefault(request.reviewFocus(), "未提供"),
                 "extraRequirement", TextUtil.trimToDefault(request.extraRequirement(), "未提供"),
-                "materials", buildMaterialPrompt(materials),
-                "suggestionResult", buildSuggestionPrompt(suggestionRecord),
+                "videoMetrics", buildVideoMetricPrompt(videoMetricRecord),
                 "feedbackResult", buildFeedbackReportPrompt(feedbackReportRecord),
                 "competitorResult", buildCompetitorReportPrompt(competitorReportRecord),
                 "crossPeriodContext", crossPeriodContext
         ));
     }
 
-    /** 将素材列表格式化为提示词片段，每种素材用中文名称标注，内容做长度截断 */
-    private String buildMaterialPrompt(List<CreatorMaterialRecord> materials) {
-        if (materials.isEmpty()) {
-            return "未提供";
+    /** 视频指标可能未随反馈导入，缺失时明确标记，避免模型补造发布表现。 */
+    private String buildVideoMetricPrompt(CreatorFeedbackMetricRecord record) {
+        if (record == null) {
+            return "未提供（当前反馈数据未包含视频公开指标）";
         }
-        StringBuilder builder = new StringBuilder();
-        for (CreatorMaterialRecord material : materials) {
-            builder.append("\n【")
-                    .append(toChineseMaterialName(material.getMaterialType()))
-                    .append("】\n")
-                    .append(limitSection(material.getContent(), MATERIAL_MAX_LENGTH))
-                    .append("\n");
-        }
-        return builder.toString();
+        return """
+                播放量：%s
+                点赞数：%s
+                投币数：%s
+                收藏数：%s
+                分享数：%s
+                数据来源：%s
+                """.formatted(
+                formatMetricValue(record.getViewCount()),
+                formatMetricValue(record.getLikeCount()),
+                formatMetricValue(record.getCoinCount()),
+                formatMetricValue(record.getFavoriteCount()),
+                formatMetricValue(record.getShareCount()),
+                TextUtil.trimToDefault(record.getSource(), "未提供")
+        );
     }
 
-    /**
-     * 将发布前优化建议格式化为提示词片段。
-     * 每个字段用中文标签标注，空值以"未提供"兜底并做长度截断，防止 null 值和超长文本污染 prompt。
-     */
-    private String buildSuggestionPrompt(CreatorSuggestionRecord record) {
-        return """
-                内容摘要：%s
-                创作者困境：%s
-                目标受众：%s
-                观众钩子：%s
-                内容定位：%s
-                核心卖点：%s
-                风险点：%s
-                标题建议：%s
-                简介建议：%s
-                可执行修改计划：%s
-                标签建议：%s
-                分区建议：%s
-                解析状态：%s
-                """.formatted(
-                normalizeSection(record.getContentSummary()),
-                normalizeSection(record.getCreatorDilemma()),
-                normalizeSection(record.getAudienceProfile()),
-                normalizeSection(record.getAudienceHook()),
-                normalizeSection(record.getContentPositioning()),
-                normalizeSection(record.getSellingPoints()),
-                normalizeSection(record.getRiskPoints()),
-                normalizeSection(record.getTitleSuggestions()),
-                normalizeSection(record.getDescriptionSuggestion()),
-                normalizeSection(record.getActionableRevisionPlan()),
-                normalizeSection(record.getTagSuggestions()),
-                normalizeSection(record.getPartitionSuggestion()),
-                normalizeSection(record.getParseStatus())
-        );
+    private String formatMetricValue(Long value) {
+        return value == null ? "未提供" : value.toString();
     }
 
     /** 将观众反馈分析报告格式化为提示词片段 */
@@ -534,23 +491,6 @@ public class CreatorReportService {
                 maxLength,
                 "\n[内容过长，已截断用于本次复盘]"
         );
-    }
-
-    /** 将素材类型枚举名转换为中文展示名称，未匹配到的类型原样返回（兼容未来新增类型） */
-    private String toChineseMaterialName(String materialType) {
-        if (CreatorMaterialType.TITLE_DRAFT.name().equals(materialType)) {
-            return "标题草稿";
-        }
-        if (CreatorMaterialType.DESCRIPTION_DRAFT.name().equals(materialType)) {
-            return "简介草稿";
-        }
-        if (CreatorMaterialType.MANUSCRIPT.name().equals(materialType)) {
-            return "文稿";
-        }
-        if (CreatorMaterialType.SUBTITLE.name().equals(materialType)) {
-            return "字幕";
-        }
-        return materialType;
     }
 
     /**

@@ -30,6 +30,7 @@ export function createPrePublishLayoutPreviewFixture() {
     taskName: '学校最近下大雨把学校宿舍楼和食堂淹了',
     videoType: '生活记录',
     status: 'PRE_PUBLISH_ANALYZED',
+    planningSkipped: false,
     createTime,
     updateTime,
     materials: [

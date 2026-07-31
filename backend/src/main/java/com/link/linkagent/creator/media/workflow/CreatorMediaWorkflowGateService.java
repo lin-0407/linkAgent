@@ -23,7 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
  * 阶段 7 发布后流程门禁。
  * <p>
  * 成片上传成功不代表已完成发布前检查。反馈、BV 绑定等发布后写入操作必须确认当前成片
- * 已通过 FFprobe、媒体预处理和发布前试映，才能避免任务绕过“确认发布方案 -> 成片试映 -> 实际发布”的主流程。
+ * 已通过 FFprobe、媒体预处理和发布前试映，才能避免任务绕过“成片试映 -> 实际发布”的发布前检查。
  */
 @Service
 public class CreatorMediaWorkflowGateService {
@@ -154,8 +154,8 @@ public class CreatorMediaWorkflowGateService {
     /**
      * 校验成片上传前的发布方案确认事实。
      * <p>
-     * 任务主状态中的 PRE_PUBLISH_ANALYZED 只能说明生成过建议，不能证明用户已经采用；
-     * 这里必须读取最新 PRE_PUBLISH 会话的 CONFIRMED 状态，避免直接 API 从草稿任务发起成片上传。
+     * 普通任务必须读取最新 PRE_PUBLISH 会话的 CONFIRMED 状态；只有用户通过已有成片入口
+     * 显式保存 planning_skipped 后才能跳过，避免直接 API 从普通草稿任务发起成片上传。
      */
     public void ensurePrePublishConfirmed(String taskId, String ownerId, String nextStageName) {
         ensureMediaEnabled(nextStageName);
@@ -164,6 +164,10 @@ public class CreatorMediaWorkflowGateService {
 
     private void requirePrePublishConfirmed(String taskId, String ownerId, String nextStageName) {
         String normalizedTaskId = taskId.trim();
+        // 已有成片任务由用户显式选择跳过前期策划，不能再要求补造发布方案。
+        if (mediaUploadMapper.countPlanningSkippedTask(normalizedTaskId, ownerId) == 1) {
+            return;
+        }
         CreatorWorkflowSessionRecord session = creatorWorkflowMapper.findLatestSession(
                         normalizedTaskId,
                         CreatorWorkflowStage.PRE_PUBLISH.name()

@@ -5,6 +5,14 @@ export interface RuntimeToggle {
   description: string
 }
 
+export interface RuntimeValue {
+  key: string
+  name: string
+  value: string
+  options: string[]
+  description: string
+}
+
 export interface ReadonlySetting {
   key: string
   name: string
@@ -14,6 +22,7 @@ export interface ReadonlySetting {
 
 export interface SettingsStatus {
   dynamicToggles: RuntimeToggle[]
+  dynamicValues: RuntimeValue[]
   readonlySettings: ReadonlySetting[]
 }
 

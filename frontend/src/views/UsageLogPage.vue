@@ -30,10 +30,10 @@ function toLocalDateTimeInput(date: Date) {
 
 function createDefaultFilters(): FilterForm {
   const now = new Date()
-  const startOfDay = new Date(now)
-  startOfDay.setHours(0, 0, 0, 0)
+  const sevenDaysAgo = new Date(now)
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
   return {
-    startTime: toLocalDateTimeInput(startOfDay),
+    startTime: toLocalDateTimeInput(sevenDaysAgo),
     endTime: toLocalDateTimeInput(now),
     modelName: '',
     scene: '',
@@ -271,6 +271,7 @@ onMounted(() => {
               <th scope="col">时间 / 状态</th>
               <th scope="col">业务场景</th>
               <th scope="col">模型</th>
+              <th scope="col">思考</th>
               <th scope="col">类型</th>
               <th scope="col">Tokens</th>
               <th scope="col">耗时</th>
@@ -293,6 +294,12 @@ onMounted(() => {
                 <td>
                   <strong>{{ record.modelName || '未返回模型名' }}</strong>
                   <small>{{ record.scene || '无场景备注' }}</small>
+                </td>
+                <td>
+                  <span v-if="record.reasoningEffort" class="usage-log-reasoning-effort">
+                    {{ record.reasoningEffort }}
+                  </span>
+                  <small v-else>未启用或未发送</small>
                 </td>
                 <td><span class="usage-log-category">{{ categoryLabel(record.modelCategory) }}</span></td>
                 <td>
@@ -322,7 +329,7 @@ onMounted(() => {
                 </td>
               </tr>
               <tr v-if="expandedCallIds.has(record.callId)" class="usage-log-detail-row">
-                <td colspan="7">
+                <td colspan="8">
                   <dl>
                     <div><dt>调用 ID</dt><dd>{{ record.callId }}</dd></div>
                     <div><dt>追踪 ID</dt><dd>{{ record.traceId || '未记录' }}</dd></div>
@@ -330,6 +337,7 @@ onMounted(() => {
                     <div><dt>工作流会话</dt><dd>{{ record.workflowSessionId || '未记录' }}</dd></div>
                     <div><dt>工作流阶段</dt><dd>{{ record.workflowStage || '未记录' }}</dd></div>
                     <div><dt>工作流步骤</dt><dd>{{ record.workflowStepId || '未记录' }}</dd></div>
+                    <div><dt>思考强度</dt><dd>{{ record.reasoningEffort || '未发送' }}</dd></div>
                   </dl>
                   <p v-if="record.errorMessage" class="usage-log-error-message">
                     <strong>失败原因</strong>
@@ -597,7 +605,7 @@ onMounted(() => {
 
 .usage-log-table {
   width: 100%;
-  min-width: 1120px;
+  min-width: 1240px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -620,10 +628,11 @@ onMounted(() => {
 .usage-log-table th:nth-child(1) { width: 184px; }
 .usage-log-table th:nth-child(2) { width: 210px; }
 .usage-log-table th:nth-child(3) { width: 190px; }
-.usage-log-table th:nth-child(4) { width: 110px; }
-.usage-log-table th:nth-child(5) { width: 180px; }
-.usage-log-table th:nth-child(6) { width: 120px; }
-.usage-log-table th:nth-child(7) { width: 70px; }
+.usage-log-table th:nth-child(4) { width: 100px; }
+.usage-log-table th:nth-child(5) { width: 110px; }
+.usage-log-table th:nth-child(6) { width: 180px; }
+.usage-log-table th:nth-child(7) { width: 120px; }
+.usage-log-table th:nth-child(8) { width: 70px; }
 
 .usage-log-row:hover td {
   background: #f4fafc;
@@ -673,6 +682,21 @@ onMounted(() => {
   margin-top: 5px;
   padding: 0 7px;
   border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+}
+
+.usage-log-reasoning-effort {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 22px;
+  align-items: center;
+  margin-top: 0;
+  padding: 0 7px;
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  border-radius: var(--r-pill);
+  font-family: var(--font-code);
   font-size: 11px;
   font-weight: var(--fw-semibold);
 }

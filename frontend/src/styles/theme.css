@@ -5973,6 +5973,66 @@ body {
   box-shadow: 0 1px 3px rgba(23, 32, 51, 0.12);
 }
 
+.ai-existing-video-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-existing-video-entry div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ai-existing-video-entry strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.ai-existing-video-entry p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ai-existing-video-button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 15px;
+  color: #fff;
+  background: var(--accent-strong);
+  border: 1px solid var(--accent-strong);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.ai-existing-video-button:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ai-existing-video-button:focus-visible {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 3px;
+}
+
+.ai-existing-video-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .ai-creation-panel {
   display: grid;
   gap: 14px;
@@ -7251,6 +7311,15 @@ body {
     flex: 1 0 auto;
   }
 
+  .ai-existing-video-entry {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .ai-existing-video-button {
+    width: 100%;
+  }
+
   .ai-creation-panel {
     min-height: 180px;
     padding: 12px;
@@ -7649,25 +7718,21 @@ body {
 }
 
 /* 顶栏在创作台也必须保留一级导航，避免用户进入工作流后失去页面切换入口。 */
-:root {
+:root,
+.surface-root-creator {
   --surface-topbar-height: 60px;
 }
 
-.surface-root-creator {
-  --surface-topbar-height: 54px;
-}
-
 .surface-topbar {
-  grid-template-columns: minmax(260px, 0.95fr) minmax(0, auto) minmax(220px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr) minmax(520px, 620px) minmax(0, 1fr);
+  height: var(--surface-topbar-height);
   min-height: var(--surface-topbar-height);
   gap: 14px;
   padding: 0 20px;
 }
 
 .surface-topbar-creator {
-  grid-template-columns: minmax(300px, 0.9fr) minmax(0, auto) minmax(220px, 0.75fr);
-  gap: 12px;
-  padding: 0 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(520px, 620px) minmax(0, 1fr);
 }
 
 .surface-topbar-left {
@@ -7687,14 +7752,15 @@ body {
 }
 
 .surface-switch {
-  max-width: min(760px, 44vw);
+  width: 100%;
+  max-width: 620px;
   overflow-x: auto;
-  justify-content: flex-start;
+  justify-content: center;
   scrollbar-width: none;
 }
 
 .surface-topbar-creator .surface-switch {
-  max-width: min(620px, 34vw);
+  max-width: 620px;
 }
 
 .surface-switch::-webkit-scrollbar {
@@ -7734,7 +7800,7 @@ body {
 
 @media (max-width: 1180px) {
   .surface-topbar {
-    grid-template-columns: minmax(220px, 0.8fr) minmax(0, auto) minmax(180px, 0.7fr);
+    grid-template-columns: minmax(0, 1fr) minmax(480px, 560px) minmax(0, 1fr);
     gap: 10px;
     padding-inline: 14px;
   }
@@ -7745,7 +7811,7 @@ body {
 
   .surface-switch,
   .surface-topbar-creator .surface-switch {
-    max-width: min(560px, 40vw);
+    max-width: 560px;
   }
 }
 
@@ -7760,6 +7826,7 @@ body {
 
   .surface-topbar {
     grid-template-columns: minmax(0, 1fr) auto;
+    height: auto;
     min-height: auto;
     gap: 8px 10px;
     padding: 8px 10px;

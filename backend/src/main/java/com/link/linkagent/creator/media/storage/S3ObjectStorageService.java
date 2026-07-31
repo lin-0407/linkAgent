@@ -243,15 +243,16 @@ public class S3ObjectStorageService implements ObjectStorageService {
      * 本方法对 NoSuchUploadException 幂等处理：上传已被 OSS 自动清理时，
      * 业务状态仍可安全收敛为 ABORTED。
      *
-     * @param objectKey 对象键
-     * @param uploadId  要取消的 Multipart Upload ID
+     * @param bucketName 对象所在 Bucket
+     * @param objectKey  对象键
+     * @param uploadId   要取消的 Multipart Upload ID
      */
     @Override
-    public void abortMultipartUpload(String objectKey, String uploadId) {
+    public void abortMultipartUpload(String bucketName, String objectKey, String uploadId) {
         try {
             s3Client.abortMultipartUpload(
                     AbortMultipartUploadRequest.builder()
-                            .bucket(properties.getBucket())
+                            .bucket(bucketName)
                             .key(objectKey)
                             .uploadId(uploadId)
                             .build()
@@ -342,11 +343,11 @@ public class S3ObjectStorageService implements ObjectStorageService {
     }
 
     @Override
-    public void deleteObject(String objectKey) {
+    public void deleteObject(String bucketName, String objectKey) {
         try {
             s3Client.deleteObject(
                     DeleteObjectRequest.builder()
-                            .bucket(properties.getBucket())
+                            .bucket(bucketName)
                             .key(objectKey)
                             .build()
             );

@@ -73,6 +73,20 @@ class ProductionPlanGateServiceTest {
     }
 
     @Test
+    void shouldAllowPreflightWhenPlanningWasExplicitlySkipped() {
+        ProductionPlanMapper planMapper = mock(ProductionPlanMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        CreatorSuggestionMapper suggestionMapper = mock(CreatorSuggestionMapper.class);
+        when(planMapper.countPlanningSkippedTask("task-1", "default")).thenReturn(1);
+        ProductionPlanGateService service = new ProductionPlanGateService(
+                planMapper, workflowMapper, suggestionMapper);
+
+        service.ensureReadyForPreflight("task-1", "default");
+
+        verifyNoInteractions(workflowMapper, suggestionMapper);
+    }
+
+    @Test
     void shouldRejectRepositionWhenVideoIsPublishedOrBvIsBound() {
         ProductionPlanMapper planMapper = mock(ProductionPlanMapper.class);
         when(planMapper.countFinalizedPublishingFacts("task-1", "default")).thenReturn(1);

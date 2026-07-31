@@ -130,6 +130,15 @@ agent:
       trigger-message-count: ${SUMMARY_MEMORY_TRIGGER_MESSAGE_COUNT:8}
       retained-message-count: ${SUMMARY_MEMORY_RETAINED_MESSAGE_COUNT:2}
 
+# ========== DeepSeek Flash 思考模式 ==========
+# 只有模型名同时包含 deepseek 和 flash 时，后端才会发送 reasoning_effort / thinking 字段。
+# 默认值直接开启最高思考强度，设置页可以在运行期覆盖这两个值。
+deepseek:
+  thinking:
+    enabled: ${DEEPSEEK_THINKING_ENABLED:true}
+    reasoning-effort: ${DEEPSEEK_REASONING_EFFORT:max}
+    default-model: ${LLM_MODEL:deepseek-chat}
+
 # ========== MyBatis ==========
 mybatis:
   configuration:
@@ -150,8 +159,6 @@ creator:
     # 单视频时长上限毫秒，默认 1800000ms = 30 分钟。
     # P0-1 阶段 ffprobe 探测后生效；P0-0 阶段仅声明不校验。
     max-duration-ms: 1800000
-    # 未发布成片及其派生媒体的保留天数，超期由定时任务清理原片对象。
-    unpublished-retention-days: ${CREATOR_MEDIA_UNPUBLISHED_RETENTION_DAYS:30}
     # ----- 上传子配置 -----
     upload:
       # 单分片目标字节数，默认 16 MiB = 16777216。
