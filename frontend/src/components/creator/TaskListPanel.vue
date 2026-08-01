@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Plus } from '@lucide/vue'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 
 const {
@@ -8,10 +9,19 @@ const {
   statusLabel,
   formatDate,
   openTaskManager,
+  startAiCreationTask,
 } = useCreatorWorkspaceShell()
 </script>
 
 <template>
+  <button
+    type="button"
+    class="creator-primary-button creator-task-new-action"
+    @click="startAiCreationTask"
+  >
+    <Plus :size="17" :stroke-width="1.9" aria-hidden="true" />
+    新建任务
+  </button>
   <div v-if="selectedTask" class="creator-panel compact-panel creator-current-task-card">
     <div class="creator-panel-title">
       <div>
@@ -66,3 +76,14 @@ const {
     </span>
   </button>
 </template>
+
+<style scoped>
+.creator-task-new-action {
+  display: inline-flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+</style>

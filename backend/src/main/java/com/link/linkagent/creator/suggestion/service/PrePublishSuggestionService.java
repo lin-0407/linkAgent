@@ -272,9 +272,25 @@ public class PrePublishSuggestionService {
      */
     @Transactional
     public CreatorSuggestionResponse saveSuggestion(PrePublishSuggestionCandidate candidate) {
+        return saveSuggestion(candidate, null);
+    }
+
+    /**
+     * 工作流结果按会话保存，同一任务的新旧会话即使并行完成也不会互相覆盖。
+     */
+    @Transactional
+    public CreatorSuggestionResponse saveSuggestion(PrePublishSuggestionCandidate candidate,
+                                                     String sessionId) {
         CreatorSuggestionRecord record = candidate.record();
+        record.setSessionId(TextUtil.trimToNull(sessionId));
         creatorSuggestionMapper.upsert(record);
-        return getSuggestion(record.getTaskId());
+        return creatorSuggestionMapper.findBySuggestionId(record.getSuggestionId())
+                .filter(saved -> record.getTaskId().equals(saved.getTaskId()))
+                .map(this::toResponse)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "发布前优化建议保存后读取失败"
+                ));
     }
 
     /**
@@ -287,6 +303,26 @@ public class PrePublishSuggestionService {
         getTaskRecord(taskId);
         CreatorSuggestionRecord record = creatorSuggestionMapper.findByTaskId(taskId.trim())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "发布前优化建议不存在"));
+        return toResponse(record);
+    }
+
+    /**
+     * 页面恢复必须带上工作流会话，不能把同一任务其它会话的方案当作当前结果。
+     */
+    public CreatorSuggestionResponse getSuggestion(String taskId, String sessionId) {
+        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        String normalizedSessionId = TextUtil.trimToNull(sessionId);
+        if (normalizedSessionId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "工作流会话ID不能为空");
+        }
+        CreatorSuggestionRecord record = creatorSuggestionMapper.findByTaskIdAndSessionId(
+                        taskRecord.getTaskId(),
+                        normalizedSessionId
+                )
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "当前工作流会话还没有发布方案"
+                ));
         return toResponse(record);
     }
 

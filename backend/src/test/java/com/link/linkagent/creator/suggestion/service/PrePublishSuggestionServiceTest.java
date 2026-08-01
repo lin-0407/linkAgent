@@ -29,6 +29,33 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PrePublishSuggestionServiceTest {
 
     @Test
+    void shouldBindSavedSuggestionToWorkflowSession() {
+        FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
+        taskMapper.taskRecord = createTaskRecord();
+        FakeCreatorSuggestionMapper suggestionMapper = new FakeCreatorSuggestionMapper();
+        CreatorSuggestionRecord record = new CreatorSuggestionRecord();
+        record.setSuggestionId("suggestion-1");
+        record.setTaskId("task-1");
+        record.setRawOutput("发布方案");
+        record.setParseStatus("RAW_ONLY");
+        PrePublishSuggestionService service = new PrePublishSuggestionService(
+                taskMapper,
+                suggestionMapper,
+                new CreatorPreferenceService(new TrackingCreatorPreferenceMapper()),
+                emptyContextService(),
+                new CapturingLlmService("发布方案"),
+                new ObjectMapper(),
+                new StubPromptService()
+        );
+
+        service.saveSuggestion(new PrePublishSuggestionCandidate(record), "session-1");
+        CreatorSuggestionResponse response = service.getSuggestion("task-1", "session-1");
+
+        assertThat(record.getSessionId()).isEqualTo("session-1");
+        assertThat(response.suggestionId()).isEqualTo("suggestion-1");
+    }
+
+    @Test
     void shouldIncludeHistoricalPreferenceWhenModeUsesHistory() {
         TrackingCreatorPreferenceMapper preferenceMapper = new TrackingCreatorPreferenceMapper();
         preferenceMapper.records = List.of(createPreferenceRecord());
@@ -371,6 +398,13 @@ class PrePublishSuggestionServiceTest {
         @Override
         public Optional<CreatorSuggestionRecord> findByTaskId(String taskId) {
             return Optional.ofNullable(savedRecord);
+        }
+
+        @Override
+        public Optional<CreatorSuggestionRecord> findByTaskIdAndSessionId(String taskId, String sessionId) {
+            return Optional.ofNullable(savedRecord)
+                    .filter(record -> taskId.equals(record.getTaskId()))
+                    .filter(record -> sessionId.equals(record.getSessionId()));
         }
 
         @Override

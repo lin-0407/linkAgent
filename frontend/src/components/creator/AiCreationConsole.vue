@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { MonitorPlay } from '@lucide/vue'
 import {
   createInteractiveTask,
@@ -8,18 +8,25 @@ import {
 } from '@/api/creator'
 import { parseJsonArray } from '@/composables/creator/creatorWorkspaceUtils'
 import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
+import { useCreatorStore, type InteractiveCreationPanel } from '@/stores/creatorStore'
 import type { InteractiveTask } from '@/types/creator'
 
 const props = withDefaults(defineProps<{
   skippingToPreflight?: boolean
+  resumeTaskId?: string
 }>(), {
   skippingToPreflight: false,
+  resumeTaskId: '',
 })
 
 const emit = defineEmits<{
   confirmed: [taskId: string]
   skipToPreflight: [taskId: string]
+  taskCreated: [taskId: string]
+  pendingUploadChange: [pending: boolean]
 }>()
+
+const creatorStore = useCreatorStore()
 
 const videoTypeOptions = [
   '未分类',
@@ -33,8 +40,8 @@ const videoTypeOptions = [
 ]
 
 const form = reactive({
-  idea: '',
-  videoType: '未分类',
+  idea: creatorStore.newInteractiveTaskDraft.idea,
+  videoType: creatorStore.newInteractiveTaskDraft.videoType || '未分类',
 })
 
 const interactiveTask = ref<InteractiveTask | null>(null)
@@ -43,7 +50,10 @@ const errorMessage = ref('')
 const noticeMessage = ref('')
 const isCreating = ref(false)
 const isUploading = ref(false)
-const activePanel = ref<'idea' | 'context' | 'alignment'>('idea')
+const isRestoring = ref(false)
+const generationRequestLocked = ref(false)
+const activePanel = ref<InteractiveCreationPanel>('idea')
+let restoreVersion = 0
 
 const selectedTaskId = computed(() => interactiveTask.value?.taskId ?? '')
 const hasTaskMaterials = computed(() => Boolean(interactiveTask.value))
@@ -57,18 +67,20 @@ const {
   isAnalyzingPrePublish: isGeneratingPlan,
   isConfirmingPrePublish: isConfirming,
   loadWorkflow,
+  syncWorkflow,
   refreshWorkflow,
   alignIntent,
   runAnalyze,
   confirmSuggestion,
   sendSupplement,
   markIntentPending,
+  canSendWorkflowMessage,
+  prePublishAnalyzeUnavailableReason,
+  resetWorkflowState,
   disconnect,
 } = workflowModule
 
-onBeforeUnmount(disconnect)
-
-const uploadedFiles = ref<{ name: string; size: number }[]>([])
+const uploadedFiles = computed(() => interactiveTask.value?.uploadedDocuments ?? [])
 const isDragging = ref(false)
 const previewModalVisible = ref(false)
 const previewFileName = ref('')
@@ -83,6 +95,8 @@ const ALLOWED_EXTENSIONS = [
 const isBusy = computed(() =>
   isCreating.value ||
   isUploading.value ||
+  isRestoring.value ||
+  generationRequestLocked.value ||
   isLoadingWorkflow.value ||
   isAligning.value ||
   isGeneratingPlan.value ||
@@ -120,23 +134,26 @@ const clarificationRequired = computed(() =>
   planGenerationCount.value >= 3 && latestAlignmentSequence.value > latestResultSequence.value,
 )
 const canGeneratePlan = computed(() =>
-  intentReady.value &&
-  !clarificationRequired.value &&
   !isBusy.value &&
-  workflowSession.value?.status !== 'CONFIRMED',
+  workflowSession.value?.status !== 'RUNNING' &&
+  workflowSession.value?.status !== 'CONFIRMED' &&
+  workflowSession.value?.status !== 'CANCELLED',
 )
 const canSendFeedback = computed(() =>
   feedbackDraft.value.trim().length > 0 &&
   Boolean(workflowSession.value) &&
+  canSendWorkflowMessage.value &&
   !isBusy.value,
 )
 const statusText = computed(() => {
+  if (isRestoring.value) return '正在恢复创作现场...'
   if (props.skippingToPreflight) return '正在进入成片试映...'
   if (isCreating.value) return '正在创建任务...'
   if (isUploading.value) return '正在解析补充资料...'
   if (isAligning.value) return 'AI 正在重新理解...'
   if (isGeneratingPlan.value) return '正在生成发布方案...'
   if (isConfirming.value) return '正在确认方案...'
+  if (workflowSession.value?.status === 'RUNNING') return '服务端任务运行中，正在继续接收进度...'
   if (workflowSession.value?.status === 'CONFIRMED') return '发布方案已确认'
   if (clarificationRequired.value) return '需要先说清楚分歧'
   if (suggestion.value) return '发布方案待确认'
@@ -144,6 +161,101 @@ const statusText = computed(() => {
   if (interactiveTask.value) return '可以补充资料并开始对齐'
   return '等待输入想法'
 })
+
+const generationBlockReason = computed(() => {
+  if (!interactiveTask.value) return '请先提交视频想法。'
+  if (isUploading.value) return '补充资料仍在上传，请等待解析完成。'
+  if (isAligning.value) return 'AI 正在更新当前理解，请等待对齐完成。'
+  if (!hasAlignmentResponse.value) return '请先让 AI 说明它对创作想法的理解。'
+  if (!intentReady.value) return '资料或补充信息已经变化，请先重新进行想法对齐。'
+  if (clarificationRequired.value) return '本轮已达到三次生成上限，请先回答 AI 的澄清问题。'
+  if (workflowSession.value?.status === 'RUNNING') return '服务端工作流仍在运行，页面会继续展示进度。'
+  if (workflowSession.value?.status === 'CONFIRMED') return '当前发布方案已经确认。'
+  return prePublishAnalyzeUnavailableReason.value
+})
+
+onMounted(() => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  void restoreInteractiveTask(props.resumeTaskId)
+})
+
+onBeforeUnmount(() => {
+  restoreVersion += 1
+  disconnect()
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  emit('pendingUploadChange', false)
+})
+
+watch(
+  () => props.resumeTaskId,
+  (taskId, previousTaskId) => {
+    if (taskId === previousTaskId || interactiveTask.value?.taskId === taskId) return
+    void restoreInteractiveTask(taskId)
+  },
+)
+
+watch(
+  () => [form.idea, form.videoType] as const,
+  ([idea, videoType]) => {
+    if (!interactiveTask.value) creatorStore.setNewInteractiveTaskDraft(idea, videoType)
+  },
+  { flush: 'sync' },
+)
+
+watch(
+  [activePanel, feedbackDraft],
+  ([panel, draft]) => {
+    const taskId = interactiveTask.value?.taskId
+    if (taskId) creatorStore.setInteractiveTaskDraft(taskId, { activePanel: panel, feedbackDraft: draft })
+  },
+  { flush: 'sync' },
+)
+
+async function restoreInteractiveTask(taskId: string) {
+  const version = ++restoreVersion
+  resetWorkflowState(false)
+  interactiveTask.value = null
+  feedbackDraft.value = ''
+  isRestoring.value = false
+  clearMessages()
+
+  if (!taskId) {
+    form.idea = creatorStore.newInteractiveTaskDraft.idea
+    form.videoType = creatorStore.newInteractiveTaskDraft.videoType || '未分类'
+    activePanel.value = 'idea'
+    return
+  }
+
+  isRestoring.value = true
+  try {
+    const task = await getInteractiveTask(taskId)
+    if (version !== restoreVersion || props.resumeTaskId !== taskId) return
+    interactiveTask.value = task
+    form.idea = task.idea
+    form.videoType = task.videoType || '未分类'
+    creatorStore.setActiveInteractiveTaskId(task.taskId)
+    const savedDraft = creatorStore.interactiveTaskDrafts[task.taskId]
+    feedbackDraft.value = savedDraft?.feedbackDraft ?? ''
+    activePanel.value = isInteractivePanel(savedDraft?.activePanel)
+      ? savedDraft.activePanel
+      : 'context'
+
+    await loadWorkflow({
+      taskId: task.taskId,
+      userId: task.userId,
+      resumeLatest: true,
+    })
+    if (version !== restoreVersion || interactiveTask.value?.taskId !== task.taskId) return
+    if (!savedDraft && hasAlignmentResponse.value) activePanel.value = 'alignment'
+    noticeMessage.value = '已恢复此前的创作输入、对话、生成次数和已上传资料。'
+  } catch (error) {
+    if (version !== restoreVersion) return
+    creatorStore.setActiveInteractiveTaskId(null)
+    showError(error)
+  } finally {
+    if (version === restoreVersion) isRestoring.value = false
+  }
+}
 
 async function submitIdea() {
   if (!canSubmitIdea.value) return
@@ -154,6 +266,13 @@ async function submitIdea() {
       idea: form.idea.trim(),
       videoType: form.videoType || undefined,
     })
+    creatorStore.setActiveInteractiveTaskId(interactiveTask.value.taskId)
+    creatorStore.clearNewInteractiveTaskDraft()
+    creatorStore.setInteractiveTaskDraft(interactiveTask.value.taskId, {
+      activePanel: 'context',
+      feedbackDraft: '',
+    })
+    emit('taskCreated', interactiveTask.value.taskId)
     activePanel.value = 'context'
   } catch (error) {
     showError(error)
@@ -212,23 +331,44 @@ async function sendFeedbackAndAlign() {
 
 async function generatePlan() {
   const task = interactiveTask.value
-  if (!task || !canGeneratePlan.value) return
-  clearMessages()
-  const session = await ensureWorkflow()
-  if (!session) return
-  const result = await runAnalyze({})
-  await refreshWorkflow()
-  if (result) {
-    noticeMessage.value = '发布方案已经生成。你可以确认，也可以继续告诉 AI 哪里不对。'
+  if (generationRequestLocked.value) {
+    errorMessage.value = '发布方案请求已经提交，请等待本轮完成。'
     return
   }
+  if (!task) {
+    errorMessage.value = '请先提交视频想法，再生成发布方案。'
+    return
+  }
+  if (isBusy.value) {
+    errorMessage.value = statusText.value
+    return
+  }
+  generationRequestLocked.value = true
+  clearMessages()
   try {
-    interactiveTask.value = await getInteractiveTask(task.taskId)
-    if (interactiveTask.value.understandingStatus === 'PENDING' || clarificationRequired.value) {
-      noticeMessage.value = 'AI 已停止继续猜，请先回答它刚刚提出的问题。'
+    const latestTask = await getInteractiveTask(task.taskId)
+    if (interactiveTask.value?.taskId !== task.taskId) return
+    interactiveTask.value = latestTask
+    const session = await syncWorkflow()
+    if (!session) {
+      if (!errorMessage.value) errorMessage.value = '工作流会话恢复失败，请重试。'
+      return
     }
+    if (!intentReady.value || clarificationRequired.value) {
+      errorMessage.value = generationBlockReason.value || '当前还不能生成发布方案。'
+      return
+    }
+    const result = await runAnalyze({})
+    await refreshWorkflow()
+    if (result) {
+      noticeMessage.value = '发布方案已经生成。你可以确认，也可以继续告诉 AI 哪里不对。'
+      return
+    }
+    if (!errorMessage.value) errorMessage.value = '发布方案生成失败，请检查当前状态后重试。'
   } catch (error) {
     showError(error)
+  } finally {
+    generationRequestLocked.value = false
   }
 }
 
@@ -243,6 +383,10 @@ async function confirmPlan() {
 async function handleFilesUpload(fileList: FileList | null) {
   const task = interactiveTask.value
   if (!fileList || fileList.length === 0 || !task) return
+  if (isUploading.value) {
+    errorMessage.value = '已有补充资料正在上传，请等待完成后再选择文件。'
+    return
+  }
   const files = Array.from(fileList).filter((file) => {
     if (file.size > MAX_FILE_SIZE) {
       errorMessage.value = `文件“${file.name}”超过 10 MB 限制`
@@ -257,19 +401,26 @@ async function handleFilesUpload(fileList: FileList | null) {
   if (files.length === 0) return
 
   isUploading.value = true
+  const version = restoreVersion
+  emit('pendingUploadChange', true)
   clearMessages()
   try {
     const updatedTask = await uploadContextDocuments(task.taskId, files)
+    if (version !== restoreVersion || interactiveTask.value?.taskId !== task.taskId) return
     interactiveTask.value = updatedTask
-    uploadedFiles.value.push(...files.map((file) => ({ name: file.name, size: file.size })))
     if (workflowSession.value && updatedTask.understandingStatus === 'PENDING') {
       markIntentPending()
       noticeMessage.value = '资料已经变化，需要让 AI 重新说明理解。'
     }
   } catch (error) {
-    showError(error)
+    if (version === restoreVersion && interactiveTask.value?.taskId === task.taskId) {
+      showError(error)
+    }
   } finally {
-    isUploading.value = false
+    if (version === restoreVersion && interactiveTask.value?.taskId === task.taskId) {
+      isUploading.value = false
+      emit('pendingUploadChange', false)
+    }
   }
 }
 
@@ -333,6 +484,17 @@ function closePreview() {
   previewModalVisible.value = false
   previewFileName.value = ''
   previewText.value = ''
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!isUploading.value) return
+  // 浏览器无法恢复尚未完成上传的 File 对象，因此离开前必须触发原生确认。
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
+  return value === 'idea' || value === 'context' || value === 'alignment'
 }
 </script>
 
@@ -430,11 +592,14 @@ function closePreview() {
               <span>{{ isUploading ? '正在解析文件...' : '点击或拖拽上传文件' }}</span>
             </label>
             <ul v-if="uploadedFiles.length" class="uploaded-file-list">
-              <li v-for="file in uploadedFiles" :key="`${file.name}-${file.size}`">
-                <button type="button" class="file-name-btn" @click="openPreview(file.name)">{{ file.name }}</button>
-                <span class="file-size">{{ formatFileSize(file.size) }}</span>
+              <li v-for="file in uploadedFiles" :key="file.documentId">
+                <button type="button" class="file-name-btn" @click="openPreview(file.fileName)">{{ file.fileName }}</button>
+                <span class="file-size">{{ formatFileSize(file.fileSize) }}</span>
               </li>
             </ul>
+            <p v-if="isUploading" class="ai-creation-upload-warning" role="status">
+              本地文件正在上传。请等待解析完成再离开，否则浏览器无法恢复这些文件。
+            </p>
           </div>
           <div class="ai-creation-understanding">
             <button type="button" class="creator-primary-button" :disabled="isBusy" @click="startAlignment">
@@ -495,8 +660,15 @@ function closePreview() {
               <strong>发布方案由你决定什么时候生成</strong>
               <p v-if="clarificationRequired">AI 已停止重复生成，请先回答上面的问题。</p>
               <p v-else>当前上下文已生成 {{ planGenerationCount }}/3 次；你补充新信息后会重新计数。</p>
+              <p v-if="generationBlockReason" class="ai-plan-block-reason">{{ generationBlockReason }}</p>
             </div>
-            <button type="button" class="creator-primary-button" :disabled="!canGeneratePlan" @click="generatePlan">
+            <button
+              type="button"
+              class="creator-primary-button"
+              :disabled="!canGeneratePlan"
+              :title="generationBlockReason"
+              @click="generatePlan"
+            >
               {{ isGeneratingPlan ? '生成中...' : planGenerationCount >= 3 ? '让 AI 先问清楚' : suggestion ? '重新生成发布方案' : '生成发布方案' }}
             </button>
           </div>

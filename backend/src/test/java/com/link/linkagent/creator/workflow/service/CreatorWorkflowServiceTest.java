@@ -42,6 +42,63 @@ import static org.mockito.Mockito.when;
  */
 class CreatorWorkflowServiceTest {
     @Test
+    void shouldResumeLatestSessionUnderTaskScopedLock() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        CreatorWorkflowService service = new CreatorWorkflowService(
+                taskMapper,
+                mock(CreatorSuggestionMapper.class),
+                workflowMapper,
+                mock(CreatorInteractiveMapper.class),
+                mock(CreatorIntentAlignmentService.class),
+                mock(PrePublishSuggestionService.class),
+                mock(CreatorWorkflowEventPublisher.class),
+                mock(LlmApiUsageService.class),
+                mock(LLMService.class),
+                mock(RuntimeSettingService.class),
+                mock(CreatorPreferenceService.class),
+                mock(CreatorProfileService.class),
+                enabledMediaProperties()
+        );
+
+        CreatorTaskRecord taskRecord = new CreatorTaskRecord();
+        taskRecord.setTaskId("task-1");
+        CreatorMaterialRecord materialRecord = new CreatorMaterialRecord();
+        materialRecord.setTaskId("task-1");
+        materialRecord.setMaterialType("MANUSCRIPT");
+        materialRecord.setContent("用于恢复工作流的文稿");
+        CreatorWorkflowSessionRecord sessionRecord = new CreatorWorkflowSessionRecord();
+        sessionRecord.setSessionId("session-1");
+        sessionRecord.setTaskId("task-1");
+        sessionRecord.setStage(CreatorWorkflowStage.PRE_PUBLISH.name());
+        sessionRecord.setStatus(CreatorWorkflowStatus.WAITING_USER_INPUT.name());
+        sessionRecord.setPlanGenerationCount(1);
+
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(taskRecord));
+        when(taskMapper.listMaterialsByTaskId("task-1")).thenReturn(List.of(materialRecord));
+        when(workflowMapper.lockTaskByTaskId("task-1")).thenReturn(Optional.of("task-1"));
+        when(workflowMapper.findLatestSessionForUpdate(
+                "task-1",
+                CreatorWorkflowStage.PRE_PUBLISH.name()
+        )).thenReturn(Optional.of(sessionRecord));
+        when(workflowMapper.listMessages("session-1")).thenReturn(List.of());
+
+        var response = service.startPrePublishWorkflow(
+                "task-1",
+                new com.link.linkagent.creator.workflow.model.CreatorWorkflowStartRequest(null, true)
+        );
+
+        assertThat(response.sessionId()).isEqualTo("session-1");
+        assertThat(response.planGenerationCount()).isEqualTo(1);
+        verify(workflowMapper).lockTaskByTaskId("task-1");
+        verify(workflowMapper, never()).insertSession(org.mockito.ArgumentMatchers.any());
+        verify(workflowMapper, never()).findLatestSession(
+                "task-1",
+                CreatorWorkflowStage.PRE_PUBLISH.name()
+        );
+    }
+
+    @Test
     void shouldCountOnlySuccessfulPlansGeneratedFromTheSameContext() {
         PrePublishAnalyzeRequest request = new PrePublishAnalyzeRequest(
                 "用户原始上下文",

@@ -296,7 +296,8 @@ export function evalResultStatusLabel(status: string) {
 }
 
 export function isPrePublishSuggestionVisible(status: string) {
-  return ['WAITING_CONFIRMATION', 'CONFIRMED'].includes(status)
+  // 重新生成中、失败后或用户继续补充时仍应恢复上一版成功方案，避免刷新后结果消失。
+  return ['WAITING_USER_INPUT', 'RUNNING', 'WAITING_CONFIRMATION', 'CONFIRMED', 'FAILED'].includes(status)
 }
 
 export function hasPrePublishResult(status: string) {

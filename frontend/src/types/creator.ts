@@ -70,6 +70,13 @@ export type CreativeIdeaOption = {
   updateTime: string
 }
 
+export type InteractiveDocument = {
+  documentId: string
+  fileName: string
+  fileSize: number
+  contentType: string
+}
+
 export type InteractiveTask = {
   taskId: string
   sessionId: string
@@ -81,6 +88,8 @@ export type InteractiveTask = {
   parseStatus: string
   /** 用户上传的补充背景资料（从文档中提取的纯文本） */
   backgroundContext: string | null
+  /** 服务端已成功提取的资料元数据，刷新后可恢复列表 */
+  uploadedDocuments: InteractiveDocument[]
   /** AI 对创作者想法的理解摘要 */
   understandingSummary: string | null
   /** 理解状态：NONE / UNDERSTANDING / PENDING / READY / CONFIRMED */
@@ -226,11 +235,24 @@ export type PrePublishDraftResult = {
 
 export type CreatorPreferenceMode = 'USE_HISTORY' | 'IGNORE_HISTORY' | 'EXPERIMENT'
 
+export type PrePublishSettings = {
+  taskId: string
+  preferenceMode: CreatorPreferenceMode
+  creatorPreference: string
+  titleStyle: string
+  extraRequirement: string
+  customGuidance: string
+  updateTime: string | null
+}
+
+export type PrePublishSettingsPayload = Omit<PrePublishSettings, 'taskId' | 'updateTime'>
+
 export type CreatorPreference = {
   id: number
   preferenceId: string
   userId: string
   sourceTaskId: string
+  sourceTaskName: string | null
   sourceReportId: string
   preferenceContent: string
   createTime: string

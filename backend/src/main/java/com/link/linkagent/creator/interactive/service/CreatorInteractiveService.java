@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.interactive.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.interactive.mapper.CreatorInteractiveMapper;
@@ -8,6 +9,7 @@ import com.link.linkagent.creator.interactive.model.CreativeIdeaOptionRecord;
 import com.link.linkagent.creator.interactive.model.CreativeIdeaOptionResponse;
 import com.link.linkagent.creator.interactive.model.CreativeOptionsRegenerateRequest;
 import com.link.linkagent.creator.interactive.model.InteractiveSessionRecord;
+import com.link.linkagent.creator.interactive.model.InteractiveDocumentResponse;
 import com.link.linkagent.creator.interactive.model.InteractiveTaskCreateRequest;
 import com.link.linkagent.creator.interactive.model.InteractiveTaskResponse;
 import com.link.linkagent.creator.task.model.CreatorTaskCreateRequest;
@@ -186,6 +188,7 @@ public class CreatorInteractiveService {
 
         // 用于累积本次请求中新提取的文本，最终通过 mapper 追加到 DB 已有内容之后
         StringBuilder appended = new StringBuilder();
+        List<InteractiveDocumentResponse> uploadedDocuments = new ArrayList<>();
         int extractedCount = 0;
         for (MultipartFile file : files) {
             if (file.isEmpty()) {
@@ -207,6 +210,12 @@ public class CreatorInteractiveService {
             }
             appended.append("【文档：").append(doc.fileName()).append("】\n");
             appended.append(doc.text());
+            uploadedDocuments.add(new InteractiveDocumentResponse(
+                    UUID.randomUUID().toString(),
+                    doc.fileName(),
+                    file.getSize(),
+                    TextUtil.trimToDefault(file.getContentType(), "application/octet-stream")
+            ));
             extractedCount++;
         }
 
@@ -214,7 +223,11 @@ public class CreatorInteractiveService {
             return getInteractiveTask(session.getTaskId());
         }
 
-        creatorInteractiveMapper.appendBackgroundContext(session.getTaskId(), appended.toString());
+        creatorInteractiveMapper.appendBackgroundContext(
+                session.getTaskId(),
+                appended.toString(),
+                writeUploadedDocuments(uploadedDocuments)
+        );
         return getInteractiveTask(session.getTaskId());
     }
 
@@ -967,7 +980,7 @@ public class CreatorInteractiveService {
 
     /**
      * 将会话记录 + 方向卡列表组装为统一的交互任务响应 DTO。
-     * 所有字段直接映射，不做额外转换。
+     * 上传资料元数据在这里从 JSON 还原；损坏的旧值降级为空列表，不能阻断正文和任务恢复。
      */
     private InteractiveTaskResponse toTaskResponse(InteractiveSessionRecord session,
                                                    List<CreativeIdeaOptionResponse> options) {
@@ -981,6 +994,7 @@ public class CreatorInteractiveService {
                 session.getSelectedOptionId(),
                 session.getParseStatus(),
                 session.getBackgroundContext(),
+                readUploadedDocuments(session.getUploadedDocuments()),
                 session.getUnderstandingSummary(),
                 session.getUnderstandingStatus(),
                 session.getCreateTime(),
@@ -1011,6 +1025,34 @@ public class CreatorInteractiveService {
                 record.getCreateTime(),
                 record.getUpdateTime()
         );
+    }
+
+    private String writeUploadedDocuments(List<InteractiveDocumentResponse> documents) {
+        try {
+            return objectMapper.writeValueAsString(documents);
+        } catch (JsonProcessingException exception) {
+            // 元数据写入失败时不追加正文，避免页面显示与实际恢复结果不一致。
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "补充资料元数据保存失败",
+                    exception
+            );
+        }
+    }
+
+    private List<InteractiveDocumentResponse> readUploadedDocuments(String documentsJson) {
+        if (TextUtil.isBlank(documentsJson)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(
+                    documentsJson,
+                    new TypeReference<List<InteractiveDocumentResponse>>() { }
+            );
+        } catch (JsonProcessingException exception) {
+            // 旧数据或局部损坏不应阻断任务恢复，正文仍可继续用于想法对齐。
+            return List.of();
+        }
     }
 
     /**

@@ -22,6 +22,19 @@ import java.util.Optional;
 @Mapper
 public interface CreatorWorkflowMapper {
 
+    /**
+     * 恢复工作流前锁定稳定存在的任务行，避免首次恢复时多个请求同时在空会话范围内创建记录。
+     */
+    @Select("""
+            SELECT task_id
+            FROM creator_task
+            WHERE task_id = #{taskId}
+              AND is_deleted = 0
+            LIMIT 1
+            FOR UPDATE
+            """)
+    Optional<String> lockTaskByTaskId(@Param("taskId") String taskId);
+
     @Insert("""
             INSERT INTO creator_workflow_session (
                 session_id,
@@ -48,6 +61,9 @@ public interface CreatorWorkflowMapper {
             """)
     int insertSession(CreatorWorkflowSessionRecord record);
 
+    /**
+     * 当前会话按创建顺序确定，旧会话晚完成只会更新自身，不能重新变成当前会话。
+     */
     @Select("""
             SELECT id,
                    session_id,
@@ -65,7 +81,7 @@ public interface CreatorWorkflowMapper {
             WHERE task_id = #{taskId}
               AND stage = #{stage}
               AND is_deleted = 0
-            ORDER BY update_time DESC, id DESC
+            ORDER BY id DESC
             LIMIT 1
             """)
     @Results(id = "CreatorWorkflowSessionRecordMap", value = {
@@ -84,6 +100,35 @@ public interface CreatorWorkflowMapper {
     })
     Optional<CreatorWorkflowSessionRecord> findLatestSession(@Param("taskId") String taskId,
                                                              @Param("stage") String stage);
+
+    /**
+     * 在任务行锁已经取得后读取并锁定当前阶段最新创建的会话，保证返回快照不会被并发更新。
+     * 首次创建的串行边界由上面的任务行锁提供，不能只依赖空会话范围的间隙锁。
+     */
+    @Select("""
+            SELECT id,
+                   session_id,
+                   task_id,
+                   stage,
+                   status,
+                   user_id,
+                   confirmed_result_id,
+                   plan_context_hash,
+                   plan_generation_count,
+                   error_message,
+                   create_time,
+                   update_time
+            FROM creator_workflow_session
+            WHERE task_id = #{taskId}
+              AND stage = #{stage}
+              AND is_deleted = 0
+            ORDER BY id DESC
+            LIMIT 1
+            FOR UPDATE
+            """)
+    @ResultMap("CreatorWorkflowSessionRecordMap")
+    Optional<CreatorWorkflowSessionRecord> findLatestSessionForUpdate(@Param("taskId") String taskId,
+                                                                      @Param("stage") String stage);
 
     @Select("""
             SELECT id,

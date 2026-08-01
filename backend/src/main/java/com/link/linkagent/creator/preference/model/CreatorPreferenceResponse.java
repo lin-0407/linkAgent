@@ -7,6 +7,7 @@ public record CreatorPreferenceResponse(
         String preferenceId,
         String userId,
         String sourceTaskId,
+        String sourceTaskName,
         String sourceReportId,
         String preferenceContent,
         LocalDateTime createTime,

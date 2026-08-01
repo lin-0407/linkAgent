@@ -82,7 +82,7 @@ function updateStatusFilter(event: Event) {
             </div>
             <div class="creator-panel-actions">
               <button type="button" class="creator-ghost-button" @click="emit('create')">
-                新建
+                新建任务
               </button>
               <button type="button" class="creator-ghost-button" @click="emit('refresh')">
                 {{ loading ? '读取中' : '刷新' }}

@@ -8,6 +8,7 @@ import type {
   CreatorPreferenceMode,
   CreatorSuggestion,
   CreatorTask,
+  CreatorWorkflowMessage,
   CreatorWorkflowSession,
   CreatorWorkflowStep,
   LlmApiCallPage,
@@ -33,9 +34,18 @@ export type CreatorWorkspacePreferenceOption = {
   description: string
 }
 
-export type CreatorWorkspacePreferenceChip = {
+export type CreatorWorkspaceHistoricalPreferenceItem = {
   text: string
   sourceTaskId: string
+  sourceTaskName: string
+  sourceTime: string
+  rawText: string
+}
+
+export type CreatorWorkspaceHistoricalPreferenceGroup = {
+  key: 'title' | 'length' | 'tone' | 'audience' | 'keyword' | 'avoidance' | 'other'
+  label: string
+  items: CreatorWorkspaceHistoricalPreferenceItem[]
 }
 
 export type CreatorWorkspaceContextTermChip = {
@@ -62,6 +72,7 @@ export interface CreatorWorkspaceShell {
   changeUsagePage: (delta: number) => Promise<void>
   confirmPrePublishResult: () => Promise<void>
   contextTermChips: WorkspaceRef<CreatorWorkspaceContextTermChip[]>
+  creatorPreferencesError: WorkspaceRef<string>
   currentDraftVideo: Ref<DraftVideo | null>
   currentMediaProcessingStatus: Ref<MediaProcessingJob['status'] | null>
   currentPreflightReviewStatus: Ref<PreflightReviewStatus | null>
@@ -93,10 +104,12 @@ export interface CreatorWorkspaceShell {
   hasConfirmedPrePublish: WorkspaceRef<boolean>
   hasFeedbackSampleInput: WorkspaceRef<boolean>
   hasPrePublishPreferenceModeSnapshot: WorkspaceRef<boolean>
+  hasPrePublishSettingsChanges: WorkspaceRef<boolean>
   hasPrePublishScriptMaterial: WorkspaceRef<boolean>
   hasSelectedTask: WorkspaceRef<boolean>
   hasTaskMaterialInput: WorkspaceRef<boolean>
-  historicalPreferenceChips: WorkspaceRef<CreatorWorkspacePreferenceChip[]>
+  historicalPreferenceCount: WorkspaceRef<number>
+  historicalPreferenceGroups: WorkspaceRef<CreatorWorkspaceHistoricalPreferenceGroup[]>
   generatePrePublishManuscriptDraftForCurrentTask: (extraRequirement?: string) => Promise<boolean>
   handleFeedbackFileChange: (event: Event) => void
   importFeedbackFile: () => Promise<void>
@@ -110,9 +123,13 @@ export interface CreatorWorkspaceShell {
   isImportingFeedback: WorkspaceRef<boolean>
   isLoadingCreatorContextTerms: WorkspaceRef<boolean>
   isLoadingCreatorPreferences: WorkspaceRef<boolean>
+  isLoadingPrePublishSettings: WorkspaceRef<boolean>
+  isLoadingWorkflow: WorkspaceRef<boolean>
+  isPreparingPrePublishAnalyze: WorkspaceRef<boolean>
   isLoadingUsageStats: WorkspaceRef<boolean>
   isSavingCreatorContextTerm: WorkspaceRef<boolean>
   isSavingFeedback: WorkspaceRef<boolean>
+  isSavingPrePublishSettings: WorkspaceRef<boolean>
   isSendingWorkflowMessage: WorkspaceRef<boolean>
   isUpdatingTask: WorkspaceRef<boolean>
   lastPreferenceModeLabel: WorkspaceRef<string>
@@ -125,10 +142,16 @@ export interface CreatorWorkspaceShell {
   preferenceModeNote: WorkspaceRef<string>
   preferenceModeOptions: CreatorWorkspacePreferenceOption[]
   prePublishForm: GuidanceModule['prePublishForm']
+  prePublishAnalyzeUnavailableReason: WorkspaceRef<string>
+  prePublishSettingsError: WorkspaceRef<string>
+  prePublishSettingsErrorSource: WorkspaceRef<'load' | 'save' | null>
+  prePublishSettingsSaveState: WorkspaceRef<'idle' | 'saved' | 'error'>
+  reloadCurrentPrePublishSettings: () => Promise<void>
   refreshCurrentDraftVideo: (taskId?: string) => Promise<void>
   refreshUsageStats: (page?: number, reportError?: boolean) => Promise<void>
   runFeedbackAnalyze: () => Promise<void>
   runPrePublishAnalyze: () => Promise<void>
+  saveCurrentPrePublishSettings: (force?: boolean) => Promise<boolean>
   saveContextTermFromSuggestion: (
     term: string,
     termType: CreatorContextTermType,
@@ -141,6 +164,7 @@ export interface CreatorWorkspaceShell {
   showDeveloperTools: WorkspaceRef<boolean>
   shortId: (value: string | null | undefined) => string
   startEditTask: (taskId: string) => Promise<void>
+  startAiCreationTask: () => void
   statusLabel: (status: string) => string
   submitFeedback: () => Promise<void>
   submitTask: () => Promise<void>
@@ -162,10 +186,15 @@ export interface CreatorWorkspaceShell {
   usageTotalPages: WorkspaceRef<number>
   videoTypeOptions: string[]
   workflowRunningStep: WorkspaceRef<CreatorWorkflowStep | null>
+  workflowMessages: WorkspaceRef<CreatorWorkflowMessage[]>
+  workflowMessageDraft: WorkspaceRef<string>
   workflowSession: WorkspaceRef<CreatorWorkflowSession | null>
   workflowSseText: WorkspaceRef<string>
   workflowStatusText: WorkspaceRef<string>
   workflowSteps: WorkspaceRef<CreatorWorkflowStep[]>
+  retryCreatorPreferences: () => Promise<void>
+  sendWorkflowSupplement: () => Promise<void>
+  updateWorkflowMessageDraft: (draft: string) => void
 }
 
 export interface CreatorWorkspaceContext {

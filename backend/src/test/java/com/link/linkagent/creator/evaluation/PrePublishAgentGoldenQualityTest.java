@@ -587,6 +587,13 @@ public class PrePublishAgentGoldenQualityTest {
         }
 
         @Override
+        public Optional<CreatorSuggestionRecord> findByTaskIdAndSessionId(String taskId, String sessionId) {
+            return Optional.ofNullable(savedRecord)
+                    .filter(record -> taskId.equals(record.getTaskId()))
+                    .filter(record -> sessionId.equals(record.getSessionId()));
+        }
+
+        @Override
         public Optional<CreatorSuggestionRecord> findBySuggestionId(String suggestionId) {
             return Optional.ofNullable(savedRecord);
         }

@@ -19,6 +19,7 @@ public class InteractiveSessionRecord {
     private String rawOutput;
     private String parseStatus;
     private String backgroundContext;
+    private String uploadedDocuments;
     private String understandingSummary;
     private String understandingStatus;
     private LocalDateTime createTime;
@@ -110,6 +111,14 @@ public class InteractiveSessionRecord {
 
     public void setBackgroundContext(String backgroundContext) {
         this.backgroundContext = backgroundContext;
+    }
+
+    public String getUploadedDocuments() {
+        return uploadedDocuments;
+    }
+
+    public void setUploadedDocuments(String uploadedDocuments) {
+        this.uploadedDocuments = uploadedDocuments;
     }
 
     public String getUnderstandingSummary() {

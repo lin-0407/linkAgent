@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { onBeforeRouteLeave } from 'vue-router'
 import { ApiError } from '@/api/http'
 import {
   getCreatorTask,
+  getInteractiveTask,
   disableCreatorContextTerm,
   recordCreatorContextTermFeedback,
   saveCreatorContextTerm,
@@ -24,7 +25,10 @@ import CreatorTaskManagerModal from '@/components/creator/CreatorTaskManagerModa
 import CreatorWorkflowMessageModal from '@/components/creator/CreatorWorkflowMessageModal.vue'
 import { createPrePublishLayoutPreviewFixture } from '@/dev/prePublishLayoutPreview'
 import { useCreatorFeedbackEvent } from '@/composables/creator/useCreatorFeedbackEvent'
-import { provideCreatorWorkspace } from '@/composables/creator/useCreatorWorkspaceContext'
+import {
+  provideCreatorWorkspace,
+  type CreatorWorkspaceHistoricalPreferenceGroup,
+} from '@/composables/creator/useCreatorWorkspaceContext'
 import {
   contextTermPolarity,
   contextTermTypeLabel,
@@ -69,10 +73,6 @@ import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
 type CreatorWorkStep = 'prePublish' | 'production' | 'preflight' | 'feedback' | 'report'
 type CreatorStepKey = 'task' | CreatorWorkStep
-type PreferenceChip = {
-  text: string
-  sourceTaskId: string
-}
 type ContextTermOption = {
   value: CreatorContextTermType
   label: string
@@ -108,15 +108,18 @@ const isLayoutPreviewMode =
   import.meta.env.DEV &&
   new URLSearchParams(window.location.search).get('layoutPreview') === 'prepublish'
 
-// 指导词域迁移至 useCreatorGuidance（表单 + guidance 编辑 + localStorage 持久化）
+// 发布前设置由任务接口持久化，反馈指导词仍保留为本机通用配置。
 const guidance = useCreatorGuidance()
 const {
   prePublishForm, feedbackAnalyzeForm,
   guidanceEditorTarget, lastPrePublishPreferenceMode, hasPrePublishPreferenceModeSnapshot,
-  hasTaskGuidanceInput,
+  hasTaskGuidanceInput, hasPrePublishSettingsChanges,
+  isLoadingPrePublishSettings, isSavingPrePublishSettings,
+  prePublishSettingsSaveState, prePublishSettingsError, prePublishSettingsErrorSource,
   loadGuidanceSettings, openGuidanceEditor, closeGuidanceEditor,
   resetCurrentGuidance, resetTaskGuidanceFields,
   markPrePublishGuidanceSubmitted, markFeedbackGuidanceSubmitted,
+  loadTaskPrePublishSettings, saveTaskPrePublishSettings,
 } = guidance
 const preferenceModeOptions: Array<{
   value: CreatorPreferenceMode
@@ -202,7 +205,7 @@ const isGuidanceBackdropPointerDown = ref(false)
 const contextModule = useCreatorContext(errorMessage)
 const {
   creatorPreferences, creatorContextTerms,
-  isLoadingCreatorPreferences, isLoadingCreatorContextTerms,
+  isLoadingCreatorPreferences, creatorPreferencesError, isLoadingCreatorContextTerms,
   isSavingCreatorContextTerm, savingContextTermKey,
   loadCreatorPreferences, loadCreatorContextTerms,
 } = contextModule
@@ -228,15 +231,14 @@ const workflowModule = useCreatorWorkflow(
 )
 const {
   workflowSession, workflowMessages, workflowSteps, workflowMessageDraft,
-  selectedWorkflowMessageId, suggestion, workflowMessageModalOpen,
+  suggestion, workflowMessageModalOpen,
   isAnalyzingPrePublish, isConfirmingPrePublish, isGeneratingPrePublishDraft,
   isLoadingWorkflow, isSendingWorkflowMessage,
   canSendWorkflowMessage, canRunPrePublishAnalyze, canConfirmPrePublish,
-  selectedWorkflowMessage, workflowStatusText,
+  prePublishAnalyzeUnavailableReason, workflowStatusText,
   workflowSseText: liveWorkflowSseText,
   disconnect: closeWorkflowEventSource,
 } = workflowModule
-const workflowMessageListRef = ref<HTMLDivElement | null>(null)
 const workflowSseText = computed(() =>
   isLayoutPreviewMode ? '实时连接' : liveWorkflowSseText.value,
 )
@@ -246,7 +248,11 @@ const hasConfirmedPrePublish = computed(() => {
 })
 // activeStep / restoredTaskId 从 Pinia creatorStore 读取，替代原来的 localStorage + persistWorkspaceState 模式
 const creatorStore = useCreatorStore()
-const { activeStep, restoredTaskId } = storeToRefs(creatorStore)
+const { activeStep, restoredTaskId, activeInteractiveTaskId } = storeToRefs(creatorStore)
+const isPreparingPrePublishAnalyze = ref(false)
+let prePublishAnalyzeAttemptVersion = 0
+const hasPendingInteractiveUpload = ref(false)
+const aiCreationInstance = ref(0)
 const isMediaFeatureEnabled = ref(false)
 const isMediaFeatureAvailabilityResolved = ref(false)
 const currentDraftVideo = ref<DraftVideo | null>(null)
@@ -421,17 +427,84 @@ const isActiveStepReadOnly = computed(() => {
   const matchedIndex = creatorStepMetas.value.findIndex((step) => step.key === activeStep.value)
   return matchedIndex >= 0 && matchedIndex < currentTaskProgressIndex.value
 })
-const historicalPreferenceChips = computed<PreferenceChip[]>(() =>
-  creatorPreferences.value
-    .flatMap((record) =>
-      parseJsonArray(record.preferenceContent).map((item) => ({
-        text: preferenceItemText(item),
-        sourceTaskId: record.sourceTaskId,
-      })),
-    )
-    .filter((item) => item.text.length > 0)
-    .slice(0, 8),
+const historicalPreferenceCategoryOrder = [
+  ['title', '标题风格'],
+  ['length', '长度'],
+  ['tone', '表达语气'],
+  ['audience', '受众'],
+  ['keyword', '关键词'],
+  ['avoidance', '规避项'],
+  ['other', '其它偏好'],
+] as const
+const historicalPreferenceGroups = computed<CreatorWorkspaceHistoricalPreferenceGroup[]>(() => {
+  const sourceTasks = new Map(tasks.value.map((task) => [task.taskId, task]))
+  const grouped = new Map<CreatorWorkspaceHistoricalPreferenceGroup['key'], CreatorWorkspaceHistoricalPreferenceGroup['items']>()
+  const seen = new Set<string>()
+  const records = [...creatorPreferences.value].sort((left, right) =>
+    (right.updateTime || right.createTime).localeCompare(left.updateTime || left.createTime),
+  )
+
+  for (const record of records) {
+    const sourceTask = sourceTasks.get(record.sourceTaskId)
+    for (const rawValue of parseJsonArray(record.preferenceContent)) {
+      if (isRejectedHistoricalPreference(rawValue)) continue
+      const rawText = preferenceItemText(rawValue)
+      for (const text of cleanHistoricalPreferenceText(rawText)) {
+        const category = resolveHistoricalPreferenceCategory(text)
+        const dedupeKey = `${category}:${text.toLocaleLowerCase().replace(/[\s，。；、,.!?！？]/g, '')}`
+        if (!text || seen.has(dedupeKey)) continue
+        seen.add(dedupeKey)
+        const items = grouped.get(category) ?? []
+        items.push({
+          text,
+          sourceTaskId: record.sourceTaskId,
+          sourceTaskName: record.sourceTaskName || sourceTask?.taskName || '历史创作任务',
+          sourceTime: record.updateTime || record.createTime,
+          rawText,
+        })
+        grouped.set(category, items)
+      }
+    }
+  }
+
+  return historicalPreferenceCategoryOrder
+    .map(([key, label]) => ({ key, label, items: grouped.get(key) ?? [] }))
+    .filter((group) => group.items.length > 0)
+})
+const historicalPreferenceCount = computed(() =>
+  historicalPreferenceGroups.value.reduce((count, group) => count + group.items.length, 0),
 )
+
+function cleanHistoricalPreferenceText(rawText: string) {
+  if (!rawText.trim() || /\[(?:REJECTED|DISMISSED)\]/i.test(rawText)) return []
+  return rawText
+    .replace(/\[(?:ADOPTED|MODIFIED|ACCEPTED|PENDING)\]\s*/gi, '')
+    .replace(/(?:任务\s*(?:ID|编号)|taskId)\s*[:：=]?\s*[A-Za-z0-9_-]+/gi, '')
+    .split(/[；;\n]+/)
+    .map((item) => item
+      .replace(/^(?:采用发布前优化建议|已采纳偏好|偏好记录|ADOPTED|MODIFIED)\s*[:：]?\s*/i, '')
+      .replace(/^[，。；、,.:：\s]+|[，。；、,.:：\s]+$/g, '')
+      .trim())
+    .filter(Boolean)
+}
+
+function isRejectedHistoricalPreference(value: unknown) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const status = (value as Record<string, unknown>).status
+  return typeof status === 'string' && /REJECTED|DISMISSED/i.test(status)
+}
+
+function resolveHistoricalPreferenceCategory(
+  text: string,
+): CreatorWorkspaceHistoricalPreferenceGroup['key'] {
+  if (/避免|不要|规避|慎用|禁用|少用|标题党|夸张|敏感/.test(text)) return 'avoidance'
+  if (/长度|长标题|短标题|中等长度|字数|\d+\s*[-—至~]\s*\d+\s*字|[≤≥<>]\s*\d+\s*字/.test(text)) return 'length'
+  if (/受众|观众|人群|用户|读者|粉丝/.test(text)) return 'audience'
+  if (/关键词|标签|热词|搜索词|话题词/.test(text)) return 'keyword'
+  if (/标题|问句|疑问句|数字标题|标题套路/.test(text)) return 'title'
+  if (/语气|语调|表达|口吻|风格|克制|叙事|教程|实用|幽默|专业|网感/.test(text)) return 'tone'
+  return 'other'
+}
 const activeContextTerms = computed(() => creatorContextTerms.value.filter((term) => term.enabled))
 const contextTermChips = computed(() =>
   activeContextTerms.value
@@ -457,28 +530,14 @@ const lastPreferenceModeLabel = computed(
       ?.label ?? '沿用历史偏好',
 )
 const preferenceModeNote = computed(() =>
-  preferenceModeNoteByMode(prePublishForm.preferenceMode, historicalPreferenceChips.value.length),
+  preferenceModeNoteByMode(prePublishForm.preferenceMode, historicalPreferenceCount.value),
 )
 const lastPreferenceModeNote = computed(() =>
   preferenceModeNoteByMode(
     lastPrePublishPreferenceMode.value,
-    historicalPreferenceChips.value.length,
+    historicalPreferenceCount.value,
   ),
 )
-const selectedWorkflowMaterial = computed(() => {
-  const message = selectedWorkflowMessage.value
-  if (
-    !message ||
-    message.detailRefType !== 'MATERIAL' ||
-    !selectedTask.value ||
-    !message.detailRefId
-  ) {
-    return null
-  }
-  return (
-    selectedTask.value.materials.find((item) => String(item.id) === message.detailRefId) ?? null
-  )
-})
 const evalStats = computed(() => {
   const stats = {
     total: evalCases.value.length,
@@ -540,7 +599,6 @@ function loadPrePublishLayoutPreview() {
   workflowSteps.value = fixture.workflowSteps
   creatorPreferences.value = fixture.creatorPreferences
   creatorContextTerms.value = fixture.creatorContextTerms
-  selectedWorkflowMessageId.value = fixture.workflowMessages[0]?.messageId ?? ''
   prePublishForm.preferenceMode = 'USE_HISTORY'
   taskManageMode.value = 'create'
   isTaskComposerOpen.value = true
@@ -580,9 +638,12 @@ function confirmDiscardUnsavedInput(message: string) {
   return !hasUnsavedCurrentTaskInput.value || window.confirm(message)
 }
 
-onBeforeRouteLeave(() =>
-  confirmDiscardUnsavedInput('当前任务还有未保存的输入，离开后会清空。确定继续吗？'),
-)
+onBeforeRouteLeave(() => {
+  if (hasPendingInteractiveUpload.value) {
+    return window.confirm('本地文件仍在上传，离开后浏览器无法恢复这些文件。确定继续吗？')
+  }
+  return confirmDiscardUnsavedInput('当前任务还有未保存的输入，确定离开吗？')
+})
 
 watch(
   () => props.developerMode,
@@ -595,13 +656,6 @@ watch(
     }
     isDeveloperTestOpen.value = false
     workflowMessageModalOpen.value = false
-  },
-)
-
-watch(
-  () => workflowMessages.value.length,
-  () => {
-    void scrollWorkflowMessagesToBottom()
   },
 )
 
@@ -630,15 +684,6 @@ function handleWorkspaceKeydown(event: KeyboardEvent) {
   }
 }
 
-async function scrollWorkflowMessagesToBottom() {
-  await nextTick()
-  const messageList = workflowMessageListRef.value
-  if (!messageList) {
-    return
-  }
-  messageList.scrollTop = messageList.scrollHeight
-}
-
 /** 关闭成功通知（NotificationToast 组件通过 @close 事件触发，定时器由组件内部管理） */
 function closeSuccessToast() {
   successMessage.value = ''
@@ -649,6 +694,13 @@ async function refreshTasks() {
   // 编排：检查是否有待恢复的任务，自动选中
   const targetTask = resolveRefreshTargetTask()
   if (!targetTask) {
+    if (activeInteractiveTaskId.value) {
+      selectedTask.value = null
+      creatorStore.selectedTaskId = null
+      isTaskComposerOpen.value = false
+      activeStep.value = 'task'
+      return
+    }
     resetSelectedWorkspace()
     creatorStore.selectedTaskId = null
     return
@@ -682,6 +734,7 @@ async function submitTask() {
   const task = await taskModule.submitTask()
   if (!task) return
   // 编排层：跨域操作 + UI 状态
+  creatorStore.setActiveInteractiveTaskId(null)
   resetTaskGuidanceFields()
   resetGeneratedTaskResults()
   resetTaskLocalDrafts()
@@ -691,6 +744,7 @@ async function submitTask() {
   await Promise.all([
     loadCreatorPreferences(task.userId),
     loadCreatorContextTerms(task.userId, task.videoType),
+    loadTaskPrePublishSettings(task.taskId),
   ])
   await loadPrePublishWorkflow(task.taskId)
   await refreshTasks()
@@ -725,16 +779,38 @@ async function updateTask() {
 }
 
 function startCreateTask() {
+  if (hasPendingInteractiveUpload.value) {
+    if (!window.confirm('本地文件仍在上传，改为手动新建后浏览器无法恢复这些文件。确定继续吗？')) return
+  }
   if (!confirmDiscardUnsavedInput('当前任务还有未保存的输入，新建任务后会清空。确定继续吗？')) {
     return
   }
   taskModule.startCreateTask()
+  creatorStore.setActiveInteractiveTaskId(null)
   taskManageMode.value = 'create'
   isTaskComposerOpen.value = true
   pendingDeleteTask.value = null
   errorMessage.value = ''
   successMessage.value = ''
   activeStep.value = 'task'
+  closeTaskManager()
+}
+
+function startAiCreationTask() {
+  if (hasPendingInteractiveUpload.value) {
+    if (!window.confirm('本地文件仍在上传，新建任务后浏览器无法恢复这些文件。确定继续吗？')) return
+  }
+  if (!confirmDiscardUnsavedInput('当前任务还有未保存的输入，确定新建另一项创作任务吗？')) {
+    return
+  }
+  resetSelectedWorkspace()
+  creatorStore.setActiveInteractiveTaskId(null)
+  creatorStore.clearNewInteractiveTaskDraft()
+  restoredTaskId.value = ''
+  hasPendingInteractiveUpload.value = false
+  aiCreationInstance.value += 1
+  errorMessage.value = ''
+  successMessage.value = ''
   closeTaskManager()
 }
 
@@ -918,12 +994,25 @@ async function confirmDeleteTask() {
   if (pendingDeleteTask.value?.taskId === targetTaskId) {
     return
   }
+  if (activeInteractiveTaskId.value === targetTaskId) {
+    creatorStore.setActiveInteractiveTaskId(null)
+    creatorStore.clearInteractiveTaskDraft(targetTaskId)
+  }
+  creatorStore.clearWorkflowMessageDraft(targetTaskId)
   // 编排：删除成功后补充 toast，并刷新一次主壳状态，确保选中任务和历史列表保持一致。
   successMessage.value = '任务已删除，列表会自动刷新。'
   await refreshTasks()
 }
 
 async function selectTask(taskId: string) {
+  if (activeInteractiveTaskId.value === taskId && !hasPendingInteractiveUpload.value) {
+    closeTaskManager()
+    return
+  }
+  if (hasPendingInteractiveUpload.value) {
+    const leaveUpload = window.confirm('本地文件仍在上传，切换任务后浏览器无法恢复这些文件。确定继续吗？')
+    if (!leaveUpload) return
+  }
   if (selectedTaskId.value === taskId && !hasUnsavedCurrentTaskInput.value) {
     closeTaskManager()
     return
@@ -938,6 +1027,23 @@ async function selectTask(taskId: string) {
   successMessage.value = ''
   const task = await taskModule.loadTask(taskId)
   if (!task) return
+  prePublishAnalyzeAttemptVersion += 1
+  isPreparingPrePublishAnalyze.value = false
+
+  if (task.status === 'DRAFT') {
+    try {
+      await getInteractiveTask(task.taskId)
+      if (selectedTaskId.value !== task.taskId) return
+      openInteractiveTask(task.taskId)
+      return
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 404)) {
+        showError(error)
+        return
+      }
+    }
+  }
+  creatorStore.setActiveInteractiveTaskId(null)
 
   resultModalTarget.value = null
   pendingDeleteTask.value = null
@@ -962,6 +1068,7 @@ async function selectTask(taskId: string) {
   await Promise.all([
     loadCreatorPreferences(task.userId),
     loadCreatorContextTerms(task.userId, task.videoType),
+    loadTaskPrePublishSettings(task.taskId),
     refreshCurrentDraftVideo(task.taskId),
   ])
   if (selectedTaskId.value !== task.taskId) return
@@ -973,6 +1080,24 @@ async function selectTask(taskId: string) {
   }
   activeStep.value = resolveTaskEntryStep(task)
   await refreshUsageStats(1)
+  closeTaskManager()
+}
+
+function openInteractiveTask(taskId: string) {
+  workflowModule.resetWorkflowState()
+  feedbackModule.resetFeedbackData()
+  resetTaskGuidanceFields()
+  resetTaskLocalDrafts()
+  selectedTask.value = null
+  taskModule.resetTaskForm()
+  creatorStore.selectedTaskId = null
+  creatorStore.setActiveInteractiveTaskId(taskId)
+  restoredTaskId.value = ''
+  isTaskComposerOpen.value = false
+  activeStep.value = 'task'
+  pendingDeleteTask.value = null
+  errorMessage.value = ''
+  successMessage.value = ''
   closeTaskManager()
 }
 
@@ -1067,6 +1192,9 @@ async function handleProductionPlanRegenerated() {
 }
 
 async function handleCreativeOptionConfirmed(taskId: string) {
+  creatorStore.setActiveInteractiveTaskId(null)
+  creatorStore.clearInteractiveTaskDraft(taskId)
+  creatorStore.clearWorkflowMessageDraft(taskId)
   await selectTask(taskId)
   if (selectedTaskId.value !== taskId) return
   activeStep.value = 'production'
@@ -1086,6 +1214,9 @@ async function handleSkipToPreflight(taskId: string) {
   successMessage.value = ''
   try {
     await skipCreatorTaskToPreflight(taskId)
+    creatorStore.setActiveInteractiveTaskId(null)
+    creatorStore.clearInteractiveTaskDraft(taskId)
+    creatorStore.clearWorkflowMessageDraft(taskId)
     await selectTask(taskId)
     if (selectedTaskId.value !== taskId) return
     activeStep.value = 'preflight'
@@ -1095,6 +1226,16 @@ async function handleSkipToPreflight(taskId: string) {
   } finally {
     isSkippingToPreflight.value = false
   }
+}
+
+function handleInteractiveTaskCreated(taskId: string) {
+  creatorStore.setActiveInteractiveTaskId(taskId)
+  restoredTaskId.value = ''
+  void taskModule.refreshTasks()
+}
+
+function handleInteractiveUploadState(pending: boolean) {
+  hasPendingInteractiveUpload.value = pending
 }
 
 async function loadOptionalResults(task: CreatorTask) {
@@ -1209,6 +1350,43 @@ async function loadPrePublishWorkflow(taskId: string, resumeLatest = true) {
   })
 }
 
+async function saveCurrentPrePublishSettings(force = false) {
+  const taskId = selectedTaskId.value
+  if (!taskId) {
+    errorMessage.value = '请先选择创作任务，再保存本次设置。'
+    return false
+  }
+  if (isLoadingPrePublishSettings.value) {
+    errorMessage.value = '正在恢复当前任务的发布前设置，请稍候再保存。'
+    return false
+  }
+  if (isSavingPrePublishSettings.value) {
+    errorMessage.value = '本次设置正在保存，请等待完成。'
+    return false
+  }
+  const saved = await saveTaskPrePublishSettings(taskId, force)
+  if (selectedTaskId.value !== taskId) return false
+  if (!saved) {
+    errorMessage.value = prePublishSettingsError.value || '本次设置保存失败，请重试。'
+    return false
+  }
+  successMessage.value = '本次发布前设置已保存。'
+  return true
+}
+
+async function retryCreatorPreferences() {
+  await loadCreatorPreferences(selectedTask.value?.userId || 'default')
+}
+
+async function reloadCurrentPrePublishSettings() {
+  const taskId = selectedTaskId.value
+  if (!taskId) return
+  const loaded = await loadTaskPrePublishSettings(taskId)
+  if (!loaded && selectedTaskId.value === taskId) {
+    errorMessage.value = prePublishSettingsError.value || '发布前设置读取失败，请重试。'
+  }
+}
+
 async function refreshPrePublishWorkflowMessages() {
   if (!selectedTaskId.value) return
   if (!workflowSession.value) {
@@ -1239,7 +1417,6 @@ async function generatePrePublishManuscriptDraftForCurrentTask(extraRequirement 
     if (selectedTaskId.value !== result.taskId) return false
     selectedTask.value = task
     await refreshUsageStats(1, false)
-    await scrollWorkflowMessagesToBottom()
     successMessage.value = 'AI 已补全文稿草稿，可以继续补充修改要求或生成发布方案。'
     return true
   } catch (error) {
@@ -1249,19 +1426,44 @@ async function generatePrePublishManuscriptDraftForCurrentTask(extraRequirement 
 }
 
 async function runPrePublishAnalyze() {
-  if (!selectedTaskId.value) return
+  if (isPreparingPrePublishAnalyze.value || isAnalyzingPrePublish.value) {
+    errorMessage.value = '发布方案请求已经提交，请等待本轮完成。'
+    return
+  }
+  const taskId = selectedTaskId.value
+  if (!taskId) {
+    errorMessage.value = '请先选择创作任务，再生成发布方案。'
+    return
+  }
   if (!hasSelectedTaskMaterials.value) {
     errorMessage.value = '当前任务没有可分析材料，请重新创建包含标题、简介、文稿或字幕的任务。'
     return
   }
-  if (!workflowSession.value) {
-    await loadPrePublishWorkflow(selectedTaskId.value)
-  }
-  if (!workflowSession.value || !canRunPrePublishAnalyze.value) {
+  if (isLoadingPrePublishSettings.value) {
+    errorMessage.value = '正在恢复当前任务的发布前设置，请等待完成后再生成。'
     return
   }
+  if (prePublishSettingsError.value) {
+    errorMessage.value = '当前任务设置读取或保存失败，请先在“偏好与语境”中重新读取或重试保存。'
+    return
+  }
+  isPreparingPrePublishAnalyze.value = true
+  const attemptVersion = ++prePublishAnalyzeAttemptVersion
   successMessage.value = ''
   try {
+    const saved = await saveCurrentPrePublishSettings(true)
+    if (!saved || selectedTaskId.value !== taskId) return
+    successMessage.value = ''
+    const session = await workflowModule.syncWorkflow()
+    if (selectedTaskId.value !== taskId) return
+    if (!session) {
+      if (!errorMessage.value) errorMessage.value = '工作流会话恢复失败，请重试。'
+      return
+    }
+    if (!canRunPrePublishAnalyze.value) {
+      errorMessage.value = prePublishAnalyzeUnavailableReason.value || '当前状态不能生成发布方案，请稍后重试。'
+      return
+    }
     const result = await workflowModule.runAnalyze({
       customGuidance: prePublishForm.customGuidance,
       creatorPreference: prePublishForm.creatorPreference,
@@ -1270,12 +1472,16 @@ async function runPrePublishAnalyze() {
       preferenceMode: prePublishForm.preferenceMode,
     })
     if (!result) return
+    if (selectedTaskId.value !== taskId) return
     lastPrePublishPreferenceMode.value = prePublishForm.preferenceMode
     hasPrePublishPreferenceModeSnapshot.value = true
     markPrePublishGuidanceSubmitted()
     successMessage.value = '发布前优化建议已生成，请确认采用后进入制作蓝图。'
   } finally {
-    await refreshUsageStats(1, false)
+    if (prePublishAnalyzeAttemptVersion === attemptVersion) {
+      isPreparingPrePublishAnalyze.value = false
+    }
+    if (selectedTaskId.value === taskId) await refreshUsageStats(1, false)
   }
 }
 
@@ -1284,6 +1490,8 @@ async function confirmPrePublishResult() {
   successMessage.value = ''
   const session = await workflowModule.confirmSuggestion()
   if (!session) return
+  workflowModule.updateMessageDraft('')
+  creatorStore.clearWorkflowMessageDraft(session.taskId)
   try {
     const task = await getCreatorTask(session.taskId)
     if (selectedTaskId.value !== session.taskId) return
@@ -1299,11 +1507,23 @@ async function confirmPrePublishResult() {
 }
 
 async function sendWorkflowSupplement() {
-  if (!canSendWorkflowMessage.value || !hasText(workflowMessageDraft.value)) return
+  if (!selectedTaskId.value) {
+    errorMessage.value = '请先选择创作任务，再给 AI 补充信息。'
+    return
+  }
+  if (!hasText(workflowMessageDraft.value)) {
+    errorMessage.value = '请先填写要补充给 AI 的内容。'
+    return
+  }
+  if (!canSendWorkflowMessage.value) {
+    errorMessage.value = workflowSession.value?.status === 'RUNNING'
+      ? '工作流正在运行，请等待当前操作完成后再发送。'
+      : '当前会话暂时不能继续发送，请先同步会话或检查任务状态。'
+    return
+  }
   successMessage.value = ''
   const message = await workflowModule.sendSupplement()
   if (!message) return
-  await scrollWorkflowMessagesToBottom()
   successMessage.value = '补充要求已写入工作流消息流。'
 }
 
@@ -1501,6 +1721,8 @@ function resolveRefreshTargetTask() {
 }
 
 function resetSelectedWorkspace() {
+  prePublishAnalyzeAttemptVersion += 1
+  isPreparingPrePublishAnalyze.value = false
   workflowModule.resetWorkflowState()
   feedbackModule.resetFeedbackData()
   resetTaskGuidanceFields()
@@ -1565,7 +1787,6 @@ function openWorkflowMessageModal() {
     return
   }
   workflowMessageModalOpen.value = true
-  void scrollWorkflowMessagesToBottom()
 }
 
 function closeWorkflowMessageModal() {
@@ -1613,16 +1834,8 @@ function showError(error: unknown) {
   errorMessage.value = error instanceof Error ? error.message : '请求失败'
 }
 
-function updateWorkflowMessageSelection(messageId: string) {
-  selectedWorkflowMessageId.value = messageId
-}
-
 function updateWorkflowMessageDraft(draft: string) {
-  workflowMessageDraft.value = draft
-}
-
-function updateWorkflowMessageListRef(element: HTMLDivElement | null) {
-  workflowMessageListRef.value = element
+  workflowModule.updateMessageDraft(draft)
 }
 
 function updateFeedbackChatQuestion(question: string) {
@@ -1659,6 +1872,7 @@ provideCreatorWorkspace({
     changeUsagePage,
     confirmPrePublishResult,
     contextTermChips,
+    creatorPreferencesError,
     currentDraftVideo,
     currentMediaProcessingStatus,
     currentPreflightReviewStatus,
@@ -1680,12 +1894,14 @@ provideCreatorWorkspace({
     hasConfirmedPrePublish,
     hasFeedbackSampleInput,
     hasPrePublishPreferenceModeSnapshot,
+    hasPrePublishSettingsChanges,
     hasPrePublishScriptMaterial,
     hasSelectedTask,
     hasTaskMaterialInput,
     generatePrePublishManuscriptDraftForCurrentTask,
     handleFeedbackFileChange,
-    historicalPreferenceChips,
+    historicalPreferenceCount,
+    historicalPreferenceGroups,
     importFeedbackFile,
     isActiveStepReadOnly,
     isAnalyzingFeedback,
@@ -1697,9 +1913,13 @@ provideCreatorWorkspace({
     isImportingFeedback,
     isLoadingCreatorContextTerms,
     isLoadingCreatorPreferences,
+    isLoadingPrePublishSettings,
+    isLoadingWorkflow,
+    isPreparingPrePublishAnalyze,
     isLoadingUsageStats,
     isSavingCreatorContextTerm,
     isSavingFeedback,
+    isSavingPrePublishSettings,
     isSendingWorkflowMessage,
     isUpdatingTask,
     lastPreferenceModeLabel,
@@ -1712,9 +1932,15 @@ provideCreatorWorkspace({
     preferenceModeNote,
     preferenceModeOptions,
     prePublishForm,
+    prePublishAnalyzeUnavailableReason,
+    prePublishSettingsError,
+    prePublishSettingsErrorSource,
+    prePublishSettingsSaveState,
+    reloadCurrentPrePublishSettings,
     refreshUsageStats,
     runFeedbackAnalyze,
     runPrePublishAnalyze,
+    saveCurrentPrePublishSettings,
     saveContextTermFromSuggestion,
     savingContextTermKey,
     selectedPreferenceModeLabel,
@@ -1722,6 +1948,7 @@ provideCreatorWorkspace({
     selectedTaskId,
     shortId,
     showDeveloperTools,
+    startAiCreationTask,
     startEditTask,
     statusLabel,
     submitFeedback,
@@ -1744,10 +1971,15 @@ provideCreatorWorkspace({
     usageTotalPages,
     videoTypeOptions,
     workflowRunningStep,
+    workflowMessages,
+    workflowMessageDraft,
     workflowSession,
     workflowSseText,
     workflowStatusText,
     workflowSteps,
+    retryCreatorPreferences,
+    sendWorkflowSupplement,
+    updateWorkflowMessageDraft,
     refreshCurrentDraftVideo,
   },
 })
@@ -1799,14 +2031,14 @@ provideCreatorWorkspace({
       :tasks="tasks"
       :filtered-tasks="filteredTasks"
       :summary="taskSummaryStats"
-      :selected-task-id="selectedTaskId"
+      :selected-task-id="selectedTaskId || activeInteractiveTaskId || ''"
       :loading="isLoadingTasks"
       :search-query="taskSearchQuery"
       :status-filter="taskStatusFilter"
       :status-options="taskStatusOptions"
       :can-edit-task="isTaskMaterialsEditable"
       @close="closeTaskManager"
-      @create="startCreateTask"
+      @create="startAiCreationTask"
       @refresh="refreshTasks"
       @select="selectTask"
       @edit="startEditTask"
@@ -1828,11 +2060,23 @@ provideCreatorWorkspace({
       aria-label="创作台入口"
     >
       <AiCreationConsole
+        :key="`${activeInteractiveTaskId || 'new'}-${aiCreationInstance}`"
+        :resume-task-id="activeInteractiveTaskId || ''"
         :skipping-to-preflight="isSkippingToPreflight"
         @confirmed="handleCreativeOptionConfirmed"
+        @pending-upload-change="handleInteractiveUploadState"
         @skip-to-preflight="handleSkipToPreflight"
+        @task-created="handleInteractiveTaskCreated"
       />
       <div class="creator-start-actions" aria-label="其他创建方式">
+        <button
+          v-if="activeInteractiveTaskId"
+          type="button"
+          class="creator-secondary-action creator-mini-button"
+          @click="startAiCreationTask"
+        >
+          新建任务
+        </button>
         <button
           v-if="hasTaskHistory"
           type="button"
@@ -1923,21 +2167,10 @@ provideCreatorWorkspace({
       :open="workflowMessageModalOpen"
       :status-text="workflowStatusText"
       :sse-text="workflowSseText"
-      :has-selected-task="hasSelectedTask"
-      :has-selected-task-materials="hasSelectedTaskMaterials"
       :loading="isLoadingWorkflow"
-      :messages="workflowMessages"
-      :selected-message="selectedWorkflowMessage"
-      :selected-material="selectedWorkflowMaterial"
-      :draft="workflowMessageDraft"
-      :can-send="canSendWorkflowMessage"
-      :sending="isSendingWorkflowMessage"
+      :steps="workflowSteps"
       @close="closeWorkflowMessageModal"
       @refresh="refreshPrePublishWorkflowMessages"
-      @send="sendWorkflowSupplement"
-      @update:selected-message-id="updateWorkflowMessageSelection"
-      @update:draft="updateWorkflowMessageDraft"
-      @message-list-ref="updateWorkflowMessageListRef"
     />
 
     <Teleport to="body">

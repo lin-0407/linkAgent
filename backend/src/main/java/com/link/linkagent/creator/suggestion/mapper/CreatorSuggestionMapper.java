@@ -13,7 +13,7 @@ import java.util.Optional;
 
 /**
  * 发布前优化建议访问层。
- * 当前每个任务只保留一份最新建议，先满足演示闭环，后续再扩展版本管理。
+ * 工作流结果按任务和会话分别保存，避免并行会话的完成顺序改变当前页面结果。
  */
 @Mapper
 public interface CreatorSuggestionMapper {
@@ -22,6 +22,7 @@ public interface CreatorSuggestionMapper {
             INSERT INTO creator_suggestion (
                 suggestion_id,
                 task_id,
+                session_id,
                 content_summary,
                 creator_dilemma,
                 audience_profile,
@@ -45,6 +46,7 @@ public interface CreatorSuggestionMapper {
             VALUES (
                 #{suggestionId},
                 #{taskId},
+                #{sessionId},
                 #{contentSummary},
                 #{creatorDilemma},
                 #{audienceProfile},
@@ -67,6 +69,7 @@ public interface CreatorSuggestionMapper {
             )
             ON DUPLICATE KEY UPDATE
                 suggestion_id = VALUES(suggestion_id),
+                session_id = VALUES(session_id),
                 content_summary = VALUES(content_summary),
                 creator_dilemma = VALUES(creator_dilemma),
                 audience_profile = VALUES(audience_profile),
@@ -91,40 +94,54 @@ public interface CreatorSuggestionMapper {
             """)
     int upsert(CreatorSuggestionRecord record);
 
+    /**
+     * 任务级兼容查询优先返回已确认会话绑定的方案，避免旧会话晚完成后被下游误用。
+     */
     @Select("""
-            SELECT id,
-                   suggestion_id,
-                   task_id,
-                   content_summary,
-                   creator_dilemma,
-                   audience_profile,
-                   audience_hook,
-                   content_positioning,
-                   selling_points,
-                   risk_points,
-                   title_suggestions,
-                   description_suggestion,
-                   actionable_revision_plan,
-                   tag_suggestions,
-                   partition_suggestion,
-                   evidence_refs,
-                   missing_info,
-                   generation_mode,
-                   quality_status,
-                   audit_report,
-                   raw_output,
-                   parse_status,
-                   create_time,
-                   update_time
-            FROM creator_suggestion
-            WHERE task_id = #{taskId}
-              AND is_deleted = 0
+            SELECT suggestion.id,
+                   suggestion.suggestion_id,
+                   suggestion.task_id,
+                   suggestion.session_id,
+                   suggestion.content_summary,
+                   suggestion.creator_dilemma,
+                   suggestion.audience_profile,
+                   suggestion.audience_hook,
+                   suggestion.content_positioning,
+                   suggestion.selling_points,
+                   suggestion.risk_points,
+                   suggestion.title_suggestions,
+                   suggestion.description_suggestion,
+                   suggestion.actionable_revision_plan,
+                   suggestion.tag_suggestions,
+                   suggestion.partition_suggestion,
+                   suggestion.evidence_refs,
+                   suggestion.missing_info,
+                   suggestion.generation_mode,
+                   suggestion.quality_status,
+                   suggestion.audit_report,
+                   suggestion.raw_output,
+                   suggestion.parse_status,
+                   suggestion.create_time,
+                   suggestion.update_time
+            FROM creator_suggestion suggestion
+            LEFT JOIN creator_workflow_session workflow_session
+              ON workflow_session.confirmed_result_id = suggestion.suggestion_id
+             AND workflow_session.task_id = suggestion.task_id
+             AND workflow_session.status = 'CONFIRMED'
+             AND workflow_session.is_deleted = 0
+            WHERE suggestion.task_id = #{taskId}
+              AND suggestion.is_deleted = 0
+            ORDER BY (workflow_session.id IS NOT NULL) DESC,
+                     workflow_session.id DESC,
+                     suggestion.update_time DESC,
+                     suggestion.id DESC
             LIMIT 1
             """)
     @Results(id = "CreatorSuggestionRecordMap", value = {
             @Result(column = "id", property = "id"),
             @Result(column = "suggestion_id", property = "suggestionId"),
             @Result(column = "task_id", property = "taskId"),
+            @Result(column = "session_id", property = "sessionId"),
             @Result(column = "content_summary", property = "contentSummary"),
             @Result(column = "creator_dilemma", property = "creatorDilemma"),
             @Result(column = "audience_profile", property = "audienceProfile"),
@@ -149,10 +166,50 @@ public interface CreatorSuggestionMapper {
     })
     Optional<CreatorSuggestionRecord> findByTaskId(@Param("taskId") String taskId);
 
+    /**
+     * 按任务和工作流会话读取当前方案，避免旧会话晚完成后覆盖新会话页面。
+     */
     @Select("""
             SELECT id,
                    suggestion_id,
                    task_id,
+                   session_id,
+                   content_summary,
+                   creator_dilemma,
+                   audience_profile,
+                   audience_hook,
+                   content_positioning,
+                   selling_points,
+                   risk_points,
+                   title_suggestions,
+                   description_suggestion,
+                   actionable_revision_plan,
+                   tag_suggestions,
+                   partition_suggestion,
+                   evidence_refs,
+                   missing_info,
+                   generation_mode,
+                   quality_status,
+                   audit_report,
+                   raw_output,
+                   parse_status,
+                   create_time,
+                   update_time
+            FROM creator_suggestion
+            WHERE task_id = #{taskId}
+              AND session_id = #{sessionId}
+              AND is_deleted = 0
+            LIMIT 1
+            """)
+    @ResultMap("CreatorSuggestionRecordMap")
+    Optional<CreatorSuggestionRecord> findByTaskIdAndSessionId(@Param("taskId") String taskId,
+                                                               @Param("sessionId") String sessionId);
+
+    @Select("""
+            SELECT id,
+                   suggestion_id,
+                   task_id,
+                   session_id,
                    content_summary,
                    creator_dilemma,
                    audience_profile,

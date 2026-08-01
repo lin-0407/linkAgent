@@ -11,6 +11,7 @@ public class CreatorSuggestionRecord {
     private Long id;
     private String suggestionId;
     private String taskId;
+    private String sessionId;
     private String contentSummary;
     private String creatorDilemma;
     private String audienceProfile;
@@ -55,6 +56,14 @@ public class CreatorSuggestionRecord {
 
     public void setTaskId(String taskId) {
         this.taskId = taskId;
+    }
+
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
     }
 
     public String getContentSummary() {

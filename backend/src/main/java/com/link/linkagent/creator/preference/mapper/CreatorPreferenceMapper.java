@@ -36,18 +36,20 @@ public interface CreatorPreferenceMapper {
     int upsert(CreatorPreferenceRecord record);
 
     @Select("""
-            SELECT id,
-                   preference_id,
-                   user_id,
-                   source_task_id,
-                   source_report_id,
-                   preference_content,
-                   create_time,
-                   update_time
-            FROM creator_preference
-            WHERE user_id = #{userId}
-              AND is_deleted = 0
-            ORDER BY update_time DESC, id DESC
+            SELECT preference.id,
+                   preference.preference_id,
+                   preference.user_id,
+                   preference.source_task_id,
+                   task.task_name AS source_task_name,
+                   preference.source_report_id,
+                   preference.preference_content,
+                   preference.create_time,
+                   preference.update_time
+            FROM creator_preference preference
+            LEFT JOIN creator_task task ON task.task_id = preference.source_task_id
+            WHERE preference.user_id = #{userId}
+              AND preference.is_deleted = 0
+            ORDER BY preference.update_time DESC, preference.id DESC
             LIMIT #{limit}
             """)
     @Results(id = "CreatorPreferenceRecordMap", value = {
@@ -55,6 +57,7 @@ public interface CreatorPreferenceMapper {
             @Result(column = "preference_id", property = "preferenceId"),
             @Result(column = "user_id", property = "userId"),
             @Result(column = "source_task_id", property = "sourceTaskId"),
+            @Result(column = "source_task_name", property = "sourceTaskName"),
             @Result(column = "source_report_id", property = "sourceReportId"),
             @Result(column = "preference_content", property = "preferenceContent"),
             @Result(column = "create_time", property = "createTime"),
@@ -94,19 +97,21 @@ public interface CreatorPreferenceMapper {
      * source_report_id 以 ADOPTION_FEEDBACK_ 开头的记录是采用反馈而非复盘洞察。
      */
     @Select("""
-            SELECT id,
-                   preference_id,
-                   user_id,
-                   source_task_id,
-                   source_report_id,
-                   preference_content,
-                   create_time,
-                   update_time
-            FROM creator_preference
-            WHERE user_id = #{userId}
-              AND is_deleted = 0
-              AND source_report_id LIKE 'ADOPTION_FEEDBACK_%'
-            ORDER BY update_time DESC, id DESC
+            SELECT preference.id,
+                   preference.preference_id,
+                   preference.user_id,
+                   preference.source_task_id,
+                   task.task_name AS source_task_name,
+                   preference.source_report_id,
+                   preference.preference_content,
+                   preference.create_time,
+                   preference.update_time
+            FROM creator_preference preference
+            LEFT JOIN creator_task task ON task.task_id = preference.source_task_id
+            WHERE preference.user_id = #{userId}
+              AND preference.is_deleted = 0
+              AND preference.source_report_id LIKE 'ADOPTION_FEEDBACK_%'
+            ORDER BY preference.update_time DESC, preference.id DESC
             LIMIT #{limit}
             """)
     @ResultMap("CreatorPreferenceRecordMap")

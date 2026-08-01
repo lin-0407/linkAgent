@@ -28,14 +28,8 @@ type SuggestionCardItem = {
 const { feedbackEvent } = useCreatorWorkspaceContext()
 const {
   suggestion,
-  hasPrePublishScriptMaterial,
   hasConfirmedPrePublish,
-  canRunPrePublishAnalyze,
   isAnalyzingPrePublish,
-  runPrePublishAnalyze,
-  canGeneratePrePublishDraft,
-  isGeneratingPrePublishDraft,
-  generatePrePublishManuscriptDraftForCurrentTask,
   canConfirmPrePublish,
   isConfirmingPrePublish,
   confirmPrePublishResult,
@@ -50,7 +44,6 @@ const {
   workflowSteps,
 } = useCreatorWorkspaceShell()
 
-const draftRequirement = ref('')
 const suggestionPanelBodyRef = ref<HTMLDivElement | null>(null)
 const acceptedTitleContents = ref<Set<string>>(new Set())
 const acceptedTagContents = ref<Set<string>>(new Set())
@@ -94,10 +87,7 @@ const panelStatus = computed(() => {
   if (suggestion.value) {
     return '待采用'
   }
-  if (!hasPrePublishScriptMaterial.value) {
-    return '缺少完整文稿'
-  }
-  return isAnalyzingPrePublish.value ? '正在生成' : '等待生成'
+  return isAnalyzingPrePublish.value ? '正在生成' : '暂无方案'
 })
 
 const preferenceSnapshotNote = computed(() => {
@@ -129,23 +119,6 @@ watch(isAnalyzingPrePublish, (isAnalyzing, wasAnalyzing) => {
     void resetSuggestionScroll()
   }
 })
-
-async function generateDraft() {
-  if (isActiveStepReadOnly.value) {
-    return
-  }
-  const generated = await generatePrePublishManuscriptDraftForCurrentTask(draftRequirement.value)
-  if (generated) {
-    draftRequirement.value = ''
-  }
-}
-
-async function generatePlan() {
-  if (isActiveStepReadOnly.value) {
-    return
-  }
-  await runPrePublishAnalyze()
-}
 
 async function confirmPlan() {
   if (isActiveStepReadOnly.value) {
@@ -205,7 +178,6 @@ function saveSuggestionContext(
 <template>
   <section
     class="pre-publish-suggestion-panel"
-    :class="{ 'is-empty': !suggestion }"
     aria-label="发布方案内容"
   >
     <header class="suggestion-panel-head">
@@ -226,70 +198,7 @@ function saveSuggestionContext(
       </b>
     </header>
 
-    <div ref="suggestionPanelBodyRef" class="suggestion-panel-body">
-      <section v-if="!suggestion && !hasPrePublishScriptMaterial" class="suggestion-empty-state">
-        <div>
-          <strong>还缺完整文稿或字幕</strong>
-          <p>补齐可分析的内容后，标题、简介和标签建议才能贴合视频本身。</p>
-        </div>
-        <textarea
-          v-model="draftRequirement"
-          maxlength="1000"
-          :disabled="isActiveStepReadOnly"
-          placeholder="让 AI 补稿时的额外要求，例如节奏、口播语气、必须保留的观点"
-        ></textarea>
-        <button
-          type="button"
-          class="creator-primary-button"
-          :disabled="
-            isActiveStepReadOnly ||
-            !canGeneratePrePublishDraft ||
-            isGeneratingPrePublishDraft
-          "
-          @click="generateDraft"
-        >
-          {{ isGeneratingPrePublishDraft ? '补稿中...' : '让 AI 补一版' }}
-        </button>
-      </section>
-
-      <section v-else-if="!suggestion && isAnalyzingPrePublish" class="suggestion-loading-state">
-        <div class="suggestion-skeleton title"></div>
-        <div class="suggestion-skeleton"></div>
-        <div class="suggestion-skeleton short"></div>
-        <button type="button" class="creator-primary-button" disabled>生成中...</button>
-      </section>
-
-      <section v-else-if="!suggestion && currentWorkflowFailedStep" class="suggestion-empty-state failed">
-        <div>
-          <strong>生成没有完成</strong>
-          <p>失败步骤：{{ currentWorkflowFailedStep.stepName || '未知步骤' }}。请重新生成后再确认方案。</p>
-        </div>
-        <button
-          type="button"
-          class="creator-primary-button"
-          :disabled="isActiveStepReadOnly || !canRunPrePublishAnalyze || isAnalyzingPrePublish"
-          @click="generatePlan"
-        >
-          重新生成
-        </button>
-      </section>
-
-      <section v-else-if="!suggestion" class="suggestion-empty-state">
-        <div>
-          <strong>材料已就绪</strong>
-          <p>AI 会结合当前材料、偏好记忆和消息流中的补充要求生成发布方案。</p>
-        </div>
-        <button
-          type="button"
-          class="creator-primary-button"
-          :disabled="isActiveStepReadOnly || !canRunPrePublishAnalyze || isAnalyzingPrePublish"
-          @click="generatePlan"
-        >
-          {{ isAnalyzingPrePublish ? '生成中...' : '生成发布方案' }}
-        </button>
-      </section>
-
-      <template v-else>
+    <div v-if="suggestion" ref="suggestionPanelBodyRef" class="suggestion-panel-body">
         <p v-if="currentWorkflowFailedStep" class="suggestion-refresh-failure">
           新版生成未完成，当前保留上一轮方案。失败步骤：{{ currentWorkflowFailedStep.stepName || '未知步骤' }}。
         </p>
@@ -463,18 +372,9 @@ function saveSuggestionContext(
             </section>
           </div>
         </details>
-      </template>
     </div>
 
     <footer v-if="suggestion && !hasConfirmedPrePublish" class="suggestion-panel-actions">
-      <button
-        type="button"
-        class="creator-secondary-action"
-        :disabled="isActiveStepReadOnly || !canRunPrePublishAnalyze || isAnalyzingPrePublish || isConfirmingPrePublish"
-        @click="generatePlan"
-      >
-        {{ isAnalyzingPrePublish ? '重新生成中...' : '重新生成' }}
-      </button>
       <button
         type="button"
         class="creator-primary-button"
@@ -578,20 +478,6 @@ function saveSuggestionContext(
   scrollbar-width: thin;
 }
 
-/* 没有方案时底部不存在操作栏，不预留正文滚动空间，让等待卡保持紧凑。 */
-.pre-publish-suggestion-panel.is-empty {
-  grid-template-rows: auto auto;
-}
-
-.pre-publish-suggestion-panel.is-empty .suggestion-panel-body {
-  padding: 0 14px 14px;
-  overflow: visible;
-}
-
-.pre-publish-suggestion-panel.is-empty .suggestion-empty-state {
-  min-height: 220px;
-}
-
 .suggestion-panel-body::-webkit-scrollbar {
   width: 8px;
 }
@@ -607,27 +493,6 @@ function saveSuggestionContext(
   border-radius: var(--r-pill);
 }
 
-.suggestion-empty-state,
-.suggestion-loading-state {
-  display: grid;
-  align-content: center;
-  justify-items: start;
-  min-height: 360px;
-  gap: 16px;
-  padding: 24px 0;
-}
-
-.suggestion-empty-state > div {
-  display: grid;
-  gap: 8px;
-}
-
-.suggestion-empty-state strong {
-  color: var(--ink);
-  font-size: 16px;
-}
-
-.suggestion-empty-state p,
 .suggestion-content-section p,
 .suggestion-insight-grid p,
 .suggestion-plan-list p {
@@ -636,10 +501,6 @@ function saveSuggestionContext(
   line-height: 1.65;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-}
-
-.suggestion-empty-state.failed strong {
-  color: var(--danger);
 }
 
 .suggestion-refresh-failure {
@@ -652,41 +513,6 @@ function saveSuggestionContext(
   font-size: 13px;
   line-height: 1.55;
   overflow-wrap: anywhere;
-}
-
-.suggestion-empty-state textarea {
-  width: min(100%, 640px);
-  min-height: 116px;
-  padding: 11px 12px;
-  color: var(--text);
-  resize: vertical;
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  outline: none;
-  line-height: 1.55;
-}
-
-.suggestion-empty-state textarea:focus-visible {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
-}
-
-.suggestion-skeleton {
-  width: 100%;
-  height: 112px;
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.suggestion-skeleton.title {
-  height: 164px;
-}
-
-.suggestion-skeleton.short {
-  width: 58%;
-  height: 68px;
 }
 
 .suggestion-content-section {
@@ -809,15 +635,6 @@ function saveSuggestionContext(
     min-height: auto;
   }
 
-  .suggestion-panel-body {
-    overflow: visible;
-  }
-
-  .suggestion-empty-state,
-  .suggestion-loading-state {
-    min-height: 280px;
-  }
-
   .suggestion-panel-actions {
     position: static;
   }
@@ -842,7 +659,6 @@ function saveSuggestionContext(
 @media (max-width: 820px) {
   .suggestion-card-grid :deep(.creator-mini-button),
   .suggestion-insight-grid :deep(.creator-mini-button),
-  .suggestion-empty-state .creator-primary-button,
   .suggestion-disclosure summary {
     min-height: 44px;
   }

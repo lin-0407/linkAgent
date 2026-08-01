@@ -33,6 +33,7 @@ public interface CreatorInteractiveMapper {
                 raw_output,
                 parse_status,
                 background_context,
+                uploaded_documents,
                 understanding_summary,
                 understanding_status
             )
@@ -47,6 +48,7 @@ public interface CreatorInteractiveMapper {
                 #{rawOutput},
                 #{parseStatus},
                 #{backgroundContext},
+                #{uploadedDocuments},
                 #{understandingSummary},
                 #{understandingStatus}
             )
@@ -91,6 +93,7 @@ public interface CreatorInteractiveMapper {
                    raw_output,
                    parse_status,
                    background_context,
+                   uploaded_documents,
                    understanding_summary,
                    understanding_status,
                    create_time,
@@ -112,6 +115,7 @@ public interface CreatorInteractiveMapper {
             @Result(column = "raw_output", property = "rawOutput"),
             @Result(column = "parse_status", property = "parseStatus"),
             @Result(column = "background_context", property = "backgroundContext"),
+            @Result(column = "uploaded_documents", property = "uploadedDocuments"),
             @Result(column = "understanding_summary", property = "understandingSummary"),
             @Result(column = "understanding_status", property = "understandingStatus"),
             @Result(column = "create_time", property = "createTime"),
@@ -258,13 +262,18 @@ public interface CreatorInteractiveMapper {
                     IF(IFNULL(background_context, '') = '', '', '\n\n---\n\n'),
                     #{contextText}
                 ),
+                uploaded_documents = JSON_MERGE_PRESERVE(
+                    IFNULL(uploaded_documents, JSON_ARRAY()),
+                    CAST(#{uploadedDocumentsJson} AS JSON)
+                ),
                 understanding_status = IF(status = 'INTENT_ALIGNMENT', 'PENDING', understanding_status),
                 update_time = CURRENT_TIMESTAMP
             WHERE task_id = #{taskId}
               AND is_deleted = 0
             """)
     int appendBackgroundContext(@Param("taskId") String taskId,
-                                @Param("contextText") String contextText);
+                                @Param("contextText") String contextText,
+                                @Param("uploadedDocumentsJson") String uploadedDocumentsJson);
 
     /**
      * 更新 AI 理解确认结果。

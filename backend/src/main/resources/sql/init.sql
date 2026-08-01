@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS creator_interactive_session
     raw_output         LONGTEXT              DEFAULT NULL COMMENT 'LLM 生成创意卡片的原始输出，用于失败回放和人工检查',
     parse_status       VARCHAR(32)  NOT NULL DEFAULT 'PENDING' COMMENT '解析状态：PENDING=未生成，PARSED=已解析，RAW_ONLY=仅保存原文并使用兜底卡片',
     background_context LONGTEXT              DEFAULT NULL COMMENT '用户上传的补充背景资料（从文档中提取的纯文本，可累积追加多个文件的内容）',
+    uploaded_documents JSON                  DEFAULT NULL COMMENT '已成功提取的补充资料元数据 JSON，用于刷新后恢复文件列表而不保存浏览器本地文件对象',
     understanding_summary TEXT                DEFAULT NULL COMMENT 'AI 对用户创作想法的理解摘要，用于用户在生成方向卡前核验 AI 是否准确理解了创作意图',
     understanding_status VARCHAR(32) NOT NULL DEFAULT 'NONE' COMMENT '理解状态：NONE=未开始，UNDERSTANDING=生成中，PENDING=用户上下文已变化，READY=当前理解已更新，CONFIRMED=旧方向卡流程已确认',
     create_time        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -222,6 +223,26 @@ CREATE TABLE IF NOT EXISTS creator_idea_option
   COMMENT = '创意卡片表';
 
 -- ------------------------------------------------------------
+-- 7.3 任务级发布前设置表
+--     只保存本期生成参数，避免本次要求被误写成跨任务历史偏好
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS creator_pre_publish_setting
+(
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    task_id             VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id，每个任务只保留一份当前发布前设置',
+    preference_mode     VARCHAR(32)  NOT NULL DEFAULT 'USE_HISTORY' COMMENT '历史偏好使用方式：USE_HISTORY、IGNORE_HISTORY、EXPERIMENT',
+    creator_preference  VARCHAR(500)          DEFAULT NULL COMMENT '本期创作目标和表达偏好，只参与当前任务生成',
+    title_style         VARCHAR(100)          DEFAULT NULL COMMENT '本期标题风格，只参与当前任务生成',
+    extra_requirement   VARCHAR(500)          DEFAULT NULL COMMENT '本期额外要求，只参与当前任务生成',
+    custom_guidance     VARCHAR(2000)         DEFAULT NULL COMMENT '当前任务使用的其它发布前语境，不写入全局历史偏好',
+    create_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uk_pre_publish_setting_task_id (task_id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COMMENT = '任务级发布前设置表';
+
+-- ------------------------------------------------------------
 -- 8. 发布前优化建议表
 --    保存 LLM 基于创作材料生成的标题、简介、标签和风险建议，便于后续复盘与评测
 -- ------------------------------------------------------------
@@ -230,6 +251,7 @@ CREATE TABLE IF NOT EXISTS creator_suggestion
     id                     BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     suggestion_id          VARCHAR(64)  NOT NULL COMMENT '建议唯一标识（UUID）',
     task_id                VARCHAR(64)  NOT NULL COMMENT '关联 creator_task.task_id',
+    session_id             VARCHAR(64)           DEFAULT NULL COMMENT '关联 creator_workflow_session.session_id；旧直连结果可为空',
     content_summary        TEXT                  DEFAULT NULL COMMENT '内容摘要',
     creator_dilemma        TEXT                  DEFAULT NULL COMMENT '创作者困境，用于记录本期最容易让 UP 主纠结或做错的表达问题',
     audience_profile       TEXT                  DEFAULT NULL COMMENT '目标受众判断',
@@ -253,7 +275,7 @@ CREATE TABLE IF NOT EXISTS creator_suggestion
     update_time            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted             TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
     UNIQUE KEY uk_suggestion_id (suggestion_id),
-    UNIQUE KEY uk_task_id (task_id),
+    UNIQUE KEY uk_suggestion_task_session (task_id, session_id),
     KEY idx_task_update_time (task_id, update_time)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
@@ -2079,6 +2101,44 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_interactive_session' AND COLUMN_NAME = 'background_context');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_interactive_session ADD COLUMN uploaded_documents JSON DEFAULT NULL COMMENT ''已成功提取的补充资料元数据 JSON，用于刷新后恢复文件列表而不保存浏览器本地文件对象'' AFTER background_context',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_interactive_session' AND COLUMN_NAME = 'uploaded_documents');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 发布方案必须和工作流会话一起隔离；旧库先补列并回填已有结果，再替换任务级唯一键。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_suggestion ADD COLUMN session_id VARCHAR(64) DEFAULT NULL COMMENT ''关联 creator_workflow_session.session_id；旧直连结果可为空'' AFTER task_id',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_suggestion' AND COLUMN_NAME = 'session_id');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+UPDATE creator_suggestion suggestion
+JOIN creator_workflow_message workflow_message
+  ON workflow_message.detail_ref_type = 'SUGGESTION'
+ AND workflow_message.detail_ref_id = suggestion.suggestion_id
+ AND workflow_message.is_deleted = 0
+SET suggestion.session_id = workflow_message.session_id
+WHERE suggestion.session_id IS NULL
+  AND suggestion.is_deleted = 0;
+
+SET @sql = (SELECT IF(COUNT(*) > 0,
+    'ALTER TABLE creator_suggestion DROP INDEX uk_task_id',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_suggestion' AND INDEX_NAME = 'uk_task_id');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_suggestion ADD UNIQUE KEY uk_suggestion_task_session (task_id, session_id)',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_suggestion' AND INDEX_NAME = 'uk_suggestion_task_session');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @sql = (SELECT IF(COUNT(*) = 0,

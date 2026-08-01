@@ -12,6 +12,7 @@ public class CreatorPreferenceRecord {
     private String preferenceId;
     private String userId;
     private String sourceTaskId;
+    private String sourceTaskName;
     private String sourceReportId;
     private String preferenceContent;
     private LocalDateTime createTime;
@@ -47,6 +48,14 @@ public class CreatorPreferenceRecord {
 
     public void setSourceTaskId(String sourceTaskId) {
         this.sourceTaskId = sourceTaskId;
+    }
+
+    public String getSourceTaskName() {
+        return sourceTaskName;
+    }
+
+    public void setSourceTaskName(String sourceTaskName) {
+        this.sourceTaskName = sourceTaskName;
     }
 
     public String getSourceReportId() {

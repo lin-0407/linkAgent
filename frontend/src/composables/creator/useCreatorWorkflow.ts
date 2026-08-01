@@ -18,6 +18,7 @@ import {
   workflowSessionLabel,
 } from '@/composables/creator/creatorWorkspaceUtils'
 import { useWorkflowSSE } from '@/composables/useWorkflowSSE'
+import { useCreatorStore } from '@/stores/creatorStore'
 import type {
   CreatorSuggestion,
   CreatorWorkflowMessage,
@@ -39,6 +40,7 @@ export function useCreatorWorkflow(
   errorRef: Ref<string>,
   onSuggestionUpdated?: () => void,
 ) {
+  const creatorStore = useCreatorStore()
   const {
     connect: connectSSE,
     disconnect: disconnectSSE,
@@ -90,6 +92,20 @@ export function useCreatorWorkflow(
         status !== 'CONFIRMED' &&
         status !== 'CANCELLED',
     )
+  })
+  const prePublishAnalyzeUnavailableReason = computed(() => {
+    if (!selectedTaskId.value) return '请先选择创作任务。'
+    if (!hasSelectedTaskMaterials.value) return '当前任务缺少可分析材料，请先补充标题、简介、文稿或字幕。'
+    if (isLoadingWorkflow.value) return '正在从服务端恢复工作流会话，请稍候。'
+    if (isSendingWorkflowMessage.value) return '正在发送补充信息，请等待发送完成。'
+    if (isGeneratingPrePublishDraft.value) return '正在补全文稿，请等待文稿保存完成。'
+    if (isConfirmingPrePublish.value) return '正在确认当前发布方案，请等待操作完成。'
+    if (isAnalyzingPrePublish.value) return '发布方案正在生成，请勿重复提交。'
+    if (!workflowSession.value) return '工作流会话尚未恢复，请刷新会话后重试。'
+    if (workflowSession.value.status === 'RUNNING') return '服务端工作流仍在运行，页面会继续展示执行进度。'
+    if (workflowSession.value.status === 'CONFIRMED') return '当前发布方案已经确认，不能再次生成。'
+    if (workflowSession.value.status === 'CANCELLED') return '当前工作流会话已取消，请重新进入任务后再试。'
+    return ''
   })
   const canConfirmPrePublish = computed(
     () =>
@@ -143,13 +159,24 @@ export function useCreatorWorkflow(
     selectedWorkflowMessageId.value = selected?.messageId ?? workflowMessages.value[0]?.messageId ?? ''
   }
 
-  async function refreshSuggestion(taskId: string, version = requestVersion) {
+  async function refreshSuggestion(
+    taskId: string,
+    sessionId: string,
+    version = requestVersion,
+  ) {
     try {
-      const result = await getPrePublishSuggestion(taskId)
-      if (isCurrentTask(taskId, version)) suggestion.value = result
-      return isCurrentTask(taskId, version) ? result : null
-    } catch {
-      // 临时读取失败时保留当前建议，避免可用方案因网络波动从页面消失。
+      const result = await getPrePublishSuggestion(taskId, sessionId)
+      if (isCurrentSession(taskId, sessionId, version)) suggestion.value = result
+      return isCurrentSession(taskId, sessionId, version) ? result : null
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.status === 404 &&
+        isCurrentSession(taskId, sessionId, version)
+      ) {
+        suggestion.value = null
+      }
+      // 当前会话明确没有结果时清空；其它临时失败保留旧值，避免网络波动让可用方案消失。
       return null
     }
   }
@@ -188,14 +215,14 @@ export function useCreatorWorkflow(
           errorMessage: eventErrorMessage ?? null,
         }
         if (status === 'WAITING_CONFIRMATION' || status === 'CONFIRMED') {
-          void refreshSuggestion(taskId, version).then((result) => {
+          void refreshSuggestion(taskId, sessionId, version).then((result) => {
             if (result) onSuggestionUpdated?.()
           })
         }
       },
       onResultReady: (resultTaskId) => {
         if (resultTaskId !== taskId) return
-        void refreshSuggestion(taskId, version).then((result) => {
+        void refreshSuggestion(taskId, sessionId, version).then((result) => {
           if (result) onSuggestionUpdated?.()
         })
       },
@@ -211,6 +238,7 @@ export function useCreatorWorkflow(
     resumeLatest = true,
   }: LoadWorkflowOptions): Promise<CreatorWorkflowSession | null> {
     resetWorkflowState(false)
+    workflowMessageDraft.value = creatorStore.workflowMessageDrafts[taskId] ?? ''
     const version = requestVersion
     if (!hasSelectedTaskMaterials.value) {
       errorRef.value = '当前任务没有可加载材料，请重新创建包含标题、简介、文稿或字幕的任务。'
@@ -225,7 +253,47 @@ export function useCreatorWorkflow(
       syncWorkflowSelection()
       await refreshSteps(taskId, session.sessionId, version)
       if (!suggestion.value && isPrePublishSuggestionVisible(session.status)) {
-        await refreshSuggestion(taskId, version)
+        await refreshSuggestion(taskId, session.sessionId, version)
+      }
+      if (!isCurrentSession(taskId, session.sessionId, version)) return null
+      connectWorkflowEvents(taskId, session.sessionId, version)
+      return session
+    } catch (error) {
+      if (isCurrentTask(taskId, version)) showError(error)
+      return null
+    } finally {
+      if (requestVersion === version) isLoadingWorkflow.value = false
+    }
+  }
+
+  /**
+   * 从服务端重新读取最新会话后再判断操作门禁，避免页面保留的旧 RUNNING 状态阻断生成。
+   */
+  async function syncWorkflow(): Promise<CreatorWorkflowSession | null> {
+    const taskId = selectedTaskId.value
+    if (!taskId) {
+      errorRef.value = '请先选择创作任务。'
+      return null
+    }
+    if (!hasSelectedTaskMaterials.value) {
+      errorRef.value = '当前任务缺少可分析材料，请先补充标题、简介、文稿或字幕。'
+      return null
+    }
+
+    const version = requestVersion
+    isLoadingWorkflow.value = true
+    errorRef.value = ''
+    try {
+      const previousSessionId = workflowSession.value?.sessionId
+      const session = await startPrePublishWorkflow(taskId, { resumeLatest: true })
+      if (!isCurrentTask(taskId, version)) return null
+      if (previousSessionId && previousSessionId !== session.sessionId) suggestion.value = null
+      workflowSession.value = session
+      workflowMessages.value = session.messages ?? []
+      syncWorkflowSelection()
+      await refreshSteps(taskId, session.sessionId, version)
+      if (isPrePublishSuggestionVisible(session.status)) {
+        await refreshSuggestion(taskId, session.sessionId, version)
       }
       if (!isCurrentSession(taskId, session.sessionId, version)) return null
       connectWorkflowEvents(taskId, session.sessionId, version)
@@ -325,7 +393,10 @@ export function useCreatorWorkflow(
   async function runAnalyze(payload: PrePublishAnalyzePayload): Promise<CreatorSuggestion | null> {
     const taskId = selectedTaskId.value
     const sessionId = workflowSession.value?.sessionId
-    if (!taskId || !sessionId || !canRunPrePublishAnalyze.value) return null
+    if (!taskId || !sessionId || !canRunPrePublishAnalyze.value) {
+      errorRef.value = prePublishAnalyzeUnavailableReason.value || '当前状态不能生成发布方案，请同步会话后重试。'
+      return null
+    }
     const version = requestVersion
     isAnalyzingPrePublish.value = true
     errorRef.value = ''
@@ -343,8 +414,10 @@ export function useCreatorWorkflow(
     } catch (error) {
       if (isCurrentSession(taskId, sessionId, version)) {
         if (error instanceof ApiError && error.status === 409) {
-          errorRef.value = ''
-          await refreshWorkflow()
+          await syncWorkflow()
+          if (isCurrentTask(taskId, version)) {
+            errorRef.value = error.message || '当前生成请求与服务端状态冲突，请查看最新消息后重试。'
+          }
         } else {
           showError(error)
         }
@@ -392,7 +465,10 @@ export function useCreatorWorkflow(
       const session = workflowSession.value
       if (!session) return null
       upsertWorkflowMessage(message)
-      workflowMessageDraft.value = ''
+      if (contentOverride === undefined) {
+        workflowMessageDraft.value = ''
+        creatorStore.clearWorkflowMessageDraft(taskId)
+      }
       workflowSession.value = {
         ...session,
         status: 'WAITING_USER_INPUT',
@@ -415,6 +491,12 @@ export function useCreatorWorkflow(
       status: 'WAITING_USER_INPUT',
       planGenerationCount: 0,
     }
+  }
+
+  function updateMessageDraft(draft: string) {
+    workflowMessageDraft.value = draft
+    const taskId = selectedTaskId.value
+    if (taskId) creatorStore.setWorkflowMessageDraft(taskId, draft)
   }
 
   function resetWorkflowState(closeModal = true) {
@@ -449,8 +531,10 @@ export function useCreatorWorkflow(
     isLoadingWorkflow, isSendingWorkflowMessage, isAligningIntent,
     isAnalyzingPrePublish, isConfirmingPrePublish, isGeneratingPrePublishDraft,
     canSendWorkflowMessage, canRunPrePublishAnalyze, canConfirmPrePublish,
+    isWorkflowCommandRunning, prePublishAnalyzeUnavailableReason,
     selectedWorkflowMessage, workflowStatusText,
-    loadWorkflow, refreshWorkflow, generateDraft, alignIntent, runAnalyze,
-    confirmSuggestion, sendSupplement, markIntentPending, resetWorkflowState, disconnect,
+    loadWorkflow, syncWorkflow, refreshWorkflow, generateDraft, alignIntent, runAnalyze,
+    confirmSuggestion, sendSupplement, markIntentPending, updateMessageDraft,
+    resetWorkflowState, disconnect,
   }
 }

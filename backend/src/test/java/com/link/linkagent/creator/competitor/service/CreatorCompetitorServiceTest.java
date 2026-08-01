@@ -361,6 +361,11 @@ class CreatorCompetitorServiceTest {
         }
 
         @Override
+        public Optional<CreatorSuggestionRecord> findByTaskIdAndSessionId(String taskId, String sessionId) {
+            return Optional.empty();
+        }
+
+        @Override
         public Optional<CreatorSuggestionRecord> findBySuggestionId(String suggestionId) {
             return Optional.empty();
         }

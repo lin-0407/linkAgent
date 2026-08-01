@@ -211,6 +211,7 @@ export function createPrePublishLayoutPreviewFixture() {
       preferenceId: 'layout-preview-preference',
       userId: 'default',
       sourceTaskId: taskId,
+      sourceTaskName: '宿舍收纳实测',
       sourceReportId: 'layout-preview-report',
       preferenceContent: JSON.stringify([
         '[ADOPTED] 采用发布前优化建议：倾向问句式标题；标题含数字；中等长度标题（16-25字）',

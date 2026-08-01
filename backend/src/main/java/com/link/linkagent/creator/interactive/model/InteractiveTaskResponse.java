@@ -13,6 +13,7 @@ public record InteractiveTaskResponse(
         String selectedOptionId,
         String parseStatus,
         String backgroundContext,
+        List<InteractiveDocumentResponse> uploadedDocuments,
         String understandingSummary,
         String understandingStatus,
         LocalDateTime createTime,

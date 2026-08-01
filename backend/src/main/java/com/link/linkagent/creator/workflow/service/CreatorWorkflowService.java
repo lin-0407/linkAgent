@@ -225,10 +225,11 @@ public class CreatorWorkflowService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "创作任务缺少可加载材料");
         }
 
-        // 恢复逻辑：优先尝试复用最近一次发布前优化会话（页面刷新/重连场景），
-        // 找不到时才新建。这样用户回到页面后能继续之前的分析和消息流。
+        // 先锁稳定存在的任务行，再查会话；空索引间隙本身不能可靠串行两个首次恢复请求。
         if (shouldResumeLatest(request)) {
-            return creatorWorkflowMapper.findLatestSession(
+            creatorWorkflowMapper.lockTaskByTaskId(taskRecord.getTaskId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+            return creatorWorkflowMapper.findLatestSessionForUpdate(
                             taskRecord.getTaskId(),
                             CreatorWorkflowStage.PRE_PUBLISH.name()
                     )
@@ -669,7 +670,10 @@ public class CreatorWorkflowService {
                     "保存建议结果消息",
                     "把结构化建议挂到当前工作流会话，等待用户确认。"
             );
-            CreatorSuggestionResponse suggestionResponse = prePublishSuggestionService.saveSuggestion(suggestionCandidate);
+            CreatorSuggestionResponse suggestionResponse = prePublishSuggestionService.saveSuggestion(
+                    suggestionCandidate,
+                    sessionRecord.getSessionId()
+            );
             appendAndPublishMessage(
                     sessionRecord.getTaskId(),
                     sessionRecord.getSessionId(),

@@ -92,12 +92,15 @@ async function loadTasks() {
 // 通过 Pinia creatorStore 持久化选中的任务 ID，替代原来的 localStorage 直写通道。
 // Pinia persist 插件自动同步到 localStorage，CreatorWorkspace 从同一 store 读取恢复。
 function continueTask(task: CreatorTaskSummary) {
+  creatorStore.setActiveInteractiveTaskId(null)
   creatorStore.selectedTaskId = task.taskId
   router.push('/creator')
 }
 
 function createNewTask() {
   creatorStore.selectedTaskId = null
+  creatorStore.setActiveInteractiveTaskId(null)
+  creatorStore.clearNewInteractiveTaskDraft()
   router.push('/creator')
 }
 

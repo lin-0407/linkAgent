@@ -21,6 +21,7 @@ export function useCreatorContext(errorRef: Ref<string>) {
   const creatorPreferences = ref<CreatorPreference[]>([])
   const creatorContextTerms = ref<CreatorContextTerm[]>([])
   const isLoadingCreatorPreferences = ref(false)
+  const creatorPreferencesError = ref('')
   const isLoadingCreatorContextTerms = ref(false)
   const isSavingCreatorContextTerm = ref(false)
   const savingContextTermKey = ref('')
@@ -33,11 +34,15 @@ export function useCreatorContext(errorRef: Ref<string>) {
   async function loadCreatorPreferences(userId = 'default') {
     const version = ++preferenceLoadVersion
     isLoadingCreatorPreferences.value = true
+    creatorPreferencesError.value = ''
     try {
       const result = await listCreatorPreferences(userId)
       if (version === preferenceLoadVersion) creatorPreferences.value = result
     } catch (error) {
-      if (version === preferenceLoadVersion) showError(error)
+      if (version === preferenceLoadVersion) {
+        creatorPreferencesError.value = error instanceof Error ? error.message : '历史偏好读取失败'
+        showError(error)
+      }
     } finally {
       if (version === preferenceLoadVersion) isLoadingCreatorPreferences.value = false
     }
@@ -100,6 +105,7 @@ export function useCreatorContext(errorRef: Ref<string>) {
     creatorPreferences,
     creatorContextTerms,
     isLoadingCreatorPreferences,
+    creatorPreferencesError,
     isLoadingCreatorContextTerms,
     isSavingCreatorContextTerm,
     savingContextTermKey,

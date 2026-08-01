@@ -259,6 +259,7 @@ public class CreatorPreferenceService {
                 record.getPreferenceId(),
                 record.getUserId(),
                 record.getSourceTaskId(),
+                record.getSourceTaskName(),
                 record.getSourceReportId(),
                 record.getPreferenceContent(),
                 record.getCreateTime(),

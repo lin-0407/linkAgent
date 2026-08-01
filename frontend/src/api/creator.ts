@@ -42,6 +42,8 @@ import type {
   PrePublishAnalyzePayload,
   PrePublishDraftPayload,
   PrePublishDraftResult,
+  PrePublishSettings,
+  PrePublishSettingsPayload,
   // P0-3: B站账号绑定 + 视频分析
   BilibiliAccount,
   BindAccountPayload,
@@ -81,6 +83,19 @@ export function getCreatorTask(taskId: string) {
 
 export function skipCreatorTaskToPreflight(taskId: string) {
   return post<CreatorTask>(`/creator/tasks/${encodeURIComponent(taskId)}:skip-to-preflight`)
+}
+
+export function getPrePublishSettings(taskId: string) {
+  return get<PrePublishSettings>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/pre-publish-settings`,
+  )
+}
+
+export function savePrePublishSettings(taskId: string, payload: PrePublishSettingsPayload) {
+  return put<PrePublishSettings>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/pre-publish-settings`,
+    cleanPayload(payload),
+  )
 }
 
 // ── AI 交互式创作 ──
@@ -170,8 +185,11 @@ export function recordCreatorContextTermFeedback(termId: string, accepted: boole
 
 // ── 发布前优化 ──
 
-export function getPrePublishSuggestion(taskId: string) {
-  return get<CreatorSuggestion>(`/creator/tasks/${encodeURIComponent(taskId)}/pre-publish/suggestions`)
+export function getPrePublishSuggestion(taskId: string, sessionId: string) {
+  return get<CreatorSuggestion>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/pre-publish/suggestions`,
+    { params: { sessionId } },
+  )
 }
 
 export function startPrePublishWorkflow(
