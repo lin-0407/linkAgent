@@ -257,8 +257,8 @@ knowledge:
       enabled: ${KNOWLEDGE_RAG_RERANK_ENABLED:false}
       model: ${KNOWLEDGE_RAG_RERANK_MODEL:qwen3-rerank}
       base-url: ${KNOWLEDGE_RAG_RERANK_BASE_URL:https://dashscope.aliyuncs.com/compatible-api/v1}
-      # 默认复用 LLM 网关同一个 DashScope Key；如 rerank 用独立 Key，单独配 KNOWLEDGE_RAG_RERANK_API_KEY
-      api-key: ${KNOWLEDGE_RAG_RERANK_API_KEY:${LLM_API_KEY:}}
+      # 默认复用 DashScope Key；如 rerank 使用独立 Key，单独配置 KNOWLEDGE_RAG_RERANK_API_KEY
+      api-key: ${KNOWLEDGE_RAG_RERANK_API_KEY:${DASHSCOPE_API_KEY:}}
       candidate-pool-size: ${KNOWLEDGE_RAG_RERANK_POOL:20}
       timeout-ms: ${KNOWLEDGE_RAG_RERANK_TIMEOUT_MS:10000}
     # 原生 dense+BM25 混合检索（5.2d）：默认关，需 Milvus 服务端 ≥2.5（BM25 是服务端能力）+ 自建 schema 集合 + 重灌。

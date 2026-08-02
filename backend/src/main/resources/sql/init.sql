@@ -693,6 +693,7 @@ CREATE TABLE IF NOT EXISTS creator_reference_video
     id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     video_id              VARCHAR(64)     NOT NULL COMMENT '案例唯一标识（UUID）；跨任务稳定引用，同时作为子表外键和向量文档 ID 的来源',
     bv_id                 VARCHAR(20)              DEFAULT NULL COMMENT 'B 站 BV 号；seed 内置样例或手动录入可能没有，故可空',
+    cover_url             VARCHAR(500)             DEFAULT NULL COMMENT 'B站视频封面原始公开URL，仅保存非临时签名地址，不存储图片文件',
     tier                  VARCHAR(16)     NOT NULL DEFAULT 'BENCHMARK' COMMENT '案例层级：BENCHMARK=优品标杆（榜单来源），COMPETITOR=竞品，OWN_HISTORY=创作者历史；决定检索时如何使用该案例',
     category              VARCHAR(64)              DEFAULT NULL COMMENT '分区 / 主题，用于同赛道过滤检索；质量分也按分区归一化，缺失时不参与分区相对打分',
     title                 VARCHAR(255)             DEFAULT NULL COMMENT '视频标题，案例卡片的语义主体之一；导入接口负责校验必填，DB 层保持宽松以容纳 seed / 手动录入',
@@ -2189,4 +2190,12 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_suggestion' AND COLUMN_NAME = 'audit_report');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 案例库封面只保存 B 站公开源地址；旧库补列后由页面按可见范围逐步回源，不做全表抓取。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_reference_video ADD COLUMN cover_url VARCHAR(500) DEFAULT NULL COMMENT ''B站视频封面原始公开URL，仅保存非临时签名地址，不存储图片文件'' AFTER bv_id',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_reference_video' AND COLUMN_NAME = 'cover_url');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

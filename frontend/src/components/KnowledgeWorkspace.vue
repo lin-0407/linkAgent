@@ -4,6 +4,7 @@ import {
   fetchImportReferenceVideo,
   getReferenceVideoAnalysisContext,
   listReferenceVideos,
+  refreshReferenceVideoPublicMetadata,
   topicSearchReferenceVideos,
 } from '@/api/knowledge'
 import type {
@@ -56,6 +57,12 @@ const filterTier = ref('')
 const filterCategory = ref('')
 const listLoading = ref(false)
 const listError = ref('')
+
+// 单卡回源会启动 Python 进程，因此页面自动补齐严格限制为两个并发任务。
+const PUBLIC_METADATA_REFRESH_CONCURRENCY = 2
+const publicMetadataRefreshQueue: string[] = []
+const publicMetadataRefreshAttemptedVideoIds = new Set<string>()
+let publicMetadataRefreshInFlight = 0
 
 const searchQuery = ref('')
 const searchTier = ref('')
@@ -132,6 +139,46 @@ async function loadList() {
   } finally {
     listLoading.value = false
   }
+}
+
+function mergeReferenceVideo(updated: ReferenceVideo) {
+  items.value = items.value.map((item) => (
+    item.videoId === updated.videoId ? updated : item
+  ))
+}
+
+function drainPublicMetadataRefreshQueue() {
+  while (
+    publicMetadataRefreshInFlight < PUBLIC_METADATA_REFRESH_CONCURRENCY
+    && publicMetadataRefreshQueue.length > 0
+  ) {
+    const videoId = publicMetadataRefreshQueue.shift()
+    if (!videoId) {
+      continue
+    }
+
+    publicMetadataRefreshInFlight += 1
+    void refreshReferenceVideoPublicMetadata(videoId)
+      .then(mergeReferenceVideo)
+      .catch(() => {
+        // 自动补封面失败时保留当前卡片，避免单张图片影响整个案例列表。
+      })
+      .finally(() => {
+        publicMetadataRefreshInFlight -= 1
+        drainPublicMetadataRefreshQueue()
+      })
+  }
+}
+
+function schedulePublicMetadataRefresh(video: ReferenceVideo) {
+  if (!video.bvId || publicMetadataRefreshAttemptedVideoIds.has(video.videoId)) {
+    return
+  }
+
+  // 页面生命周期内只允许每个案例自动回源一次，避免坏图反复触发脚本。
+  publicMetadataRefreshAttemptedVideoIds.add(video.videoId)
+  publicMetadataRefreshQueue.push(video.videoId)
+  drainPublicMetadataRefreshQueue()
 }
 
 function handleFilterChange(tier: string, category: string) {
@@ -265,6 +312,7 @@ onMounted(() => {
         @page-change="handlePageChange"
         @filter-change="handleFilterChange"
         @refresh="loadList"
+        @refresh-public-metadata="schedulePublicMetadataRefresh"
         @open-analysis="openVideoAnalysis"
         @open-competitor="openCompetitorAnalysis"
       />

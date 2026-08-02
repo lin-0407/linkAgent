@@ -3,6 +3,7 @@ package com.link.linkagent.knowledge.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.knowledge.mapper.KnowledgeReferenceVideoMapper;
+import com.link.linkagent.knowledge.model.BilibiliCoverUrlPolicy;
 import com.link.linkagent.knowledge.model.ReferenceVideoImportRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoImportResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoChunkRecord;
@@ -129,6 +130,7 @@ public class KnowledgeReferenceVideoService {
             // video_id 用 UUID，作为跨任务稳定标识，同时是子表外键与未来向量文档 ID 的来源
             record.setVideoId(UUID.randomUUID().toString());
             record.setBvId(bvId);
+            record.setCoverUrl(BilibiliCoverUrlPolicy.normalize(video.coverUrl()));
             record.setTier(tier);
             record.setCategory(resolveCategory(video.category(), defaultCategory));
             record.setTitle(video.title().trim());
@@ -167,6 +169,42 @@ public class KnowledgeReferenceVideoService {
         // 与导入同一事务：此处重算的 SELECT 能读到上面刚插入的行，算完回写后整体原子提交。
         knowledgeQualityScoringService.recomputeCategories(affectedCategories);
         return new ReferenceVideoImportResponse(request.videos().size(), imported, skipped, source, tier);
+    }
+
+    /**
+     * 在短事务内替换封面和六项公开统计，并基于新统计重算当前分区质量分。
+     * 脚本调用由上层在进入本方法前完成，避免 B 站网络等待占用数据库事务。
+     */
+    @Transactional
+    public ReferenceVideoResponse updatePublicMetadata(String videoId,
+                                                       String coverUrl,
+                                                       ReferenceVideoImportRequest.VideoStats stats) {
+        ReferenceVideoRecord current = knowledgeReferenceVideoMapper.findByVideoId(videoId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "案例不存在"));
+        String persistentCoverUrl = BilibiliCoverUrlPolicy.normalize(coverUrl);
+        validatePublicMetadata(persistentCoverUrl, stats);
+
+        int updated = knowledgeReferenceVideoMapper.updatePublicMetadata(
+                videoId,
+                persistentCoverUrl,
+                stats.view(),
+                stats.like(),
+                stats.coin(),
+                stats.favorite(),
+                stats.danmaku(),
+                stats.reply()
+        );
+        if (updated != 1) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "案例不存在");
+        }
+
+        String category = TextUtil.trimToNull(current.getCategory());
+        if (category != null) {
+            knowledgeQualityScoringService.recomputeCategories(Set.of(category));
+        }
+        return knowledgeReferenceVideoMapper.findByVideoId(videoId)
+                .map(this::toResponse)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "案例不存在"));
     }
 
     /**
@@ -259,6 +297,25 @@ public class KnowledgeReferenceVideoService {
         record.setReplyCount(stats.reply());
     }
 
+    private void validatePublicMetadata(String coverUrl, ReferenceVideoImportRequest.VideoStats stats) {
+        if (coverUrl == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "B站没有返回可持久化的封面地址");
+        }
+        if (stats == null
+                || invalidPublicCount(stats.view())
+                || invalidPublicCount(stats.like())
+                || invalidPublicCount(stats.coin())
+                || invalidPublicCount(stats.favorite())
+                || invalidPublicCount(stats.danmaku())
+                || invalidPublicCount(stats.reply())) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "B站返回的公开视频统计不完整");
+        }
+    }
+
+    private boolean invalidPublicCount(Long value) {
+        return value == null || value < 0;
+    }
+
     /**
      * 列表的层级过滤值做大写归一并校验，非法值直接 400，避免静默返回空列表让人误以为没数据。
      */
@@ -279,6 +336,7 @@ public class KnowledgeReferenceVideoService {
                 record.getId(),
                 record.getVideoId(),
                 record.getBvId(),
+                BilibiliCoverUrlPolicy.normalize(record.getCoverUrl()),
                 record.getTier(),
                 record.getCategory(),
                 record.getTitle(),

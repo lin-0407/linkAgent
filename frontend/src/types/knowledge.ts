@@ -22,6 +22,7 @@ export type ReferenceVideo = {
   id: number
   videoId: string
   bvId: string | null
+  coverUrl: string | null
   tier: string
   category: string | null
   title: string

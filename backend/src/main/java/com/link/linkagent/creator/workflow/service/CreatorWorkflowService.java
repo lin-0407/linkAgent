@@ -57,6 +57,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -502,14 +503,26 @@ public class CreatorWorkflowService {
         sessionRecord = claimPrePublishExecution(sessionRecord);
         if (successfulGenerationCount >= MAX_PLAN_GENERATION_COUNT) {
             stopPlanGenerationAndAskForClarification(sessionRecord, intentContext);
+            log.warn("发布方案生成被三次门禁停止：taskId={}, sessionId={}, generationCount={}",
+                    sessionRecord.getTaskId(), sessionRecord.getSessionId(), successfulGenerationCount);
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "同一上下文已经生成三次发布方案，请先回答 AI 的具体问题再继续。"
             );
         }
 
+        long workflowStartNanos = System.nanoTime();
+        log.info("发布方案生成开始：taskId={}, sessionId={}, generationNo={}, materialCount={}",
+                sessionRecord.getTaskId(),
+                sessionRecord.getSessionId(),
+                successfulGenerationCount + 1,
+                materials.size());
         CreatorWorkflowStepRecord currentStep = null;
         try {
+            boolean agentModeEnabled = runtimeSettingService.isPrePublishAgentEnabled();
+            log.info("发布方案生成模式：taskId={}, sessionId={}, agentModeEnabled={}",
+                    sessionRecord.getTaskId(), sessionRecord.getSessionId(), agentModeEnabled);
+
             // 确保创作者画像存在（不存在时从历史偏好中 LLM 初始化）
             // 放在分析开始前，是为了让首次使用的用户也能体验到个性化建议
             // 虽然 ensureProfile 可能触发 LLM 调用，但未将其包装为步骤——
@@ -551,7 +564,7 @@ public class CreatorWorkflowService {
             PrePublishSuggestionCandidate suggestionCandidate;
             // Agent 模式与直连 LLM 模式的切换由运行期设置控制，无需重启服务。
             // 当 Agent 模式生产环境出现不稳定时，可快速关闭开关回退到直连 LLM。
-            if (runtimeSettingService.isPrePublishAgentEnabled()) {
+            if (agentModeEnabled) {
                 currentStep = startStep(
                         sessionRecord,
                         CreatorWorkflowStepType.AGENT_REASONING,
@@ -713,11 +726,31 @@ public class CreatorWorkflowService {
                     null,
                     payload("suggestionId", suggestionResponse.suggestionId(), "parseStatus", suggestionResponse.parseStatus())
             );
+            log.info("发布方案生成完成：taskId={}, sessionId={}, suggestionId={}, parseStatus={}, "
+                            + "generationCount={}, elapsedMs={}",
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    suggestionResponse.suggestionId(),
+                    suggestionResponse.parseStatus(),
+                    nextGenerationCount,
+                    elapsedMillis(workflowStartNanos));
             return suggestionResponse;
         } catch (RuntimeException exception) {
             if (exception instanceof PlanClarificationRequiredException) {
+                log.warn("发布方案生成停止并等待用户澄清：taskId={}, sessionId={}, elapsedMs={}, reason={}",
+                        sessionRecord.getTaskId(),
+                        sessionRecord.getSessionId(),
+                        elapsedMillis(workflowStartNanos),
+                        exception.getMessage());
                 throw exception;
             }
+            log.error("发布方案生成失败：taskId={}, sessionId={}, stepId={}, stepName={}, elapsedMs={}",
+                    sessionRecord.getTaskId(),
+                    sessionRecord.getSessionId(),
+                    currentStep == null ? null : currentStep.getStepId(),
+                    currentStep == null ? null : currentStep.getStepName(),
+                    elapsedMillis(workflowStartNanos),
+                    exception);
             if (currentStep != null) {
                 completeStepFailure(sessionRecord, currentStep, exception);
             }
@@ -1592,7 +1625,15 @@ public class CreatorWorkflowService {
         stepRecord.setStepName(stepName);
         stepRecord.setStatus(CreatorWorkflowStepStatus.RUNNING.name());
         stepRecord.setInputSummary(inputSummary);
+        // SSE 事件在数据库回查前就会发出，因此同时写入内存开始时间，让页面和日志立即拿到一致时间。
+        stepRecord.setStartTime(LocalDateTime.now());
         creatorWorkflowMapper.insertStep(stepRecord);
+        log.info("工作流步骤开始：taskId={}, sessionId={}, stepId={}, stepType={}, stepName={}",
+                sessionRecord.getTaskId(),
+                sessionRecord.getSessionId(),
+                stepRecord.getStepId(),
+                stepRecord.getStepType(),
+                stepRecord.getStepName());
         // 步骤开始即推送——让前端立即看到时间轴上新增了一个正在执行的步骤节点
         publishEvent(
                 sessionRecord.getTaskId(),
@@ -1617,6 +1658,14 @@ public class CreatorWorkflowService {
         stepRecord.setStatus(CreatorWorkflowStepStatus.SUCCESS.name());
         stepRecord.setOutputSummary(outputSummary);
         stepRecord.setRawOutput(rawOutput);
+        stepRecord.setEndTime(LocalDateTime.now());
+        log.info("工作流步骤完成：taskId={}, sessionId={}, stepId={}, stepType={}, stepName={}, elapsedMs={}",
+                sessionRecord.getTaskId(),
+                sessionRecord.getSessionId(),
+                stepRecord.getStepId(),
+                stepRecord.getStepType(),
+                stepRecord.getStepName(),
+                elapsedMillis(stepRecord.getStartTime(), stepRecord.getEndTime()));
         publishEvent(
                 sessionRecord.getTaskId(),
                 sessionRecord.getSessionId(),
@@ -1641,6 +1690,16 @@ public class CreatorWorkflowService {
         );
         stepRecord.setStatus(CreatorWorkflowStepStatus.FAILED.name());
         stepRecord.setErrorMessage(errorMessage);
+        stepRecord.setEndTime(LocalDateTime.now());
+        log.warn("工作流步骤失败：taskId={}, sessionId={}, stepId={}, stepType={}, stepName={}, "
+                        + "elapsedMs={}, error={}",
+                sessionRecord.getTaskId(),
+                sessionRecord.getSessionId(),
+                stepRecord.getStepId(),
+                stepRecord.getStepType(),
+                stepRecord.getStepName(),
+                elapsedMillis(stepRecord.getStartTime(), stepRecord.getEndTime()),
+                TextUtil.trimToDefault(errorMessage, "步骤执行失败"));
         publishEvent(
                 sessionRecord.getTaskId(),
                 sessionRecord.getSessionId(),
@@ -1661,8 +1720,25 @@ public class CreatorWorkflowService {
         );
         CreatorWorkflowSessionRecord updatedSession = creatorWorkflowMapper.findSession(taskId, sessionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "工作流会话状态更新后读取失败"));
+        log.info("工作流会话状态更新：taskId={}, sessionId={}, status={}, planGenerationCount={}, hasError={}",
+                updatedSession.getTaskId(),
+                updatedSession.getSessionId(),
+                updatedSession.getStatus(),
+                updatedSession.getPlanGenerationCount(),
+                TextUtil.hasText(updatedSession.getErrorMessage()));
         publishSessionStatus(updatedSession);
         return updatedSession;
+    }
+
+    private static long elapsedMillis(long startNanos) {
+        return Math.max(0L, (System.nanoTime() - startNanos) / 1_000_000L);
+    }
+
+    private static long elapsedMillis(LocalDateTime startTime, LocalDateTime endTime) {
+        if (startTime == null || endTime == null) {
+            return -1L;
+        }
+        return Math.max(0L, Duration.between(startTime, endTime).toMillis());
     }
 
     private void publishMessage(String taskId, CreatorWorkflowMessageRecord messageRecord) {

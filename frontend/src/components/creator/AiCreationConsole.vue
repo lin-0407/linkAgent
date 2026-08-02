@@ -61,6 +61,7 @@ const workflowModule = useCreatorWorkflow(selectedTaskId, hasTaskMaterials, erro
 const {
   workflowSession,
   workflowMessages,
+  workflowSteps,
   suggestion,
   isLoadingWorkflow,
   isAligningIntent: isAligning,
@@ -172,6 +173,97 @@ const generationBlockReason = computed(() => {
   if (workflowSession.value?.status === 'RUNNING') return '服务端工作流仍在运行，页面会继续展示进度。'
   if (workflowSession.value?.status === 'CONFIRMED') return '当前发布方案已经确认。'
   return prePublishAnalyzeUnavailableReason.value
+})
+
+const planProgressStages = ['读取材料', '生成方案', '审查方案', '保存结果']
+const planGenerationStepNames = new Set([
+  '发布前优化 Agent 推理',
+  '直连 LLM 回退生成建议',
+  '生成发布前优化建议',
+  '检查发布方案是否偏离用户想法',
+  '按用户原话重新生成发布方案',
+  '复查重答后的发布方案',
+  '保存建议结果消息',
+])
+const currentPlanSteps = computed(() => {
+  const orderedSteps = [...workflowSteps.value].sort((left, right) => {
+    const leftTime = left.startTime || left.createTime
+    const rightTime = right.startTime || right.createTime
+    return leftTime.localeCompare(rightTime)
+  })
+  const latestStartIndex = orderedSteps.reduce(
+    (result, step, index) => step.stepType === 'LOAD_CONTEXT' ? index : result,
+    -1,
+  )
+  return latestStartIndex >= 0 ? orderedSteps.slice(latestStartIndex) : []
+})
+const latestCurrentPlanStep = computed(() =>
+  currentPlanSteps.value[currentPlanSteps.value.length - 1] ?? null,
+)
+const hasRunningPlanGeneration = computed(() => {
+  const latestStep = latestCurrentPlanStep.value
+  return Boolean(
+    workflowSession.value?.status === 'RUNNING' &&
+    latestStep &&
+    (
+      latestStep.stepType === 'LOAD_CONTEXT' ||
+      planGenerationStepNames.has(latestStep.stepName)
+    ),
+  )
+})
+const isPlanProgressVisible = computed(() =>
+  !isAligning.value && (
+    generationRequestLocked.value ||
+    isGeneratingPlan.value ||
+    hasRunningPlanGeneration.value
+  ),
+)
+const planProgress = computed(() => {
+  if (workflowSession.value?.status !== 'RUNNING') {
+    return {
+      currentStep: '正在准备生成发布方案',
+      percent: 8,
+      stageIndex: 0,
+    }
+  }
+
+  const steps = currentPlanSteps.value
+  const runningIndex = steps.findIndex((step) => step.status === 'RUNNING')
+  const currentIndex = runningIndex >= 0 ? runningIndex : steps.length - 1
+  const currentStep = currentIndex >= 0 ? steps[currentIndex] : null
+  const hasEarlierCandidate = currentIndex > 0 && steps
+    .slice(0, currentIndex)
+    .some((step) =>
+      step.status === 'SUCCESS' &&
+      (step.stepType === 'AGENT_REASONING' || step.stepType === 'LLM_CALL'),
+    )
+
+  // 偏离后会动态增加重答与复查步骤，按固定业务阶段推进可避免总步骤数变化导致进度倒退。
+  let stageIndex = 0
+  let percent = 8
+  if (currentStep?.stepType === 'LOAD_CONTEXT') {
+    percent = currentStep.status === 'SUCCESS' ? 25 : 12
+  } else if (currentStep?.stepType === 'SAVE_RESULT') {
+    stageIndex = 3
+    percent = currentStep.status === 'SUCCESS' ? 100 : 90
+  } else if (currentStep?.stepType === 'AGENT_REASONING') {
+    stageIndex = 1
+    percent = currentStep.status === 'SUCCESS' ? 50 : 38
+  } else if (currentStep?.stepType === 'LLM_CALL') {
+    if (hasEarlierCandidate) {
+      stageIndex = 2
+      percent = currentStep.status === 'SUCCESS' ? 75 : 65
+    } else {
+      stageIndex = 1
+      percent = currentStep.status === 'SUCCESS' ? 50 : 38
+    }
+  }
+
+  return {
+    currentStep: currentStep?.stepName || '正在准备生成发布方案',
+    percent,
+    stageIndex,
+  }
 })
 
 onMounted(() => {
@@ -656,11 +748,37 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
           </div>
 
           <div class="ai-plan-action">
-            <div>
+            <div class="ai-plan-action-copy">
               <strong>发布方案由你决定什么时候生成</strong>
               <p v-if="clarificationRequired">AI 已停止重复生成，请先回答上面的问题。</p>
               <p v-else>当前上下文已生成 {{ planGenerationCount }}/3 次；你补充新信息后会重新计数。</p>
-              <p v-if="generationBlockReason" class="ai-plan-block-reason">{{ generationBlockReason }}</p>
+              <div v-if="isPlanProgressVisible" class="ai-plan-progress">
+                <div class="ai-plan-progress-header">
+                  <strong>发布方案生成中</strong>
+                  <span>{{ planProgress.currentStep }}</span>
+                </div>
+                <div
+                  class="ai-plan-progress-track"
+                  role="progressbar"
+                  aria-label="发布方案生成进度"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  :aria-valuenow="planProgress.percent"
+                  :aria-valuetext="planProgress.currentStep"
+                >
+                  <span :style="{ width: `${planProgress.percent}%` }" />
+                </div>
+                <div class="ai-plan-progress-stages" aria-hidden="true">
+                  <span
+                    v-for="(stage, index) in planProgressStages"
+                    :key="stage"
+                    :class="{ done: index < planProgress.stageIndex, current: index === planProgress.stageIndex }"
+                  >
+                    {{ stage }}
+                  </span>
+                </div>
+              </div>
+              <p v-if="generationBlockReason && !isPlanProgressVisible" class="ai-plan-block-reason">{{ generationBlockReason }}</p>
             </div>
             <button
               type="button"
@@ -669,7 +787,7 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
               :title="generationBlockReason"
               @click="generatePlan"
             >
-              {{ isGeneratingPlan ? '生成中...' : planGenerationCount >= 3 ? '让 AI 先问清楚' : suggestion ? '重新生成发布方案' : '生成发布方案' }}
+              {{ isPlanProgressVisible ? '生成中...' : planGenerationCount >= 3 ? '让 AI 先问清楚' : suggestion ? '重新生成发布方案' : '生成发布方案' }}
             </button>
           </div>
 

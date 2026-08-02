@@ -13,6 +13,7 @@ public class ReferenceVideoRecord {
     private Long id;
     private String videoId;
     private String bvId;
+    private String coverUrl;
     private String tier;
     private String category;
     private String title;
@@ -59,6 +60,14 @@ public class ReferenceVideoRecord {
 
     public void setBvId(String bvId) {
         this.bvId = bvId;
+    }
+
+    public String getCoverUrl() {
+        return coverUrl;
+    }
+
+    public void setCoverUrl(String coverUrl) {
+        this.coverUrl = coverUrl;
     }
 
     public String getTier() {

@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
@@ -43,6 +43,15 @@ COMMENT_TYPE_VIDEO = 1
 DEFAULT_TIMEOUT_SECONDS = 15
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "export" / "bilibili_reference"
+MAX_COVER_URL_LENGTH = 500
+
+# 仅接受视频详情 data.pic 实际使用的公开图片 CDN，避免把代理、OSS 或任意外部地址写入案例库。
+TRUSTED_IMAGE_HOSTS = {
+    "i0.hdslb.com",
+    "i1.hdslb.com",
+    "i2.hdslb.com",
+    "archive.biliimg.com",
+}
 
 # 后端导入接口校验过的来源白名单；脚本侧只做默认值与提示，真正拦截仍由后端负责。
 ALLOWED_SOURCES = (
@@ -396,6 +405,61 @@ def normalize_optional(value: str | None) -> str | None:
     return trimmed or None
 
 
+def normalize_cover_url(value: Any) -> str | None:
+    """把 data.pic 统一成可长期保存的 B 站 HTTPS 源地址；签名或非官方地址按缺失处理。"""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    candidate = value.strip()
+    if candidate.startswith("//"):
+        candidate = f"https:{candidate}"
+
+    parsed = urlparse(candidate)
+    if parsed.scheme.lower() == "http":
+        parsed = parsed._replace(scheme="https")
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    host = parsed.hostname.lower() if parsed.hostname else None
+    if (
+        parsed.scheme.lower() != "https"
+        or host not in TRUSTED_IMAGE_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.fragment
+        or not parsed.path
+        or contains_temporary_signature(parsed.query)
+    ):
+        return None
+
+    normalized = urlunparse(("https", host, parsed.path, parsed.params, parsed.query, ""))
+    return normalized if len(normalized) <= MAX_COVER_URL_LENGTH else None
+
+
+def contains_temporary_signature(query: str) -> bool:
+    if not query:
+        return False
+    for key, _ in parse_qsl(query.replace(";", "&"), keep_blank_values=True):
+        normalized = key.lower()
+        if (
+            normalized == "sign"
+            or normalized.endswith("_sign")
+            or normalized.endswith("-sign")
+            or "signature" in normalized
+            or "token" in normalized
+            or "secret" in normalized
+            or "hmac" in normalized
+            or "expires" in normalized
+            or "expiry" in normalized
+            or "credential" in normalized
+            or "accesskey" in normalized
+            or normalized in {"policy", "auth_key", "authkey"}
+        ):
+            return True
+    return False
+
+
 def extract_bvid(value: str) -> str:
     matched = re.search(r"BV[0-9A-Za-z]{10}", value)
     if not matched:
@@ -466,12 +530,16 @@ def build_video_item(
 ) -> dict[str, Any]:
     video_info = fetch_video_info(bvid, options.timeout)
     stat = video_info.get("stat") if isinstance(video_info.get("stat"), dict) else {}
+    cover_url = normalize_cover_url(video_info.get("pic"))
+    if video_info.get("pic") and cover_url is None:
+        warnings.append(f"视频 {video_info.get('bvid') or bvid} 的封面地址不是可持久化的 B 站公开 CDN 地址，已按缺失处理")
 
     comments = collect_root_comments(video_info, options, warnings, signer_state)
     danmaku = collect_danmaku(video_info, options, warnings)
 
     return {
         "bvId": video_info.get("bvid") or bvid,
+        "coverUrl": cover_url,
         "title": video_info.get("title") or "",
         "description": video_info.get("desc"),
         "tags": None,  # 标签需额外接口，案例检索（5.1c+）才用到，此处先留空，保持采集轻量

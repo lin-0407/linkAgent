@@ -9,6 +9,7 @@ import com.link.linkagent.knowledge.model.ReferenceVideoIndexResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoIndexStatusResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoPageResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoQualityRecomputeResponse;
+import com.link.linkagent.knowledge.model.ReferenceVideoResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoSearchResponse;
 import com.link.linkagent.knowledge.model.ReferenceVideoTopicSearchRequest;
@@ -97,6 +98,18 @@ public class KnowledgeReferenceVideoController {
     public ReferenceVideoImportResponse fetchAndImportReferenceVideo(
             @Valid @RequestBody ReferenceVideoFetchImportRequest request) {
         return knowledgeReferenceFetchService.fetchAndImport(request);
+    }
+
+    /**
+     * 按单张案例刷新 B 站公开封面和统计；不抓评论弹幕正文，也不触发摘要、中块或向量索引更新。
+     */
+    @PostMapping("/{videoId}/refresh-public-metadata")
+    public ReferenceVideoResponse refreshReferenceVideoPublicMetadata(
+            @PathVariable
+            @NotBlank(message = "videoId 不能为空")
+            @Size(max = 64, message = "videoId 长度不能超过64个字符")
+            String videoId) {
+        return knowledgeReferenceFetchService.refreshPublicMetadata(videoId);
     }
 
     /**

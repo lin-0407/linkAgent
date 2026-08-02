@@ -6585,6 +6585,11 @@ body {
   border-radius: 10px;
 }
 
+.ai-plan-action-copy {
+  flex: 1;
+  min-width: 0;
+}
+
 .ai-plan-action strong {
   color: var(--text);
 }
@@ -6598,6 +6603,83 @@ body {
 .ai-plan-action .ai-plan-block-reason {
   color: var(--warn);
   font-weight: 650;
+}
+
+.ai-plan-progress {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.ai-plan-progress-header {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.ai-plan-progress-header strong {
+  color: var(--creator-accent);
+  font-size: 12px;
+}
+
+.ai-plan-progress-header span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.ai-plan-progress-track {
+  height: 6px;
+  overflow: hidden;
+  background: rgba(23, 32, 51, 0.09);
+  border-radius: 3px;
+}
+
+.ai-plan-progress-track > span {
+  display: block;
+  height: 100%;
+  background: var(--creator-accent);
+  border-radius: inherit;
+  transition: width 320ms ease;
+}
+
+.ai-plan-progress-stages {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.ai-plan-progress-stages span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.ai-plan-progress-stages span:first-child {
+  text-align: left;
+}
+
+.ai-plan-progress-stages span:last-child {
+  text-align: right;
+}
+
+.ai-plan-progress-stages span.done {
+  color: var(--color-mint);
+}
+
+.ai-plan-progress-stages span.current {
+  color: var(--creator-accent);
+  font-weight: 750;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-plan-progress-track > span {
+    transition: none;
+  }
 }
 
 .ai-plan-result {
@@ -7363,6 +7445,15 @@ body {
 
   .ai-plan-action .creator-primary-button {
     width: 100%;
+  }
+
+  .ai-plan-progress-header {
+    display: grid;
+    gap: 3px;
+  }
+
+  .ai-plan-progress-header span {
+    text-align: left;
   }
 
   .creator-header,

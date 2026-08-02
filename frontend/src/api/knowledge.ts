@@ -1,4 +1,5 @@
 import type {
+  ReferenceVideo,
   ReferenceVideoAnalysisContext,
   ReferenceVideoFetchImportPayload,
   ReferenceVideoImportResult,
@@ -32,6 +33,13 @@ export function listReferenceVideos(query: ReferenceVideoListQuery = {}) {
       size: query.size ?? 20,
     },
   })
+}
+
+/** 只刷新单张案例的持久化封面和公开统计，避免列表刷新触发批量回源。 */
+export function refreshReferenceVideoPublicMetadata(videoId: string) {
+  return post<ReferenceVideo>(
+    `/knowledge/reference-videos/${encodeURIComponent(videoId)}/refresh-public-metadata`,
+  )
 }
 
 // ── 向量索引状态 & 重建 ──

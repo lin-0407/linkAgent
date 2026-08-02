@@ -39,6 +39,7 @@ public interface KnowledgeReferenceVideoMapper {
             INSERT INTO creator_reference_video (
                 video_id,
                 bv_id,
+                cover_url,
                 tier,
                 category,
                 title,
@@ -57,6 +58,7 @@ public interface KnowledgeReferenceVideoMapper {
             VALUES (
                 #{videoId},
                 #{bvId},
+                #{coverUrl},
                 #{tier},
                 #{category},
                 #{title},
@@ -138,6 +140,7 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT v.id,
                    v.video_id,
                    v.bv_id,
+                   v.cover_url,
                    v.tier,
                    v.category,
                    v.title,
@@ -170,6 +173,7 @@ public interface KnowledgeReferenceVideoMapper {
             @Result(column = "id", property = "id"),
             @Result(column = "video_id", property = "videoId"),
             @Result(column = "bv_id", property = "bvId"),
+            @Result(column = "cover_url", property = "coverUrl"),
             @Result(column = "tier", property = "tier"),
             @Result(column = "category", property = "category"),
             @Result(column = "title", property = "title"),
@@ -232,7 +236,7 @@ public interface KnowledgeReferenceVideoMapper {
      */
     @Select("""
             <script>
-            SELECT id, video_id, bv_id, tier, category, title, description, tags,
+            SELECT id, video_id, bv_id, cover_url, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
                    source, publish_time_text,
@@ -254,7 +258,7 @@ public interface KnowledgeReferenceVideoMapper {
      */
     @Select("""
             <script>
-            SELECT id, video_id, bv_id, tier, category, title, description, tags,
+            SELECT id, video_id, bv_id, cover_url, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
                    source, publish_time_text,
@@ -288,7 +292,7 @@ public interface KnowledgeReferenceVideoMapper {
      */
     @Select("""
             <script>
-            SELECT id, video_id, bv_id, tier, category, title, description, tags,
+            SELECT id, video_id, bv_id, cover_url, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
                    source, publish_time_text,
@@ -347,7 +351,7 @@ public interface KnowledgeReferenceVideoMapper {
      * @return 匹配的参考案例记录，不存在时返回 Optional.empty()
      */
     @Select("""
-            SELECT id, video_id, bv_id, tier, category, title, description, tags,
+            SELECT id, video_id, bv_id, cover_url, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
                    source, publish_time_text,
@@ -359,6 +363,31 @@ public interface KnowledgeReferenceVideoMapper {
             """)
     @ResultMap("ReferenceVideoRecordMap")
     Optional<ReferenceVideoRecord> findByVideoId(@Param("videoId") String videoId);
+
+    /**
+     * 一次性更新封面和六项公开统计，避免封面成功但统计只写入一部分的中间状态。
+     */
+    @Update("""
+            UPDATE creator_reference_video
+            SET cover_url = #{coverUrl,jdbcType=VARCHAR},
+                view_count = #{viewCount,jdbcType=BIGINT},
+                like_count = #{likeCount,jdbcType=BIGINT},
+                coin_count = #{coinCount,jdbcType=BIGINT},
+                favorite_count = #{favoriteCount,jdbcType=BIGINT},
+                danmaku_count = #{danmakuCount,jdbcType=BIGINT},
+                reply_count = #{replyCount,jdbcType=BIGINT},
+                update_time = CURRENT_TIMESTAMP
+            WHERE video_id = #{videoId}
+              AND is_deleted = 0
+            """)
+    int updatePublicMetadata(@Param("videoId") String videoId,
+                             @Param("coverUrl") String coverUrl,
+                             @Param("viewCount") Long viewCount,
+                             @Param("likeCount") Long likeCount,
+                             @Param("coinCount") Long coinCount,
+                             @Param("favoriteCount") Long favoriteCount,
+                             @Param("danmakuCount") Long danmakuCount,
+                             @Param("replyCount") Long replyCount);
 
     /**
      * 取出某分区下全部未删除视频的打分输入：父表 6 项热度 + 子表正/负向条数（5.1c 质量打分）。
@@ -426,6 +455,7 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT v.id,
                    v.video_id,
                    v.bv_id,
+                   v.cover_url,
                    v.tier,
                    v.category,
                    v.title,
@@ -675,6 +705,7 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT v.id,
                    v.video_id,
                    v.bv_id,
+                   v.cover_url,
                    v.tier,
                    v.category,
                    v.title,

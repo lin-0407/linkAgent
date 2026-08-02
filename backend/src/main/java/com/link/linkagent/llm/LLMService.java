@@ -562,14 +562,23 @@ public class LLMService {
         if (thinkingModelName == null) {
             thinkingModelName = modelName;
         }
+        String reasoningEffort = reasoningEffortForLog(thinkingModelName);
         llmApiUsageService.recordTextSuccess(
                 modelName,
                 result.promptTokens(),
                 result.completionTokens(),
                 result.totalTokens(),
-                reasoningEffortForLog(thinkingModelName),
+                reasoningEffort,
                 result.elapsedMs()
         );
+        log.info("LLM 调用成功：model={}, reasoningEffort={}, promptTokens={}, completionTokens={}, "
+                        + "totalTokens={}, elapsedMs={}",
+                modelName,
+                reasoningEffort,
+                result.promptTokens(),
+                result.completionTokens(),
+                result.totalTokens(),
+                result.elapsedMs());
     }
 
     /**
@@ -581,12 +590,20 @@ public class LLMService {
         if (llmApiUsageService == null) {
             return;
         }
+        String resolvedModelName = effectiveModelName(modelName);
+        String reasoningEffort = reasoningEffortForLog(modelName);
         llmApiUsageService.recordTextFailure(
-                effectiveModelName(modelName),
-                reasoningEffortForLog(modelName),
+                resolvedModelName,
+                reasoningEffort,
                 elapsedMs,
                 exception
         );
+        log.warn("LLM 调用失败：model={}, reasoningEffort={}, elapsedMs={}, errorType={}, error={}",
+                resolvedModelName,
+                reasoningEffort,
+                elapsedMs,
+                exception.getClass().getSimpleName(),
+                TextUtil.trimToDefault(exception.getMessage(), "未知错误"));
     }
 
     private OpenAiChatOptions defaultThinkingOptions() {

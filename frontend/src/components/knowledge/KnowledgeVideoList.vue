@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowRight, Play } from '@lucide/vue'
 import type { ReferenceVideo } from '@/types/knowledge'
 import {
@@ -27,15 +27,77 @@ const emit = defineEmits<{
   'page-change': [page: number]
   'filter-change': [tier: string, category: string]
   refresh: []
+  'refresh-public-metadata': [video: ReferenceVideo]
   'open-analysis': [video: ReferenceVideo]
   'open-competitor': [video: ReferenceVideo]
 }>()
 
 const filterCategoryInput = ref(props.category)
 const detailTarget = ref<ReferenceVideo | null>(null)
+const cardListRef = ref<HTMLElement | null>(null)
+const failedCoverItems = ref(new Map<string, ReferenceVideo>())
+let missingCoverObserver: IntersectionObserver | null = null
 
 watch(() => props.category, (val) => {
   filterCategoryInput.value = val
+})
+
+watch(() => props.items, (items) => {
+  if (detailTarget.value) {
+    detailTarget.value = items.find((item) => item.videoId === detailTarget.value?.videoId)
+      ?? detailTarget.value
+  }
+  void observeMissingCoverCards()
+}, { flush: 'post' })
+
+function shouldShowCover(video: ReferenceVideo) {
+  return !!video.coverUrl && failedCoverItems.value.get(video.videoId) !== video
+}
+
+function handleCoverError(video: ReferenceVideo) {
+  if (!video.coverUrl || failedCoverItems.value.get(video.videoId) === video) {
+    return
+  }
+
+  // 先隐藏加载失败的图片，刷新失败时继续展示稳定占位而不是浏览器裂图。
+  failedCoverItems.value.set(video.videoId, video)
+  emit('refresh-public-metadata', video)
+}
+
+async function observeMissingCoverCards() {
+  await nextTick()
+  if (!missingCoverObserver) {
+    return
+  }
+
+  missingCoverObserver.disconnect()
+  cardListRef.value
+    ?.querySelectorAll<HTMLElement>('[data-cover-refresh-video-id]')
+    .forEach((element) => missingCoverObserver?.observe(element))
+}
+
+// 空封面没有 img 可依赖原生懒加载，只在卡片接近视口时才请求后端回源。
+onMounted(() => {
+  missingCoverObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) {
+        return
+      }
+
+      missingCoverObserver?.unobserve(entry.target)
+      const videoId = (entry.target as HTMLElement).dataset.coverRefreshVideoId
+      const video = props.items.find((item) => item.videoId === videoId)
+      if (video && video.bvId && !video.coverUrl) {
+        emit('refresh-public-metadata', video)
+      }
+    })
+  }, { rootMargin: '200px 0px' })
+  void observeMissingCoverCards()
+})
+
+onBeforeUnmount(() => {
+  missingCoverObserver?.disconnect()
+  missingCoverObserver = null
 })
 
 function formatExactCount(value: number | null) {
@@ -154,9 +216,25 @@ function goToPage(targetPage: number | null) {
     <p v-if="!items.length && !loading && !error" class="creator-muted">
       还没有案例，先在上方输入一个 BV 采集试试。
     </p>
-    <div v-else-if="!error" class="knowledge-card-list">
-      <article v-for="item in items" :key="item.id" class="knowledge-card">
+    <div v-else-if="!error" ref="cardListRef" class="knowledge-card-list">
+      <article
+        v-for="item in items"
+        :key="item.id"
+        class="knowledge-card"
+        :data-cover-refresh-video-id="!item.coverUrl && item.bvId ? item.videoId : undefined"
+      >
         <div class="knowledge-card-cover">
+          <img
+            v-if="shouldShowCover(item)"
+            :key="item.coverUrl"
+            :src="item.coverUrl || undefined"
+            :alt="`《${item.title}》视频封面`"
+            class="knowledge-card-cover-image"
+            loading="lazy"
+            decoding="async"
+            referrerpolicy="no-referrer"
+            @error="handleCoverError(item)"
+          />
           <span class="knowledge-card-tier">{{ knowledgeTierLabel(item.tier) }}</span>
           <span class="knowledge-card-play" aria-hidden="true">
             <Play :size="20" :stroke-width="1.8" />
@@ -410,6 +488,14 @@ function goToPage(targetPage: number | null) {
 .knowledge-card-cover::before,
 .knowledge-card-cover::after {
   display: none;
+}
+
+.knowledge-card-cover-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .knowledge-card-tier {

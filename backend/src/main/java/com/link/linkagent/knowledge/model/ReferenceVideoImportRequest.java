@@ -41,6 +41,9 @@ public record ReferenceVideoImportRequest(
             @Size(max = 20, message = "BV号长度不能超过20个字符")
             String bvId,
 
+            @Size(max = 500, message = "封面地址长度不能超过500个字符")
+            String coverUrl,
+
             @NotBlank(message = "视频标题不能为空")
             @Size(max = 255, message = "视频标题长度不能超过255个字符")
             String title,

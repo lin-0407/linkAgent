@@ -2,9 +2,12 @@ package com.link.linkagent.knowledge.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.knowledge.mapper.KnowledgeReferenceVideoMapper;
 import com.link.linkagent.knowledge.model.ReferenceVideoFetchImportRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoImportRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoImportResponse;
+import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
+import com.link.linkagent.knowledge.model.ReferenceVideoResponse;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +66,8 @@ public class KnowledgeReferenceFetchService {
      */
     private static final int FETCH_MAX_COMMENTS = 50;
     private static final int FETCH_MAX_DANMAKU = 300;
+    private static final int METADATA_MAX_COMMENTS = 0;
+    private static final int METADATA_MAX_DANMAKU = 0;
 
     /** BV 号正则：BV 开头 + 10 位字母数字 */
     private static final Pattern BVID_PATTERN = Pattern.compile("BV[0-9A-Za-z]{10}");
@@ -72,11 +77,14 @@ public class KnowledgeReferenceFetchService {
     private static final String REFERENCE_EXPORT_PATH = "export/bilibili_reference";
 
     private final KnowledgeReferenceVideoService knowledgeReferenceVideoService;
+    private final KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper;
     private final ObjectMapper objectMapper;
 
     public KnowledgeReferenceFetchService(KnowledgeReferenceVideoService knowledgeReferenceVideoService,
+                                          KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper,
                                           ObjectMapper objectMapper) {
         this.knowledgeReferenceVideoService = knowledgeReferenceVideoService;
+        this.knowledgeReferenceVideoMapper = knowledgeReferenceVideoMapper;
         this.objectMapper = objectMapper;
     }
 
@@ -96,12 +104,69 @@ public class KnowledgeReferenceFetchService {
         Path scriptPath = resolveRelativePath(projectRoot, REFERENCE_SCRIPT_PATH);
         Path outputDir = resolveOutputDir(projectRoot);
 
-        runReferenceScript(projectRoot, scriptPath, outputDir, bvid, request);
+        runReferenceScript(
+                projectRoot,
+                scriptPath,
+                outputDir,
+                bvid,
+                request.tier(),
+                request.category(),
+                FETCH_MAX_COMMENTS,
+                FETCH_MAX_DANMAKU
+        );
 
         Path jsonPath = outputDir.resolve(bvid + "_reference.json").normalize();
         String jsonText = readGeneratedText(jsonPath);
         ReferenceVideoImportRequest importRequest = parseImportRequest(jsonText);
         return knowledgeReferenceVideoService.importReferenceVideos(importRequest);
+    }
+
+    /**
+     * 按案例库中的 BV 号刷新封面和公开统计。脚本完整成功后才进入短事务，失败不会覆盖旧数据。
+     */
+    public ReferenceVideoResponse refreshPublicMetadata(String videoId) {
+        ReferenceVideoRecord record = knowledgeReferenceVideoMapper.findByVideoId(videoId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "案例不存在"));
+        String bvid = TextUtil.trimToNull(record.getBvId());
+        if (bvid == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "该案例没有 BV 号，无法刷新公开数据");
+        }
+
+        ReferenceVideoImportRequest.VideoItem metadata = fetchPublicMetadata(bvid);
+        if (!bvid.equals(metadata.bvId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "脚本返回的 BV 号与案例不一致");
+        }
+        return knowledgeReferenceVideoService.updatePublicMetadata(videoId, metadata.coverUrl(), metadata.stats());
+    }
+
+    /**
+     * 轻量模式只读取视频详情，不请求评论和弹幕正文。
+     */
+    ReferenceVideoImportRequest.VideoItem fetchPublicMetadata(String bvid) {
+        String normalizedBvid = extractBvid(bvid);
+        Path projectRoot = resolveProjectRoot();
+        Path scriptPath = resolveRelativePath(projectRoot, REFERENCE_SCRIPT_PATH);
+        Path outputDir = resolveOutputDir(projectRoot);
+        runReferenceScript(
+                projectRoot,
+                scriptPath,
+                outputDir,
+                normalizedBvid,
+                null,
+                null,
+                METADATA_MAX_COMMENTS,
+                METADATA_MAX_DANMAKU
+        );
+
+        Path jsonPath = outputDir.resolve(normalizedBvid + "_reference.json").normalize();
+        ReferenceVideoImportRequest payload = parseImportRequest(readGeneratedText(jsonPath));
+        if (payload.videos() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "脚本没有返回视频公开数据");
+        }
+        return payload.videos().stream()
+                .filter(video -> normalizedBvid.equals(video.bvId()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_GATEWAY, "脚本没有返回目标视频的公开数据"));
     }
 
     private String extractBvid(String value) {
@@ -200,35 +265,15 @@ public class KnowledgeReferenceFetchService {
                                     Path scriptPath,
                                     Path outputDir,
                                     String bvid,
-                                    ReferenceVideoFetchImportRequest request) {
+                                    String tier,
+                                    String category,
+                                    int maxComments,
+                                    int maxDanmaku) {
         if (!Files.isRegularFile(scriptPath)) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "案例库采集脚本不存在");
         }
-        // bv 子命令固定来源 manual_bv；tier / category 可选，用可变列表按需追加。
-        List<String> command = new ArrayList<>(List.of(
-                "python",
-                scriptPath.toString(),
-                "bv",
-                bvid,
-                "--output-dir",
-                outputDir.toString(),
-                "--source",
-                "manual_bv",
-                "--max-comments",
-                String.valueOf(FETCH_MAX_COMMENTS),
-                "--max-danmaku",
-                String.valueOf(FETCH_MAX_DANMAKU)
-        ));
-        String tier = TextUtil.trimToNull(request.tier());
-        if (tier != null) {
-            command.add("--tier");
-            command.add(tier);
-        }
-        String category = TextUtil.trimToNull(request.category());
-        if (category != null) {
-            command.add("--category");
-            command.add(category);
-        }
+        List<String> command = buildReferenceScriptCommand(
+                scriptPath, outputDir, bvid, tier, category, maxComments, maxDanmaku);
 
         ProcessBuilder processBuilder = new ProcessBuilder(command);
         processBuilder.directory(projectRoot.toFile());
@@ -254,6 +299,41 @@ public class KnowledgeReferenceFetchService {
             Thread.currentThread().interrupt();
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "案例库采集脚本被中断");
         }
+    }
+
+    static List<String> buildReferenceScriptCommand(Path scriptPath,
+                                                    Path outputDir,
+                                                    String bvid,
+                                                    String tier,
+                                                    String category,
+                                                    int maxComments,
+                                                    int maxDanmaku) {
+        // 参数由后端固定拼装，避免 videoId 或页面输入变成任意脚本参数。
+        List<String> command = new ArrayList<>(List.of(
+                "python",
+                scriptPath.toString(),
+                "bv",
+                bvid,
+                "--output-dir",
+                outputDir.toString(),
+                "--source",
+                "manual_bv",
+                "--max-comments",
+                String.valueOf(maxComments),
+                "--max-danmaku",
+                String.valueOf(maxDanmaku)
+        ));
+        String normalizedTier = TextUtil.trimToNull(tier);
+        if (normalizedTier != null) {
+            command.add("--tier");
+            command.add(normalizedTier);
+        }
+        String normalizedCategory = TextUtil.trimToNull(category);
+        if (normalizedCategory != null) {
+            command.add("--category");
+            command.add(normalizedCategory);
+        }
+        return command;
     }
 
     private String readGeneratedText(Path jsonPath) {
