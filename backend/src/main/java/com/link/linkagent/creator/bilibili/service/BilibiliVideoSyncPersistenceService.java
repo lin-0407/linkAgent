@@ -116,9 +116,13 @@ public class BilibiliVideoSyncPersistenceService {
         String nickname = TextUtil.hasText(payload.nickname())
                 ? TextUtil.trimToNull(payload.nickname())
                 : account.getNickname();
+        String avatarUrl = TextUtil.hasText(payload.avatarUrl())
+                ? TextUtil.trimToNull(payload.avatarUrl())
+                : account.getAvatarUrl();
         bilibiliMapper.updateAccountSyncResult(
                 account.getAccountId(),
                 nickname,
+                avatarUrl,
                 "ACTIVE",
                 syncTime,
                 lastError

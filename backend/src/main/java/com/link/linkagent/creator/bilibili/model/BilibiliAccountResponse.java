@@ -11,6 +11,7 @@ public record BilibiliAccountResponse(
         String userId,
         String bilibiliUid,
         String nickname,
+        String avatarUrl,
         String bindStatus,
         LocalDateTime lastSyncTime,
         String lastSyncError,

@@ -12,6 +12,7 @@ import java.util.List;
 public record BilibiliVideoSyncPayload(
         String bilibiliUid,
         String nickname,
+        String avatarUrl,
         boolean hasMore,
         boolean partial,
         List<BilibiliVideoSyncItem> videos,

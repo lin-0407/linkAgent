@@ -77,7 +77,7 @@ public class CreatorBilibiliService {
      * 如果用户已有绑定记录则更新 UID（用户可能换号或填错），没有则创建新记录。
      * 这样保证每个平台用户只有一条绑定，查询和同步时不会出现"到底用哪个 UID"的歧义。
      * <p>
-     * UID 变更时同步重置昵称：因为 UID 变了意味着旧缓存和昵称不再有效，
+     * UID 变更时同步重置昵称和头像：因为 UID 变了意味着旧账号公开资料不再有效，
      * 等下次同步时重新拉取。使用专用的 updateAccountUid 而非 updateAccountSyncResult——
      * 后者没有权限改动 UID，强制走正确的方法防止误操作。
      *
@@ -89,8 +89,8 @@ public class CreatorBilibiliService {
         var existing = bilibiliMapper.findAccountByUserId(request.userId());
         if (existing.isPresent()) {
             BilibiliAccountRecord record = existing.get();
-            // 已有绑定：更新 UID，同时重置昵称和同步信息。
-            // 因为 UID 变了意味着旧缓存和昵称不再有效，等下次同步时重新拉取。
+            // 已有绑定：更新 UID，同时重置昵称、头像和同步信息。
+            // 因为 UID 变了意味着旧账号公开资料不再有效，等下次同步时重新拉取。
             // 使用专用的 updateAccountUid 而非 updateAccountSyncResult——后者没有权限改动 UID。
             bilibiliMapper.updateAccountUid(record.getAccountId(), request.bilibiliUid());
             var updated = bilibiliMapper.findAccountByUserId(request.userId()).orElseThrow();
@@ -104,6 +104,7 @@ public class CreatorBilibiliService {
                 request.userId(),
                 request.bilibiliUid(),
                 null, // 昵称首次为空，等同步后填充
+                null, // 头像同样来自公开账号同步，不能沿用旧 UID 的图片。
                 "ACTIVE",
                 null,
                 null,
@@ -184,6 +185,7 @@ public class CreatorBilibiliService {
             bilibiliMapper.updateAccountSyncResult(
                     account.getAccountId(),
                     account.getNickname(),
+                    account.getAvatarUrl(),
                     "SYNC_FAILED",
                     account.getLastSyncTime(),
                     normalizedReason
@@ -463,6 +465,7 @@ public class CreatorBilibiliService {
                 record.getUserId(),
                 record.getBilibiliUid(),
                 record.getNickname(),
+                record.getAvatarUrl(),
                 record.getBindStatus(),
                 record.getLastSyncTime(),
                 record.getLastSyncError(),

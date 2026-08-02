@@ -23,6 +23,7 @@ class CreatorBilibiliMapperMappingTest {
     @Test
     void shouldExposeJavaBeanConstructionAndSetterForPersistentModels() throws NoSuchMethodException {
         assertJavaBean(BilibiliAccountRecord.class);
+        assertThat(BilibiliAccountRecord.class.getMethod("setAvatarUrl", String.class)).isNotNull();
         assertJavaBean(BilibiliVideoRecord.class);
         assertJavaBean(TaskVideoBindingRecord.class);
         assertJavaBean(VideoAnalysisReportRecord.class);

@@ -130,7 +130,10 @@ def collect_payload(args: argparse.Namespace) -> dict[str, Any]:
         # WBI接口受限时仍继续用公开视频详情接口校验任务BV，保住手动绑定主链路。
         warnings.append(f"WBI签名信息读取失败：{error}")
 
-    nickname = fetch_nickname(args.uid, signer, args.timeout, warnings) if signer else None
+    nickname: str | None = None
+    avatar_url: str | None = None
+    if signer:
+        nickname, avatar_url = fetch_account_profile(args.uid, signer, args.timeout, warnings)
 
     videos_by_bvid: dict[str, dict[str, Any]] = {}
     archive_succeeded = False
@@ -171,6 +174,7 @@ def collect_payload(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "bilibiliUid": args.uid,
         "nickname": nickname,
+        "avatarUrl": avatar_url,
         "hasMore": has_more,
         "partial": bool(warnings),
         "videos": list(videos_by_bvid.values()),
@@ -179,25 +183,26 @@ def collect_payload(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def fetch_nickname(
+def fetch_account_profile(
     uid: str,
     signer: WbiSigner,
     timeout: int,
     warnings: list[str],
-) -> str | None:
+) -> tuple[str | None, str | None]:
     params = signer.sign({"mid": uid, "platform": "web", "web_location": 1550101})
     try:
         data = ensure_bili_success(fetch_json(SPACE_INFO_API, params, timeout), "账号信息接口")
     except BiliApiError as error:
-        warnings.append(f"账号昵称读取失败：{error}")
-        return None
+        warnings.append(f"账号公开信息读取失败：{error}")
+        return None, None
     if not isinstance(data, dict):
-        return None
+        return None, None
     returned_uid = normalize_identifier(data.get("mid"))
     if returned_uid and returned_uid != uid:
         raise BiliApiError("账号信息接口返回的UID与请求不一致")
     name = data.get("name")
-    return name.strip() if isinstance(name, str) and name.strip() else None
+    nickname = name.strip() if isinstance(name, str) and name.strip() else None
+    return nickname, normalize_cover_url(data.get("face"))
 
 
 def fetch_recent_videos(
@@ -457,6 +462,8 @@ def normalize_cover_url(value: Any) -> str | None:
     normalized = normalize_text(value)
     if normalized and normalized.startswith("//"):
         return f"https:{normalized}"
+    if normalized and normalized.startswith("http://"):
+        return f"https://{normalized[7:]}"
     return normalized
 
 

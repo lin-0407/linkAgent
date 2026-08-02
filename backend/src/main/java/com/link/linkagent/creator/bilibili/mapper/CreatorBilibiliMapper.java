@@ -42,6 +42,7 @@ public interface CreatorBilibiliMapper {
                 user_id,
                 bilibili_uid,
                 nickname,
+                avatar_url,
                 bind_status,
                 last_sync_time,
                 last_sync_error
@@ -51,6 +52,7 @@ public interface CreatorBilibiliMapper {
                 #{userId},
                 #{bilibiliUid},
                 #{nickname},
+                #{avatarUrl},
                 #{bindStatus},
                 #{lastSyncTime},
                 #{lastSyncError}
@@ -68,6 +70,7 @@ public interface CreatorBilibiliMapper {
                    user_id,
                    bilibili_uid,
                    nickname,
+                   avatar_url,
                    bind_status,
                    last_sync_time,
                    last_sync_error,
@@ -84,6 +87,7 @@ public interface CreatorBilibiliMapper {
             @Result(column = "user_id", property = "userId"),
             @Result(column = "bilibili_uid", property = "bilibiliUid"),
             @Result(column = "nickname", property = "nickname"),
+            @Result(column = "avatar_url", property = "avatarUrl"),
             @Result(column = "bind_status", property = "bindStatus"),
             @Result(column = "last_sync_time", property = "lastSyncTime"),
             @Result(column = "last_sync_error", property = "lastSyncError"),
@@ -94,12 +98,13 @@ public interface CreatorBilibiliMapper {
 
     /**
      * 更新账号的同步结果。
-     * 同步成功时更新昵称和时间，失败时只更新错误信息和状态。
+     * 同步成功时更新昵称、头像和时间，失败时保留旧公开资料并更新错误信息和状态。
      * 不更新 bilibili_uid——UID 只能通过 bindAccount 接口修改，避免同步异常误改 UID。
      */
     @Update("""
             UPDATE creator_bilibili_account
             SET nickname = #{nickname},
+                avatar_url = #{avatarUrl},
                 bind_status = #{bindStatus},
                 last_sync_time = #{lastSyncTime},
                 last_sync_error = #{lastSyncError},
@@ -109,6 +114,7 @@ public interface CreatorBilibiliMapper {
             """)
     int updateAccountSyncResult(@Param("accountId") String accountId,
                                 @Param("nickname") String nickname,
+                                @Param("avatarUrl") String avatarUrl,
                                 @Param("bindStatus") String bindStatus,
                                 @Param("lastSyncTime") LocalDateTime lastSyncTime,
                                 @Param("lastSyncError") String lastSyncError);
@@ -117,12 +123,13 @@ public interface CreatorBilibiliMapper {
      * 更新 B 站 UID。
      * 独立于 updateAccountSyncResult，因为 UID 只能通过 bindAccount 接口修改，
      * 同步流程不应有权限改动 UID。
-     * 修改 UID 同时重置昵称和同步信息，因为旧缓存和昵称对新 UID 不再有效。
+     * 修改 UID 同时重置昵称、头像和同步信息，因为旧账号公开资料对新 UID 不再有效。
      */
     @Update("""
             UPDATE creator_bilibili_account
             SET bilibili_uid = #{bilibiliUid},
                 nickname = NULL,
+                avatar_url = NULL,
                 last_sync_time = NULL,
                 last_sync_error = NULL,
                 bind_status = 'ACTIVE',

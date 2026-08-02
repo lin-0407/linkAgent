@@ -96,6 +96,13 @@ class CreatorBilibiliServiceTest {
         verify(bilibiliMapper).insertVideo(org.mockito.ArgumentMatchers.any(BilibiliVideoRecord.class));
         verify(bilibiliMapper).updateBindingStatus(
                 "binding-1", "BOUND", "BV归属校验通过");
+        verify(bilibiliMapper).updateAccountSyncResult(
+                org.mockito.ArgumentMatchers.eq("account-1"),
+                org.mockito.ArgumentMatchers.eq("测试账号"),
+                org.mockito.ArgumentMatchers.eq("https://i0.hdslb.com/bfs/face/avatar.jpg"),
+                org.mockito.ArgumentMatchers.eq("ACTIVE"),
+                org.mockito.ArgumentMatchers.any(LocalDateTime.class),
+                org.mockito.ArgumentMatchers.isNull());
         verify(mediaWorkflowGateService).ensureReadyForPostPublish("task-1", "default", "BV绑定");
     }
 
@@ -147,6 +154,7 @@ class CreatorBilibiliServiceTest {
         BilibiliVideoSyncPayload payload = new BilibiliVideoSyncPayload(
                 "27058248",
                 "测试账号",
+                "https://i0.hdslb.com/bfs/face/avatar.jpg",
                 false,
                 false,
                 List.of(),
@@ -191,6 +199,7 @@ class CreatorBilibiliServiceTest {
 
         assertThat(result).isNotNull();
         assertThat(result.accountId()).isEqualTo("account-1");
+        assertThat(result.avatarUrl()).isEqualTo("https://i0.hdslb.com/bfs/face/avatar.jpg");
     }
 
     /** GET /accounts/{uid}/linked-videos：有绑定和缓存视频时应组装视频卡片。 */
@@ -371,6 +380,7 @@ class CreatorBilibiliServiceTest {
                 userId,
                 bilibiliUid,
                 null,
+                "https://i0.hdslb.com/bfs/face/avatar.jpg",
                 "ACTIVE",
                 null,
                 null,
@@ -470,6 +480,7 @@ class CreatorBilibiliServiceTest {
         return new BilibiliVideoSyncPayload(
                 bilibiliUid,
                 "测试账号",
+                "https://i0.hdslb.com/bfs/face/avatar.jpg",
                 false,
                 false,
                 List.of(video),

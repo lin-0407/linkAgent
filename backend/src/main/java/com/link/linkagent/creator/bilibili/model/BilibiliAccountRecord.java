@@ -14,6 +14,7 @@ public class BilibiliAccountRecord {
     private String userId;
     private String bilibiliUid;
     private String nickname;
+    private String avatarUrl;
     private String bindStatus;
     private LocalDateTime lastSyncTime;
     private String lastSyncError;
@@ -26,13 +27,15 @@ public class BilibiliAccountRecord {
 
     /** 业务创建账号绑定时使用全参构造，保持写入字段一次性完整初始化。 */
     public BilibiliAccountRecord(Long id, String accountId, String userId, String bilibiliUid,
-                                 String nickname, String bindStatus, LocalDateTime lastSyncTime,
-                                 String lastSyncError, LocalDateTime createTime, LocalDateTime updateTime) {
+                                 String nickname, String avatarUrl, String bindStatus,
+                                 LocalDateTime lastSyncTime, String lastSyncError,
+                                 LocalDateTime createTime, LocalDateTime updateTime) {
         this.id = id;
         this.accountId = accountId;
         this.userId = userId;
         this.bilibiliUid = bilibiliUid;
         this.nickname = nickname;
+        this.avatarUrl = avatarUrl;
         this.bindStatus = bindStatus;
         this.lastSyncTime = lastSyncTime;
         this.lastSyncError = lastSyncError;
@@ -50,6 +53,8 @@ public class BilibiliAccountRecord {
     public void setBilibiliUid(String bilibiliUid) { this.bilibiliUid = bilibiliUid; }
     public String getNickname() { return nickname; }
     public void setNickname(String nickname) { this.nickname = nickname; }
+    public String getAvatarUrl() { return avatarUrl; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
     public String getBindStatus() { return bindStatus; }
     public void setBindStatus(String bindStatus) { this.bindStatus = bindStatus; }
     public LocalDateTime getLastSyncTime() { return lastSyncTime; }

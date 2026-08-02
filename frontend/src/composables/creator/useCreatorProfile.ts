@@ -9,13 +9,15 @@
  * 当前阶段只有顶部头像一个消费者，但提前抽离保持可扩展性。
  */
 import { computed, ref } from 'vue'
-import { getCreatorProfile, refreshCreatorProfile } from '@/api/creator'
-import type { CreatorProfile } from '@/types/creator'
+import { getBilibiliAccount, getCreatorProfile, refreshCreatorProfile } from '@/api/creator'
+import { ApiError } from '@/api/http'
+import type { BilibiliAccount, CreatorProfile } from '@/types/creator'
 
 /** 默认用户标识（后续接入多用户时为动态值） */
 const DEFAULT_USER_ID = 'default'
 
 const profile = ref<CreatorProfile | null>(null)
+const bilibiliAccount = ref<BilibiliAccount | null>(null)
 const isLoading = ref(false)
 const loadError = ref('')
 
@@ -50,7 +52,23 @@ async function loadProfile(userId?: string) {
   isLoading.value = true
   loadError.value = ''
   try {
-    profile.value = await getCreatorProfile(userId || DEFAULT_USER_ID)
+    const resolvedUserId = userId || DEFAULT_USER_ID
+    const accountRequest = getBilibiliAccount(resolvedUserId).catch((error) => {
+      if (error instanceof ApiError && error.status === 404) return null
+      // B站身份只是画像的辅助信息，瞬时失败时保留旧头像，不能阻断画像正文读取。
+      return bilibiliAccount.value
+    })
+    const [profileResult, accountResult] = await Promise.allSettled([
+      getCreatorProfile(resolvedUserId),
+      accountRequest,
+    ])
+    if (accountResult.status === 'fulfilled') {
+      bilibiliAccount.value = accountResult.value
+    }
+    if (profileResult.status === 'rejected') {
+      throw profileResult.reason
+    }
+    profile.value = profileResult.value
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -76,6 +94,7 @@ export function useCreatorProfile() {
   return {
     // 状态
     profile,
+    bilibiliAccount,
     isLoading,
     loadError,
     // 派生

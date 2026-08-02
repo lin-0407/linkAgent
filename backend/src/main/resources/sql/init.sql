@@ -1163,6 +1163,7 @@ CREATE TABLE IF NOT EXISTS creator_bilibili_account
     user_id         VARCHAR(64)  NOT NULL DEFAULT 'default' COMMENT '平台用户标识，与 creator_task.user_id 对应',
     bilibili_uid    VARCHAR(32)  NOT NULL COMMENT '用户填写的 B 站 UID，用于同步公开视频列表和校验 BV 归属',
     nickname        VARCHAR(128)          DEFAULT NULL COMMENT '同步到的 B 站昵称，取不到则为空',
+    avatar_url      VARCHAR(500)          DEFAULT NULL COMMENT '同步到的 B 站公开头像 URL，取不到或换绑 UID 时为空',
     bind_status     VARCHAR(32)  NOT NULL DEFAULT 'ACTIVE' COMMENT '绑定状态：ACTIVE=正常绑定，UNVERIFIED=UID未校验，SYNC_FAILED=同步失败',
     last_sync_time  DATETIME              DEFAULT NULL COMMENT '最近一次同步视频列表时间',
     last_sync_error VARCHAR(500)          DEFAULT NULL COMMENT '最近一次同步失败原因摘要，截断保存避免异常堆栈撑爆表',
@@ -1960,6 +1961,14 @@ ON DUPLICATE KEY UPDATE
 -- 幂等迁移：为已存在的表补充新列
 -- 用 INFORMATION_SCHEMA 判断列是否存在，兼容所有 MySQL 8.x 版本
 -- ============================================================
+
+-- B站公开头像：旧库补列后，由下一次手动同步账号公开数据逐步填充。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_bilibili_account ADD COLUMN avatar_url VARCHAR(500) DEFAULT NULL COMMENT ''同步到的 B 站公开头像 URL，取不到或换绑 UID 时为空'' AFTER nickname',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_bilibili_account' AND COLUMN_NAME = 'avatar_url');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 已有成片直达试映：旧库补齐标记后，刷新页面和媒体接口才能持续识别用户已跳过前期策划。
 SET @sql = (SELECT IF(COUNT(*) = 0,

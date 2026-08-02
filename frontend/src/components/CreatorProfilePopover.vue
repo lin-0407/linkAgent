@@ -1,24 +1,18 @@
 <script setup lang="ts">
-/**
- * 创作者画像弹出面板（P1-3）。
- * <p>
- * 在顶部全局导航栏显示头像按钮，点击弹出画像面板，
- * 展示 AI 根据用户创作行为自动提取的风格标签、语气偏好和受众认知。
- * <p>
- * 为什么用点击弹出而非 hover 浮层？
- * 画像内容较多（标签 + 多段文字 + 刷新按钮），hover 浮层容易误触消失；
- * 点击弹出给用户明确的打开/关闭控制，体验更稳定。
- * <p>
- * 为什么所有路由下都渲染？
- * 画像属于用户级别的全局信息，与当前在哪个页面无关，
- * 用户在任何页面都可能想查看或刷新自己的创作画像。
- */
-import { onMounted, ref } from 'vue'
-import { UserRound } from '@lucide/vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import {
+  ChevronDown,
+  MessageSquareText,
+  RefreshCw,
+  UserRound,
+  UsersRound,
+  X,
+} from '@lucide/vue'
 import { useCreatorProfile } from '@/composables/creator/useCreatorProfile'
 import { formatDate } from '@/composables/creator/creatorWorkspaceUtils'
 
 const {
+  bilibiliAccount,
   isLoading,
   loadError,
   styleTagList,
@@ -30,14 +24,35 @@ const {
   refreshProfile,
 } = useCreatorProfile()
 
-// ── 面板开关 ──
-
 const panelOpen = ref(false)
+const detailsExpanded = ref(false)
+const failedAvatarUrl = ref('')
+const toneTextRef = ref<HTMLElement | null>(null)
+const audienceTextRef = ref<HTMLElement | null>(null)
+const hasClippedDetails = ref(false)
+let detailsResizeObserver: ResizeObserver | null = null
+
+const avatarUrl = computed(() => bilibiliAccount.value?.avatarUrl?.trim() ?? '')
+const shouldShowAvatar = computed(
+  () => !!avatarUrl.value && failedAvatarUrl.value !== avatarUrl.value,
+)
+const creatorName = computed(
+  () => bilibiliAccount.value?.nickname?.trim() || '我的创作画像',
+)
+const profileButtonTitle = computed(() => {
+  if (bilibiliAccount.value) return `查看 ${creatorName.value} 的创作者画像`
+  return hasProfile.value ? '查看创作者画像' : '暂无画像数据'
+})
+
+function handleAvatarError() {
+  // 与案例封面一致，图片失败后立即隐藏，稳定回退为默认图标而不是保留浏览器裂图。
+  failedAvatarUrl.value = avatarUrl.value
+}
 
 function togglePanel() {
   panelOpen.value = !panelOpen.value
-  // 每次打开面板时重新加载画像，确保数据是最新的
   if (panelOpen.value) {
+    detailsExpanded.value = false
     loadProfile()
   }
 }
@@ -46,31 +61,73 @@ function closePanel() {
   panelOpen.value = false
 }
 
-// ── 生命周期 ──
+function updateClippedDetails() {
+  if (detailsExpanded.value) return
+  hasClippedDetails.value = [toneTextRef.value, audienceTextRef.value]
+    .filter((element): element is HTMLElement => !!element)
+    .some((element) => element.scrollHeight > element.clientHeight + 1)
+}
+
+async function observeDetailText() {
+  await nextTick()
+  detailsResizeObserver?.disconnect()
+  const detailElements = [toneTextRef.value, audienceTextRef.value]
+  detailElements.forEach((element) => {
+    if (element) detailsResizeObserver?.observe(element)
+  })
+  updateClippedDetails()
+}
+
+watch([toneGuide, audienceView, panelOpen], () => {
+  void observeDetailText()
+})
+
+watch(detailsExpanded, (expanded) => {
+  if (!expanded) void observeDetailText()
+})
 
 onMounted(() => {
-  // 组件挂载时预加载画像，这样用户点击时数据大概率已就绪
+  detailsResizeObserver = new ResizeObserver(updateClippedDetails)
+  // 提前读取画像和绑定账号，让用户打开面板时能直接看到最新身份与摘要。
   loadProfile()
+})
+
+onBeforeUnmount(() => {
+  detailsResizeObserver?.disconnect()
+  detailsResizeObserver = null
 })
 </script>
 
 <template>
   <div class="profile-popover-root">
-    <!-- 头像按钮 -->
     <button
       type="button"
       class="profile-avatar-btn"
       :class="{ active: panelOpen }"
       aria-label="创作者画像"
-      :title="hasProfile ? '查看创作者画像' : '暂无画像数据'"
+      :title="profileButtonTitle"
       @click="togglePanel"
     >
-      <UserRound class="profile-avatar-icon" :size="18" :stroke-width="1.8" aria-hidden="true" />
-      <!-- 有画像时显示小绿点，暗示"已有数据" -->
+      <img
+        v-if="shouldShowAvatar"
+        :src="avatarUrl"
+        :alt="`${creatorName}的B站头像`"
+        class="profile-avatar-image"
+        decoding="async"
+        referrerpolicy="no-referrer"
+        draggable="false"
+        @error="handleAvatarError"
+      />
+      <UserRound
+        v-else
+        class="profile-avatar-icon"
+        :size="18"
+        :stroke-width="1.8"
+        aria-hidden="true"
+      />
       <span v-if="hasProfile" class="profile-avatar-dot" aria-hidden="true"></span>
     </button>
 
-    <!-- 弹出面板 -->
     <Teleport to="body">
       <Transition name="profile-panel">
         <div
@@ -83,88 +140,131 @@ onMounted(() => {
             class="profile-panel"
             role="dialog"
             aria-modal="true"
-            aria-label="创作者画像"
+            aria-labelledby="creator-profile-title"
           >
             <header class="profile-panel-head">
-              <div>
-                <UserRound class="profile-panel-icon" :size="20" :stroke-width="1.8" aria-hidden="true" />
-                <h3>创作者画像</h3>
+              <div class="profile-identity">
+                <span class="profile-identity-avatar" aria-hidden="true">
+                  <img
+                    v-if="shouldShowAvatar"
+                    :src="avatarUrl"
+                    alt=""
+                    decoding="async"
+                    referrerpolicy="no-referrer"
+                    draggable="false"
+                    @error="handleAvatarError"
+                  />
+                  <UserRound v-else :size="22" :stroke-width="1.7" />
+                </span>
+                <div class="profile-identity-copy">
+                  <span>创作者画像</span>
+                  <h3 id="creator-profile-title">{{ creatorName }}</h3>
+                  <p v-if="bilibiliAccount">B站 UID {{ bilibiliAccount.bilibiliUid }}</p>
+                  <p v-else>个人创作偏好</p>
+                </div>
               </div>
               <button
                 type="button"
-                class="creator-ghost-button"
+                class="profile-icon-button"
+                aria-label="关闭创作者画像"
+                title="关闭"
                 @click="closePanel"
               >
-                关闭
+                <X :size="18" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </header>
 
-            <p class="profile-panel-desc">
-              AI 根据您的创作行为学习到的风格特征
-            </p>
-
-            <!-- 加载中 -->
-            <div v-if="isLoading" class="profile-panel-status">
-              <p class="creator-muted">加载中…</p>
+            <div v-if="isLoading && !hasProfile" class="profile-panel-status" aria-live="polite">
+              <span class="profile-loading-mark" aria-hidden="true"></span>
+              <p>正在读取画像</p>
             </div>
 
-            <!-- 加载失败 -->
-            <div v-else-if="loadError" class="profile-panel-status">
-              <p class="creator-muted error-text">加载失败：{{ loadError }}</p>
-              <button
-                type="button"
-                class="creator-ghost-button"
-                @click="loadProfile()"
-              >
+            <div v-else-if="loadError && !hasProfile" class="profile-panel-status">
+              <p class="profile-error-text">画像加载失败</p>
+              <button type="button" class="profile-text-button" @click="loadProfile()">
                 重试
               </button>
             </div>
 
-            <!-- 空状态（新用户） -->
             <div v-else-if="!hasProfile" class="profile-panel-empty">
-              <p>
-                尚未积累足够数据。完成几次创作后，画像将根据您的风格偏好自动生成。
-              </p>
+              <strong>画像尚未形成</strong>
+              <p>完成几次创作后，这里会沉淀稳定的风格与受众特征。</p>
             </div>
 
-            <!-- 画像内容 -->
             <template v-else>
-              <!-- 风格标签 -->
-              <div class="profile-section">
-                <h4>风格标签</h4>
+              <section
+                v-if="styleTagList.length"
+                class="profile-primary-section"
+                aria-labelledby="profile-style-title"
+              >
+                <h4 id="profile-style-title">核心风格</h4>
                 <div class="profile-tag-list">
-                  <span
-                    v-for="tag in styleTagList"
-                    :key="tag"
-                    class="profile-tag"
-                  >{{ tag }}</span>
+                  <span v-for="tag in styleTagList" :key="tag" class="profile-tag">
+                    {{ tag }}
+                  </span>
                 </div>
+              </section>
+
+              <div class="profile-insight-list">
+                <section v-if="toneGuide" class="profile-insight">
+                  <span class="profile-insight-icon" aria-hidden="true">
+                    <MessageSquareText :size="17" :stroke-width="1.8" />
+                  </span>
+                  <div>
+                    <h4>表达基调</h4>
+                    <p
+                      ref="toneTextRef"
+                      :class="{ 'is-collapsed': !detailsExpanded }"
+                    >{{ toneGuide }}</p>
+                  </div>
+                </section>
+
+                <section v-if="audienceView" class="profile-insight">
+                  <span class="profile-insight-icon" aria-hidden="true">
+                    <UsersRound :size="17" :stroke-width="1.8" />
+                  </span>
+                  <div>
+                    <h4>核心受众</h4>
+                    <p
+                      ref="audienceTextRef"
+                      :class="{ 'is-collapsed': !detailsExpanded }"
+                    >{{ audienceView }}</p>
+                  </div>
+                </section>
               </div>
 
-              <!-- 语气偏好 -->
-              <div v-if="toneGuide" class="profile-section">
-                <h4>语气偏好</h4>
-                <p>{{ toneGuide }}</p>
-              </div>
+              <button
+                v-if="hasClippedDetails"
+                type="button"
+                class="profile-expand-button"
+                :aria-expanded="detailsExpanded"
+                @click="detailsExpanded = !detailsExpanded"
+              >
+                <span>{{ detailsExpanded ? '收起完整画像' : '查看完整画像' }}</span>
+                <ChevronDown
+                  :size="16"
+                  :stroke-width="1.8"
+                  :class="{ 'is-expanded': detailsExpanded }"
+                  aria-hidden="true"
+                />
+              </button>
 
-              <!-- 受众认知 -->
-              <div v-if="audienceView" class="profile-section">
-                <h4>受众认知</h4>
-                <p>{{ audienceView }}</p>
-              </div>
-
-              <!-- 底部信息 + 刷新 -->
               <footer class="profile-panel-foot">
-                <span v-if="lastUpdateTime" class="profile-update-time">
-                  画像更新于 {{ formatDate(lastUpdateTime) }}
-                </span>
+                <span v-if="lastUpdateTime">更新于 {{ formatDate(lastUpdateTime) }}</span>
+                <span v-else></span>
                 <button
                   type="button"
-                  class="creator-secondary-action profile-refresh-btn"
+                  class="profile-refresh-button"
                   :disabled="isLoading"
                   @click="refreshProfile()"
                 >
-                  {{ isLoading ? '刷新中…' : '刷新画像' }}
+                  <RefreshCw
+                    :size="15"
+                    :stroke-width="1.8"
+                    :class="{ 'is-spinning': isLoading }"
+                    aria-hidden="true"
+                  />
+                  <span>{{ isLoading ? '更新中' : '刷新画像' }}</span>
                 </button>
               </footer>
             </template>
@@ -176,78 +276,76 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/**
- * 画像弹出面板样式。
- * 按钮融入 topbar 的风格，面板采用固定定位 + 右对齐，
- * 宽度控制在 320px，内容超出时内部滚动。
- */
-
-/* ── 根容器（按钮 + 面板的定位上下文） ── */
-
 .profile-popover-root {
   position: relative;
   display: flex;
   align-items: center;
 }
 
-/* ── 头像按钮 ── */
-
 .profile-avatar-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   position: relative;
+  display: grid;
   width: 36px;
   height: 36px;
   padding: 0;
-  background: transparent;
+  overflow: visible;
+  color: var(--muted);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 50%;
+  place-items: center;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .profile-avatar-btn:hover,
 .profile-avatar-btn.active {
-  border-color: var(--accent, #1a73e8);
-  background: var(--surface-dim, #f0f4ff);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
-.profile-avatar-icon {
-  color: var(--muted);
+.profile-avatar-btn:focus-visible,
+.profile-icon-button:focus-visible,
+.profile-expand-button:focus-visible,
+.profile-refresh-button:focus-visible,
+.profile-text-button:focus-visible {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 2px;
 }
 
-/* 已存在画像数据时的小绿点指示 */
+.profile-avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
 .profile-avatar-dot {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 8px;
-  height: 8px;
-  background: var(--success, #1e8e3e);
+  top: -1px;
+  right: -1px;
+  width: 9px;
+  height: 9px;
+  background: var(--ok);
+  border: 2px solid var(--surface);
   border-radius: 50%;
-  border: 1px solid var(--surface, #fff);
 }
-
-/* ── 背景遮罩 ── */
 
 .profile-panel-backdrop {
   position: fixed;
   inset: 0;
   z-index: 9000;
-  /* 不设背景色：点击空白区域关闭，但不遮挡页面内容 */
 }
-
-/* ── 面板本体 ── */
 
 .profile-panel {
   position: fixed;
-  top: 56px;
+  top: calc(var(--surface-topbar-height, 60px) + 8px);
   right: 16px;
-  width: 320px;
-  max-height: calc(100vh - 80px);
+  width: min(380px, calc(100vw - 24px));
+  max-height: calc(100dvh - var(--surface-topbar-height, 60px) - 24px);
+  padding: 18px;
   overflow-y: auto;
-  padding: var(--s4);
+  color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -256,133 +354,305 @@ onMounted(() => {
 
 .profile-panel-head {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--s2);
+  gap: var(--s3);
+  padding-bottom: var(--s4);
+  border-bottom: 1px solid var(--border);
 }
 
-.profile-panel-head > div {
-  display: flex;
+.profile-identity {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
   align-items: center;
-  gap: var(--s2);
+  min-width: 0;
+  gap: var(--s3);
 }
 
-.profile-panel-icon {
+.profile-identity-avatar {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  overflow: hidden;
   color: var(--accent-strong);
+  background: var(--accent-tint);
+  border: 1px solid rgba(8, 126, 167, 0.18);
+  border-radius: 50%;
+  place-items: center;
 }
 
-.profile-panel-head h3 {
+.profile-identity-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-identity-copy {
+  min-width: 0;
+}
+
+.profile-identity-copy > span {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+}
+
+.profile-identity-copy h3 {
   margin: 0;
+  overflow: hidden;
+  color: var(--ink);
   font-size: 16px;
   font-weight: var(--fw-semibold);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.profile-panel-desc {
-  margin: 0 0 var(--s4);
-  font-size: 13px;
-  color: var(--text-secondary, #666);
+.profile-identity-copy p {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* ── 状态占位 ── */
+.profile-icon-button {
+  display: grid;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  place-items: center;
+  cursor: pointer;
+}
 
-.profile-panel-status {
+.profile-icon-button:hover {
+  color: var(--ink);
+  background: var(--surface-sub);
+}
+
+.profile-panel-status,
+.profile-panel-empty {
+  display: grid;
+  min-height: 150px;
+  padding: var(--s6) var(--s3);
   text-align: center;
-  padding: var(--s4) 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  place-content: center;
+  justify-items: center;
   gap: var(--s2);
 }
 
-/* ── 空状态 ── */
-
-.profile-panel-empty {
-  text-align: center;
-  padding: var(--s4) var(--s2);
-}
-
+.profile-panel-status p,
 .profile-panel-empty p {
   margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.profile-panel-empty strong {
+  color: var(--ink);
   font-size: 14px;
-  color: var(--text-secondary, #666);
-  line-height: 1.6;
 }
 
-/* ── 画像内容区块 ── */
-
-.profile-section {
-  margin-bottom: var(--s3);
+.profile-loading-mark {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: profile-spin 700ms linear infinite;
 }
 
-.profile-section h4 {
-  margin: 0 0 var(--s2);
-  font-size: 13px;
-  font-weight: var(--fw-semibold);
-  color: var(--text-secondary, #666);
-  text-transform: none;
+.profile-error-text {
+  color: var(--danger) !important;
 }
 
-.profile-section p {
+.profile-text-button {
+  padding: 4px 8px;
+  color: var(--accent-strong);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.profile-primary-section {
+  padding: var(--s4) 0;
+}
+
+.profile-primary-section h4,
+.profile-insight h4 {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
 }
 
-/* 风格标签列表 */
 .profile-tag-list {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--s1);
+  gap: 6px;
+  margin-top: 9px;
 }
 
 .profile-tag {
-  display: inline-block;
-  padding: 2px var(--s2);
-  background: var(--surface-dim, #f0f4ff);
-  color: var(--accent, #1a73e8);
+  display: inline-flex;
+  min-height: 26px;
+  padding: 4px 9px;
+  align-items: center;
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  border: 1px solid rgba(8, 126, 167, 0.14);
   border-radius: var(--r-sm);
   font-size: 12px;
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-medium);
+  line-height: 1.3;
 }
 
-/* ── 底部信息 ── */
+.profile-insight-list {
+  border-top: 1px solid var(--border);
+}
+
+.profile-insight {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: var(--s3);
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-insight-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  color: var(--accent-strong);
+  background: var(--surface-sub);
+  border-radius: var(--r-sm);
+  place-items: center;
+}
+
+.profile-insight p {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.profile-insight p.is-collapsed {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.profile-expand-button {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  padding: 0;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--accent-strong);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.profile-expand-button svg {
+  transition: transform 160ms ease;
+}
+
+.profile-expand-button svg.is-expanded {
+  transform: rotate(180deg);
+}
 
 .profile-panel-foot {
   display: flex;
+  min-height: 48px;
+  align-items: flex-end;
   justify-content: space-between;
-  align-items: center;
+  gap: var(--s3);
   padding-top: var(--s3);
-  border-top: 1px solid var(--border);
-  margin-top: var(--s2);
 }
 
-.profile-update-time {
+.profile-panel-foot > span {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.profile-refresh-button {
+  display: inline-flex;
+  min-height: 32px;
+  padding: 0 10px;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-strong);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
   font-size: 12px;
-  color: var(--text-secondary, #999);
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
 }
 
-.profile-refresh-btn {
-  font-size: 12px;
-  padding: 4px var(--s3);
+.profile-refresh-button:hover:not(:disabled) {
+  background: var(--accent-tint);
+  border-color: rgba(8, 126, 167, 0.32);
 }
 
-/* ── 错误文本 ── */
-
-.error-text {
-  color: var(--danger, #d93025);
+.profile-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
 }
 
-/* ── 过渡动画 ── */
+.profile-refresh-button .is-spinning {
+  animation: profile-spin 700ms linear infinite;
+}
 
 .profile-panel-enter-active,
 .profile-panel-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
 .profile-panel-enter-from,
 .profile-panel-leave-to {
   opacity: 0;
-  transform: translateY(-8px);
+  transform: translateY(-6px);
+}
+
+@keyframes profile-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 520px) {
+  .profile-panel {
+    right: 8px;
+    width: calc(100vw - 16px);
+    padding: var(--s4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-panel-enter-active,
+  .profile-panel-leave-active,
+  .profile-expand-button svg {
+    transition: none;
+  }
 }
 </style>

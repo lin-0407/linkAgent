@@ -15,6 +15,7 @@ class BilibiliVideoSyncProviderTest {
                 {
                   "bilibiliUid": "27058248",
                   "nickname": "测试账号",
+                  "avatarUrl": "https://i0.hdslb.com/bfs/face/avatar.jpg",
                   "hasMore": false,
                   "partial": false,
                   "videos": [{
@@ -38,6 +39,7 @@ class BilibiliVideoSyncProviderTest {
         BilibiliVideoSyncPayload payload = provider.parsePayload(json);
 
         assertThat(payload.bilibiliUid()).isEqualTo("27058248");
+        assertThat(payload.avatarUrl()).isEqualTo("https://i0.hdslb.com/bfs/face/avatar.jpg");
         assertThat(payload.videos()).hasSize(1);
         assertThat(payload.verificationResults().getFirst().status()).isEqualTo("FOUND");
     }

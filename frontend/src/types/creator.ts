@@ -747,6 +747,8 @@ export type BilibiliAccount = {
   userId: string
   bilibiliUid: string
   nickname: string | null
+  /** 从 B 站公开账号信息同步的头像地址，未同步或读取失败时为空 */
+  avatarUrl: string | null
   /** 绑定状态：ACTIVE=正常绑定，UNVERIFIED=UID未校验，SYNC_FAILED=同步失败 */
   bindStatus: string
   lastSyncTime: string | null
