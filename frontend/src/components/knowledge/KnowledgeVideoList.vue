@@ -226,7 +226,7 @@ function goToPage(targetPage: number | null) {
         <div class="knowledge-card-cover">
           <img
             v-if="shouldShowCover(item)"
-            :key="item.coverUrl"
+            :key="item.coverUrl ?? undefined"
             :src="item.coverUrl || undefined"
             :alt="`《${item.title}》视频封面`"
             class="knowledge-card-cover-image"
