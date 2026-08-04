@@ -200,9 +200,12 @@ public class PreflightVideoAnalysisService {
                 .map(item -> item.evidenceId() + " | " + item.sourceType() + " | "
                         + item.startMs() + "-" + item.endMs() + "ms | " + item.content())
                 .collect(java.util.stream.Collectors.joining("\n"));
+        // P0-2 分析预览已移除音轨，必须明确限制模型结论，避免把不可听见的音乐或背景音写进体检。
         return """
                 你是 B 站创作者的发布前成片体检助手。请同时观察视频画面并结合下面的时间轴证据，
-                检查定位一致性、开场吸引力、内容结构、节奏、表达清晰度、画面、音频、字幕、音画一致性和发布风险。
+                检查定位一致性、开场吸引力、内容结构、节奏、表达清晰度、画面、可见字幕和发布风险。
+                输入的代理视频不含音轨，你不能听到人声、音乐或背景音。涉及音频的描述只能引用已有 TRANSCRIPT、SILENCE、
+                VOLUME 证据中明确记录的事实；不得评价音乐、背景音、音质或音画同步，没有 TRANSCRIPT 时不得推断口播内容。
                 只输出 JSON，不要输出 Markdown。没有证据的问题不要编造；建议必须是创作者可直接执行的剪辑或内容动作。
                 每个问题的 startMs/endMs 必须落在 0 到 %d 毫秒内。HIGH/BLOCKER 必须引用至少一个已有 evidenceId；
                 模型画面观察会由系统自动补一条 VIDEO_MODEL 证据。

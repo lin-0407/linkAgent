@@ -48,6 +48,7 @@ import java.util.List;
  *   <li>{@code GET  /api/memory/long-term/users/{userId}} — 列出用户的长期记忆</li>
  *   <li>{@code GET  /api/memory/long-term/users/{userId}/keys/{memoryKey}} — 按 key 精确查询</li>
  *   <li>{@code DELETE /api/memory/long-term/users/{userId}/keys/{memoryKey}} — 软删除长期记忆</li>
+ *   <li>{@code POST /api/memory/long-term/users/{userId}/keys/{memoryKey}/restore} — 撤销软删除</li>
  * </ul>
  *
  * @see LongTermMemory MySQL 长期记忆存储服务
@@ -174,6 +175,28 @@ public class MemoryController {
             @Size(max = 128, message = "记忆键长度不能超过128个字符")
             String memoryKey) {
         longTermMemory.delete(userId, memoryKey);
+    }
+
+    /**
+     * 撤销一条长期记忆的软删除。
+     * <p>
+     * 恢复端点只翻转删除标记，并返回数据库中的当前记录。这样不会像重新保存一样覆盖
+     * 原内容、来源会话或向量标识；重复调用时也会返回已经恢复的记录。
+     */
+    @PostMapping("/long-term/users/{userId}/keys/{memoryKey}/restore")
+    public LongTermMemoryResponse restoreLongTermMemory(
+            @PathVariable
+            @NotBlank(message = "用户ID不能为空")
+            @Size(max = 64, message = "用户ID长度不能超过64个字符")
+            String userId,
+
+            @PathVariable
+            @NotBlank(message = "记忆键不能为空")
+            @Size(max = 128, message = "记忆键长度不能超过128个字符")
+            String memoryKey) {
+        return longTermMemory.restore(userId, memoryKey)
+                .map(this::toResponse)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "长期记忆不存在"));
     }
 
     /**

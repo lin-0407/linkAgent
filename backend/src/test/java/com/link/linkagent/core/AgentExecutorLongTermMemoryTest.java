@@ -306,6 +306,11 @@ class AgentExecutorLongTermMemoryTest {
         public int softDelete(String userId, String memoryKey) {
             return 1;
         }
+
+        @Override
+        public int restore(String userId, String memoryKey) {
+            return 1;
+        }
     }
 
     private static class NoopLongTermMemoryExtractor extends LongTermMemoryExtractor {

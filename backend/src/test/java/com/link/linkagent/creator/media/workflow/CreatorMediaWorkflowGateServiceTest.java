@@ -272,6 +272,71 @@ class CreatorMediaWorkflowGateServiceTest {
     }
 
     @Test
+    void shouldReportReadyFromReadOnlyInspection() {
+        CreatorMediaProperties properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        CreatorWorkflowMapper workflowMapper = confirmedWorkflowMapper();
+        when(mapper.findDraftVideo("task-1", "default"))
+                .thenReturn(Optional.of(draft("READY_FOR_REVIEW")));
+        CreatorMediaWorkflowGateService service = service(properties, mapper, workflowMapper);
+
+        CreatorMediaWorkflowGateService.PostPublishReadiness readiness =
+                service.inspectPostPublishReadiness("task-1", "default", "BV绑定");
+
+        assertThat(readiness.ready()).isTrue();
+        assertThat(readiness.blockingReason()).isNull();
+        verify(mapper, never()).recoverStaleDraftVideoProbe(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(LocalDateTime.class));
+    }
+
+    @Test
+    void shouldNotRecoverStaleProbeDuringReadOnlyInspection() {
+        CreatorMediaProperties properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        properties.getProcessing().setProbeTimeout(Duration.ofSeconds(30));
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        CreatorWorkflowMapper workflowMapper = confirmedWorkflowMapper();
+        when(mapper.findDraftVideo("task-1", "default"))
+                .thenReturn(Optional.of(draft("PROBING", LocalDateTime.now().minusMinutes(2))));
+        CreatorMediaWorkflowGateService service = service(properties, mapper, workflowMapper);
+
+        CreatorMediaWorkflowGateService.PostPublishReadiness readiness =
+                service.inspectPostPublishReadiness("task-1", "default", "BV绑定");
+
+        assertThat(readiness.ready()).isFalse();
+        assertThat(readiness.blockingReason()).contains("正在媒体探测中");
+        verify(mapper, never()).recoverStaleDraftVideoProbe(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(LocalDateTime.class));
+        verify(mapper, never()).findDraftVideoByVersion(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void shouldReportBlockedWhenMediaIsDisabledDuringReadOnlyInspection() {
+        CreatorMediaProperties properties = new CreatorMediaProperties();
+        properties.setEnabled(false);
+        MediaUploadMapper mapper = mock(MediaUploadMapper.class);
+        CreatorWorkflowMapper workflowMapper = mock(CreatorWorkflowMapper.class);
+        CreatorMediaWorkflowGateService service = service(properties, mapper, workflowMapper);
+
+        CreatorMediaWorkflowGateService.PostPublishReadiness readiness =
+                service.inspectPostPublishReadiness("task-1", "default", "BV绑定");
+
+        assertThat(readiness.ready()).isFalse();
+        assertThat(readiness.blockingReason()).contains("发布前试映能力未启用");
+        verifyNoInteractions(mapper, workflowMapper);
+    }
+
+    @Test
     void shouldRejectBeforeReadingDraftWhenPrePublishIsNotConfirmed() {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.setEnabled(true);

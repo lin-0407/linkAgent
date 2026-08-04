@@ -14,14 +14,6 @@ const {
 </script>
 
 <template>
-  <button
-    type="button"
-    class="creator-primary-button creator-task-new-action"
-    @click="startAiCreationTask"
-  >
-    <Plus :size="17" :stroke-width="1.9" aria-hidden="true" />
-    新建任务
-  </button>
   <div v-if="selectedTask" class="creator-panel compact-panel creator-current-task-card">
     <div class="creator-panel-title">
       <div>
@@ -54,6 +46,14 @@ const {
   </div>
   <button
     type="button"
+    class="creator-secondary-action creator-task-new-action"
+    @click="startAiCreationTask"
+  >
+    <Plus :size="17" :stroke-width="1.9" aria-hidden="true" />
+    新建任务
+  </button>
+  <button
+    type="button"
     class="creator-panel compact-panel creator-task-empty-panel creator-history-entry"
     aria-label="打开任务列表管理"
     @click="openTaskManager"
@@ -81,7 +81,7 @@ const {
 .creator-task-new-action {
   display: inline-flex;
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
   gap: 8px;

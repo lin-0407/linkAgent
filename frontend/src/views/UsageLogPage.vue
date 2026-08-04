@@ -264,8 +264,9 @@ onMounted(() => {
         <span>正在读取调用记录...</span>
       </div>
 
-      <div v-else-if="result && result.items.length > 0" class="usage-log-table-wrap">
-        <table class="usage-log-table">
+      <div v-else-if="result && result.items.length > 0" class="usage-log-records">
+        <div class="usage-log-table-wrap">
+          <table class="usage-log-table">
           <thead>
             <tr>
               <th scope="col">时间 / 状态</th>
@@ -347,7 +348,81 @@ onMounted(() => {
               </tr>
             </template>
           </tbody>
-        </table>
+          </table>
+        </div>
+
+        <!-- 窄屏使用独立纵向摘要，避免表格横移后丢失时间、状态和业务场景。 -->
+        <div class="usage-log-mobile-list">
+          <article v-for="record in result.items" :key="record.callId" class="usage-log-mobile-item">
+            <header class="usage-log-mobile-head">
+              <time :datetime="record.createTime">{{ formatDateTime(record.createTime) }}</time>
+              <span class="usage-log-status" :class="record.status.toLowerCase()">
+                {{ statusLabel(record.status) }}
+              </span>
+            </header>
+
+            <div class="usage-log-mobile-scene">
+              <strong>{{ record.workflowStepName || record.scene || '未记录场景' }}</strong>
+              <small>{{ record.taskId ? `任务 ${shortId(record.taskId)}` : '通用调用' }}</small>
+            </div>
+
+            <dl class="usage-log-mobile-summary">
+              <div>
+                <dt>模型</dt>
+                <dd>{{ record.modelName || '未返回模型名' }}</dd>
+              </div>
+              <div>
+                <dt>Token</dt>
+                <dd>{{ formatNumber(record.totalTokens) }}</dd>
+              </div>
+              <div>
+                <dt>耗时</dt>
+                <dd>{{ formatDuration(record.elapsedMs) }}</dd>
+              </div>
+            </dl>
+
+            <footer class="usage-log-mobile-actions">
+              <div>
+                <span class="usage-log-category">{{ categoryLabel(record.modelCategory) }}</span>
+                <span v-if="record.reasoningEffort" class="usage-log-reasoning-effort">
+                  {{ record.reasoningEffort }}
+                </span>
+              </div>
+              <button
+                type="button"
+                class="usage-log-detail-button"
+                :aria-expanded="expandedCallIds.has(record.callId)"
+                @click="toggleDetails(record.callId)"
+              >
+                <ChevronUp
+                  v-if="expandedCallIds.has(record.callId)"
+                  :size="14"
+                  :stroke-width="1.8"
+                  aria-hidden="true"
+                />
+                <ChevronDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+                {{ expandedCallIds.has(record.callId) ? '收起详情' : '查看详情' }}
+              </button>
+            </footer>
+
+            <div v-if="expandedCallIds.has(record.callId)" class="usage-log-mobile-detail">
+              <dl>
+                <div><dt>调用 ID</dt><dd>{{ record.callId }}</dd></div>
+                <div><dt>追踪 ID</dt><dd>{{ record.traceId || '未记录' }}</dd></div>
+                <div><dt>请求 ID</dt><dd>{{ record.requestId || '未记录' }}</dd></div>
+                <div><dt>工作流会话</dt><dd>{{ record.workflowSessionId || '未记录' }}</dd></div>
+                <div><dt>工作流阶段</dt><dd>{{ record.workflowStage || '未记录' }}</dd></div>
+                <div><dt>工作流步骤</dt><dd>{{ record.workflowStepId || '未记录' }}</dd></div>
+                <div><dt>思考强度</dt><dd>{{ record.reasoningEffort || '未发送' }}</dd></div>
+                <div><dt>输入数量</dt><dd>{{ displayInputCount(record) }}</dd></div>
+              </dl>
+              <p v-if="record.errorMessage" class="usage-log-error-message">
+                <strong>失败原因</strong>
+                <span>{{ record.errorMessage }}</span>
+              </p>
+            </div>
+          </article>
+        </div>
       </div>
 
       <div v-else class="usage-log-state empty">
@@ -381,7 +456,7 @@ onMounted(() => {
 .usage-log-heading,
 .usage-log-query,
 .usage-log-results {
-  width: min(1540px, 100%);
+  width: min(1280px, 100%);
   margin-inline: auto;
 }
 
@@ -596,11 +671,131 @@ onMounted(() => {
   min-height: 32px;
   padding-inline: 10px;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .usage-log-table-wrap {
   width: 100%;
   overflow-x: auto;
+}
+
+.usage-log-mobile-list {
+  display: none;
+}
+
+.usage-log-mobile-item {
+  min-width: 0;
+  padding: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-log-mobile-item:last-child {
+  border-bottom: 0;
+}
+
+.usage-log-mobile-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.usage-log-mobile-head time {
+  min-width: 0;
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+  line-height: 1.45;
+}
+
+.usage-log-mobile-head .usage-log-status {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.usage-log-mobile-scene {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  margin-top: 10px;
+}
+
+.usage-log-mobile-scene strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.usage-log-mobile-scene small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.usage-log-mobile-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 0.8fr));
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-log-mobile-summary > div,
+.usage-log-mobile-detail dl > div {
+  min-width: 0;
+}
+
+.usage-log-mobile-summary dt,
+.usage-log-mobile-detail dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.usage-log-mobile-summary dd,
+.usage-log-mobile-detail dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 11px;
+}
+
+.usage-log-mobile-summary dd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-log-mobile-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.usage-log-mobile-actions > div {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.usage-log-mobile-detail {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.usage-log-mobile-detail dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  margin: 0;
 }
 
 .usage-log-table {
@@ -839,6 +1034,7 @@ onMounted(() => {
 @media (max-width: 820px) {
   .usage-log-page {
     min-height: auto;
+    overflow-x: hidden;
     padding: 14px 10px 64px;
   }
 
@@ -867,6 +1063,13 @@ onMounted(() => {
     min-height: 44px;
   }
 
+  .usage-log-field input,
+  .usage-log-field select,
+  .usage-log-pagination button {
+    min-height: 44px;
+    height: 44px;
+  }
+
   .usage-log-summary {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -880,8 +1083,17 @@ onMounted(() => {
     border-right: 0;
   }
 
-  .usage-log-detail-row dl {
-    grid-template-columns: 1fr 1fr;
+  .usage-log-table-wrap {
+    display: none;
+  }
+
+  .usage-log-mobile-list {
+    display: block;
+  }
+
+  .usage-log-refresh,
+  .usage-log-detail-button {
+    min-height: 44px;
   }
 }
 
@@ -905,7 +1117,15 @@ onMounted(() => {
     align-items: flex-start;
   }
 
-  .usage-log-detail-row dl {
+  .usage-log-mobile-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-log-mobile-summary > div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .usage-log-mobile-detail dl {
     grid-template-columns: 1fr;
   }
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowRight, Play } from '@lucide/vue'
+import { useModalDialog } from '@/composables/useModalDialog'
 import type { ReferenceVideo } from '@/types/knowledge'
 import {
   formatKnowledgeCount,
@@ -115,6 +116,12 @@ function closeDetail() {
   detailTarget.value = null
 }
 
+const detailOpen = computed(() => detailTarget.value !== null)
+const { dialogRef: detailDialogRef, handleDialogKeydown: handleDetailKeydown } = useModalDialog(
+  detailOpen,
+  closeDetail,
+)
+
 function openCompetitorFromDetail(video: ReferenceVideo) {
   closeDetail()
   emit('open-competitor', video)
@@ -214,7 +221,7 @@ function goToPage(targetPage: number | null) {
     </div>
 
     <p v-if="!items.length && !loading && !error" class="creator-muted">
-      还没有案例，先在上方输入一个 BV 采集试试。
+      还没有案例，可通过下方的“添加参考案例”导入一个 BV。
     </p>
     <div v-else-if="!error" ref="cardListRef" class="knowledge-card-list">
       <article
@@ -313,17 +320,27 @@ function goToPage(targetPage: number | null) {
           @click.self="closeDetail"
         >
           <section
+            ref="detailDialogRef"
             class="creator-prompt-modal knowledge-detail-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="knowledge-detail-title"
+            tabindex="-1"
+            @keydown="handleDetailKeydown"
           >
             <header class="creator-result-modal-head knowledge-detail-head">
               <div>
                 <span>{{ knowledgeTierLabel(detailTarget.tier) }}</span>
                 <h3 id="knowledge-detail-title">案例详情</h3>
               </div>
-              <button type="button" class="creator-ghost-button" @click="closeDetail">关闭</button>
+              <button
+                type="button"
+                class="creator-ghost-button"
+                data-dialog-initial-focus
+                @click="closeDetail"
+              >
+                关闭
+              </button>
             </header>
 
             <div class="knowledge-detail-title-block">

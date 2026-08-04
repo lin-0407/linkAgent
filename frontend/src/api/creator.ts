@@ -50,6 +50,7 @@ import type {
   BilibiliVideo,
   TaskVideoBinding,
   BindBvPayload,
+  PostPublishReadiness,
   SyncVideosResult,
   // 创作者画像
   CreatorProfile,
@@ -439,6 +440,13 @@ export function bindBvToTask(taskId: string, payload: BindBvPayload) {
 export function getTaskVideoBinding(taskId: string) {
   return get<TaskVideoBinding>(
     `/creator/bilibili/tasks/${encodeURIComponent(taskId)}/video-binding`,
+  )
+}
+
+/** 只读检查任务是否完成成片试映；该查询不会触发媒体状态恢复 */
+export function getPostPublishReadiness(taskId: string) {
+  return get<PostPublishReadiness>(
+    `/creator/bilibili/tasks/${encodeURIComponent(taskId)}/post-publish-readiness`,
   )
 }
 

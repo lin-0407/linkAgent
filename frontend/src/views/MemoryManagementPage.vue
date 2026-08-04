@@ -10,10 +10,15 @@
  * 长期记忆可能数量较多（几十到上百条），需要搜索、排序、详情查看等
  * 完整管理能力，设置面板的侧边抽屉空间不足以承载这些交互。
  */
-import { computed, onMounted, ref } from 'vue'
-import { BrainCircuit, RefreshCw, Search } from '@lucide/vue'
-import { deleteLongTermMemory, listLongTermMemories } from '@/api/memory'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { BrainCircuit, RefreshCw, RotateCcw, Search, Trash2, X } from '@lucide/vue'
+import {
+  deleteLongTermMemory,
+  listLongTermMemories,
+  restoreLongTermMemory,
+} from '@/api/memory'
 import { formatDate } from '@/composables/creator/creatorWorkspaceUtils'
+import { useModalDialog } from '@/composables/useModalDialog'
 import type { LongTermMemoryRecord } from '@/types/memory'
 
 // ── 数据加载 ──
@@ -96,12 +101,110 @@ function closeDetail() {
   detailTarget.value = null
 }
 
+const detailOpen = computed(() => detailTarget.value !== null)
+const { dialogRef: detailDialogRef, handleDialogKeydown: handleDetailKeydown } = useModalDialog(
+  detailOpen,
+  closeDetail,
+)
+
 // ── 删除确认 ──
 
 const deletingKey = ref<string | null>(null)
 const deleteError = ref('')
+const pendingDelete = ref<LongTermMemoryRecord | null>(null)
 
-async function confirmDelete(memoryKey: string) {
+async function requestDelete(memory: LongTermMemoryRecord) {
+  deleteError.value = ''
+  if (detailTarget.value?.memoryKey === memory.memoryKey) {
+    // 先关闭详情并回到原卡片，再打开确认框，避免两个模态层同时存在和争夺焦点。
+    closeDetail()
+    await nextTick()
+  }
+  pendingDelete.value = memory
+}
+
+function cancelDelete() {
+  if (deletingKey.value) return
+  pendingDelete.value = null
+  deleteError.value = ''
+}
+
+const deleteConfirmOpen = computed(() => pendingDelete.value !== null)
+const { dialogRef: deleteDialogRef, handleDialogKeydown: handleDeleteKeydown } = useModalDialog(
+  deleteConfirmOpen,
+  cancelDelete,
+)
+
+// ── 删除撤销 ──
+
+const recentlyDeleted = ref<LongTermMemoryRecord | null>(null)
+const restoringKey = ref<string | null>(null)
+const undoError = ref('')
+const undoToastRef = ref<HTMLElement | null>(null)
+const undoActionRef = ref<HTMLButtonElement | null>(null)
+let undoTimer: ReturnType<typeof window.setTimeout> | undefined
+
+function clearUndoTimer() {
+  if (undoTimer === undefined) return
+  window.clearTimeout(undoTimer)
+  undoTimer = undefined
+}
+
+function dismissUndo() {
+  if (restoringKey.value) return
+  clearUndoTimer()
+  recentlyDeleted.value = null
+  undoError.value = ''
+}
+
+function scheduleUndoDismissal() {
+  clearUndoTimer()
+  if (!recentlyDeleted.value || undoError.value || restoringKey.value) return
+
+  const toast = undoToastRef.value
+  // 用户正在读取或操作撤销提示时暂停计时，避免键盘和鼠标操作被自动关闭打断。
+  if (toast?.matches(':hover') || toast?.contains(document.activeElement)) return
+
+  undoTimer = window.setTimeout(() => {
+    recentlyDeleted.value = null
+    undoTimer = undefined
+  }, 8_000)
+}
+
+function offerUndo(memory: LongTermMemoryRecord) {
+  clearUndoTimer()
+  recentlyDeleted.value = memory
+  undoError.value = ''
+  scheduleUndoDismissal()
+  // 原删除按钮已随卡片移除，因此把焦点交给撤销入口，保证键盘用户不会回到文档起点。
+  void nextTick(() => undoActionRef.value?.focus())
+}
+
+async function undoDelete() {
+  const memory = recentlyDeleted.value
+  if (!memory || restoringKey.value) return
+  clearUndoTimer()
+  restoringKey.value = memory.memoryKey
+  undoError.value = ''
+  try {
+    const restored = await restoreLongTermMemory(DEFAULT_USER_ID, memory.memoryKey)
+    // 使用后端返回的当前记录，避免把删除前快照覆盖到可能已更新的数据上。
+    memories.value = [
+      restored,
+      ...memories.value.filter((item) => item.memoryKey !== restored.memoryKey),
+    ]
+    recentlyDeleted.value = null
+  } catch (err) {
+    undoError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    restoringKey.value = null
+  }
+}
+
+async function confirmDelete() {
+  const memory = pendingDelete.value
+  const memoryKey = memory?.memoryKey
+  if (!memoryKey || deletingKey.value) return
   deletingKey.value = memoryKey
   deleteError.value = ''
   try {
@@ -112,6 +215,8 @@ async function confirmDelete(memoryKey: string) {
     if (detailTarget.value?.memoryKey === memoryKey) {
       closeDetail()
     }
+    pendingDelete.value = null
+    offerUndo(memory)
   } catch (err) {
     deleteError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -123,6 +228,10 @@ async function confirmDelete(memoryKey: string) {
 
 onMounted(() => {
   loadMemories()
+})
+
+onBeforeUnmount(() => {
+  clearUndoTimer()
 })
 </script>
 
@@ -213,6 +322,7 @@ onMounted(() => {
         tabindex="0"
         @click="openDetail(memory)"
         @keydown.enter="openDetail(memory)"
+        @keydown.space.prevent="openDetail(memory)"
       >
         <div class="memory-card-head">
           <span class="memory-card-key">{{ readableKey(memory.memoryKey) }}</span>
@@ -228,32 +338,118 @@ onMounted(() => {
           <button
             type="button"
             class="memory-card-delete"
-            :disabled="deletingKey === memory.memoryKey"
-            @click.stop="confirmDelete(memory.memoryKey)"
+            :disabled="Boolean(deletingKey) || Boolean(recentlyDeleted)"
+            :aria-label="`删除${readableKey(memory.memoryKey)}`"
+            @click.stop="requestDelete(memory)"
           >
-            {{ deletingKey === memory.memoryKey ? '删除中…' : '删除' }}
+            <Trash2 :size="16" :stroke-width="1.8" aria-hidden="true" />
+            删除
           </button>
         </div>
       </article>
     </div>
 
-    <!-- 删除错误提示（全局） -->
+    <!-- 删除确认必须在请求发出前展示，避免卡片上的高频点击直接造成数据丢失。 -->
     <Teleport to="body">
       <Transition name="creator-modal">
         <div
-          v-if="deleteError"
+          v-if="pendingDelete"
           class="creator-modal-backdrop"
           role="presentation"
-          @click.self="deleteError = ''"
+          @click.self="cancelDelete"
         >
-          <div class="creator-alert error-alert memory-delete-error-toast">
-            <strong>删除失败</strong>
-            <span>{{ deleteError }}</span>
-            <button type="button" class="creator-ghost-button" @click="deleteError = ''">
-              关闭
+          <section
+            ref="deleteDialogRef"
+            class="creator-prompt-modal memory-delete-confirm-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="memory-delete-title"
+            aria-describedby="memory-delete-description"
+            tabindex="-1"
+            @keydown="handleDeleteKeydown"
+          >
+            <header>
+              <span>删除长期记忆</span>
+              <h3 id="memory-delete-title">删除「{{ readableKey(pendingDelete.memoryKey) }}」？</h3>
+            </header>
+            <p id="memory-delete-description">
+              删除后，后续对话将不再使用这条偏好或关键信息。请确认这是你要删除的内容。
+            </p>
+            <blockquote>{{ pendingDelete.content }}</blockquote>
+            <p v-if="deleteError" class="creator-alert error-alert" role="alert">
+              {{ deleteError }}
+            </p>
+            <div class="memory-delete-confirm-actions">
+              <button
+                type="button"
+                class="creator-ghost-button"
+                :disabled="Boolean(deletingKey)"
+                data-dialog-initial-focus
+                @click="cancelDelete"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                class="creator-danger-action"
+                :disabled="Boolean(deletingKey)"
+                @click="confirmDelete"
+              >
+                {{ deletingKey ? '删除中…' : '确认删除' }}
+              </button>
+            </div>
+          </section>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- 删除请求成功后提供短时恢复入口；恢复失败时保留提示，允许用户重试。 -->
+    <Teleport to="body">
+      <Transition name="memory-undo-toast">
+        <aside
+          v-if="recentlyDeleted"
+          ref="undoToastRef"
+          class="memory-undo-toast"
+          :class="{ 'is-error': undoError }"
+          @mouseenter="clearUndoTimer"
+          @mouseleave="scheduleUndoDismissal"
+          @focusin="clearUndoTimer"
+          @focusout="scheduleUndoDismissal"
+        >
+          <div
+            class="memory-undo-copy"
+            :role="undoError ? 'alert' : 'status'"
+            :aria-live="undoError ? 'assertive' : 'polite'"
+            aria-atomic="true"
+          >
+            <strong>
+              {{ undoError ? '撤销失败' : `已删除「${readableKey(recentlyDeleted.memoryKey)}」` }}
+            </strong>
+            <span>{{ undoError || '可在提示关闭前撤销这次删除。' }}</span>
+          </div>
+          <div class="memory-undo-actions">
+            <button
+              ref="undoActionRef"
+              type="button"
+              class="memory-undo-action"
+              :disabled="Boolean(restoringKey)"
+              @click="undoDelete"
+            >
+              <RotateCcw :size="16" :stroke-width="1.8" aria-hidden="true" />
+              {{ restoringKey ? '恢复中…' : undoError ? '重试' : '撤销' }}
+            </button>
+            <button
+              type="button"
+              class="memory-undo-dismiss"
+              :disabled="Boolean(restoringKey)"
+              aria-label="关闭撤销提示"
+              title="关闭撤销提示"
+              @click="dismissUndo"
+            >
+              <X :size="17" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </div>
-        </div>
+        </aside>
       </Transition>
     </Teleport>
 
@@ -267,16 +463,20 @@ onMounted(() => {
           @click.self="closeDetail"
         >
           <section
+            ref="detailDialogRef"
             class="creator-prompt-modal memory-detail-modal"
             role="dialog"
             aria-modal="true"
             aria-label="记忆详情"
+            tabindex="-1"
+            @keydown="handleDetailKeydown"
           >
             <header class="creator-result-modal-head">
               <h3>记忆详情</h3>
               <button
                 type="button"
                 class="creator-ghost-button"
+                data-dialog-initial-focus
                 @click="closeDetail"
               >
                 关闭
@@ -311,10 +511,10 @@ onMounted(() => {
               <button
                 type="button"
                 class="creator-secondary-action"
-                :disabled="deletingKey === detailTarget.memoryKey"
-                @click="confirmDelete(detailTarget.memoryKey)"
+                :disabled="Boolean(deletingKey) || Boolean(recentlyDeleted)"
+                @click="requestDelete(detailTarget)"
               >
-                {{ deletingKey === detailTarget.memoryKey ? '删除中…' : '删除此记忆' }}
+                删除此记忆
               </button>
             </div>
           </section>
@@ -332,7 +532,7 @@ onMounted(() => {
  */
 
 .memory-page {
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: 22px var(--s4) 72px;
 }
@@ -370,8 +570,10 @@ onMounted(() => {
 }
 
 .memory-count {
+  flex: none;
   font-size: 14px;
   color: var(--text-secondary, #666);
+  white-space: nowrap;
 }
 
 .memory-count strong {
@@ -506,6 +708,11 @@ onMounted(() => {
   background: #f9fcfd;
 }
 
+.memory-card:focus-visible {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
 .memory-card-head {
   display: flex;
   justify-content: space-between;
@@ -515,6 +722,8 @@ onMounted(() => {
 
 .memory-card-key {
   display: inline-block;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 2px var(--s2);
   background: var(--surface-dim, #f0f4ff);
   color: var(--accent, #1a73e8);
@@ -562,7 +771,13 @@ onMounted(() => {
 }
 
 .memory-card-delete {
-  padding: 2px var(--s2);
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 var(--s2);
   background: transparent;
   color: var(--danger, #d93025);
   border: 1px solid transparent;
@@ -582,18 +797,162 @@ onMounted(() => {
   cursor: not-allowed;
 }
 
-/* ── 删除错误 Toast ── */
+/* ── 删除确认 ── */
 
-.memory-delete-error-toast {
-  position: fixed;
-  top: var(--s4);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10000;
+.memory-delete-confirm-modal {
+  width: min(520px, 100%);
+}
+
+.memory-delete-confirm-modal header {
+  display: grid;
+  gap: 5px;
+}
+
+.memory-delete-confirm-modal header span {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+
+.memory-delete-confirm-modal h3,
+.memory-delete-confirm-modal p,
+.memory-delete-confirm-modal blockquote {
+  margin: 0;
+}
+
+.memory-delete-confirm-modal h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.memory-delete-confirm-modal blockquote {
+  max-height: 120px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  padding: var(--s3);
+  color: var(--text);
+  background: var(--surface-sub);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.memory-delete-confirm-actions {
   display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+
+/* ── 删除撤销提示 ── */
+
+.memory-undo-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 52px;
+  z-index: 70;
+  display: flex;
+  width: min(460px, calc(100vw - 32px));
   align-items: center;
+  justify-content: space-between;
   gap: var(--s3);
-  max-width: 480px;
+  padding: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-sm);
+  box-shadow: var(--sh-sm);
+}
+
+.memory-undo-toast.is-error {
+  border-left-color: var(--danger);
+}
+
+.memory-undo-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.memory-undo-copy strong,
+.memory-undo-copy span {
+  overflow-wrap: anywhere;
+}
+
+.memory-undo-copy strong {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.memory-undo-copy span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.memory-undo-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.memory-undo-action,
+.memory-undo-dismiss {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-strong);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.memory-undo-action {
+  gap: 6px;
+  padding: 0 var(--s2);
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+}
+
+.memory-undo-dismiss {
+  width: 44px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.memory-undo-action:hover:not(:disabled),
+.memory-undo-dismiss:hover:not(:disabled) {
+  background: var(--surface-sub);
+  border-color: var(--border);
+}
+
+.memory-undo-action:focus-visible,
+.memory-undo-dismiss:focus-visible {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.memory-undo-action:disabled,
+.memory-undo-dismiss:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.memory-undo-toast-enter-active,
+.memory-undo-toast-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.memory-undo-toast-enter-from,
+.memory-undo-toast-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 
 /* ── 详情弹窗 ── */
@@ -651,5 +1010,33 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--s1);
+}
+
+@media (max-width: 820px) {
+  .memory-search-input,
+  .memory-sort-select {
+    height: 44px;
+  }
+}
+
+@media (max-width: 640px) {
+  .memory-undo-toast {
+    right: 12px;
+    bottom: 12px;
+    width: calc(100vw - 24px);
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-undo-toast-enter-active,
+  .memory-undo-toast-leave-active {
+    transition: opacity 150ms ease;
+  }
+
+  .memory-undo-toast-enter-from,
+  .memory-undo-toast-leave-to {
+    transform: none;
+  }
 }
 </style>

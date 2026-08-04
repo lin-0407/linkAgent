@@ -92,6 +92,8 @@ const preflightBusy = ref(false)
 const preflightError = ref('')
 const mediaDeleteBusy = ref(false)
 const mediaDeleteError = ref('')
+const isRestoringMediaState = ref(true)
+const mediaStateRestoreFailed = ref(false)
 const newPreflightIdempotencyKey = ref('')
 const openIssueIgnoreId = ref('')
 const openEditIgnoreId = ref('')
@@ -100,6 +102,29 @@ const editIgnoreReasons = reactive<Record<string, string>>({})
 
 const taskId = computed(() => selectedTaskId.value ?? '')
 const mediaDeleted = computed(() => Boolean(completedDraft.value?.mediaDeletedAt))
+const canRetryFailedUpload = computed(() => {
+  const status = completedDraft.value?.status
+  return (
+    status === 'UPLOAD_FAILED' || status === 'UPLOAD_ABORTED' || status === 'PROBE_FAILED'
+  )
+})
+const hasStoredMedia = computed(() => {
+  const status = completedDraft.value?.status
+  return (
+    status === 'UPLOADED' ||
+    status === 'PROBING' ||
+    status === 'READY_FOR_REVIEW' ||
+    status === 'PROBE_FAILED'
+  )
+})
+const showUploadWorkbench = computed(
+  () =>
+    !isRestoringMediaState.value &&
+    !mediaStateRestoreFailed.value &&
+    !mediaDeleted.value &&
+    (canRetryFailedUpload.value ||
+      (!completedDraft.value && currentUpload.value?.status !== 'COMPLETED')),
+)
 const fileSummary = computed(() => {
   if (!selectedFile.value) return '尚未选择文件'
   return `${selectedFile.value.name} · ${formatBytes(selectedFile.value.size)}`
@@ -112,7 +137,7 @@ const completedPartRatio = computed(() => {
 })
 const uploadActionLabel = computed(() => {
   if (currentUpload.value?.status === 'VERIFYING') return '确认结果'
-  if (completedDraft.value?.status === 'PROBE_FAILED') return '重新上传'
+  if (canRetryFailedUpload.value) return '重新上传'
   return isPaused.value || currentUpload.value ? '继续上传' : '开始上传'
 })
 const activeVersionId = computed(
@@ -143,8 +168,8 @@ const canStartUpload = computed(() => {
   return (
     Boolean(selectedFile.value) &&
     !isProbing.value &&
-    (!completedDraft.value || completedDraft.value.status === 'PROBE_FAILED') &&
-    (currentUpload.value?.status !== 'COMPLETED' || completedDraft.value?.status === 'PROBE_FAILED')
+    (!completedDraft.value || canRetryFailedUpload.value) &&
+    (currentUpload.value?.status !== 'COMPLETED' || canRetryFailedUpload.value)
   )
 })
 const showProbeButton = computed(() => {
@@ -178,11 +203,19 @@ const mediaProbeSummary = computed(() => {
   ]
 })
 const hasCompletedUpload = computed(() =>
-  Boolean(completedDraft.value || currentUpload.value?.status === 'COMPLETED'),
+  Boolean(hasStoredMedia.value || currentUpload.value?.status === 'COMPLETED'),
 )
 const resultPanelTitle = computed(() => {
   if (mediaDeleted.value) return '媒体文件已删除'
+  if (isRestoringMediaState.value) return '正在恢复当前成片'
+  if (preflightReview.value?.status === 'FAILED') return '发布前试映未完成'
   if (visibleError.value) return '媒体处理需要检查'
+  if (
+    completedDraft.value?.status === 'UPLOAD_FAILED' ||
+    completedDraft.value?.status === 'UPLOAD_ABORTED'
+  ) {
+    return '成片上传未完成'
+  }
   if (completedDraft.value?.status === 'READY_FOR_REVIEW') return '媒体探测已完成'
   if (completedDraft.value?.status === 'PROBING' || isProbing.value) return '正在读取成片信息'
   if (completedDraft.value?.status === 'PROBE_FAILED') return '媒体探测未完成'
@@ -194,7 +227,17 @@ const resultPanelDescription = computed(() => {
   if (mediaDeleted.value) {
     return '云端原片、预览、音频和关键画面已删除；试映报告、问题和修改清单仍保留。'
   }
+  if (isRestoringMediaState.value) return '正在读取当前任务已经保存的成片与处理状态。'
+  if (preflightReview.value?.status === 'FAILED') {
+    return preflightReview.value.errorMessage || '请查看失败原因后重试发布前试映。'
+  }
   if (visibleError.value) return visibleError.value
+  if (completedDraft.value?.status === 'UPLOAD_FAILED') {
+    return '上次上传未能完成，可重新选择 MP4 文件发起新的上传。'
+  }
+  if (completedDraft.value?.status === 'UPLOAD_ABORTED') {
+    return '上次上传已经取消，可重新选择 MP4 文件发起新的上传。'
+  }
   if (completedDraft.value?.status === 'READY_FOR_REVIEW') {
     return '视频参数已经就绪，可查看本次媒体探测详情。'
   }
@@ -210,7 +253,9 @@ const resultPanelDescription = computed(() => {
 })
 const resultPanelStatus = computed(() => {
   if (mediaDeleted.value) return 'success'
-  if (visibleError.value || completedDraft.value?.status === 'PROBE_FAILED') return 'error'
+  if (isRestoringMediaState.value) return 'working'
+  if (preflightReview.value?.status === 'FAILED') return 'error'
+  if (visibleError.value || canRetryFailedUpload.value) return 'error'
   if (completedDraft.value?.status === 'PROBING' || isProbing.value) return 'working'
   if (completedDraft.value?.status === 'READY_FOR_REVIEW' || hasCompletedUpload.value)
     return 'success'
@@ -310,7 +355,7 @@ const uploadBlocksMediaDeletion = computed(() => {
 })
 const canDeleteMedia = computed(
   () =>
-    Boolean(completedDraft.value) &&
+    hasStoredMedia.value &&
     !mediaDeleted.value &&
     !mediaDeleteBusy.value &&
     !uploadBlocksMediaDeletion.value &&
@@ -318,8 +363,13 @@ const canDeleteMedia = computed(
     !processingIsActive.value &&
     !preflightIsActive.value,
 )
-const preflightProviderTaskId = computed(
-  () => preflightReview.value?.steps.find((item) => item.stepType === 'TRANSCRIBE')?.providerTaskId ?? null,
+const preflightTranscribeStep = computed(() =>
+  preflightReview.value?.steps.find((item) => item.stepType === 'TRANSCRIBE'),
+)
+const preflightProviderTaskId = computed(() => preflightTranscribeStep.value?.providerTaskId ?? null)
+// 创建时跳过的步骤没有 Provider ID；两者同时成立才能说明 ASR 已执行并确认无人声。
+const preflightSkippedNoSpeech = computed(
+  () => preflightTranscribeStep.value?.status === 'SKIPPED' && Boolean(preflightProviderTaskId.value),
 )
 const preflightStepLabel = computed(() => {
   if (preflightReview.value?.currentStep === 'TRANSCRIBE') return '正在生成带时间戳字幕'
@@ -385,23 +435,43 @@ watch(
   },
 )
 
-onMounted(async () => {
-  const generation = viewGeneration
-  if (!taskId.value) return
+async function restoreMediaState(currentTaskId: string, generation: number) {
+  isRestoringMediaState.value = true
+  localError.value = ''
+  if (!currentTaskId) {
+    mediaStateRestoreFailed.value = false
+    isRestoringMediaState.value = false
+    return
+  }
   try {
-    await restoreStoredUpload(taskId.value)
-    await restorePersistedDraft(taskId.value, generation)
+    await restoreStoredUpload(currentTaskId)
+    await restorePersistedDraft(currentTaskId, generation)
+    if (isDisposed || generation !== viewGeneration) return
+    mediaStateRestoreFailed.value = false
     scheduleProbeRefreshIfNecessary(generation)
   } catch (error) {
     if (isDisposed || generation !== viewGeneration) return
+    mediaStateRestoreFailed.value = true
     localError.value = toMessage(error)
+  } finally {
+    if (!isDisposed && generation === viewGeneration) isRestoringMediaState.value = false
   }
+}
+
+function retryMediaStateRestore() {
+  // 重试仍复用当前视图代次，任务切换后旧响应不能覆盖新任务。
+  void restoreMediaState(taskId.value, viewGeneration)
+}
+
+onMounted(() => {
+  void restoreMediaState(taskId.value, viewGeneration)
 })
 
 watch(taskId, async (nextTaskId) => {
   viewGeneration += 1
   processingEstimateGeneration += 1
   const generation = viewGeneration
+  mediaStateRestoreFailed.value = false
   isProbing.value = false
   clearProbeRefreshTimer()
   clearProcessingRefreshTimer()
@@ -431,15 +501,7 @@ watch(taskId, async (nextTaskId) => {
   if (fileInput.value) fileInput.value.value = ''
   localError.value = ''
   closeResultModal(false)
-  if (nextTaskId) {
-    try {
-      await restoreStoredUpload(nextTaskId)
-      await restorePersistedDraft(nextTaskId, generation)
-      scheduleProbeRefreshIfNecessary(generation)
-    } catch (error) {
-      if (!isDisposed && generation === viewGeneration) localError.value = toMessage(error)
-    }
-  }
+  await restoreMediaState(nextTaskId, generation)
 })
 
 onBeforeUnmount(() => {
@@ -579,7 +641,9 @@ async function restorePersistedDraft(currentTaskId: string, generation: number) 
       draft.status === 'UPLOADED' ||
       draft.status === 'PROBING' ||
       draft.status === 'READY_FOR_REVIEW' ||
-      draft.status === 'PROBE_FAILED'
+      draft.status === 'PROBE_FAILED' ||
+      draft.status === 'UPLOAD_FAILED' ||
+      draft.status === 'UPLOAD_ABORTED'
     ) {
       completedDraft.value = draft
       currentDraftVideo.value = draft
@@ -1177,6 +1241,10 @@ function updateProbeStatusMessage(status: string) {
     statusMessage.value = '上一次媒体探测失败，可以重试检测或重新上传成片'
   } else if (status === 'UPLOADED') {
     statusMessage.value = '成片已经上传完成，等待媒体探测'
+  } else if (status === 'UPLOAD_FAILED') {
+    statusMessage.value = '上一次上传未能完成，请重新选择文件创建新的上传尝试'
+  } else if (status === 'UPLOAD_ABORTED') {
+    statusMessage.value = '上一次上传已经取消，请重新选择文件创建新的上传尝试'
   }
 }
 
@@ -1278,7 +1346,7 @@ function toMessage(error: unknown) {
     </div>
 
     <div class="preflight-work-grid">
-      <section class="preflight-file-card">
+      <section v-if="showUploadWorkbench" class="preflight-file-card">
         <span class="preflight-index">01</span>
         <div class="preflight-card-head">
           <div>
@@ -1326,7 +1394,7 @@ function toMessage(error: unknown) {
         </p>
       </section>
 
-      <section class="preflight-meter-card">
+      <section v-if="showUploadWorkbench" class="preflight-meter-card">
         <span class="preflight-index">02</span>
         <div class="preflight-meter-head">
           <div>
@@ -1391,11 +1459,31 @@ function toMessage(error: unknown) {
           <Minus v-else :size="20" :stroke-width="1.8" />
         </span>
         <div class="preflight-result-copy">
-          <small>当前成片状态</small>
+          <small v-if="completedDraft">
+            {{ completedDraft.versionName }} · {{ completedDraft.originalFileName }}
+          </small>
+          <small v-else>当前成片状态</small>
           <strong>{{ resultPanelTitle }}</strong>
-          <p :role="visibleError ? 'alert' : undefined">{{ resultPanelDescription }}</p>
+          <p :role="resultPanelStatus === 'error' ? 'alert' : undefined">
+            {{ resultPanelDescription }}
+          </p>
         </div>
         <div class="preflight-result-actions">
+          <button
+            v-if="mediaStateRestoreFailed"
+            type="button"
+            class="preflight-secondary"
+            :disabled="isRestoringMediaState"
+            @click="retryMediaStateRestore"
+          >
+            <LoaderCircle
+              v-if="isRestoringMediaState"
+              :size="15"
+              :stroke-width="1.8"
+              aria-hidden="true"
+            />
+            {{ isRestoringMediaState ? '重新读取中...' : '重新读取' }}
+          </button>
           <button
             v-if="hasCompletedUpload"
             type="button"
@@ -1414,7 +1502,7 @@ function toMessage(error: unknown) {
             {{ probeButtonLabel }}
           </button>
           <button
-            v-if="completedDraft && !mediaDeleted"
+            v-if="hasStoredMedia && !mediaDeleted"
             type="button"
             class="preflight-danger-action"
             :disabled="!canDeleteMedia"
@@ -1442,6 +1530,22 @@ function toMessage(error: unknown) {
             <p>先确定抽帧和识别档位，系统按实际视频时长给出本次预估。</p>
           </div>
           <span v-if="processingJob" class="preflight-state-chip">{{ processingJob.status }}</span>
+        </div>
+
+        <div
+          v-if="processingPreviewAsset && processingAssetUrls[processingPreviewAsset.assetId]"
+          class="preflight-preview-result"
+        >
+          <div class="preflight-processing-status-head">
+            <strong>预览成片</strong>
+            <span>{{ formatBytes(processingPreviewAsset.fileSize) }}</span>
+          </div>
+          <video
+            ref="processingPreviewVideo"
+            controls
+            preload="metadata"
+            :src="processingAssetUrls[processingPreviewAsset.assetId]"
+          ></video>
         </div>
 
         <div class="preflight-processing-options">
@@ -1484,7 +1588,7 @@ function toMessage(error: unknown) {
               type="checkbox"
               :disabled="processingIsActive || processingBusy"
             />
-            <span>估算 ASR 转写</span>
+            <span>识别人声并生成字幕</span>
           </label>
         </div>
 
@@ -1556,22 +1660,6 @@ function toMessage(error: unknown) {
                   : '确认并开始处理'
             }}
           </button>
-        </div>
-
-        <div
-          v-if="processingPreviewAsset && processingAssetUrls[processingPreviewAsset.assetId]"
-          class="preflight-preview-result"
-        >
-          <div class="preflight-processing-status-head">
-            <strong>预览成片</strong>
-            <span>{{ formatBytes(processingPreviewAsset.fileSize) }}</span>
-          </div>
-          <video
-            ref="processingPreviewVideo"
-            controls
-            preload="metadata"
-            :src="processingAssetUrls[processingPreviewAsset.assetId]"
-          ></video>
         </div>
 
         <div v-if="processingFrameAssets.length" class="preflight-frame-grid">
@@ -1656,6 +1744,9 @@ function toMessage(error: unknown) {
             <p v-if="preflightReview.errorMessage" class="preflight-processing-error">
               {{ preflightReview.errorMessage }}
             </p>
+            <p v-if="preflightSkippedNoSpeech" class="preflight-cost-note">
+              未检测到人声，已跳过字幕。当前试映不评鉴音乐与背景音内容。
+            </p>
           </div>
 
           <dl class="preflight-review-facts">
@@ -1665,11 +1756,31 @@ function toMessage(error: unknown) {
             </div>
             <div>
               <dt>实际用量</dt>
-              <dd>{{ preflightReview.usageSeconds == null ? '等待返回' : `${preflightReview.usageSeconds} 秒` }}</dd>
+              <dd>
+                {{
+                  preflightReview.usageSeconds == null
+                    ? preflightSkippedNoSpeech
+                      ? '供应商未返回'
+                      : '等待返回'
+                    : `${preflightReview.usageSeconds} 秒`
+                }}
+              </dd>
             </div>
             <div>
               <dt>实际费用</dt>
-              <dd>{{ preflightReview.actualCostUsd == null ? '等待返回' : formatCost(preflightReview.actualCostUsd) }}</dd>
+              <dd>
+                {{
+                  preflightReview.actualCostUsd == null
+                    ? preflightSkippedNoSpeech
+                      ? '供应商未返回'
+                      : '等待返回'
+                    : preflightSkippedNoSpeech &&
+                        preflightReview.usageSeconds == null &&
+                        preflightReview.actualCostUsd === 0
+                      ? '供应商未返回'
+                      : formatCost(preflightReview.actualCostUsd)
+                }}
+              </dd>
             </div>
           </dl>
 
@@ -2463,9 +2574,9 @@ button:disabled {
   grid-template-columns: 42px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--s4);
-  height: 104px;
+  min-height: 104px;
   padding: var(--s4) var(--s5);
-  overflow: hidden;
+  overflow: visible;
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid var(--border-strong);
   border-radius: var(--r);
@@ -2514,8 +2625,6 @@ button:disabled {
 
 .preflight-result-copy {
   min-width: 0;
-  max-height: 74px;
-  overflow: auto;
 }
 
 .preflight-result-copy small {
@@ -2525,6 +2634,7 @@ button:disabled {
   font-size: 10px;
   font-weight: var(--fw-bold);
   letter-spacing: 0.08em;
+  overflow-wrap: anywhere;
 }
 
 .preflight-result-copy strong {
@@ -2578,8 +2688,8 @@ button:disabled {
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   color: var(--muted);
   background: var(--surface-sub);
   border: 1px solid var(--border);
@@ -3339,7 +3449,7 @@ button:disabled {
 
 .preflight-processing-options select {
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
   padding: 9px 10px;
   color: var(--ink);
   background: var(--surface-sub);
@@ -3355,7 +3465,7 @@ button:disabled {
 .preflight-processing-options .preflight-check-option {
   display: flex;
   align-items: center;
-  min-height: 42px;
+  min-height: 44px;
   margin-top: 22px;
   padding: 9px 10px;
   background: var(--surface-sub);
@@ -3526,7 +3636,7 @@ button:disabled {
   }
 
   .preflight-result-dock {
-    height: 168px;
+    min-height: 168px;
     grid-template-columns: 42px minmax(0, 1fr);
   }
 
@@ -3563,7 +3673,7 @@ button:disabled {
   }
 
   .preflight-result-dock {
-    height: 164px;
+    min-height: 164px;
     grid-template-columns: 36px minmax(0, 1fr);
     gap: var(--s2);
   }

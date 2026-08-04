@@ -5,6 +5,7 @@ import com.link.linkagent.creator.bilibili.model.BilibiliVideoResponse;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncResponse;
 import com.link.linkagent.creator.bilibili.model.BindAccountRequest;
 import com.link.linkagent.creator.bilibili.model.BindBvRequest;
+import com.link.linkagent.creator.bilibili.model.PostPublishReadinessResponse;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingResponse;
 import com.link.linkagent.creator.bilibili.service.CreatorBilibiliService;
 import jakarta.validation.Valid;
@@ -114,6 +115,20 @@ public class CreatorBilibiliController {
             String taskId,
             @Valid @RequestBody BindBvRequest request) {
         return bilibiliService.bindBvToTask(taskId, request);
+    }
+
+    /**
+     * 查询任务是否已完成成片试映并可进入 BV 绑定。
+     * 该 GET 只返回当前事实，不会触发媒体任务恢复或放宽后续 POST 的服务端门禁。
+     */
+    @GetMapping("/tasks/{taskId}/post-publish-readiness")
+    public PostPublishReadinessResponse getPostPublishReadiness(
+            @PathVariable
+            @NotBlank(message = "任务ID不能为空")
+            @Size(max = 64, message = "任务ID长度不能超过64个字符")
+            @Pattern(regexp = "^[a-zA-Z0-9_-]+$", message = "任务ID格式不正确")
+            String taskId) {
+        return bilibiliService.getPostPublishReadiness(taskId);
     }
 
     /**

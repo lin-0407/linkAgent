@@ -208,9 +208,13 @@ public class PreflightReviewWorker {
                     "ASR_PROVIDER_FAILED", truncate(query.errorMessage()));
             throw new PermanentFailure("ASR_PROVIDER_FAILED", "ASR 转写失败");
         }
-        SpeechRecognitionProvider.TranscriptionResult result = asrProvider.loadResult(query.transcriptionUrl());
         BigDecimal actualCost = asrCost(query.usageSeconds());
-        asrService.replaceTranscript(review, step, result, query.usageSeconds(), actualCost);
+        if (query.status() == SpeechRecognitionProvider.Status.NO_SPEECH) {
+            asrService.skipTranscript(review, step, query.errorMessage(), query.usageSeconds(), actualCost);
+        } else {
+            SpeechRecognitionProvider.TranscriptionResult result = asrProvider.loadResult(query.transcriptionUrl());
+            asrService.replaceTranscript(review, step, result, query.usageSeconds(), actualCost);
+        }
         if (mapper.advanceReview(review.reviewId(), leaseOwner, "BUILD_TIMELINE", 65,
                 query.usageSeconds(), currentCost(review.reviewId())) != 1) {
             throw new IllegalStateException("试映任务状态已变化");

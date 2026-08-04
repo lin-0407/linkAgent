@@ -370,7 +370,8 @@ public interface PreflightReviewMapper {
     @Update("""
             UPDATE creator_media_api_call_log
             SET status = 'SUCCESS', audio_duration_ms = #{audioDurationMs},
-                actual_cost_usd = #{actualCostUsd}, completed_at = CURRENT_TIMESTAMP,
+                actual_cost_usd = #{actualCostUsd}, error_code = NULL, error_message = NULL,
+                completed_at = CURRENT_TIMESTAMP,
                 update_time = CURRENT_TIMESTAMP
             WHERE review_id = #{reviewId} AND provider_task_id = #{providerTaskId} AND is_deleted = 0
             """)
@@ -738,20 +739,23 @@ public interface PreflightReviewMapper {
                                  @Param("ownerId") String ownerId,
                                  @Param("reviewId") String reviewId);
 
+    // 已知无人声任务必须保留原 Provider ID，修复后重试只查询旧任务，避免再次产生 ASR 调用。
     @Update("""
             UPDATE creator_preflight_step
             SET status = 'PENDING',
                 provider_task_id = CASE
                     WHEN step_type = 'TRANSCRIBE'
                          AND provider_task_id IS NOT NULL
-                         AND error_code <> 'ASR_PROVIDER_FAILED'
+                         AND (error_code <> 'ASR_PROVIDER_FAILED'
+                              OR error_message = 'SUCCESS_WITH_NO_VALID_FRAGMENT')
                     THEN provider_task_id
                     ELSE NULL
                 END,
                 output_ref = CASE
                     WHEN step_type = 'TRANSCRIBE'
                          AND provider_task_id IS NOT NULL
-                         AND error_code <> 'ASR_PROVIDER_FAILED'
+                         AND (error_code <> 'ASR_PROVIDER_FAILED'
+                              OR error_message = 'SUCCESS_WITH_NO_VALID_FRAGMENT')
                     THEN output_ref
                     ELSE NULL
                 END,

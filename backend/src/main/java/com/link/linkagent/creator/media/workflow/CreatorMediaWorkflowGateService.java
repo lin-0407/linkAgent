@@ -82,73 +82,118 @@ public class CreatorMediaWorkflowGateService {
                         "请先上传成片并完成媒体探测，才能进入" + nextStageName + "阶段。"
                 ));
         draft = recoverStaleProbeIfNecessary(draft);
+        PostPublishReadiness readiness = evaluatePostPublishReadiness(
+                taskId.trim(), ownerId, nextStageName, draft);
+        if (!readiness.ready()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, readiness.blockingReason());
+        }
+    }
+
+    /**
+     * 只读查询任务能否进入发布后流程。
+     * <p>
+     * 查询接口只展示当前持久化事实，因此不能调用陈旧探测恢复；否则用户打开视频分析页就会
+     * 隐式改写媒体状态。写接口仍由 {@link #ensureReadyForPostPublish(String, String, String)}
+     * 保留原有恢复行为和 409 门禁。
+     */
+    public PostPublishReadiness inspectPostPublishReadiness(String taskId,
+                                                            String ownerId,
+                                                            String nextStageName) {
+        try {
+            ensureMediaEnabled(nextStageName);
+            requirePrePublishConfirmed(taskId, ownerId, nextStageName);
+        } catch (ResponseStatusException exception) {
+            return new PostPublishReadiness(false, exception.getReason());
+        }
+        return mediaUploadMapper.findDraftVideo(taskId.trim(), ownerId)
+                .map(draft -> evaluatePostPublishReadiness(
+                        taskId.trim(), ownerId, nextStageName, draft))
+                .orElseGet(() -> new PostPublishReadiness(
+                        false,
+                        "请先上传成片并完成媒体探测，才能进入" + nextStageName + "阶段。"
+                ));
+    }
+
+    private PostPublishReadiness evaluatePostPublishReadiness(String taskId,
+                                                               String ownerId,
+                                                               String nextStageName,
+                                                               DraftVideoRecord draft) {
         if (DraftVideoStatus.READY_FOR_REVIEW.name().equals(draft.status())) {
             MediaProcessingJobRecord processingJob = mediaProcessingMapper
-                    .findCurrentJob(taskId.trim(), ownerId, draft.versionId())
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.CONFLICT,
-                            "请先生成预览成片并完成媒体预处理，才能进入" + nextStageName + "阶段。"
-                    ));
+                    .findCurrentJob(taskId, ownerId, draft.versionId())
+                    .orElse(null);
+            if (processingJob == null) {
+                return new PostPublishReadiness(
+                        false,
+                        "请先生成预览成片并完成媒体预处理，才能进入" + nextStageName + "阶段。"
+                );
+            }
             if ("COMPLETED".equals(processingJob.status())) {
-                requireCompletedPreflightReview(
-                        taskId.trim(), ownerId, draft.versionId(), processingJob.jobId(), nextStageName);
-                return;
+                return evaluateCompletedPreflightReview(
+                        taskId, ownerId, draft.versionId(), processingJob.jobId(), nextStageName);
             }
             if ("QUEUED".equals(processingJob.status()) || "RUNNING".equals(processingJob.status())) {
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT,
+                return new PostPublishReadiness(
+                        false,
                         "成片正在生成预览和关键画面，请等待完成后再进入" + nextStageName + "阶段。"
                 );
             }
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
+            return new PostPublishReadiness(
+                    false,
                     "成片媒体预处理尚未完成，不能进入" + nextStageName + "阶段。"
             );
         }
         if (DraftVideoStatus.PROBING.name().equals(draft.status())) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
+            return new PostPublishReadiness(
+                    false,
                     "成片正在媒体探测中，请等待完成后再进入" + nextStageName + "阶段。"
             );
         }
-        throw new ResponseStatusException(
-                HttpStatus.CONFLICT,
+        return new PostPublishReadiness(
+                false,
                 "成片尚未通过媒体探测，不能进入" + nextStageName + "阶段。"
         );
     }
 
-    private void requireCompletedPreflightReview(String taskId,
-                                                 String ownerId,
-                                                 String versionId,
-                                                 String processingJobId,
-                                                 String nextStageName) {
+    private PostPublishReadiness evaluateCompletedPreflightReview(String taskId,
+                                                                  String ownerId,
+                                                                  String versionId,
+                                                                  String processingJobId,
+                                                                  String nextStageName) {
         PreflightReviewRecord review = preflightReviewMapper.findCurrentByVersion(taskId, ownerId, versionId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        "请先完成发布前试映，才能进入" + nextStageName + "阶段。"
-                ));
+                .orElse(null);
+        if (review == null) {
+            return new PostPublishReadiness(
+                    false,
+                    "请先完成发布前试映，才能进入" + nextStageName + "阶段。"
+            );
+        }
         if (!processingJobId.equals(review.processingJobId())) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
+            return new PostPublishReadiness(
+                    false,
                     "当前发布前试映不对应最新媒体预处理结果，请重新完成试映后再进入" + nextStageName + "阶段。"
             );
         }
         if ("COMPLETED".equals(review.status())) {
-            return;
+            return new PostPublishReadiness(true, null);
         }
         if ("QUEUED".equals(review.status())
                 || "RUNNING".equals(review.status())
                 || "RETRY_WAIT".equals(review.status())
                 || "CANCEL_REQUESTED".equals(review.status())) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
+            return new PostPublishReadiness(
+                    false,
                     "发布前试映仍在处理中，请等待完成后再进入" + nextStageName + "阶段。"
             );
         }
-        throw new ResponseStatusException(
-                HttpStatus.CONFLICT,
+        return new PostPublishReadiness(
+                false,
                 "发布前试映尚未完成，请处理失败或取消的任务后再进入" + nextStageName + "阶段。"
         );
+    }
+
+    /** 只暴露就绪结论和可直接展示的阻塞原因，避免查询调用方复制门禁判断。 */
+    public record PostPublishReadiness(boolean ready, String blockingReason) {
     }
 
     /**

@@ -1,6 +1,14 @@
 <script setup lang="ts">
-import type { Component } from 'vue'
-import { BarChart3, Clapperboard, FileText, ListChecks, MessageSquareText, MonitorPlay } from '@lucide/vue'
+import { computed, type Component } from 'vue'
+import {
+  ArrowRight,
+  BarChart3,
+  Clapperboard,
+  FileText,
+  ListChecks,
+  MessageSquareText,
+  MonitorPlay,
+} from '@lucide/vue'
 
 type CreatorWorkStep = 'prePublish' | 'production' | 'preflight' | 'feedback' | 'report'
 type CreatorStepKey = 'task' | CreatorWorkStep
@@ -42,6 +50,8 @@ const {
 const emit = defineEmits<{
   navigate: [stepKey: CreatorStepKey]
 }>()
+
+const nextStep = computed(() => steps[activeStepIndex + 1] ?? null)
 </script>
 
 <template>
@@ -64,6 +74,16 @@ const emit = defineEmits<{
         <span></span>
       </div>
       <p>{{ activeStepMeta.description }}</p>
+      <button
+        v-if="nextStep"
+        type="button"
+        class="creator-mobile-next-action"
+        :disabled="!canNavigate(nextStep.key)"
+        @click="emit('navigate', nextStep.key)"
+      >
+        <span>进入{{ nextStep.label }}</span>
+        <ArrowRight :size="17" :stroke-width="1.9" aria-hidden="true" />
+      </button>
     </div>
 
     <nav class="creator-tabs creator-tabs-vertical" aria-label="创作步骤">

@@ -265,7 +265,7 @@ function formatDate(value: string) {
 
 .project-list-page {
   display: grid;
-  width: min(1440px, calc(100vw - 48px));
+  width: min(1280px, calc(100vw - 48px));
   gap: var(--s4);
   margin: 0 auto;
 }

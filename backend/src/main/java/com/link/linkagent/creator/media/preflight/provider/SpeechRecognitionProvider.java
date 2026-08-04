@@ -18,6 +18,8 @@ public interface SpeechRecognitionProvider {
         PENDING,
         RUNNING,
         SUCCEEDED,
+        /** Provider 已完成音频检查，但没有发现可生成字幕的人声片段。 */
+        NO_SPEECH,
         FAILED
     }
 

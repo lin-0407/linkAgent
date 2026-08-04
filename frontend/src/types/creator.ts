@@ -817,6 +817,13 @@ export type BindBvPayload = {
   bvid: string
 }
 
+/** 任务进入 BV 绑定前的只读门禁状态 */
+export type PostPublishReadiness = {
+  taskId: string
+  ready: boolean
+  blockingReason: string | null
+}
+
 // ═══════════════════════════════════════════
 // P0-3: 视频同步结果
 // ═══════════════════════════════════════════

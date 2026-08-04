@@ -3,6 +3,10 @@ import { createRouter, createWebHistory } from 'vue-router'
 // 首页为产品化入口，工作台通过路由独立访问
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
+  // 跨页面进入创作台时回到顶部，避免上一页滚动位置让移动端吸附流程栏压住任务操作。
+  scrollBehavior(_to, _from, savedPosition) {
+    return savedPosition ?? { left: 0, top: 0 }
+  },
   routes: [
     {
       path: '/',
@@ -41,6 +45,11 @@ const router = createRouter({
       path: '/usage-logs',
       name: 'usageLogs',
       component: () => import('@/views/UsageLogPage.vue'),
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      name: 'notFound',
+      component: () => import('@/views/NotFoundPage.vue'),
     },
   ],
 })

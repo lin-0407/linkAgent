@@ -8,6 +8,7 @@ import com.link.linkagent.creator.bilibili.model.BilibiliVideoResponse;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncResponse;
 import com.link.linkagent.creator.bilibili.model.BindAccountRequest;
 import com.link.linkagent.creator.bilibili.model.BindBvRequest;
+import com.link.linkagent.creator.bilibili.model.PostPublishReadinessResponse;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingResponse;
 import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
@@ -346,6 +347,30 @@ public class CreatorBilibiliService {
         return bilibiliMapper.findBindingByTaskId(taskId)
                 .map(this::toBindingResponse)
                 .orElse(null);
+    }
+
+    /**
+     * 查询任务进入 BV 绑定前的发布后就绪状态。
+     * <p>
+     * 归属从任务记录读取，避免前端传入 userId 后查询到其他归属下的媒体事实；门禁查询本身不恢复
+     * 陈旧探测任务，也不会替代绑定写接口上的强制校验。
+     */
+    public PostPublishReadinessResponse getPostPublishReadiness(String taskId) {
+        var task = taskMapper.findTaskByTaskId(taskId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "创作任务不存在：" + taskId
+                ));
+        var readiness = mediaWorkflowGateService.inspectPostPublishReadiness(
+                taskId,
+                task.getUserId(),
+                "BV绑定"
+        );
+        return new PostPublishReadinessResponse(
+                taskId,
+                readiness.ready(),
+                readiness.blockingReason()
+        );
     }
 
     /**

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ApiError } from '@/api/http'
 import {
   getCreatorTask,
@@ -17,6 +17,7 @@ import {
   getCurrentPreflightReview,
   getMediaFeatureStatus,
 } from '@/api/media'
+import { getCurrentProductionPlan } from '@/api/creatorProduction'
 import NotificationToast from '@/components/NotificationToast.vue'
 import CreatorDeleteConfirmModal from '@/components/creator/CreatorDeleteConfirmModal.vue'
 import CreatorDevTestModal from '@/components/creator/CreatorDevTestModal.vue'
@@ -73,6 +74,10 @@ import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
 type CreatorWorkStep = 'prePublish' | 'production' | 'preflight' | 'feedback' | 'report'
 type CreatorStepKey = 'task' | CreatorWorkStep
+type TaskSelectionOptions = {
+  requestedStep?: 'preflight'
+  consumeEntryQuery?: boolean
+}
 type ContextTermOption = {
   value: CreatorContextTermType
   label: string
@@ -102,6 +107,8 @@ const props = withDefaults(
     developerMode: false,
   },
 )
+const route = useRoute()
+const router = useRouter()
 
 // 仅开发环境允许通过显式查询参数进入无后端布局预览，生产构建不会响应这个入口。
 const isLayoutPreviewMode =
@@ -249,6 +256,11 @@ const hasConfirmedPrePublish = computed(() => {
 // activeStep / restoredTaskId 从 Pinia creatorStore 读取，替代原来的 localStorage + persistWorkspaceState 模式
 const creatorStore = useCreatorStore()
 const { activeStep, restoredTaskId, activeInteractiveTaskId } = storeToRefs(creatorStore)
+// 恢复期间使用稳定骨架隔离旧任务控件，避免异步状态陆续返回时暴露错误步骤或危险操作。
+const isRestoringTask = ref(
+  !isLayoutPreviewMode && Boolean(creatorStore.selectedTaskId || routeQueryText(route.query.taskId)),
+)
+let taskRestoreVersion = 0
 const isPreparingPrePublishAnalyze = ref(false)
 let prePublishAnalyzeAttemptVersion = 0
 const hasPendingInteractiveUpload = ref(false)
@@ -582,11 +594,16 @@ onMounted(() => {
     window.addEventListener('keydown', handleWorkspaceKeydown)
     return
   }
-  loadWorkspaceState()
-  void refreshTasks()
-  void refreshMediaFeatureAvailability()
+  void initializeWorkspace()
   window.addEventListener('keydown', handleWorkspaceKeydown)
 })
+
+async function initializeWorkspace() {
+  loadWorkspaceState()
+  // 入口步骤必须在媒体能力已确认后再判定，否则合法的成片试映请求可能被未知状态误拦截。
+  await refreshMediaFeatureAvailability()
+  await refreshTasks()
+}
 
 function loadPrePublishLayoutPreview() {
   const fixture = createPrePublishLayoutPreviewFixture()
@@ -691,10 +708,20 @@ function closeSuccessToast() {
 
 async function refreshTasks() {
   await taskModule.refreshTasks()
+  const entryRequest = resolveCreatorEntryRequest()
+  if (entryRequest) {
+    await selectTask(entryRequest.taskId, {
+      requestedStep: entryRequest.step,
+      consumeEntryQuery: true,
+    })
+    return
+  }
   // 编排：检查是否有待恢复的任务，自动选中
   const targetTask = resolveRefreshTargetTask()
   if (!targetTask) {
     if (activeInteractiveTaskId.value) {
+      taskRestoreVersion += 1
+      isRestoringTask.value = false
       selectedTask.value = null
       creatorStore.selectedTaskId = null
       isTaskComposerOpen.value = false
@@ -1004,83 +1031,124 @@ async function confirmDeleteTask() {
   await refreshTasks()
 }
 
-async function selectTask(taskId: string) {
+async function selectTask(taskId: string, options: TaskSelectionOptions = {}) {
   if (activeInteractiveTaskId.value === taskId && !hasPendingInteractiveUpload.value) {
     closeTaskManager()
+    await finishSkippedTaskSelection(options)
     return
   }
   if (hasPendingInteractiveUpload.value) {
     const leaveUpload = window.confirm('本地文件仍在上传，切换任务后浏览器无法恢复这些文件。确定继续吗？')
-    if (!leaveUpload) return
+    if (!leaveUpload) {
+      await finishSkippedTaskSelection(options)
+      return
+    }
   }
   if (selectedTaskId.value === taskId && !hasUnsavedCurrentTaskInput.value) {
+    if (options.requestedStep) navigateToRequestedTaskStep(options.requestedStep)
     closeTaskManager()
+    await finishSkippedTaskSelection(options)
     return
   }
   const discardMessage = selectedTaskId.value === taskId
     ? '当前任务还有未保存的输入，重新载入后会清空。确定继续吗？'
     : '当前任务还有未保存的输入，切换后会清空。确定继续吗？'
   if (!confirmDiscardUnsavedInput(discardMessage)) {
+    await finishSkippedTaskSelection(options)
     return
   }
-  errorMessage.value = ''
-  successMessage.value = ''
-  const task = await taskModule.loadTask(taskId)
-  if (!task) return
-  prePublishAnalyzeAttemptVersion += 1
-  isPreparingPrePublishAnalyze.value = false
+  const restoreVersion = ++taskRestoreVersion
+  isRestoringTask.value = true
+  closeTaskManager()
+  try {
+    errorMessage.value = ''
+    successMessage.value = ''
+    const task = await taskModule.loadTask(taskId)
+    if (!task) return
+    prePublishAnalyzeAttemptVersion += 1
+    isPreparingPrePublishAnalyze.value = false
 
-  if (task.status === 'DRAFT') {
-    try {
-      await getInteractiveTask(task.taskId)
-      if (selectedTaskId.value !== task.taskId) return
-      openInteractiveTask(task.taskId)
-      return
-    } catch (error) {
-      if (!(error instanceof ApiError && error.status === 404)) {
-        showError(error)
+    if (task.status === 'DRAFT') {
+      try {
+        await getInteractiveTask(task.taskId)
+        if (selectedTaskId.value !== task.taskId) return
+        openInteractiveTask(task.taskId)
         return
+      } catch (error) {
+        if (!(error instanceof ApiError && error.status === 404)) {
+          showError(error)
+          return
+        }
       }
     }
-  }
-  creatorStore.setActiveInteractiveTaskId(null)
+    creatorStore.setActiveInteractiveTaskId(null)
 
-  resultModalTarget.value = null
-  pendingDeleteTask.value = null
-  taskManageMode.value = 'create'
-  taskModule.resetTaskForm()
-  currentDraftVideo.value = null
-  currentMediaProcessingStatus.value = null
-  currentPreflightReviewStatus.value = null
-  productionPlanReady.value = false
-  workflowModule.resetWorkflowState()
-  feedbackModule.resetFeedbackData()
-  resetTaskLocalDrafts()
-  // 编排层：跨域操作
-  isTaskComposerOpen.value = true
-  activeStep.value = resolveTaskEntryStep(task)
-  taskModule.fillTaskForm(task)
-  resetTaskGuidanceFields()
-  if (requiresPreflight(task) && isMediaFeatureAvailabilityResolved.value && !isMediaFeatureEnabled.value) {
-    errorMessage.value = mediaFeatureUnavailableMessage
-  }
-  restoredTaskId.value = task.taskId
-  await Promise.all([
-    loadCreatorPreferences(task.userId),
-    loadCreatorContextTerms(task.userId, task.videoType),
-    loadTaskPrePublishSettings(task.taskId),
-    refreshCurrentDraftVideo(task.taskId),
-  ])
-  if (selectedTaskId.value !== task.taskId) return
-  await loadOptionalResults(task)
-  if (selectedTaskId.value !== task.taskId) return
-  if (!task.planningSkipped) {
-    await loadPrePublishWorkflow(taskId)
+    resultModalTarget.value = null
+    pendingDeleteTask.value = null
+    taskManageMode.value = 'create'
+    taskModule.resetTaskForm()
+    currentDraftVideo.value = null
+    currentMediaProcessingStatus.value = null
+    currentPreflightReviewStatus.value = null
+    productionPlanReady.value = false
+    workflowModule.resetWorkflowState()
+    feedbackModule.resetFeedbackData()
+    resetTaskLocalDrafts()
+    // 编排层：跨域操作
+    isTaskComposerOpen.value = true
+    activeStep.value = resolveTaskEntryStep(task)
+    taskModule.fillTaskForm(task)
+    resetTaskGuidanceFields()
+    if (requiresPreflight(task) && isMediaFeatureAvailabilityResolved.value && !isMediaFeatureEnabled.value) {
+      errorMessage.value = mediaFeatureUnavailableMessage
+    }
+    restoredTaskId.value = task.taskId
+    await Promise.all([
+      loadCreatorPreferences(task.userId),
+      loadCreatorContextTerms(task.userId, task.videoType),
+      loadTaskPrePublishSettings(task.taskId),
+      refreshCurrentDraftVideo(task.taskId),
+      restoreProductionPlanReadiness(task),
+    ])
     if (selectedTaskId.value !== task.taskId) return
+    await loadOptionalResults(task)
+    if (selectedTaskId.value !== task.taskId) return
+    if (!task.planningSkipped) {
+      await loadPrePublishWorkflow(taskId)
+      if (selectedTaskId.value !== task.taskId) return
+    }
+    activeStep.value = resolveTaskEntryStep(task)
+    await refreshUsageStats(1)
+    if (options.requestedStep) navigateToRequestedTaskStep(options.requestedStep)
+  } finally {
+    try {
+      if (options.consumeEntryQuery) await clearCreatorEntryQuery()
+    } finally {
+      if (restoreVersion === taskRestoreVersion) isRestoringTask.value = false
+    }
   }
-  activeStep.value = resolveTaskEntryStep(task)
-  await refreshUsageStats(1)
-  closeTaskManager()
+}
+
+async function finishSkippedTaskSelection(options: TaskSelectionOptions) {
+  if (!options.consumeEntryQuery) return
+  try {
+    await clearCreatorEntryQuery()
+  } finally {
+    isRestoringTask.value = false
+  }
+}
+
+function navigateToRequestedTaskStep(step: 'preflight') {
+  if (canNavigateCreatorStep(step)) {
+    navigateCreatorStep(step)
+    return
+  }
+  if (!hasSkippedPlanning.value && !hasConfirmedPrePublish.value) {
+    errorMessage.value = '请先确认发布方案，再进入制作蓝图和成片试映。'
+    return
+  }
+  // 复用现有导航守卫给出制作蓝图或媒体能力的阻塞原因，同时保持正常任务入口不变。
+  navigateCreatorStep(step)
 }
 
 function openInteractiveTask(taskId: string) {
@@ -1246,6 +1314,17 @@ async function loadOptionalResults(task: CreatorTask) {
 
   if (hasPrePublishResult(task.status)) {
     await feedbackModule.loadFeedbackData(task.taskId, hasFeedbackResult(task.status))
+  }
+}
+
+async function restoreProductionPlanReadiness(task: CreatorTask) {
+  if (task.planningSkipped || !hasPrePublishResult(task.status)) return
+  try {
+    const workspace = await getCurrentProductionPlan(task.taskId)
+    if (selectedTaskId.value === task.taskId) productionPlanReady.value = workspace.readyForMedia
+  } catch {
+    // 蓝图页仍会展示具体读取错误；恢复阶段只按未就绪处理，避免失败请求放宽成片试映门禁。
+    if (selectedTaskId.value === task.taskId) productionPlanReady.value = false
   }
 }
 
@@ -1721,6 +1800,8 @@ function resolveRefreshTargetTask() {
 }
 
 function resetSelectedWorkspace() {
+  taskRestoreVersion += 1
+  isRestoringTask.value = false
   prePublishAnalyzeAttemptVersion += 1
   isPreparingPrePublishAnalyze.value = false
   workflowModule.resetWorkflowState()
@@ -1757,6 +1838,27 @@ function loadWorkspaceState() {
   if (creatorStore.selectedTaskId) {
     restoredTaskId.value = creatorStore.selectedTaskId
   }
+}
+
+function routeQueryText(value: unknown) {
+  const normalized = Array.isArray(value) ? value[0] : value
+  return typeof normalized === 'string' ? normalized.trim() : ''
+}
+
+function resolveCreatorEntryRequest() {
+  const taskId = routeQueryText(route.query.taskId)
+  if (!taskId) return null
+  return {
+    taskId,
+    step: routeQueryText(route.query.step) === 'preflight' ? 'preflight' as const : undefined,
+  }
+}
+
+async function clearCreatorEntryQuery() {
+  const query = { ...route.query }
+  delete query.taskId
+  delete query.step
+  await router.replace({ query })
 }
 
 function openResultModal(target: ResultModalTarget) {
@@ -1993,7 +2095,7 @@ provideCreatorWorkspace({
       @close="closeSuccessToast"
     />
 
-    <header v-if="!selectedTask && !isTaskComposerOpen" class="creator-header">
+    <header v-if="!isRestoringTask && !selectedTask && !isTaskComposerOpen" class="creator-header">
       <div>
         <p class="creator-kicker">创作台</p>
         <h2>视频发布与复盘助手</h2>
@@ -2027,6 +2129,7 @@ provideCreatorWorkspace({
     </header>
 
     <CreatorTaskManagerModal
+      v-if="!isRestoringTask"
       :open="isTaskManagerOpen"
       :tasks="tasks"
       :filtered-tasks="filteredTasks"
@@ -2048,6 +2151,7 @@ provideCreatorWorkspace({
     />
 
     <CreatorDeleteConfirmModal
+      v-if="!isRestoringTask"
       :pending-task="pendingDeleteTask"
       :deleting="isDeletingTask"
       @cancel="cancelDeleteTask"
@@ -2055,7 +2159,26 @@ provideCreatorWorkspace({
     />
 
     <section
-      v-if="!selectedTask && !isTaskComposerOpen"
+      v-if="isRestoringTask"
+      class="creator-task-restoring"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <span class="sr-only">正在恢复创作任务</span>
+      <div class="creator-task-restoring-rail" aria-hidden="true">
+        <span class="creator-restoring-line creator-restoring-line-short"></span>
+        <span v-for="index in 5" :key="`rail-${index}`" class="creator-restoring-step"></span>
+      </div>
+      <div class="creator-task-restoring-main" aria-hidden="true">
+        <span class="creator-restoring-line creator-restoring-line-title"></span>
+        <span class="creator-restoring-line"></span>
+        <div class="creator-restoring-panel"></div>
+        <div class="creator-restoring-panel creator-restoring-panel-short"></div>
+      </div>
+    </section>
+
+    <section
+      v-else-if="!selectedTask && !isTaskComposerOpen"
       class="creator-start-screen"
       aria-label="创作台入口"
     >
@@ -2164,6 +2287,7 @@ provideCreatorWorkspace({
     </div>
 
     <CreatorWorkflowMessageModal
+      v-if="!isRestoringTask"
       :open="workflowMessageModalOpen"
       :status-text="workflowStatusText"
       :sse-text="workflowSseText"
@@ -2175,6 +2299,7 @@ provideCreatorWorkspace({
 
     <Teleport to="body">
       <CreatorResultModal
+        v-if="!isRestoringTask"
         :target="resultModalTarget"
         :title="resultModalTitle"
         :show-developer-tools="showDeveloperTools"
@@ -2202,6 +2327,7 @@ provideCreatorWorkspace({
     </Teleport>
 
     <CreatorContextLibraryModal
+      v-if="!isRestoringTask"
       :open="isContextLibraryOpen"
       :video-type="currentVideoType"
       :options="contextTermOptions"
@@ -2220,6 +2346,7 @@ provideCreatorWorkspace({
     />
 
     <GuidanceEditorModal
+      v-if="!isRestoringTask"
       :target="guidanceEditorTarget"
       :title="guidanceEditorTitle"
       v-model:pre-publish-guidance="prePublishForm.customGuidance"

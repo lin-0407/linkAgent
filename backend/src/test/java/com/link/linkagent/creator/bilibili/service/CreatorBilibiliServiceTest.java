@@ -11,6 +11,7 @@ import com.link.linkagent.creator.bilibili.model.BilibiliVideoSyncResponse;
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoVerificationResult;
 import com.link.linkagent.creator.bilibili.model.BindAccountRequest;
 import com.link.linkagent.creator.bilibili.model.BindBvRequest;
+import com.link.linkagent.creator.bilibili.model.PostPublishReadinessResponse;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingResponse;
 import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
@@ -223,6 +224,30 @@ class CreatorBilibiliServiceTest {
         assertThat(result.getFirst().bvid()).isEqualTo("BV1xx411c7mD");
     }
 
+    /** GET 发布后就绪状态应使用任务真实归属，并原样返回门禁的阻塞原因。 */
+    @Test
+    void shouldReturnPostPublishReadinessForTaskOwner() {
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
+        when(taskMapper.findTaskByTaskId("task-1"))
+                .thenReturn(Optional.of(task("task-1", "测试任务")));
+        when(mediaWorkflowGateService.inspectPostPublishReadiness("task-1", "default", "BV绑定"))
+                .thenReturn(new CreatorMediaWorkflowGateService.PostPublishReadiness(
+                        false,
+                        "请先完成发布前试映，才能进入BV绑定阶段。"
+                ));
+        CreatorBilibiliService service = service(bilibiliMapper, taskMapper, mediaWorkflowGateService);
+
+        PostPublishReadinessResponse result = service.getPostPublishReadiness("task-1");
+
+        assertThat(result.taskId()).isEqualTo("task-1");
+        assertThat(result.ready()).isFalse();
+        assertThat(result.blockingReason()).contains("发布前试映");
+        verify(mediaWorkflowGateService)
+                .inspectPostPublishReadiness("task-1", "default", "BV绑定");
+    }
+
     /** POST /tasks/{taskId}/video-binding：新 BV 绑定应在写入后返回当前绑定。 */
     @Test
     void shouldBindBvToExistingTask() {
@@ -267,6 +292,34 @@ class CreatorBilibiliServiceTest {
                 assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
 
         verify(bilibiliMapper, never()).insertBinding(org.mockito.ArgumentMatchers.any(TaskVideoBindingRecord.class));
+    }
+
+    /** 修正异常绑定同样必须先通过媒体门禁，拒绝后不能提前更新原绑定。 */
+    @Test
+    void shouldRejectNonBoundBindingRepairWhenMediaGateRejects() {
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorMediaWorkflowGateService mediaWorkflowGateService = mock(CreatorMediaWorkflowGateService.class);
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(task("task-1", "测试任务")));
+        when(bilibiliMapper.findBindingByTaskId("task-1")).thenReturn(Optional.of(
+                binding("task-1", "default", "27058248", "BV1xx411c7mD", "UID_MISMATCH")));
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "发布前试映尚未完成"))
+                .when(mediaWorkflowGateService)
+                .ensureReadyForPostPublish("task-1", "default", "BV绑定");
+        CreatorBilibiliService service = service(bilibiliMapper, taskMapper, mediaWorkflowGateService);
+
+        assertThatThrownBy(() -> service.bindBvToTask(
+                "task-1",
+                new BindBvRequest("default", "27058248", "BV1yy511c7eF")
+        )).isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        verify(bilibiliMapper, never()).updateBindingDetails(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.nullable(String.class));
     }
 
     /** 非 BOUND 绑定允许重新填写 BV，并在缓存可信时直接恢复为 BOUND。 */

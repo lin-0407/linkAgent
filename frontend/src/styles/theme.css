@@ -5143,6 +5143,20 @@ body {
   font-weight: 700;
 }
 
+.surface-brand {
+  flex: none;
+  min-width: max-content;
+}
+
+.surface-brand strong {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.surface-mobile-navigation {
+  display: none;
+}
+
 .surface-brand:hover .surface-brand-mark {
   box-shadow: 0 12px 28px rgba(0, 174, 236, 0.26);
   transform: translateY(-1px) rotate(-2deg);
@@ -7523,6 +7537,78 @@ body {
   display: none;
 }
 
+.creator-mobile-next-action {
+  display: none;
+}
+
+.creator-task-restoring {
+  display: grid;
+  grid-template-columns: 252px minmax(0, 1fr);
+  width: 100%;
+  min-height: calc(100vh - var(--surface-topbar-height));
+  background: var(--canvas);
+}
+
+.creator-task-restoring-rail,
+.creator-task-restoring-main {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+}
+
+.creator-task-restoring-rail {
+  gap: 10px;
+  padding: 20px;
+  background: var(--surface-sub);
+  border-right: 1px solid var(--border);
+}
+
+.creator-task-restoring-main {
+  gap: 14px;
+  padding: 24px;
+}
+
+.creator-restoring-line,
+.creator-restoring-step,
+.creator-restoring-panel {
+  display: block;
+  background: var(--border);
+  border-radius: var(--r-sm);
+  animation: none;
+}
+
+.creator-restoring-line {
+  width: min(560px, 72%);
+  height: 12px;
+}
+
+.creator-restoring-line-short {
+  width: 112px;
+}
+
+.creator-restoring-line-title {
+  width: min(320px, 48%);
+  height: 24px;
+}
+
+.creator-restoring-step {
+  width: 100%;
+  height: 58px;
+}
+
+.creator-restoring-panel {
+  width: 100%;
+  min-height: 280px;
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.creator-restoring-panel-short {
+  min-height: 160px;
+  margin-top: 0;
+}
+
 .creator-workbench-shell .creator-section,
 .creator-workbench-shell .creator-flow-card,
 .creator-workbench-shell .creator-current-task-card,
@@ -7700,6 +7786,64 @@ body {
     line-height: 1.45;
   }
 
+  .creator-mobile-next-action {
+    display: inline-flex;
+    width: 100%;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 9px 12px;
+    color: #fff;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-sm);
+    font: inherit;
+    font-size: 13px;
+    font-weight: var(--fw-semibold);
+    cursor: pointer;
+  }
+
+  .creator-mobile-next-action:disabled {
+    color: var(--muted);
+    background: var(--surface-sub);
+    border-color: var(--border-strong);
+    opacity: 1;
+  }
+
+  .creator-task-restoring {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: calc(100vh - var(--surface-topbar-height));
+  }
+
+  .creator-task-restoring-rail {
+    grid-template-columns: minmax(96px, 0.8fr) repeat(3, minmax(0, 1fr));
+    min-height: 112px;
+    align-content: center;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .creator-task-restoring-rail .creator-restoring-line-short {
+    width: 100%;
+  }
+
+  .creator-task-restoring-rail .creator-restoring-step {
+    height: 44px;
+  }
+
+  .creator-task-restoring-rail .creator-restoring-step:nth-of-type(n + 5) {
+    display: none;
+  }
+
+  .creator-task-restoring-main {
+    min-height: 520px;
+    padding: 16px 12px;
+  }
+
   .creator-workbench-shell .creator-tabs-vertical {
     display: flex;
     gap: 8px;
@@ -7791,6 +7935,12 @@ body {
   .creator-workbench-shell,
   .creator-shell {
     padding-inline: 8px;
+  }
+
+  /* 极窄屏只保留当前阶段、下一步和可回看的步骤入口，避免吸附流程栏长期占用过多内容高度。 */
+  .creator-workbench-shell .creator-flow-head,
+  .creator-mobile-progress p {
+    display: none;
   }
 
   .creator-workbench-shell .creator-section,
@@ -8200,7 +8350,7 @@ body {
 .creator-ghost-button,
 .creator-mini-button,
 .creator-btn {
-  min-height: 40px;
+  min-height: 44px;
   gap: 7px;
   border-radius: var(--r-sm);
   box-shadow: none;
@@ -8430,25 +8580,62 @@ body {
 @media (max-width: 820px) {
   :root,
   .surface-root-creator {
-    --surface-topbar-height: 110px;
+    --surface-topbar-height: 60px;
   }
 
   .surface-topbar,
   .surface-topbar-home,
   .surface-topbar-creator {
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    height: var(--surface-topbar-height);
+    min-height: var(--surface-topbar-height);
+    gap: 8px;
     padding: 7px 10px;
   }
 
-  .surface-switch button::after {
-    bottom: -2px;
+  .surface-topbar-left {
+    grid-column: 1;
+    grid-row: 1;
+    width: auto;
+    flex-wrap: nowrap;
   }
 
-  /* 末端留出滚动缓冲，当前页位于最右侧时也能从完整菜单项开始展示。 */
+  .surface-breadcrumb,
   .surface-switch {
-    padding-right: 22px;
+    display: none;
   }
 
-  .surface-switch button,
+  .surface-mobile-navigation {
+    display: block;
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    justify-self: center;
+  }
+
+  .surface-mobile-navigation-toggle {
+    display: inline-flex;
+    max-width: 100%;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 0 11px;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    font-size: 13px;
+    font-weight: var(--fw-semibold);
+    cursor: pointer;
+  }
+
+  .surface-mobile-navigation-toggle span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .surface-settings-button,
   .surface-topbar-actions .profile-avatar-btn {
     min-height: 44px;
@@ -8458,6 +8645,11 @@ body {
   .surface-topbar-actions .profile-avatar-btn {
     width: 44px;
     height: 44px;
+  }
+
+  .surface-topbar-actions {
+    grid-column: 3;
+    grid-row: 1;
   }
 
   .creator-header {
@@ -8479,6 +8671,109 @@ body {
   }
 }
 
+.surface-mobile-navigation-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  padding: calc(60px + 8px) 10px 10px;
+  overflow-y: auto;
+  place-items: start center;
+  background: rgba(24, 33, 43, 0.32);
+}
+
+.surface-mobile-navigation-menu {
+  display: grid;
+  width: min(420px, 100%);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  box-shadow: var(--sh-lg);
+}
+
+.surface-mobile-navigation-menu header {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 8px 4px 14px;
+  color: var(--ink);
+  border-bottom: 1px solid var(--border);
+}
+
+.surface-mobile-navigation-menu header button {
+  display: inline-grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.surface-mobile-navigation-menu a {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: var(--fw-medium);
+  text-decoration: none;
+}
+
+.surface-mobile-navigation-menu a:last-child {
+  border-bottom: 0;
+}
+
+.surface-mobile-navigation-menu a:hover,
+.surface-mobile-navigation-menu a.router-link-active,
+.surface-mobile-navigation-menu a:focus-visible,
+.surface-mobile-navigation-menu header button:hover,
+.surface-mobile-navigation-menu header button:focus-visible,
+.surface-mobile-navigation-toggle:hover,
+.surface-mobile-navigation-toggle:focus-visible {
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  outline: none;
+}
+
+.surface-mobile-menu-enter-active,
+.surface-mobile-menu-leave-active,
+.surface-mobile-menu-enter-active .surface-mobile-navigation-menu,
+.surface-mobile-menu-leave-active .surface-mobile-navigation-menu {
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.surface-mobile-menu-enter-from,
+.surface-mobile-menu-leave-to {
+  opacity: 0;
+}
+
+.surface-mobile-menu-enter-from .surface-mobile-navigation-menu,
+.surface-mobile-menu-leave-to .surface-mobile-navigation-menu {
+  transform: translateY(-8px);
+}
+
+@media (min-width: 821px) and (max-width: 1360px) {
+  .surface-topbar,
+  .surface-topbar-home,
+  .surface-topbar-creator {
+    grid-template-columns: max-content minmax(0, 620px) max-content;
+    justify-content: space-between;
+  }
+
+  .surface-breadcrumb {
+    display: none;
+  }
+}
+
 @media (max-width: 480px) {
   .surface-brand b {
     display: none;
@@ -8487,5 +8782,14 @@ body {
   .surface-switch button {
     min-width: 64px;
     padding-inline: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .surface-mobile-menu-enter-active,
+  .surface-mobile-menu-leave-active,
+  .surface-mobile-menu-enter-active .surface-mobile-navigation-menu,
+  .surface-mobile-menu-leave-active .surface-mobile-navigation-menu {
+    transition: none;
   }
 }

@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { SlidersHorizontal, X } from '@lucide/vue'
+import { computed, ref, watch } from 'vue'
+import { Menu, SlidersHorizontal, X } from '@lucide/vue'
 import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AgentFloatingWindow from '@/components/AgentFloatingWindow.vue'
 import CreatorProfilePopover from '@/components/CreatorProfilePopover.vue'
 import SettingsDrawer from '@/components/SettingsDrawer.vue'
 import SystemStatusBar from '@/components/SystemStatusBar.vue'
+import { useModalDialog } from '@/composables/useModalDialog'
 import { useAppStore } from '@/stores/appStore'
 
 const appStore = useAppStore()
@@ -17,9 +18,8 @@ const isHomeRoute = computed(() => route.path === '/')
 const isCreatorRoute = computed(() => route.path === '/creator')
 const isUsageLogRoute = computed(() => route.path === '/usage-logs')
 const routeDirectory = computed(
-  () =>
-    (
-      {
+  () => {
+    const directory = {
         '/': { label: '首页', detail: '创作总览' },
         '/creator': { label: '创作台', detail: '视频发布与复盘助手' },
         '/knowledge': { label: '参考案例', detail: '案例检索' },
@@ -28,35 +28,33 @@ const routeDirectory = computed(
         '/video-analysis': { label: '视频分析', detail: '视频分析与复盘' },
         '/usage-logs': { label: '使用日志', detail: '模型调用记录' },
       } as Record<string, { label: string; detail: string }>
-    )[route.path],
+    return directory[route.path]
+      ?? (route.name === 'notFound' ? { label: '页面未找到', detail: '导航恢复' } : undefined)
+  },
 )
 const guideOpen = ref(false)
-const surfaceSwitchRef = ref<HTMLElement | null>(null)
+const mobileNavigationOpen = ref(false)
 
-function revealActiveNavigation() {
-  window.requestAnimationFrame(() => {
-    const navigation = surfaceSwitchRef.value
-    const activeButton = navigation?.querySelector<HTMLElement>('button.active')
-    if (!navigation || !activeButton) return
-    navigation.scrollLeft = Math.max(
-      0,
-      activeButton.offsetLeft - (navigation.clientWidth - activeButton.offsetWidth) / 2,
-    )
-  })
+function closeGuide() {
+  guideOpen.value = false
 }
 
-onMounted(() => {
-  revealActiveNavigation()
-  window.setTimeout(revealActiveNavigation, 100)
-})
+function closeMobileNavigation() {
+  mobileNavigationOpen.value = false
+}
+
+const { dialogRef: guideDialogRef, handleDialogKeydown: handleGuideKeydown } = useModalDialog(
+  guideOpen,
+  closeGuide,
+)
+const {
+  dialogRef: mobileNavigationDialogRef,
+  handleDialogKeydown: handleMobileNavigationKeydown,
+} = useModalDialog(mobileNavigationOpen, closeMobileNavigation)
 
 watch(
   () => route.path,
-  async () => {
-    await nextTick()
-    // 移动端一级导航可横向滚动，需要主动露出当前页入口，避免新页面入口藏在屏幕外。
-    revealActiveNavigation()
-  },
+  closeMobileNavigation,
 )
 </script>
 
@@ -82,7 +80,7 @@ watch(
         </nav>
       </div>
 
-      <nav ref="surfaceSwitchRef" class="surface-switch" aria-label="导航">
+      <nav class="surface-switch" aria-label="导航">
         <RouterLink to="/" custom v-slot="{ navigate, isExactActive }">
           <button type="button" :class="{ active: isExactActive }" @click="navigate">首页</button>
         </RouterLink>
@@ -107,6 +105,19 @@ watch(
           <button type="button" :class="{ active: isActive }" @click="navigate">使用日志</button>
         </RouterLink>
       </nav>
+
+      <div class="surface-mobile-navigation">
+        <button
+          type="button"
+          class="surface-mobile-navigation-toggle"
+          :aria-expanded="mobileNavigationOpen"
+          aria-controls="surface-mobile-navigation-menu"
+          @click="mobileNavigationOpen = !mobileNavigationOpen"
+        >
+          <Menu :size="18" :stroke-width="1.8" aria-hidden="true" />
+          <span>{{ routeDirectory?.label || '页面导航' }}</span>
+        </button>
+      </div>
 
       <div class="surface-topbar-actions" aria-label="辅助入口">
         <button
@@ -133,18 +144,62 @@ watch(
     </header>
 
     <Teleport to="body">
+      <Transition name="surface-mobile-menu">
+        <div
+          v-if="mobileNavigationOpen"
+          class="surface-mobile-navigation-backdrop"
+          role="presentation"
+          @click.self="closeMobileNavigation"
+        >
+          <nav
+            id="surface-mobile-navigation-menu"
+            ref="mobileNavigationDialogRef"
+            class="surface-mobile-navigation-menu"
+            role="dialog"
+            aria-modal="true"
+            aria-label="页面导航"
+            tabindex="-1"
+            @keydown="handleMobileNavigationKeydown"
+          >
+            <header>
+              <strong>页面导航</strong>
+              <button
+                type="button"
+                aria-label="关闭页面导航"
+                data-dialog-initial-focus
+                @click="closeMobileNavigation"
+              >
+                <X :size="19" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+            </header>
+            <RouterLink to="/" @click="closeMobileNavigation">首页</RouterLink>
+            <RouterLink to="/creator" @click="closeMobileNavigation">创作台</RouterLink>
+            <RouterLink to="/knowledge" @click="closeMobileNavigation">参考案例</RouterLink>
+            <RouterLink to="/projects" @click="closeMobileNavigation">项目列表</RouterLink>
+            <RouterLink to="/memory" @click="closeMobileNavigation">记忆管理</RouterLink>
+            <RouterLink to="/video-analysis" @click="closeMobileNavigation">视频分析</RouterLink>
+            <RouterLink to="/usage-logs" @click="closeMobileNavigation">使用日志</RouterLink>
+          </nav>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <Teleport to="body">
       <Transition name="surface-guide">
         <div
           v-if="guideOpen"
           class="surface-guide-backdrop"
           role="presentation"
-          @click.self="guideOpen = false"
+          @click.self="closeGuide"
         >
           <section
+            ref="guideDialogRef"
             class="surface-guide-panel"
             role="dialog"
             aria-modal="true"
             aria-labelledby="surface-guide-title"
+            tabindex="-1"
+            @keydown="handleGuideKeydown"
           >
             <header class="surface-guide-head">
               <div>
@@ -155,7 +210,8 @@ watch(
                 type="button"
                 class="surface-guide-close"
                 aria-label="关闭使用指南"
-                @click="guideOpen = false"
+                data-dialog-initial-focus
+                @click="closeGuide"
               >
                 <X :size="19" :stroke-width="1.8" aria-hidden="true" />
               </button>
@@ -194,24 +250,29 @@ watch(
               <li>
                 <b>4</b>
                 <div>
-                  <strong>确认方案并进入试映</strong>
-                  <p>采用发布建议后，先上传成片做发布前试映，确认问题收敛后再正式发布。</p>
+                  <strong>完成制作蓝图</strong>
+                  <p>确认发布方案后，先拆解内容结构、镜头和制作步骤，再开始制作成片。</p>
                 </div>
               </li>
               <li>
                 <b>5</b>
                 <div>
-                  <strong>导入反馈并追问</strong>
-                  <p>发布后在视频分析页绑定公开视频 BV，同步评论弹幕并生成观众反馈报告。</p>
+                  <strong>上传成片并完成试映</strong>
+                  <p>上传私有成片，完成媒体处理和发布前试映。已有成片也必须从这里进入。</p>
                 </div>
               </li>
               <li>
                 <b>6</b>
                 <div>
-                  <strong>复盘并沉淀偏好</strong>
-                  <p>
-                    根据发布后视频表现、观众反馈和竞品结论生成复盘报告，把有效偏好沉淀到下一次创作中。
-                  </p>
+                  <strong>实际发布并绑定 BV</strong>
+                  <p>在 B 站完成实际发布后，再到视频分析页绑定公开视频 BV。</p>
+                </div>
+              </li>
+              <li>
+                <b>7</b>
+                <div>
+                  <strong>导入反馈并复盘</strong>
+                  <p>同步评论弹幕，结合竞品结论生成复盘报告，并把有效偏好沉淀到下一次创作中。</p>
                 </div>
               </li>
             </ol>

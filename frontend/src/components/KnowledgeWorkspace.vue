@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ChevronDown, Plus } from '@lucide/vue'
 import {
   fetchImportReferenceVideo,
   getReferenceVideoAnalysisContext,
@@ -37,6 +38,7 @@ const PAGE_SIZE = 8
 const TOPIC_SEARCH_PAGE_SIZE = 5
 
 const importing = ref(false)
+const importPanelOpen = ref(false)
 // BV 输入仅在父组件确认采集成功后清空，失败时保留用户输入便于直接重试。
 const importClearToken = ref(0)
 
@@ -276,29 +278,6 @@ onMounted(() => {
         @close="closeNotice"
       />
 
-      <div class="knowledge-top-grid">
-        <KnowledgeImportForm
-          :importing="importing"
-          :clear-token="importClearToken"
-          @import="submitFetchImport"
-        />
-        <KnowledgeTopicSearch
-          :searching="searching"
-          :result="searchResult"
-          :search-query="searchQuery"
-          :search-tier="searchTier"
-          :search-category="searchCategory"
-          :search-strategy="searchStrategy"
-          :page-size="TOPIC_SEARCH_PAGE_SIZE"
-          :developer-mode="developerMode"
-          :analysis-loading-video-id="analysisLoadingVideoId"
-          @search="submitSearch"
-          @result-page-change="handleResultPageChange"
-          @open-analysis="openVideoAnalysis"
-          @open-competitor="openCompetitorAnalysis"
-        />
-      </div>
-
       <KnowledgeVideoList
         :items="items"
         :total="total"
@@ -316,6 +295,51 @@ onMounted(() => {
         @open-analysis="openVideoAnalysis"
         @open-competitor="openCompetitorAnalysis"
       />
+
+      <div class="knowledge-tools">
+        <KnowledgeTopicSearch
+          :searching="searching"
+          :result="searchResult"
+          :search-query="searchQuery"
+          :search-tier="searchTier"
+          :search-category="searchCategory"
+          :search-strategy="searchStrategy"
+          :page-size="TOPIC_SEARCH_PAGE_SIZE"
+          :developer-mode="developerMode"
+          :analysis-loading-video-id="analysisLoadingVideoId"
+          @search="submitSearch"
+          @result-page-change="handleResultPageChange"
+          @open-analysis="openVideoAnalysis"
+          @open-competitor="openCompetitorAnalysis"
+        />
+
+        <div class="knowledge-import-disclosure">
+          <button
+            type="button"
+            class="creator-secondary-action knowledge-import-toggle"
+            :aria-expanded="importPanelOpen"
+            aria-controls="knowledge-import-panel"
+            @click="importPanelOpen = !importPanelOpen"
+          >
+            <Plus :size="16" :stroke-width="1.8" aria-hidden="true" />
+            添加参考案例
+            <ChevronDown
+              :size="16"
+              :stroke-width="1.8"
+              class="knowledge-import-chevron"
+              :class="{ 'is-open': importPanelOpen }"
+              aria-hidden="true"
+            />
+          </button>
+          <div v-show="importPanelOpen" id="knowledge-import-panel" class="knowledge-import-panel">
+            <KnowledgeImportForm
+              :importing="importing"
+              :clear-token="importClearToken"
+              @import="submitFetchImport"
+            />
+          </div>
+        </div>
+      </div>
     </section>
 
     <CompetitorAnalysisModal
@@ -327,52 +351,80 @@ onMounted(() => {
 
 <style scoped>
 .knowledge-workspace-section {
-  width: min(1540px, calc(100vw - 96px));
+  width: min(1280px, calc(100vw - 48px));
   max-width: none;
   margin: 0 auto;
 }
 
-/* 两个高频入口并列，减少创作者在导入和检索之间的页面滚动。 */
-.knowledge-top-grid {
+.creator-header {
+  width: min(1280px, calc(100vw - 48px));
+  margin-inline: auto;
+}
+
+/* 先展示带封面的案例列表，工具区随后出现，确保窄屏首屏仍然以视频内容为主。 */
+.knowledge-tools {
   display: grid;
-  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
-  align-items: start;
   gap: var(--s4);
-}
-
-.knowledge-top-grid > :deep(.knowledge-block) {
-  min-width: 0;
-}
-
-.knowledge-top-grid > :deep(.knowledge-block + .knowledge-block) {
-  padding-top: 0;
-  padding-left: var(--s4);
-  border-top: 0;
-  border-left: 1px solid var(--border);
-}
-
-/* 案例列表保持在导入和检索区之后，恢复原有连续浏览流程。 */
-.knowledge-top-grid + :deep(.knowledge-block) {
   padding-top: var(--s4);
   border-top: 1px solid var(--border);
 }
 
-@media (max-width: 1280px) {
-  .knowledge-top-grid {
-    grid-template-columns: 1fr;
-  }
+.knowledge-tools > :deep(.knowledge-block) {
+  min-width: 0;
+}
 
-  .knowledge-top-grid > :deep(.knowledge-block + .knowledge-block) {
-    padding-top: var(--s4);
-    padding-left: 0;
-    border-top: 1px solid var(--border);
-    border-left: 0;
-  }
+.knowledge-import-disclosure {
+  display: grid;
+  justify-items: start;
+  gap: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+}
+
+.knowledge-import-toggle {
+  gap: var(--s2);
+  min-height: 40px;
+}
+
+.knowledge-import-chevron {
+  transition: transform 180ms ease;
+}
+
+.knowledge-import-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.knowledge-import-panel {
+  width: 100%;
+}
+
+/* 折叠按钮已经承担区块标题，展开后隐藏重复标题以减少无效层级。 */
+.knowledge-import-panel :deep(.knowledge-import-block > .creator-section-head) {
+  display: none;
+}
+
+.knowledge-import-panel :deep(.knowledge-import-block) {
+  gap: 0;
 }
 
 @media (max-width: 820px) {
   .knowledge-workspace-section {
     width: 100%;
+  }
+
+  .creator-header {
+    width: 100%;
+  }
+
+  .knowledge-import-toggle {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knowledge-import-chevron {
+    transition: none;
   }
 }
 </style>

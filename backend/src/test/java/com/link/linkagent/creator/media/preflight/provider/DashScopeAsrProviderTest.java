@@ -43,6 +43,54 @@ class DashScopeAsrProviderTest {
     }
 
     @Test
+    void shouldTreatExactNoSpeechCodeAsCompletedEmptyResult() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        DashScopeAsrProvider provider = new DashScopeAsrProvider(
+                new CreatorMediaProperties.Preflight(),
+                RestClient.create(),
+                objectMapper
+        );
+
+        var result = provider.parseQueryResult(objectMapper.readTree("""
+                {
+                  "output": {
+                    "task_status": "FAILED",
+                    "code": "SUCCESS_WITH_NO_VALID_FRAGMENT"
+                  },
+                  "usage": {"duration": 12}
+                }
+                """));
+
+        assertThat(result.status()).isEqualTo(SpeechRecognitionProvider.Status.NO_SPEECH);
+        assertThat(result.usageSeconds()).isEqualTo(12L);
+        assertThat(result.transcriptionUrl()).isNull();
+        assertThat(result.errorMessage()).isEqualTo("SUCCESS_WITH_NO_VALID_FRAGMENT");
+    }
+
+    @Test
+    void shouldKeepOrdinaryProviderFailureAsFailed() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        DashScopeAsrProvider provider = new DashScopeAsrProvider(
+                new CreatorMediaProperties.Preflight(),
+                RestClient.create(),
+                objectMapper
+        );
+
+        var result = provider.parseQueryResult(objectMapper.readTree("""
+                {
+                  "output": {
+                    "task_status": "FAILED",
+                    "code": "FILE_DOWNLOAD_FAILED",
+                    "message": "audio download failed"
+                  }
+                }
+                """));
+
+        assertThat(result.status()).isEqualTo(SpeechRecognitionProvider.Status.FAILED);
+        assertThat(result.errorMessage()).isEqualTo("audio download failed");
+    }
+
+    @Test
     void shouldParseTimestampedTranscriptSegments() throws Exception {
         ObjectMapper objectMapper = new ObjectMapper();
         DashScopeAsrProvider provider = new DashScopeAsrProvider(

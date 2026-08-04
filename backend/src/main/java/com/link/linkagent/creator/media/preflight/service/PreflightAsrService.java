@@ -122,6 +122,27 @@ public class PreflightAsrService {
         return count;
     }
 
+    /**
+     * 无人声是正常的内容结果，步骤与调用流水必须在同一事务中收敛，避免恢复后再次提交付费任务。
+     */
+    @Transactional
+    public void skipTranscript(PreflightReviewRecord review,
+                               PreflightStepRecord step,
+                               String providerCode,
+                               Long usageSeconds,
+                               BigDecimal actualCost) {
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("reason", "NO_SPEECH_DETECTED");
+        if (providerCode != null && !providerCode.isBlank()) output.put("providerCode", providerCode);
+        if (usageSeconds != null) output.put("usageSeconds", usageSeconds);
+        if (mapper.finishStep(review.reviewId(), "TRANSCRIBE", "SKIPPED",
+                json(output), null, null) != 1) {
+            throw new IllegalStateException("ASR 无人声状态保存失败");
+        }
+        mapper.completeAsrCall(review.reviewId(), step.providerTaskId(),
+                usageSeconds == null ? null : usageSeconds * 1000L, actualCost);
+    }
+
     private String json(Object value) {
         try {
             return objectMapper.writeValueAsString(value);

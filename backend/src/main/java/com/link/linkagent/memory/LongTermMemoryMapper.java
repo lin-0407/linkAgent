@@ -98,4 +98,13 @@ public interface LongTermMemoryMapper {
               AND is_deleted = 0
             """)
     int softDelete(@Param("userId") String userId, @Param("memoryKey") String memoryKey);
+
+    @Update("""
+            UPDATE t_long_term_memory
+            SET is_deleted = 0
+            WHERE user_id = #{userId}
+              AND memory_key = #{memoryKey}
+              AND is_deleted = 1
+            """)
+    int restore(@Param("userId") String userId, @Param("memoryKey") String memoryKey);
 }

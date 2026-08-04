@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -90,14 +91,35 @@ class PreflightVideoAnalysisServiceTest {
                 .hasMessageContaining("时间段");
     }
 
+    @Test
+    void shouldRestrictAudioClaimsForPreviewWithoutAudioTrack() {
+        Fixture fixture = fixture("""
+                {
+                  "executiveSummary": "画面结构完整。",
+                  "issues": []
+                }
+                """);
+
+        fixture.service.analyze(review(), step());
+
+        assertThat(fixture.prompt.get()).contains(
+                "输入的代理视频不含音轨",
+                "不得评价音乐、背景音、音质或音画同步",
+                "没有 TRANSCRIPT 时不得推断口播内容"
+        );
+    }
+
     private Fixture fixture(String response) {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.getPreflight().setDashScopeApiKey("test-key");
         PreflightReviewMapper mapper = mock(PreflightReviewMapper.class);
         MediaProcessingMapper processingMapper = mock(MediaProcessingMapper.class);
         ObjectStorageService storage = mock(ObjectStorageService.class);
-        VideoUnderstandingProvider provider = (videoUrl, prompt) ->
-                new VideoUnderstandingProvider.AnalysisResult(response, 1200L, 180L);
+        AtomicReference<String> prompt = new AtomicReference<>();
+        VideoUnderstandingProvider provider = (videoUrl, requestPrompt) -> {
+            prompt.set(requestPrompt);
+            return new VideoUnderstandingProvider.AnalysisResult(response, 1200L, 180L);
+        };
         MediaProcessingAssetRecord preview = new MediaProcessingAssetRecord(
                 null, "asset-1", "job-1", "version-1", "PREVIEW_VIDEO", "bucket",
                 "preview.mp4", "video/mp4", 1024L, null, null, 854, 480, 60000L, null, null
@@ -123,7 +145,7 @@ class PreflightVideoAnalysisServiceTest {
                 properties, mapper, processingMapper, storage, provider, new ObjectMapper(), () -> "call-1",
                 () -> "video-model-evidence-1", () -> "issue-1"
         );
-        return new Fixture(service, mapper);
+        return new Fixture(service, mapper, prompt);
     }
 
     private PreflightReviewRecord review() {
@@ -142,6 +164,8 @@ class PreflightVideoAnalysisServiceTest {
         );
     }
 
-    private record Fixture(PreflightVideoAnalysisService service, PreflightReviewMapper mapper) {
+    private record Fixture(PreflightVideoAnalysisService service,
+                           PreflightReviewMapper mapper,
+                           AtomicReference<String> prompt) {
     }
 }

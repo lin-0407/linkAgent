@@ -6,6 +6,7 @@
  */
 import { computed, ref, onMounted } from 'vue'
 import { getTaskVideoBinding, bindBvToTask } from '@/api/creator'
+import { ApiError } from '@/api/http'
 import type { TaskVideoBinding } from '@/types/creator'
 
 const props = defineProps<{ taskId: string; bilibiliUid?: string | null }>()
@@ -18,6 +19,7 @@ const emit = defineEmits<{
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
+const loadError = ref('')
 const binding = ref<TaskVideoBinding | null>(null)
 const editing = ref(false)
 
@@ -38,23 +40,32 @@ const statusLabels: Record<string, string> = {
   VIDEO_NOT_FOUND: '视频未找到',
 }
 
-// 组件挂载时检查是否已有绑定
-onMounted(async () => {
+async function loadBinding() {
   loading.value = true
+  loadError.value = ''
+  const previousBinding = binding.value
   try {
     binding.value = await getTaskVideoBinding(props.taskId)
     // 上层页面已经绑定账号 UID 时优先沿用，避免用户重复填写造成归属不一致。
     uidInput.value = props.bilibiliUid || binding.value.bilibiliUid || ''
     bvInput.value = binding.value.bvid
     emit('bindingReady', binding.value)
-  } catch {
-    // 404 表示还没有绑定，正常流程，不报错
-    binding.value = null
-    emit('bindingReady', null)
+  } catch (loadFailure) {
+    if (loadFailure instanceof ApiError && loadFailure.status === 404) {
+      binding.value = null
+      emit('bindingReady', null)
+    } else {
+      // 查询异常时保留上次成功结果，避免网络故障被误解为绑定已消失。
+      binding.value = previousBinding
+      loadError.value = loadFailure instanceof Error ? loadFailure.message : String(loadFailure)
+    }
   } finally {
     loading.value = false
   }
-})
+}
+
+// 组件挂载时检查是否已有绑定。
+onMounted(loadBinding)
 
 /** 用户点击"绑定 BV"按钮 */
 async function handleBind() {
@@ -108,6 +119,19 @@ function cancelEdit() {
       发布后把视频的 BV 号填回来，完成归属校验后即可读取反馈并查看视频数据。
     </p>
 
+    <div v-if="loadError" class="bv-binding-load-error" role="alert">
+      <strong>暂时无法读取 BV 绑定状态</strong>
+      <span>{{ loadError }}</span>
+      <button
+        type="button"
+        class="creator-btn creator-btn-secondary"
+        :disabled="loading"
+        @click="loadBinding"
+      >
+        {{ loading ? '重试中...' : '重新读取' }}
+      </button>
+    </div>
+
     <!-- 已绑定状态 -->
     <div v-if="binding && !editing" class="bv-binding-status">
       <div class="bv-binding-status-row">
@@ -138,7 +162,7 @@ function cancelEdit() {
     </div>
 
     <!-- 绑定输入区：首次绑定或修正异常绑定时展示。 -->
-    <div v-else-if="!loading" class="bv-binding-form">
+    <div v-else-if="!loading && !loadError" class="bv-binding-form">
       <p v-if="binding" class="bv-binding-edit-hint">
         当前绑定未通过校验，请修正 BV 号后重新提交。
       </p>
@@ -190,7 +214,7 @@ function cancelEdit() {
     </div>
 
     <!-- 加载中 -->
-    <p v-else class="bv-binding-loading">检查绑定状态...</p>
+    <p v-else-if="loading" class="bv-binding-loading">检查绑定状态...</p>
   </div>
 </template>
 
@@ -317,5 +341,19 @@ function cancelEdit() {
 .bv-binding-loading {
   font-size: 14px;
   color: var(--creator-muted-ink, #86868b);
+}
+
+.bv-binding-load-error {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  color: var(--danger);
+  background: rgba(220, 38, 38, 0.06);
+  border: 1px solid rgba(220, 38, 38, 0.16);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  line-height: 1.5;
 }
 </style>

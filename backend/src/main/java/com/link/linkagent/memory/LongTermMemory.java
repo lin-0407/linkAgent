@@ -52,6 +52,14 @@ public class LongTermMemory {
         longTermMemoryMapper.softDelete(userId.trim(), normalizeMemoryKey(memoryKey));
     }
 
+    public Optional<LongTermMemoryRecord> restore(String userId, String memoryKey) {
+        String normalizedUserId = userId.trim();
+        String normalizedMemoryKey = normalizeMemoryKey(memoryKey);
+        // 撤销只恢复软删除标记，不能借用 save 覆盖原内容、来源会话或向量标识。
+        longTermMemoryMapper.restore(normalizedUserId, normalizedMemoryKey);
+        return longTermMemoryMapper.findByKey(normalizedUserId, normalizedMemoryKey);
+    }
+
     private String normalizeMemoryKey(String memoryKey) {
         String normalized = memoryKey.trim().toLowerCase();
         if (containsAny(normalized, "language", "programming_language", "example")) {

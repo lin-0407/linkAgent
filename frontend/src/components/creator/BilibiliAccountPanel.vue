@@ -6,6 +6,7 @@
  */
 import { ref, onMounted } from 'vue'
 import { getBilibiliAccount, bindBilibiliAccount, syncBilibiliVideos } from '@/api/creator'
+import { ApiError } from '@/api/http'
 import type { BilibiliAccount, SyncVideosResult } from '@/types/creator'
 
 const emit = defineEmits<{
@@ -20,6 +21,7 @@ const loading = ref(false)
 const saving = ref(false)
 const syncing = ref(false)
 const error = ref('')
+const loadError = ref('')
 const syncMessage = ref('')
 const syncTone = ref<'neutral' | 'success' | 'warning' | 'error'>('neutral')
 const syncResult = ref<SyncVideosResult | null>(null)
@@ -39,11 +41,17 @@ const statusLabels: Record<string, string> = {
 async function loadAccount(showLoading = false) {
   if (showLoading) loading.value = true
   const previousAccount = account.value
+  loadError.value = ''
   try {
     account.value = await getBilibiliAccount(DEFAULT_USER_ID)
-  } catch {
-    // 首次加载的 404 表示未绑定；刷新时保留旧账号，避免一次瞬时网络错误把视频网格卸载。
-    if (!previousAccount) account.value = null
+  } catch (loadFailure) {
+    if (loadFailure instanceof ApiError && loadFailure.status === 404) {
+      account.value = null
+    } else {
+      // 网络或服务异常时保留上次成功结果，不能把故障伪装成账号未绑定。
+      account.value = previousAccount
+      loadError.value = loadFailure instanceof Error ? loadFailure.message : String(loadFailure)
+    }
   } finally {
     if (showLoading) loading.value = false
     emit('accountReady', account.value)
@@ -152,10 +160,24 @@ async function handleSync() {
       >
         {{ account.lastSyncError }}
       </p>
+      <div v-if="loadError" class="account-load-error" role="alert">
+        <span>账号状态刷新失败：{{ loadError }}</span>
+        <button type="button" class="creator-btn creator-btn-secondary" @click="loadAccount(true)">
+          重试
+        </button>
+      </div>
+    </div>
+
+    <div v-else-if="!loading && loadError" class="account-load-error" role="alert">
+      <strong>暂时无法读取账号状态</strong>
+      <span>{{ loadError }}</span>
+      <button type="button" class="creator-btn creator-btn-secondary" @click="loadAccount(true)">
+        重新读取
+      </button>
     </div>
 
     <!-- 未绑定 -->
-    <div v-else-if="!loading" class="account-bind-form">
+    <div v-else-if="!loading && !loadError" class="account-bind-form">
       <label class="account-bind-field" for="account-bind-uid">
         <span class="account-bind-label">B站 UID</span>
         <input
@@ -306,5 +328,19 @@ async function handleSync() {
   font-size: 14px;
   color: var(--creator-muted-ink, #86868b);
   margin: 0;
+}
+
+.account-load-error {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  color: var(--danger);
+  background: rgba(220, 38, 38, 0.06);
+  border: 1px solid rgba(220, 38, 38, 0.16);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  line-height: 1.5;
 }
 </style>

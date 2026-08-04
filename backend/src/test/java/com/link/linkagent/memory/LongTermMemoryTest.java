@@ -60,6 +60,27 @@ class LongTermMemoryTest {
     }
 
     @Test
+    void shouldRestoreSoftDeletedMemoryWithoutOverwritingItsContent() {
+        FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
+        LongTermMemoryRecord restoredRecord = new LongTermMemoryRecord();
+        restoredRecord.setContent("保留的原始内容");
+        mapper.foundRecord = Optional.of(restoredRecord);
+        LongTermMemory memory = new LongTermMemory(mapper);
+
+        Optional<LongTermMemoryRecord> result = memory.restore(
+                " user-1 ",
+                " user.preference.language "
+        );
+
+        assertThat(mapper.restoredUserId).isEqualTo("user-1");
+        assertThat(mapper.restoredMemoryKey).isEqualTo("user.preference.example_language");
+        assertThat(mapper.findUserId).isEqualTo("user-1");
+        assertThat(mapper.findMemoryKey).isEqualTo("user.preference.example_language");
+        assertThat(result).contains(restoredRecord);
+        assertThat(mapper.savedRecord).isNull();
+    }
+
+    @Test
     void shouldNormalizeEmptySourceSessionId() {
         FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
         LongTermMemory memory = new LongTermMemory(mapper);
@@ -99,6 +120,9 @@ class LongTermMemoryTest {
         private String findMemoryKey;
         private String deletedUserId;
         private String deletedMemoryKey;
+        private String restoredUserId;
+        private String restoredMemoryKey;
+        private Optional<LongTermMemoryRecord> foundRecord = Optional.empty();
 
         @Override
         public int upsert(LongTermMemoryRecord record) {
@@ -110,7 +134,7 @@ class LongTermMemoryTest {
         public Optional<LongTermMemoryRecord> findByKey(String userId, String memoryKey) {
             this.findUserId = userId;
             this.findMemoryKey = memoryKey;
-            return Optional.empty();
+            return foundRecord;
         }
 
         @Override
@@ -130,6 +154,13 @@ class LongTermMemoryTest {
         public int softDelete(String userId, String memoryKey) {
             this.deletedUserId = userId;
             this.deletedMemoryKey = memoryKey;
+            return 1;
+        }
+
+        @Override
+        public int restore(String userId, String memoryKey) {
+            this.restoredUserId = userId;
+            this.restoredMemoryKey = memoryKey;
             return 1;
         }
     }

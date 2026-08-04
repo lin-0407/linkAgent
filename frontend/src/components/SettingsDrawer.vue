@@ -9,6 +9,7 @@ import SettingsSectionReadonly from '@/components/settings/SettingsSectionReadon
 import SettingsSectionConnectivity from '@/components/settings/SettingsSectionConnectivity.vue'
 import SettingsSectionLlmConfig from '@/components/settings/SettingsSectionLlmConfig.vue'
 import SettingsSectionPrompts from '@/components/settings/SettingsSectionPrompts.vue'
+import { useModalDialog } from '@/composables/useModalDialog'
 
 const open = defineModel<boolean>('open', { default: false })
 const developerMode = defineModel<boolean>('developerMode', { default: false })
@@ -108,18 +109,34 @@ async function runConnectivityCheck() {
 function closeDrawer() {
   open.value = false
 }
+
+const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="settings-fade">
       <div v-show="open" class="settings-layer" role="presentation" @click.self="closeDrawer">
-        <aside class="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <aside
+          ref="dialogRef"
+          class="settings-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="settings-title"
+          tabindex="-1"
+          @keydown="handleDialogKeydown"
+        >
           <header class="settings-header">
             <div>
               <h2 id="settings-title">设置</h2>
             </div>
-            <button type="button" class="settings-close" aria-label="关闭设置面板" @click="closeDrawer">
+            <button
+              type="button"
+              class="settings-close"
+              aria-label="关闭设置面板"
+              data-dialog-initial-focus
+              @click="closeDrawer"
+            >
               <X :size="18" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </header>
@@ -139,8 +156,10 @@ function closeDrawer() {
                   class="settings-switch"
                   :class="{ enabled: developerMode }"
                   :aria-pressed="developerMode"
+                  :aria-label="developerMode ? '关闭开发者模式' : '开启开发者模式'"
                   @click="developerMode = !developerMode"
                 >
+                  <span class="settings-switch-track" aria-hidden="true"><i></i></span>
                   <span>{{ developerMode ? '关闭' : '开启' }}</span>
                 </button>
               </article>
@@ -265,7 +284,7 @@ function closeDrawer() {
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   cursor: pointer;
   font-size: 22px;
   line-height: 1;
@@ -321,12 +340,16 @@ function closeDrawer() {
 }
 
 .settings-switch {
-  min-width: 76px;
-  min-height: 34px;
-  padding: 0 14px;
-  color: var(--surface);
-  background: var(--danger);
-  border: 1px solid var(--danger);
+  display: inline-flex;
+  min-width: 92px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
   cursor: pointer;
   font-weight: var(--fw-semibold);
@@ -338,9 +361,37 @@ function closeDrawer() {
 }
 
 .settings-switch.enabled {
-  color: var(--muted);
-  background: var(--surface-sub);
-  border-color: var(--border);
+  color: var(--accent-strong);
+  background: var(--accent-tint);
+  border-color: rgba(8, 126, 167, 0.35);
+}
+
+.settings-switch-track {
+  position: relative;
+  width: 30px;
+  height: 18px;
+  background: var(--border-strong);
+  border-radius: var(--r-pill);
+  transition: background 180ms ease;
+}
+
+.settings-switch-track i {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  background: var(--surface);
+  border-radius: 50%;
+  transition: transform 180ms ease;
+}
+
+.settings-switch.enabled .settings-switch-track {
+  background: var(--accent);
+}
+
+.settings-switch.enabled .settings-switch-track i {
+  transform: translateX(12px);
 }
 
 .settings-switch:disabled {

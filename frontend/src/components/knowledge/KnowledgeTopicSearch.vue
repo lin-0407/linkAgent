@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { ChevronDown, SlidersHorizontal } from '@lucide/vue'
 import type { ReferenceVideo, ReferenceVideoTopicSearchResult, ReferenceVideoMatchedTopic, ReferenceVideoEvidenceItem } from '@/types/knowledge'
 import {
   chunkTypeLabel,
@@ -44,6 +45,7 @@ const queryInput = ref(props.searchQuery)
 const tierInput = ref(props.searchTier)
 const categoryInput = ref(props.searchCategory)
 const strategyInput = ref(props.searchStrategy)
+const filtersOpen = ref(false)
 
 watch(() => props.searchQuery, (v) => { queryInput.value = v })
 watch(() => props.searchTier, (v) => { tierInput.value = v })
@@ -118,47 +120,70 @@ function refreshSearchCards() {
   <div class="knowledge-block knowledge-search-block">
     <div class="creator-section-head"><h3>找灵感</h3></div>
     <div class="knowledge-toolbar knowledge-search-toolbar">
-      <input
-        v-model="queryInput"
-        type="text"
-        class="knowledge-search-input"
-        placeholder="输入想借鉴的方向"
-        :disabled="searching"
-        @keyup.enter="submitSearch()"
-      />
-      <select v-model="tierInput" class="knowledge-search-tier" :disabled="searching">
-        <option value="">全部层级</option>
-        <option v-for="option in KNOWLEDGE_TIER_OPTIONS" :key="option.value" :value="option.value">
-          {{ option.label }}
-        </option>
-      </select>
-      <input
-        v-model="categoryInput"
-        type="text"
-        class="knowledge-search-category"
-        placeholder="分区"
-        :disabled="searching"
-        @keyup.enter="submitSearch()"
-      />
-      <select
-        v-if="developerMode"
-        v-model="strategyInput"
-        class="knowledge-search-strategy"
-        :disabled="searching"
-        title="查询增强策略"
-      >
-        <option v-for="option in STRATEGY_OPTIONS" :key="option.value" :value="option.value">
-          {{ option.label }}
-        </option>
-      </select>
+      <div class="knowledge-search-primary">
+        <input
+          v-model="queryInput"
+          type="text"
+          class="knowledge-search-input"
+          aria-label="灵感检索内容"
+          placeholder="输入想借鉴的方向"
+          :disabled="searching"
+          @keyup.enter="submitSearch()"
+        />
+        <button
+          type="button"
+          class="creator-primary-button knowledge-search-submit"
+          :disabled="searching || !queryInput.trim()"
+          @click="submitSearch()"
+        >
+          {{ searching ? '检索中…' : '检索' }}
+        </button>
+      </div>
       <button
         type="button"
-        class="creator-primary-button knowledge-search-submit"
-        :disabled="searching || !queryInput.trim()"
-        @click="submitSearch()"
+        class="creator-secondary-action knowledge-filter-toggle"
+        :aria-expanded="filtersOpen"
+        aria-controls="knowledge-search-filters"
+        @click="filtersOpen = !filtersOpen"
       >
-        {{ searching ? '检索中…' : '检索' }}
+        <SlidersHorizontal :size="16" :stroke-width="1.8" aria-hidden="true" />
+        筛选条件
+        <ChevronDown
+          :size="16"
+          :stroke-width="1.8"
+          class="knowledge-filter-chevron"
+          :class="{ 'is-open': filtersOpen }"
+          aria-hidden="true"
+        />
       </button>
+      <div id="knowledge-search-filters" class="knowledge-search-filters" :class="{ 'is-open': filtersOpen }">
+        <select v-model="tierInput" class="knowledge-search-tier" :disabled="searching" aria-label="案例层级">
+          <option value="">全部层级</option>
+          <option v-for="option in KNOWLEDGE_TIER_OPTIONS" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <input
+          v-model="categoryInput"
+          type="text"
+          class="knowledge-search-category"
+          aria-label="案例分区"
+          placeholder="分区"
+          :disabled="searching"
+          @keyup.enter="submitSearch()"
+        />
+        <select
+          v-if="developerMode"
+          v-model="strategyInput"
+          class="knowledge-search-strategy"
+          :disabled="searching"
+          title="查询增强策略"
+        >
+          <option v-for="option in STRATEGY_OPTIONS" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </div>
     </div>
 
     <template v-if="result">
@@ -299,6 +324,15 @@ function refreshSearchCards() {
 
 .knowledge-search-toolbar {
   max-width: none;
+}
+
+.knowledge-search-primary,
+.knowledge-search-filters {
+  display: contents;
+}
+
+.knowledge-filter-toggle {
+  display: none;
 }
 
 .knowledge-search-input {
@@ -547,19 +581,83 @@ function refreshSearchCards() {
 }
 
 @media (max-width: 820px) {
-  .knowledge-toolbar input,
-  .knowledge-toolbar select,
-  .knowledge-toolbar button {
-    width: 100%;
+  .knowledge-search-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s2);
   }
 
-  .knowledge-search-input,
-  .knowledge-search-tier,
-  .knowledge-search-category,
-  .knowledge-search-strategy,
-  .knowledge-search-submit {
-    flex: 1 1 100%;
+  .knowledge-search-primary {
+    display: flex;
+    min-width: 0;
+    gap: var(--s2);
+  }
+
+  .knowledge-search-primary .knowledge-search-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .knowledge-search-primary .knowledge-search-submit {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 44px;
+  }
+
+  .knowledge-filter-toggle {
+    display: inline-flex;
     width: 100%;
+    min-height: 44px;
+    gap: var(--s2);
+  }
+
+  .knowledge-filter-chevron {
+    margin-left: auto;
+    transition: transform 180ms ease;
+  }
+
+  .knowledge-filter-chevron.is-open {
+    transform: rotate(180deg);
+  }
+
+  .knowledge-search-filters {
+    display: none;
+  }
+
+  .knowledge-search-filters.is-open {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s2);
+  }
+
+  .knowledge-search-filters .knowledge-search-tier,
+  .knowledge-search-filters .knowledge-search-category,
+  .knowledge-search-filters .knowledge-search-strategy {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .knowledge-search-filters .knowledge-search-strategy {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 420px) {
+  .knowledge-search-filters.is-open {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-search-filters .knowledge-search-strategy {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knowledge-filter-chevron {
+    transition: none;
   }
 }
 </style>

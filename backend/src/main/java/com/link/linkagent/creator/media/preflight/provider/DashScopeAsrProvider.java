@@ -91,6 +91,7 @@ public class DashScopeAsrProvider implements SpeechRecognitionProvider {
             throw new SpeechRecognitionException("ASR 查询未返回任务状态");
         }
         Long usageSeconds = firstLong(response, "/usage/seconds", "/usage/duration");
+        String failureCode = firstText(response, "/output/code", "/code");
         return switch (status) {
             case "PENDING" -> new QueryResult(Status.PENDING, null, usageSeconds, null);
             case "RUNNING" -> new QueryResult(Status.RUNNING, null, usageSeconds, null);
@@ -100,12 +101,18 @@ public class DashScopeAsrProvider implements SpeechRecognitionProvider {
                     usageSeconds,
                     null
             );
-            case "FAILED", "CANCELED", "CANCELLED", "UNKNOWN" -> new QueryResult(
-                    Status.FAILED,
-                    null,
-                    usageSeconds,
-                    firstText(response, "/output/message", "/message", "/code")
-            );
+            case "FAILED", "CANCELED", "CANCELLED", "UNKNOWN" -> {
+                // DashScope 用 FAILED 承载“处理完成但无人声”，业务上应跳过字幕而不是终止整次试映。
+                if ("SUCCESS_WITH_NO_VALID_FRAGMENT".equals(failureCode)) {
+                    yield new QueryResult(Status.NO_SPEECH, null, usageSeconds, failureCode);
+                }
+                yield new QueryResult(
+                        Status.FAILED,
+                        null,
+                        usageSeconds,
+                        firstText(response, "/output/message", "/message", "/code")
+                );
+            }
             default -> throw new SpeechRecognitionException("ASR 返回未知任务状态");
         };
     }
