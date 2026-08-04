@@ -120,6 +120,7 @@ cp .env.example .env
 LLM_API_KEY=your-api-key
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-chat
+LLM_STRICT_FUNCTION_CALLING_ENABLED=true
 ```
 
 如果需要在设置页保存模型密钥，还应生成并配置 `LINKAGENT_AES_KEY`。对外部署前请同时修改
@@ -199,9 +200,10 @@ CREATOR_MEDIA_ENABLED=false
 
 ### 报告结构化输出
 
-反馈分析和最终复盘使用 Spring AI 的结构化调用。模型请求设置
-`response_format=json_object`，`BeanOutputConverter` 根据 Java DTO 自动提供 JSON
-schema；DTO 再检查必填文本、列表和嵌套属性。
+反馈分析和最终复盘优先使用 DeepSeek Beta strict Function Calling：模型通过被强制调用的
+结果函数返回符合 Java DTO Schema 的参数，DTO 再检查必填文本、列表和嵌套属性。Beta
+端点未配置、不可用或 Provider 不支持 strict 时，自动回退原有
+`response_format=json_object + BeanOutputConverter` 链路。
 
 JSON 语法合法但字段不完整时，模型最多重试三次。连续失败不会写入空报告，也不会把任务错误
 推进为已分析。Markdown 只由后端根据已落库字段导出，不作为模型生成格式。

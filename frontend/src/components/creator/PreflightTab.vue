@@ -1329,12 +1329,11 @@ function toMessage(error: unknown) {
   <section class="creator-section preflight-studio">
     <header class="preflight-hero">
       <div>
-        <p class="preflight-eyebrow">FINAL CUT REVIEW</p>
         <h3>成片试映</h3>
         <p>上传最终成片并保留传输进度，随后进入发布前画面与声音体检。</p>
       </div>
       <div class="preflight-limit-plate" aria-label="视频上传限制">
-        <span>MP4 ONLY</span>
+        <span>仅支持 MP4</span>
         <strong>30:00</strong>
         <small>最大 1.5 GB</small>
       </div>
@@ -1353,7 +1352,6 @@ function toMessage(error: unknown) {
             <h4>选择成片</h4>
             <p>{{ selectedTask?.taskName || '当前创作任务' }}</p>
           </div>
-          <span v-if="currentUpload && !mediaDeleted" class="preflight-state-chip">{{ currentUpload.status }}</span>
         </div>
 
         <label class="preflight-version-field">
@@ -1525,11 +1523,9 @@ function toMessage(error: unknown) {
         <div class="preflight-processing-head">
           <div>
             <span class="preflight-index">03</span>
-            <p class="preflight-eyebrow">MEDIA PIPELINE</p>
             <h4>生成预览与关键画面</h4>
             <p>先确定抽帧和识别档位，系统按实际视频时长给出本次预估。</p>
           </div>
-          <span v-if="processingJob" class="preflight-state-chip">{{ processingJob.status }}</span>
         </div>
 
         <div
@@ -1679,11 +1675,9 @@ function toMessage(error: unknown) {
         <div class="preflight-processing-head">
           <div>
             <span class="preflight-index">04</span>
-            <p class="preflight-eyebrow">PERSISTENT PREFLIGHT</p>
             <h4>完成发布前试映</h4>
             <p>页面关闭后任务仍会继续；系统会检查成片、按所选模型档位复核重点，再给出三类观众反馈。</p>
           </div>
-          <span v-if="preflightReview" class="preflight-state-chip">{{ preflightReview.status }}</span>
         </div>
 
         <template v-if="!preflightReview && !mediaDeleted">
@@ -2173,7 +2167,7 @@ function toMessage(error: unknown) {
               <div v-if="resultModalKind === 'probe'" class="preflight-modal-probe">
                 <div class="preflight-modal-section-head">
                   <strong>媒体探测结果</strong>
-                  <span>READY FOR REVIEW</span>
+                  <span>可开始检查</span>
                 </div>
                 <dl>
                   <div v-for="item in mediaProbeSummary" :key="item[0]">
@@ -2252,15 +2246,6 @@ function toMessage(error: unknown) {
   border-bottom: 1px solid var(--border-strong);
 }
 
-.preflight-eyebrow {
-  margin-bottom: var(--s2);
-  color: var(--accent-strong);
-  font-family: var(--font-code);
-  font-size: 11px;
-  font-weight: var(--fw-bold);
-  letter-spacing: 0;
-}
-
 .preflight-hero h3 {
   margin-bottom: var(--s2);
   color: var(--lab-ink);
@@ -2268,7 +2253,7 @@ function toMessage(error: unknown) {
   letter-spacing: 0;
 }
 
-.preflight-hero p:not(.preflight-eyebrow) {
+.preflight-hero p {
   max-width: 680px;
   margin-bottom: 0;
   color: var(--muted);
@@ -2405,15 +2390,6 @@ function toMessage(error: unknown) {
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
-}
-
-.preflight-state-chip {
-  padding: 4px 8px;
-  color: var(--accent-strong);
-  background: var(--accent-tint);
-  border-radius: var(--r-pill);
-  font-family: var(--font-code);
-  font-size: 10px;
 }
 
 .preflight-version-field {
@@ -3423,7 +3399,7 @@ button:disabled {
   font-size: 20px;
 }
 
-.preflight-processing-head p:not(.preflight-eyebrow) {
+.preflight-processing-head p {
   margin: 0;
   color: var(--muted);
   font-size: 13px;

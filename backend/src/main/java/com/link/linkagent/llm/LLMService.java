@@ -1,25 +1,37 @@
 package com.link.linkagent.llm;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.llm.usage.LlmApiUsageService;
+import com.link.linkagent.settings.service.RuntimeSettingService;
+import com.link.linkagent.tool.Tool;
 import com.link.linkagent.util.LlmJsonUtil;
 import com.link.linkagent.util.TextUtil;
-import com.link.linkagent.settings.service.RuntimeSettingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.ai.openai.api.ResponseFormat;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * LLM 调用服务层 —— 封装与 DeepSeek 模型的所有交互。
@@ -30,10 +42,10 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * 核心设计决策：
  * <ul>
- *   <li><b>单一 ChatClient 实例</b>：所有调用复用同一个 Spring AI ChatClient，不同模型只通过
- *       options.model 覆盖，避免创建多余连接池和客户端对象。</li>
+ *   <li><b>正式与 Beta 客户端分离</b>：普通调用复用主 ChatClient；strict Function Calling
+ *       使用独立 Beta 客户端，避免实验端点影响普通对话、RAG 和回退链。</li>
  *   <li><b>结构化输出归 LLM 层</b>：{@link #chatStructured} 放在本服务而非上层，因为结构化输出
- *       本质是"调模型"能力（利用 API 级 JSON 约束 + BeanOutputConverter schema 解析），
+ *       本质是"调模型"能力（严格结果函数优先，json_object + BeanOutputConverter 作为回退），
  *       归 LLM 层最自然，并复用这里的成本 guard（{@link #validatePromptLength}），不让上层各自持有 ChatClient 选项细节。</li>
  *   <li><b>流式/非流式分离</b>：当前阶段统一使用非流式同步调用（{@code .call().chatResponse()}），
  *       流式 SSE 响应在 Controller 层通过 ChatClient.stream() 直接处理，不在本服务封装。</li>
@@ -42,6 +54,9 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 public class LLMService {
+
+    private static final String STRUCTURED_RESULT_FUNCTION = "return_structured_result";
+    public static final String EXECUTE_TOOL_FUNCTION = "execute_tool";
 
     private static final Logger log = LoggerFactory.getLogger(LLMService.class);
 
@@ -54,7 +69,7 @@ public class LLMService {
      */
     private static final int STRUCTURED_MAX_ATTEMPTS = 3;
 
-    /** Spring AI 的 ChatClient 实例，所有 LLM 调用（文本/结构化/指定模型）共用同一客户端连接池。 */
+    /** Spring AI 的正式 ChatClient；文本、指定模型和旧结构化回退共用，strict 请求使用独立 Beta 客户端。 */
     private final ChatClient chatClient;
 
     /** Prompt 长度限制配置：在调用模型前短路超限请求，避免产生无效 Token 消耗。 */
@@ -78,6 +93,9 @@ public class LLMService {
     /** DeepSeek Flash 思考参数工厂，保证主请求、回退请求和日志使用同一套模型判断。 */
     private final DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory;
 
+    /** DeepSeek Beta strict 客户端；只承载严格结构化输出和原生工具决策，失败时回退现有正式链路。 */
+    private final StrictFunctionCallingClient strictFunctionCallingClient;
+
     /**
      * 无参构造器：供 Spring 框架代理（CGLIB）使用，不用于生产环境的实际注入。
      * 所有字段置为 null/默认值，防止误用——真正的初始化由主构造器完成。
@@ -90,6 +108,7 @@ public class LLMService {
         this.objectMapper = new ObjectMapper();
         this.llmProviderManager = null;
         this.deepSeekThinkingOptionsFactory = null;
+        this.strictFunctionCallingClient = null;
     }
 
     /**
@@ -102,6 +121,7 @@ public class LLMService {
      * @param objectMapper Spring Boot 共享 JSON 解析器
      * @param llmProviderManager 多 Provider 回退链管理器，可为 null
      * @param deepSeekThinkingOptionsFactory DeepSeek Flash 思考参数工厂
+     * @param strictFunctionCallingClient DeepSeek Beta strict Function Calling 独立客户端
      */
     @Autowired
     public LLMService(ChatClient.Builder builder,
@@ -110,7 +130,8 @@ public class LLMService {
                       LlmApiUsageService llmApiUsageService,
                       ObjectMapper objectMapper,
                       LlmProviderManager llmProviderManager,
-                      DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory) {
+                      DeepSeekThinkingOptionsFactory deepSeekThinkingOptionsFactory,
+                      StrictFunctionCallingClient strictFunctionCallingClient) {
         this.chatClient = builder.build();
         this.guardProperties = guardProperties;
         this.runtimeSettingService = runtimeSettingService;
@@ -118,6 +139,7 @@ public class LLMService {
         this.objectMapper = objectMapper;
         this.llmProviderManager = llmProviderManager;
         this.deepSeekThinkingOptionsFactory = deepSeekThinkingOptionsFactory;
+        this.strictFunctionCallingClient = strictFunctionCallingClient;
     }
 
     /**
@@ -134,6 +156,7 @@ public class LLMService {
         this.objectMapper = new ObjectMapper();
         this.llmProviderManager = null;
         this.deepSeekThinkingOptionsFactory = null;
+        this.strictFunctionCallingClient = null;
     }
 
     /**
@@ -275,14 +298,13 @@ public class LLMService {
      * <p>
      * <b>确定性来自两层叠加</b>
      * <ol>
-     *   <li>{@code response_format=json_object}：由 DeepSeek 在 API 级保证返回合法 JSON 语法
-     *       （也满足 DeepSeek「prompt 必须含 json 关键字」的硬性要求，因为 {@code .entity(type)} 内部
-     *       会把目标类型的 schema 指令注入 prompt——不额外要求调用方手动写 json）。</li>
-     *   <li>{@code .entity(type)}：Spring AI 内部用 {@code BeanOutputConverter} 依据目标类型的字段
-     *       生成 schema 指令追加到 prompt 末尾，并将 LLM 返回的 JSON 反序列化为强类型对象。</li>
+     *   <li>DeepSeek strict Function Calling：强制调用固定结果函数，函数参数必须匹配目标 DTO 的
+     *       JSON Schema，包括必填字段、字段类型和禁止额外字段。</li>
+     *   <li>本地强类型与业务校验：{@link BeanOutputConverter} 把函数参数反序列化为目标类型，DTO
+     *       构造器和业务 Service 继续检查空内容、列表数量和跨字段规则。</li>
      * </ol>
-     * json_object 只保证语法、不保证字段——仍可能出现字段缺失或类型不匹配，因此解析失败时
-     * 自动重试 {@link #STRUCTURED_MAX_ATTEMPTS} 次，每次都是新的 LLM 调用（独立采样，概率独立）。
+     * strict 未配置、Beta 端点异常或未获得有效业务对象时，自动回退原有
+     * {@code response_format=json_object + BeanOutputConverter} 链路，避免实验能力影响主流程可用性。
      * <p>
      * <b>为什么放在 LLMService 而非 AgentExecutor</b>
      * 结构化输出本质是"调模型"能力，归 LLM 层最自然，并自然复用这里的成本 guard
@@ -291,15 +313,14 @@ public class LLMService {
      * 与业务 JSON（如建议 record）共用同一出口，无需维护两套结构化调用逻辑。
      * <p>
      * <b>Token 用量说明</b>
-     * 当前实现不再直接调用 {@code .entity(type)}，而是显式注入 schema 格式要求后拿完整的
-     * {@link ChatResponse}。这样既保留结构化解析的稳定性，也能从 metadata 中提取 usage。
+     * 两条路径都保留完整 {@link ChatResponse}，以便从 metadata 中提取 usage。
      *
      * @param systemPrompt 系统提示词（由调用方构建，不含 schema 描述——schema 由 BeanOutputConverter 自动追加）
      * @param userMessage 用户输入文本
      * @param type 目标类型的 Class 对象（如 {@code ReActStep.class} 或业务 record.class）
      * @param <T> 目标类型泛型
      * @return 解析后的强类型对象，字段按目标类型定义
-     * @throws RuntimeException 连续重试 {@link #STRUCTURED_MAX_ATTEMPTS} 次仍解析失败时抛出最后一次异常，
+     * @throws RuntimeException strict 与旧链路均未获得有效对象时抛出最后一次异常，
      *                          调用方应按场景兜底（如切文本 ReAct 或返回错误给用户）
      */
     public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> type) {
@@ -309,10 +330,9 @@ public class LLMService {
     /**
      * 带用量统计的结构化对话。
      * <p>
-     * 为什么不用 Spring AI 的 {@code .entity(type)}：它会把响应转换成目标对象后只返回 entity，
-     * 调用方拿不到 {@link ChatResponse} metadata，导致结构化 ReAct 的 token 用量无法追踪。
-     * 本方法显式使用 {@link BeanOutputConverter#getFormat()} 注入格式要求，再通过
-     * {@code .chatResponse()} 获取完整响应，最后由 Jackson 反序列化为目标类型。
+     * strict 路径从被强制调用的结果函数读取参数；旧路径显式追加
+     * {@link BeanOutputConverter#getFormat()} 并读取 JSON 文本。两者都先取得完整响应再转换，
+     * 避免 Spring AI 的 {@code .entity(type)} 丢失 token metadata。
      *
      * @param systemPrompt 系统提示词
      * @param userMessage 用户输入文本
@@ -322,6 +342,81 @@ public class LLMService {
      */
     public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, String userMessage, Class<T> type) {
         validatePromptLength(systemPrompt, userMessage);
+        if (isStrictFunctionCallingEnabled()) {
+            try {
+                return chatStructuredStrictWithUsage(systemPrompt, userMessage, type);
+            } catch (RuntimeException strictException) {
+                // strict 目前依赖 DeepSeek Beta；端点异常或业务校验未通过时回旧链路，不能让结构化能力整体中断。
+                log.warn("严格结构化调用未获得有效结果，回退 json_object：{}", strictException.getMessage());
+            }
+        }
+        return chatStructuredLegacyWithUsage(systemPrompt, userMessage, type);
+    }
+
+    /**
+     * 用强制 Function Calling 承载固定 DTO。
+     * tool_choice 固定为结果函数，模型不能改成普通文本；strict=true 让函数参数严格服从 DTO Schema，
+     * DTO 构造器中的现有校验继续负责非空内容、列表数量等业务语义。
+     */
+    private <T> StructuredCallResult<T> chatStructuredStrictWithUsage(String systemPrompt,
+                                                                       String userMessage,
+                                                                       Class<T> type) {
+        BeanOutputConverter<T> converter = new BeanOutputConverter<>(type, objectMapper);
+        Map<String, Object> schema = DeepSeekStrictJsonSchema.normalize(converter.getJsonSchemaMap(), objectMapper);
+        OpenAiApi.FunctionTool.Function function = new OpenAiApi.FunctionTool.Function(
+                "返回符合业务 DTO 的最终结构化结果，不要调用其它函数。",
+                STRUCTURED_RESULT_FUNCTION,
+                schema,
+                true
+        );
+        OpenAiApi.FunctionTool resultTool = new OpenAiApi.FunctionTool(function);
+        RuntimeException lastError = null;
+
+        for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
+            long startNanos = System.nanoTime();
+            ChatResponse chatResponse;
+            try {
+                chatResponse = strictFunctionCallingClient.call(
+                        systemPrompt,
+                        List.of(new UserMessage(userMessage == null ? "" : userMessage)),
+                        List.of(resultTool),
+                        namedToolChoice(STRUCTURED_RESULT_FUNCTION),
+                        false
+                );
+            } catch (RuntimeException providerException) {
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+                recordTextFailure(null, elapsedMs, providerException);
+                // Provider/端点失败不是采样问题，继续请求 Beta 只会重复失败，立即交给旧链路回退。
+                throw providerException;
+            }
+
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            LlmCallResult callResult = toCallResult(chatResponse, elapsedMs);
+            try {
+                String arguments = extractSingleFunctionArguments(chatResponse, STRUCTURED_RESULT_FUNCTION);
+                T entity = converter.convert(arguments);
+                recordTextSuccess(callResult);
+                return new StructuredCallResult<>(
+                        entity,
+                        callResult.promptTokens(),
+                        callResult.completionTokens(),
+                        callResult.totalTokens(),
+                        elapsedMs
+                );
+            } catch (RuntimeException validationException) {
+                recordTextFailure(callResult.modelName(), elapsedMs, validationException);
+                lastError = validationException;
+                log.warn("严格结构化输出第 {}/{} 次业务校验失败：{}",
+                        attempt, STRUCTURED_MAX_ATTEMPTS, validationException.getMessage());
+            }
+        }
+        throw lastError;
+    }
+
+    /** 保留原有 json_object 路径，作为非 DeepSeek Provider 和 Beta 端点异常时的可用性回退。 */
+    private <T> StructuredCallResult<T> chatStructuredLegacyWithUsage(String systemPrompt,
+                                                                       String userMessage,
+                                                                       Class<T> type) {
         // 保留 DeepSeek Flash 思考参数，再叠加结构化输出要求，避免 options 覆盖掉思考字段。
         OpenAiChatOptions options = defaultThinkingOptions();
         options.setResponseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null));
@@ -358,6 +453,165 @@ public class LLMService {
             }
         }
         throw lastError;
+    }
+
+    public boolean isStrictFunctionCallingEnabled() {
+        return strictFunctionCallingClient != null && strictFunctionCallingClient.isEnabled();
+    }
+
+    /**
+     * 执行一轮原生工具决策，但不自动执行工具。
+     *
+     * 项目当前 Tool 契约统一接收字符串，因此对模型只暴露一个严格的 execute_tool 函数：toolName
+     * 由注册中心名称生成 enum，input 保持字符串。这样既约束工具名和参数字段，又兼容本地工具与 MCP。
+     */
+    public ToolCallingCallResult chatWithStrictToolsWithUsage(String systemPrompt,
+                                                               List<Message> messages,
+                                                               Collection<Tool> tools) {
+        if (!isStrictFunctionCallingEnabled()) {
+            throw new IllegalStateException("严格 Function Calling 未启用");
+        }
+        String messageText = messages == null ? "" : messages.stream()
+                .map(Message::getText)
+                .filter(text -> text != null)
+                .collect(Collectors.joining("\n"));
+        validatePromptLength(systemPrompt, messageText);
+
+        Set<String> allowedToolNames = tools == null ? Set.of() : tools.stream()
+                .map(Tool::getName)
+                .filter(name -> name != null && !name.isBlank())
+                .map(String::trim)
+                .collect(Collectors.toUnmodifiableSet());
+        List<OpenAiApi.FunctionTool> functionTools = allowedToolNames.isEmpty()
+                ? List.of()
+                : List.of(buildToolDispatcher(allowedToolNames));
+
+        long startNanos = System.nanoTime();
+        try {
+            ChatResponse chatResponse = strictFunctionCallingClient.call(
+                    systemPrompt,
+                    messages == null ? List.of() : messages,
+                    functionTools,
+                    null,
+                    true
+            );
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            LlmCallResult callResult = toCallResult(chatResponse, elapsedMs);
+            AssistantMessage assistantMessage = extractAssistantMessage(chatResponse);
+            List<StrictToolCall> toolCalls = parseStrictToolCalls(assistantMessage, allowedToolNames);
+            String content = assistantMessage.getText();
+            if (toolCalls.isEmpty() && TextUtil.isBlank(content)) {
+                throw new IllegalArgumentException("模型既未返回最终内容，也未返回工具调用");
+            }
+            recordTextSuccess(callResult);
+            return new ToolCallingCallResult(
+                    assistantMessage,
+                    content,
+                    toolCalls,
+                    callResult.promptTokens(),
+                    callResult.completionTokens(),
+                    callResult.totalTokens(),
+                    elapsedMs
+            );
+        } catch (RuntimeException exception) {
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            recordTextFailure(null, elapsedMs, exception);
+            throw exception;
+        }
+    }
+
+    private OpenAiApi.FunctionTool buildToolDispatcher(Set<String> allowedToolNames) {
+        Map<String, Object> toolName = new LinkedHashMap<>();
+        toolName.put("type", "string");
+        toolName.put("description", "必须选择系统提示词中列出的一个工具名");
+        toolName.put("enum", allowedToolNames.stream().sorted().toList());
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("type", "string");
+        input.put("description", "直接传给所选工具的完整字符串参数");
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("toolName", toolName);
+        properties.put("input", input);
+
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        schema.put("properties", properties);
+        schema.put("required", List.of("toolName", "input"));
+        schema.put("additionalProperties", false);
+
+        OpenAiApi.FunctionTool.Function function = new OpenAiApi.FunctionTool.Function(
+                "调用 LinkAgent 注册中心中的一个工具。每轮最多调用一次；证据足够时直接返回最终回答。",
+                EXECUTE_TOOL_FUNCTION,
+                schema,
+                true
+        );
+        return new OpenAiApi.FunctionTool(function);
+    }
+
+    private List<StrictToolCall> parseStrictToolCalls(AssistantMessage assistantMessage,
+                                                       Set<String> allowedToolNames) {
+        if (!assistantMessage.hasToolCalls()) {
+            return List.of();
+        }
+        if (assistantMessage.getToolCalls().size() != 1) {
+            throw new IllegalArgumentException("当前 Agent 每轮只允许一次工具调用");
+        }
+        AssistantMessage.ToolCall toolCall = assistantMessage.getToolCalls().get(0);
+        if (!EXECUTE_TOOL_FUNCTION.equals(toolCall.name())) {
+            throw new IllegalArgumentException("模型调用了未声明的函数：" + toolCall.name());
+        }
+        try {
+            JsonNode arguments = objectMapper.readTree(toolCall.arguments());
+            JsonNode toolNameNode = arguments.get("toolName");
+            JsonNode inputNode = arguments.get("input");
+            if (toolNameNode == null || !toolNameNode.isTextual() || inputNode == null || !inputNode.isTextual()) {
+                throw new IllegalArgumentException("工具调用参数缺少 toolName 或 input");
+            }
+            String toolName = toolNameNode.asText().trim();
+            if (!allowedToolNames.contains(toolName)) {
+                throw new IllegalArgumentException("模型请求了未注册工具：" + toolName);
+            }
+            return List.of(new StrictToolCall(
+                    toolCall.id(),
+                    toolCall.name(),
+                    toolName,
+                    inputNode.asText()
+            ));
+        } catch (IllegalArgumentException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("工具调用参数解析失败：" + exception.getMessage(), exception);
+        }
+    }
+
+    private String extractSingleFunctionArguments(ChatResponse chatResponse, String expectedFunctionName) {
+        AssistantMessage assistantMessage = extractAssistantMessage(chatResponse);
+        if (!assistantMessage.hasToolCalls() || assistantMessage.getToolCalls().size() != 1) {
+            throw new IllegalArgumentException("严格结构化响应必须包含且只包含一个结果函数调用");
+        }
+        AssistantMessage.ToolCall toolCall = assistantMessage.getToolCalls().get(0);
+        if (!expectedFunctionName.equals(toolCall.name())) {
+            throw new IllegalArgumentException("严格结构化响应调用了错误函数：" + toolCall.name());
+        }
+        if (TextUtil.isBlank(toolCall.arguments())) {
+            throw new IllegalArgumentException("严格结构化响应缺少函数参数");
+        }
+        return toolCall.arguments();
+    }
+
+    private AssistantMessage extractAssistantMessage(ChatResponse chatResponse) {
+        if (chatResponse == null || chatResponse.getResult() == null || chatResponse.getResult().getOutput() == null) {
+            throw new IllegalArgumentException("模型返回空响应");
+        }
+        return chatResponse.getResult().getOutput();
+    }
+
+    private Map<String, Object> namedToolChoice(String functionName) {
+        return Map.of(
+                "type", "function",
+                "function", Map.of("name", functionName)
+        );
     }
 
     /**

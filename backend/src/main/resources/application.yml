@@ -283,6 +283,13 @@ knowledge:
 # 主 Provider 走 spring.ai.openai.* 自动配置；以下为备用 Provider 列表。
 # 主 Provider 调用失败时按配置顺序依次尝试备用 Provider。
 llm:
+  strict-function-calling:
+    # DeepSeek strict 目前只在 Beta 端点提供；独立客户端失败时会回退现有正式结构化链路。
+    enabled: ${LLM_STRICT_FUNCTION_CALLING_ENABLED:true}
+    base-url: ${LLM_STRICT_BASE_URL:${LLM_BASE_URL}}
+    completions-path: ${LLM_STRICT_COMPLETIONS_PATH:/beta/chat/completions}
+    api-key: ${LLM_STRICT_API_KEY:${LLM_API_KEY}}
+    model: ${LLM_STRICT_MODEL:${LLM_MODEL}}
   fallback:
     enabled: ${LLM_FALLBACK_ENABLED:false}
     cooldown-seconds: ${LLM_FALLBACK_COOLDOWN_SECONDS:60}

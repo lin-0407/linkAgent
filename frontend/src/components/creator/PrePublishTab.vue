@@ -673,7 +673,7 @@ async function generateDraftFromConversation() {
 
 .creator-ai-chat-workspace {
   display: grid;
-  grid-template-rows: auto minmax(220px, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   height: 100%;
   overflow: hidden;
   border: 1px solid var(--border);

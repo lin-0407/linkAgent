@@ -3,6 +3,8 @@ package com.link.linkagent.core;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.LlmCallResult;
 import com.link.linkagent.llm.StructuredCallResult;
+import com.link.linkagent.llm.StrictToolCall;
+import com.link.linkagent.llm.ToolCallingCallResult;
 import com.link.linkagent.memory.InMemoryShortTermMemoryStore;
 import com.link.linkagent.memory.LongTermMemory;
 import com.link.linkagent.memory.LongTermMemoryCandidate;
@@ -14,11 +16,15 @@ import com.link.linkagent.memory.SummaryMemory;
 import com.link.linkagent.memory.SummaryMemoryProperties;
 import com.link.linkagent.prompt.StubPromptService;
 import com.link.linkagent.tool.ToolExecutionProperties;
+import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -186,6 +192,35 @@ class AgentExecutorLongTermMemoryTest {
         assertThat(llmService.textCallCount).isZero();
     }
 
+    @Test
+    void shouldExecuteNativeToolCallAndReturnFinalContent() {
+        StrictToolCallingLlmService llmService = new StrictToolCallingLlmService();
+        CapturingTool tool = new CapturingTool();
+        ToolRegistry registry = new ToolRegistry(List.of(tool));
+        registry.init();
+        AgentExecutor executor = new AgentExecutor(
+                llmService,
+                registry,
+                new ToolExecutor(registry, new ToolExecutionProperties(10, 0)),
+                new ShortTermMemory(new InMemoryShortTermMemoryStore()),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2),
+                        prompt -> new ChatResponse(List.of()), new StubPromptService()),
+                new LongTermMemory(new FakeLongTermMemoryMapper()),
+                new NoopLongTermMemoryExtractor(),
+                new StubPromptService(),
+                true
+        );
+
+        var response = executor.runTask("调用测试工具");
+
+        assertThat(response.finalAnswer()).isEqualTo("工具结果已经确认");
+        assertThat(response.steps()).hasSize(1);
+        assertThat(response.steps().get(0).action()).isEqualTo("echo");
+        assertThat(response.steps().get(0).thought()).isNull();
+        assertThat(tool.input).isEqualTo("测试参数");
+        assertThat(llmService.callCount).isEqualTo(2);
+    }
+
     private static class CapturingLlmService extends LLMService {
 
         private String lastUserMessage;
@@ -263,6 +298,71 @@ class AgentExecutorLongTermMemoryTest {
         public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, String userMessage, Class<T> type) {
             structuredCallCount++;
             return new StructuredCallResult<>(type.cast(response), 7, 11, 18, 1L);
+        }
+    }
+
+    private static class StrictToolCallingLlmService extends LLMService {
+
+        private int callCount;
+
+        @Override
+        public boolean isStrictFunctionCallingEnabled() {
+            return true;
+        }
+
+        @Override
+        public ToolCallingCallResult chatWithStrictToolsWithUsage(String systemPrompt,
+                                                                  List<Message> messages,
+                                                                  Collection<Tool> tools) {
+            callCount++;
+            if (callCount == 1) {
+                AssistantMessage.ToolCall toolCall = new AssistantMessage.ToolCall(
+                        "call-1",
+                        "function",
+                        LLMService.EXECUTE_TOOL_FUNCTION,
+                        "{\"toolName\":\"echo\",\"input\":\"测试参数\"}"
+                );
+                AssistantMessage assistant = AssistantMessage.builder()
+                        .content("")
+                        .toolCalls(List.of(toolCall))
+                        .build();
+                return new ToolCallingCallResult(
+                        assistant,
+                        "",
+                        List.of(new StrictToolCall(
+                                "call-1", LLMService.EXECUTE_TOOL_FUNCTION, "echo", "测试参数"
+                        )),
+                        4, 2, 6, 1L
+                );
+            }
+            AssistantMessage assistant = AssistantMessage.builder()
+                    .content("工具结果已经确认")
+                    .toolCalls(List.of())
+                    .build();
+            return new ToolCallingCallResult(
+                    assistant, "工具结果已经确认", List.of(), 5, 3, 8, 1L
+            );
+        }
+    }
+
+    private static class CapturingTool implements Tool {
+
+        private String input;
+
+        @Override
+        public String getName() {
+            return "echo";
+        }
+
+        @Override
+        public String getDescription() {
+            return "返回输入内容";
+        }
+
+        @Override
+        public String execute(String input) {
+            this.input = input;
+            return "echo:" + input;
         }
     }
 

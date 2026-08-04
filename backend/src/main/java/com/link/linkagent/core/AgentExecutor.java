@@ -3,7 +3,9 @@ package com.link.linkagent.core;
 import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.LlmCallResult;
+import com.link.linkagent.llm.StrictToolCall;
 import com.link.linkagent.llm.StructuredCallResult;
+import com.link.linkagent.llm.ToolCallingCallResult;
 import com.link.linkagent.memory.AgentTraceMapper;
 import com.link.linkagent.memory.ConversationSessionMapper;
 import com.link.linkagent.memory.LongTermMemory;
@@ -26,6 +28,9 @@ import com.link.linkagent.tool.ToolRegistry;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -257,7 +262,21 @@ public class AgentExecutor {
             if (isStructuredKernelEnabled()) {
                 String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
                 List<AgentStep> structuredSteps = new ArrayList<>();
-                String structuredAnswer = runStructuredLoop(structuredSystemPrompt, conversation, structuredSteps, persistenceContext);
+                String structuredAnswer;
+                if (llmService.isStrictFunctionCallingEnabled()) {
+                    String toolCallingSystemPrompt = buildToolCallingSystemPrompt(toolRegistry.getAllTools());
+                    structuredAnswer = runStrictToolCallingLoop(
+                            toolCallingSystemPrompt,
+                            structuredSystemPrompt,
+                            conversation,
+                            structuredSteps,
+                            persistenceContext
+                    );
+                } else {
+                    structuredAnswer = runStructuredLoop(
+                            structuredSystemPrompt, conversation, structuredSteps, persistenceContext
+                    );
+                }
                 if (structuredAnswer == null) {
                     // 迭代次数超限：不持久化任何记忆，因为未拿到有效答案，避免脏数据污染记忆层
                     completeAgentTrace(persistenceContext, 2, null, structuredSteps.size(), "迭代次数超过上限");
@@ -394,7 +413,19 @@ public class AgentExecutor {
             StringBuilder structuredConversation = new StringBuilder();
             structuredConversation.append("Human:").append(taskMessage).append("\n\n");
             List<AgentStep> structuredSteps = new ArrayList<>();
-            String structuredAnswer = runStructuredLoop(structuredSystemPrompt, structuredConversation, structuredSteps);
+            String structuredAnswer;
+            if (llmService.isStrictFunctionCallingEnabled()) {
+                String toolCallingSystemPrompt = buildToolCallingSystemPrompt(toolRegistry.getAllTools());
+                structuredAnswer = runStrictToolCallingLoop(
+                        toolCallingSystemPrompt,
+                        structuredSystemPrompt,
+                        structuredConversation,
+                        structuredSteps,
+                        null
+                );
+            } else {
+                structuredAnswer = runStructuredLoop(structuredSystemPrompt, structuredConversation, structuredSteps);
+            }
             if (structuredAnswer == null) {
                 return new AgentChatResponse(null, null, "迭代次数超过上限", structuredSteps.size(), structuredSteps);
             }
@@ -857,7 +888,15 @@ public class AgentExecutor {
 
     private String runStructuredLoop(String systemPrompt, StringBuilder conversation, List<AgentStep> steps,
                                      AgentPersistenceContext persistenceContext) {
-        int iteration = 0;
+        return runStructuredLoop(systemPrompt, conversation, steps, persistenceContext, 0);
+    }
+
+    /**
+     * 原生 Function Calling 失败后可从已完成的轮次继续，避免重新编号并重复执行已经完成的工具调用。
+     */
+    private String runStructuredLoop(String systemPrompt, StringBuilder conversation, List<AgentStep> steps,
+                                     AgentPersistenceContext persistenceContext, int initialIteration) {
+        int iteration = initialIteration;
         while (true) {
             iteration++;
             // 迭代上限兜底：与文本路一致
@@ -904,6 +943,87 @@ public class AgentExecutor {
 
             // 对话历史用文本回灌即可（模型读历史无需结构化、省 token）；下一步仍按 schema 产出
             conversation.append("AI:\n").append("Thought:").append(TextUtil.trimToDefault(step.thought(), "")).append("\n")
+                    .append("Action:").append(action.name()).append("\n")
+                    .append("Action Input:").append(action.arguments()).append("\n")
+                    .append("Observation:").append(observation.toolName()).append(":")
+                    .append(observation.result()).append("\n\n");
+        }
+    }
+
+    /**
+     * 原生严格工具调用循环。
+     *
+     * 模型只负责返回 execute_tool(toolName,input) 或最终文本；工具仍由 ToolExecutor 执行。
+     * 如果 Beta 端点在任意一轮失败，则把已经执行的工具结果保留在 conversation 中，从旧结构化循环继续。
+     */
+    private String runStrictToolCallingLoop(String systemPrompt,
+                                            String fallbackSystemPrompt,
+                                            StringBuilder conversation,
+                                            List<AgentStep> steps,
+                                            AgentPersistenceContext persistenceContext) {
+        List<Message> messages = new ArrayList<>();
+        messages.add(new UserMessage(conversation.toString()));
+        int iteration = 0;
+        while (true) {
+            iteration++;
+            if (iteration > MAX_ITERATIONS) {
+                return null;
+            }
+            log.info("严格 Function Calling 第{}轮迭代...", iteration);
+
+            ToolCallingCallResult callResult;
+            try {
+                callResult = llmService.chatWithStrictToolsWithUsage(
+                        systemPrompt, messages, toolRegistry.getAllTools()
+                );
+            } catch (RuntimeException strictException) {
+                log.warn("严格 Function Calling 调用失败，从第{}轮切回结构化 ReAct：{}",
+                        iteration, strictException.getMessage());
+                return runStructuredLoop(
+                        fallbackSystemPrompt,
+                        conversation,
+                        steps,
+                        persistenceContext,
+                        iteration - 1
+                );
+            }
+
+            int stepTokenCount = calculateTokenCount(
+                    callResult.promptTokens(),
+                    callResult.completionTokens(),
+                    callResult.totalTokens()
+            );
+            if (persistenceContext != null) {
+                persistenceContext.totalTokens += stepTokenCount;
+            }
+
+            if (callResult.toolCalls().isEmpty()) {
+                String finalAnswer = TextUtil.trimToNull(callResult.content());
+                persistAgentStep(persistenceContext, iteration, "final", finalAnswer,
+                        null, null, null, stepTokenCount);
+                return finalAnswer;
+            }
+
+            StrictToolCall strictCall = callResult.toolCalls().get(0);
+            ToolCall action = new ToolCall(strictCall.toolName(), strictCall.input());
+            Observation observation = toolExecutor.execute(action);
+            AgentStep step = new AgentStep(
+                    iteration, null, action.name(), action.arguments(), observation.result()
+            );
+            steps.add(step);
+            persistAgentStep(persistenceContext, iteration, "action", null,
+                    action.name(), action.arguments(), observation.result(), stepTokenCount);
+
+            // 原始 assistant tool_call 与同 ID 的 tool response 必须成对进入下一轮，不能改写成普通文本消息。
+            messages.add(callResult.assistantMessage());
+            messages.add(ToolResponseMessage.builder()
+                    .responses(List.of(new ToolResponseMessage.ToolResponse(
+                            strictCall.id(), strictCall.functionName(), observation.result()
+                    )))
+                    .build());
+
+            // 同步维护文本副本，只用于 Beta 失败后无损切回旧结构化循环。
+            conversation.append("AI:\n")
                     .append("Action:").append(action.name()).append("\n")
                     .append("Action Input:").append(action.arguments()).append("\n")
                     .append("Observation:").append(observation.toolName()).append(":")
@@ -1027,6 +1147,12 @@ public class AgentExecutor {
         return promptService.render("agent_executor_structured.system", Map.of("toolList", toolDescriptions));
     }
 
+    /** 原生 Function Calling 不再要求模型输出 ReActStep，只保留工具使用边界和最终回答要求。 */
+    private String buildToolCallingSystemPrompt(Collection<Tool> tools) {
+        String toolDescriptions = AgentToolPromptFormatter.format(tools);
+        return promptService.render("agent_executor_tool_calling.system", Map.of("toolList", toolDescriptions));
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // SSE 流式输出（阶段 P0-4）：在 ReAct 迭代过程中实时推送步骤事件与最终答案
     // ═══════════════════════════════════════════════════════════════
@@ -1087,7 +1213,21 @@ public class AgentExecutor {
             // 走结构化 schema 约束的 JSON ReAct，每步通过 chatStructured 产出 ReActStep
             if (isStructuredKernelEnabled()) {
                 String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
-                String structuredAnswer = runStructuredLoopStreaming(structuredSystemPrompt, conversation, emitter, persistenceContext);
+                String structuredAnswer;
+                if (llmService.isStrictFunctionCallingEnabled()) {
+                    String toolCallingSystemPrompt = buildToolCallingSystemPrompt(toolRegistry.getAllTools());
+                    structuredAnswer = runStrictToolCallingLoopStreaming(
+                            toolCallingSystemPrompt,
+                            structuredSystemPrompt,
+                            conversation,
+                            emitter,
+                            persistenceContext
+                    );
+                } else {
+                    structuredAnswer = runStructuredLoopStreaming(
+                            structuredSystemPrompt, conversation, emitter, persistenceContext
+                    );
+                }
                 if (structuredAnswer != null) {
                     persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer, persistenceContext.totalTokens);
                     completeAgentTrace(persistenceContext, 1, structuredAnswer, persistenceContext.totalSteps, null);
@@ -1142,9 +1282,15 @@ public class AgentExecutor {
      * @return 最终答案文本；超出迭代上限返回 null
      */
     private String runStructuredLoopStreaming(String systemPrompt, StringBuilder conversation, SseEmitter emitter,
-                                              AgentPersistenceContext persistenceContext)
+                                               AgentPersistenceContext persistenceContext)
             throws IOException {
-        int iteration = 0;
+        return runStructuredLoopStreaming(systemPrompt, conversation, emitter, persistenceContext, 0);
+    }
+
+    private String runStructuredLoopStreaming(String systemPrompt, StringBuilder conversation, SseEmitter emitter,
+                                               AgentPersistenceContext persistenceContext, int initialIteration)
+            throws IOException {
+        int iteration = initialIteration;
         while (true) {
             iteration++;
             if (iteration > MAX_ITERATIONS) {
@@ -1186,6 +1332,78 @@ public class AgentExecutor {
 
             // 对话历史回灌
             conversation.append("AI:\n").append("Thought:").append(TextUtil.trimToDefault(step.thought(), "")).append("\n")
+                    .append("Action:").append(action.name()).append("\n")
+                    .append("Action Input:").append(action.arguments()).append("\n")
+                    .append("Observation:").append(observation.toolName()).append(":")
+                    .append(observation.result()).append("\n\n");
+        }
+    }
+
+    /** 流式入口复用同一原生消息协议；每次工具完成后仍按现有 SSE step 事件向前端推送。 */
+    private String runStrictToolCallingLoopStreaming(String systemPrompt,
+                                                     String fallbackSystemPrompt,
+                                                     StringBuilder conversation,
+                                                     SseEmitter emitter,
+                                                     AgentPersistenceContext persistenceContext)
+            throws IOException {
+        List<Message> messages = new ArrayList<>();
+        messages.add(new UserMessage(conversation.toString()));
+        int iteration = 0;
+        while (true) {
+            iteration++;
+            if (iteration > MAX_ITERATIONS) {
+                return null;
+            }
+            log.info("流式-严格 Function Calling 第{}轮迭代...", iteration);
+
+            ToolCallingCallResult callResult;
+            try {
+                callResult = llmService.chatWithStrictToolsWithUsage(
+                        systemPrompt, messages, toolRegistry.getAllTools()
+                );
+            } catch (RuntimeException strictException) {
+                log.warn("流式严格 Function Calling 调用失败，从第{}轮切回结构化 ReAct：{}",
+                        iteration, strictException.getMessage());
+                return runStructuredLoopStreaming(
+                        fallbackSystemPrompt,
+                        conversation,
+                        emitter,
+                        persistenceContext,
+                        iteration - 1
+                );
+            }
+
+            int stepTokenCount = calculateTokenCount(
+                    callResult.promptTokens(),
+                    callResult.completionTokens(),
+                    callResult.totalTokens()
+            );
+            persistenceContext.totalTokens += stepTokenCount;
+
+            if (callResult.toolCalls().isEmpty()) {
+                String finalAnswer = TextUtil.trimToNull(callResult.content());
+                persistAgentStep(persistenceContext, iteration, "final", finalAnswer,
+                        null, null, null, stepTokenCount);
+                return finalAnswer;
+            }
+
+            StrictToolCall strictCall = callResult.toolCalls().get(0);
+            ToolCall action = new ToolCall(strictCall.toolName(), strictCall.input());
+            Observation observation = toolExecutor.execute(action);
+            AgentStep step = new AgentStep(
+                    iteration, null, action.name(), action.arguments(), observation.result()
+            );
+            sendSseEvent(emitter, "step", step);
+            persistAgentStep(persistenceContext, iteration, "action", null,
+                    action.name(), action.arguments(), observation.result(), stepTokenCount);
+
+            messages.add(callResult.assistantMessage());
+            messages.add(ToolResponseMessage.builder()
+                    .responses(List.of(new ToolResponseMessage.ToolResponse(
+                            strictCall.id(), strictCall.functionName(), observation.result()
+                    )))
+                    .build());
+            conversation.append("AI:\n")
                     .append("Action:").append(action.name()).append("\n")
                     .append("Action Input:").append(action.arguments()).append("\n")
                     .append("Observation:").append(observation.toolName()).append(":")
