@@ -558,6 +558,9 @@ public class LLMService {
             throw new IllegalArgumentException("当前 Agent 每轮只允许一次工具调用");
         }
         AssistantMessage.ToolCall toolCall = assistantMessage.getToolCalls().get(0);
+        if (!"function".equals(toolCall.type()) || TextUtil.isBlank(toolCall.id())) {
+            throw new IllegalArgumentException("模型返回的工具调用类型或 tool_call_id 无效");
+        }
         if (!EXECUTE_TOOL_FUNCTION.equals(toolCall.name())) {
             throw new IllegalArgumentException("模型调用了未声明的函数：" + toolCall.name());
         }
@@ -591,6 +594,9 @@ public class LLMService {
             throw new IllegalArgumentException("严格结构化响应必须包含且只包含一个结果函数调用");
         }
         AssistantMessage.ToolCall toolCall = assistantMessage.getToolCalls().get(0);
+        if (!"function".equals(toolCall.type())) {
+            throw new IllegalArgumentException("严格结构化响应的工具调用类型无效：" + toolCall.type());
+        }
         if (!expectedFunctionName.equals(toolCall.name())) {
             throw new IllegalArgumentException("严格结构化响应调用了错误函数：" + toolCall.name());
         }

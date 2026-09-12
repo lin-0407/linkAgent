@@ -15,14 +15,14 @@ import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.memory.SummaryMemory;
 import com.link.linkagent.memory.SummaryMemoryProperties;
 import com.link.linkagent.prompt.StubPromptService;
-import com.link.linkagent.tool.ToolExecutionProperties;
 import com.link.linkagent.tool.Tool;
+import com.link.linkagent.tool.ToolExecutionProperties;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.model.ChatResponse;
 
 import java.util.Collection;
 import java.util.List;
@@ -221,6 +221,37 @@ class AgentExecutorLongTermMemoryTest {
         assertThat(llmService.callCount).isEqualTo(2);
     }
 
+    @Test
+    void shouldContinueStructuredLoopWithObservationWhenStrictCallFails() {
+        StrictThenFallbackLlmService llmService = new StrictThenFallbackLlmService();
+        CapturingTool tool = new CapturingTool();
+        ToolRegistry registry = new ToolRegistry(List.of(tool));
+        registry.init();
+        AgentExecutor executor = new AgentExecutor(
+                llmService,
+                registry,
+                new ToolExecutor(registry, new ToolExecutionProperties(10, 0)),
+                new ShortTermMemory(new InMemoryShortTermMemoryStore()),
+                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2),
+                        prompt -> new ChatResponse(List.of()), new StubPromptService()),
+                new LongTermMemory(new FakeLongTermMemoryMapper()),
+                new NoopLongTermMemoryExtractor(),
+                new StubPromptService(),
+                true
+        );
+
+        var response = executor.runTask("调用测试工具后完成回答");
+
+        assertThat(response.finalAnswer()).isEqualTo("已从旧链路完成回答");
+        assertThat(response.steps()).hasSize(1);
+        assertThat(tool.input).isEqualTo("测试参数");
+        assertThat(llmService.strictCallCount).isEqualTo(2);
+        assertThat(llmService.structuredCallCount).isEqualTo(1);
+        assertThat(llmService.lastStructuredMessage)
+                .contains("Action:echo")
+                .contains("Observation:echo:echo:测试参数");
+    }
+
     private static class CapturingLlmService extends LLMService {
 
         private String lastUserMessage;
@@ -342,6 +373,56 @@ class AgentExecutorLongTermMemoryTest {
             return new ToolCallingCallResult(
                     assistant, "工具结果已经确认", List.of(), 5, 3, 8, 1L
             );
+        }
+    }
+
+    private static class StrictThenFallbackLlmService extends LLMService {
+
+        private int strictCallCount;
+        private int structuredCallCount;
+        private String lastStructuredMessage;
+
+        @Override
+        public boolean isStrictFunctionCallingEnabled() {
+            return true;
+        }
+
+        @Override
+        public ToolCallingCallResult chatWithStrictToolsWithUsage(String systemPrompt,
+                                                                  List<Message> messages,
+                                                                  Collection<Tool> tools) {
+            strictCallCount++;
+            if (strictCallCount > 1) {
+                throw new IllegalStateException("Beta 端点不可用");
+            }
+            AssistantMessage.ToolCall toolCall = new AssistantMessage.ToolCall(
+                    "call-1",
+                    "function",
+                    LLMService.EXECUTE_TOOL_FUNCTION,
+                    "{\"toolName\":\"echo\",\"input\":\"测试参数\"}"
+            );
+            AssistantMessage assistant = AssistantMessage.builder()
+                    .content("")
+                    .toolCalls(List.of(toolCall))
+                    .build();
+            return new ToolCallingCallResult(
+                    assistant,
+                    "",
+                    List.of(new StrictToolCall(
+                            "call-1", LLMService.EXECUTE_TOOL_FUNCTION, "echo", "测试参数"
+                    )),
+                    4, 2, 6, 1L
+            );
+        }
+
+        @Override
+        public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt,
+                                                                   String userMessage,
+                                                                   Class<T> type) {
+            structuredCallCount++;
+            lastStructuredMessage = userMessage;
+            ReActStep response = new ReActStep(null, null, null, "已从旧链路完成回答");
+            return new StructuredCallResult<>(type.cast(response), 5, 3, 8, 1L);
         }
     }
 

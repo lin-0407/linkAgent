@@ -205,8 +205,9 @@ CREATOR_MEDIA_ENABLED=false
 端点未配置、不可用或 Provider 不支持 strict 时，自动回退原有
 `response_format=json_object + BeanOutputConverter` 链路。
 
-JSON 语法合法但字段不完整时，模型最多重试三次。连续失败不会写入空报告，也不会把任务错误
-推进为已分析。Markdown 只由后端根据已落库字段导出，不作为模型生成格式。
+模型结果未通过 DTO 或业务内容校验时会重试；严格链路不可用或持续无效时再走旧链路。
+两条链路都失败后不会写入空报告，也不会把任务错误推进为已分析。Markdown 只由后端根据
+已落库字段导出，不作为模型生成格式。
 
 ### 数据与隐私边界
 

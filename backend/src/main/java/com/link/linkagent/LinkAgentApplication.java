@@ -10,5 +10,6 @@ public class LinkAgentApplication {
 
     public static void main(String[] args) {
         SpringApplication.run(LinkAgentApplication.class, args);
+        
     }
 }

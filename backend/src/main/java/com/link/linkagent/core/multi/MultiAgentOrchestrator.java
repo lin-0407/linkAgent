@@ -37,6 +37,9 @@ import java.util.concurrent.Executors;
  *     <li><b>依赖驱动并发调度</b>：每个 WorkerCall 通过 {@code dependsOn} 声明前置依赖，
  *     Orchestrator 每轮只执行"所有依赖都已成功"的 Worker，被 <b>跳过（Skipped）的前置依赖不算成功</b>，
  *     因此依赖它的 Worker 也会被跳过——保证失败传播的正确性。</li>
+ *     <li><b>依赖同时承载数据流</b>：{@code dependsOn} 不只用来放行，前置 Worker 成功后，
+ *     它的结论与可引用证据 ID 会由 {@link #withUpstreamResults} 拼进下游的 sharedContext，
+ *     使下游能真正"基于上一步结论继续"，而不是重新推断一遍。</li>
  *     <li><b>并发度受控</b>：用固定大小线程池限制最大并发 Worker 数，避免 LLM API 被同时大量调用导致
  *     限流或资源耗尽。默认上限 4，可根据 Worker 数量自动缩小。</li>
  *     <li><b>失败隔离</b>：单个 Worker 异常不会导致整个调度崩溃——通过 {@code exceptionally} 将异常
@@ -49,8 +52,9 @@ import java.util.concurrent.Executors;
  *     1. 检查依赖：有失败前置依赖的 → 跳过
  *     2. 找就绪集：所有依赖都已成功的 WorkerCall
  *     3. 如果就绪集为空且没有新跳过项 → 存在无法解析的依赖（循环/缺失）→ 全部跳过
- *     4. 并发执行就绪集中的所有 WorkerCall
- *     5. 收集结果，标记完成
+ *     4. 把前置结论注入就绪调用的 sharedContext
+ *     5. 并发执行就绪集中的所有 WorkerCall
+ *     6. 收集结果，标记完成
  * }
  * </pre>
  */
@@ -63,6 +67,13 @@ public class MultiAgentOrchestrator {
      * 且会加剧上下文竞争和 Token 消耗。4 是在"并行加速"和"稳定可靠"之间的经验平衡点。
      */
     private static final int DEFAULT_MAX_PARALLEL_WORKERS = 4;
+
+    /**
+     * 注入下游 Worker 时，单条前置结论的字符上限。
+     * 取 600 是为了与 {@link WorkerBrief} 内部截断 coreConclusion 的长度保持一致：
+     * 直接铺开 brief 里的结论也不会让下游 prompt 无边界增长，上游与下游看到的是同一份截断口径。
+     */
+    private static final int UPSTREAM_CONCLUSION_PREVIEW_LENGTH = 600;
 
     private final MultiAgentPlanner multiAgentPlanner;
     private final AgentAnswerSynthesizer answerSynthesizer;
@@ -214,8 +225,15 @@ public class MultiAgentOrchestrator {
                 }
                 // 步骤3：将就绪调用从待处理集中移除（避免重复执行）
                 pendingCalls.removeAll(readyCalls);
+                // 步骤3.5：在主线程里先把前置 Worker 的结论拼进 sharedContext，再交给线程池执行。
+                // 不把 traceById 交给 Worker 自己去查，原因有两个：
+                // 1）traceById 是普通 HashMap，主线程每轮 join 后会继续写入，工作线程同时读就是并发读写；
+                // 2）就绪集的定义保证这些依赖在本轮开始前就已经是 SUCCESS，所以在主线程一次性取好等价且更简单。
+                List<WorkerCall> dispatchCalls = readyCalls.stream()
+                        .map(call -> withUpstreamResults(call, traceById))
+                        .toList();
                 // 步骤4：并发提交所有就绪 WorkerCall，每个都用 exceptionally 保护防止崩溃
-                List<CompletableFuture<AgentWorkerTrace>> futures = readyCalls.stream()
+                List<CompletableFuture<AgentWorkerTrace>> futures = dispatchCalls.stream()
                         .map(call -> CompletableFuture.supplyAsync(
                                         () -> executeReadyCall(call, conversationContext, userMessage),
                                         executorService
@@ -411,6 +429,66 @@ public class MultiAgentOrchestrator {
             traceById.put(trace.callId(), trace);
         }
         pendingCalls.clear();
+    }
+
+    /**
+     * 把前置 Worker 已经产出的结论补进本次调用的 sharedContext，让 dependsOn 真正承担数据传递。
+     *
+     * <h3>为什么需要这一步</h3>
+     * 依赖调度原本只保证"前置成功才放行"，但前置的结论不会自动出现在下游 Worker 的输入里——
+     * 下游只看得到 Planner 事先写好的 sharedContext，于是"基于上一步结论继续"没有任何依据，
+     * 只能靠 Planner 在 sharedContext 里预写猜测，或者把前置的活重算一遍。
+     * 这里把成功前置的结论与可引用证据 ID 追加进 sharedContext，
+     * 让下游 Worker 能直接引用上游结论，也让 Synthesizer 拿到的证据链前后一致。
+     *
+     * <h3>为什么改写 sharedContext 而不改 WorkerAgent 接口</h3>
+     * 两个 Worker 实现都已经把 call.sharedContext() 拼进自己的提示词，
+     * 改写这个字段就能完成注入，不必新增接口参数、不动 Worker 实现，是当前最小改动。
+     *
+     * @param call      就绪的 WorkerCall
+     * @param traceById 已完成 Worker 的轨迹索引
+     * @return 注入了前置结论的 WorkerCall；无依赖、或依赖没留下可用结论时原样返回
+     */
+    private WorkerCall withUpstreamResults(WorkerCall call, Map<Integer, AgentWorkerTrace> traceById) {
+        if (call.dependsOn().isEmpty()) {
+            return call;
+        }
+        StringBuilder upstream = new StringBuilder();
+        for (Integer dependencyId : call.dependsOn()) {
+            AgentWorkerTrace dependencyTrace = traceById.get(dependencyId);
+            // 就绪判定已经保证依赖是 SUCCESS，这里的判空只作防御，避免读到不完整状态
+            if (dependencyTrace == null || dependencyTrace.status() != WorkerStatus.SUCCESS) {
+                continue;
+            }
+            WorkerBrief brief = dependencyTrace.brief();
+            String conclusion = brief == null
+                    ? TextUtil.preview(dependencyTrace.summary(), UPSTREAM_CONCLUSION_PREVIEW_LENGTH, "未形成明确结论")
+                    : brief.coreConclusion();
+            upstream.append("- Worker ").append(dependencyId)
+                    .append("（").append(dependencyTrace.workerName()).append("）的结论：")
+                    .append(conclusion);
+            if (brief != null && !brief.evidenceIds().isEmpty()) {
+                // 带上证据 ID，让下游 Worker 与最终合成引用同一份证据，而不是各自重新推断
+                upstream.append("；可引用证据 ID：").append(String.join("、", brief.evidenceIds()));
+            }
+            upstream.append('\n');
+        }
+        if (upstream.isEmpty()) {
+            // 依赖存在但都没留下可用结论：原样返回，避免给下游塞一个只有标题的空块
+            return call;
+        }
+        StringBuilder mergedContext = new StringBuilder();
+        if (TextUtil.hasText(call.sharedContext())) {
+            mergedContext.append(call.sharedContext().trim()).append("\n\n");
+        }
+        mergedContext.append("【前置 Worker 已完成的结论】\n").append(upstream);
+        return new WorkerCall(
+                call.id(),
+                call.workerName(),
+                call.subTask(),
+                mergedContext.toString(),
+                call.dependsOn()
+        );
     }
 
     /**

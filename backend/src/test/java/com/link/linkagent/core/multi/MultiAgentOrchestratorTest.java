@@ -4,6 +4,8 @@ import com.link.linkagent.core.plan.AgentAnswerSynthesizer;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,11 +68,44 @@ class MultiAgentOrchestratorTest {
         assertThat(worker.executedCallIds()).containsExactly(1);
     }
 
+    /**
+     * 验证 dependsOn 不只是放行门禁，前置结论会被拼进下游 Worker 的 sharedContext。
+     * 没有依赖的 1 号调用不应被改动；依赖 1 号的 2 号调用应拿到 1 号 brief 里的结论。
+     */
+    @Test
+    void shouldInjectUpstreamConclusionIntoDependentWorkerContext() {
+        MultiAgentPlanner planner = mock(MultiAgentPlanner.class);
+        AgentAnswerSynthesizer synthesizer = mock(AgentAnswerSynthesizer.class);
+        RecordingWorker worker = new RecordingWorker("worker_a", WorkerStatus.SUCCESS);
+        when(planner.plan(anyString(), anyString(), anyList())).thenReturn(new WorkerPlan(
+                "目标",
+                List.of(
+                        new WorkerCall(1, "worker_a", "先取证", "用户原话", List.of()),
+                        new WorkerCall(2, "worker_a", "基于取证给建议", "另一条背景", List.of(1))
+                ),
+                "依赖承载数据流",
+                "覆盖用户诉求"
+        ));
+        when(synthesizer.synthesizeMultiAgentResult(anyString(), anyString(), anyList())).thenReturn("ok");
+
+        MultiAgentOrchestrator orchestrator = new MultiAgentOrchestrator(planner, synthesizer, List.of(worker));
+
+        orchestrator.run("", "测试请求");
+
+        assertThat(worker.receivedSharedContexts().get(1)).isEqualTo("用户原话");
+        assertThat(worker.receivedSharedContexts().get(2))
+                .startsWith("另一条背景")
+                .contains("【前置 Worker 已完成的结论】")
+                .contains("测试摘要");
+    }
+
     private static class RecordingWorker implements WorkerAgent {
 
         private final String name;
         private final WorkerStatus status;
         private final List<Integer> executedCallIds = new CopyOnWriteArrayList<>();
+        /** 记录每个调用实际收到的 sharedContext，用于验证前置结论是否被注入 */
+        private final Map<Integer, String> receivedSharedContexts = new ConcurrentHashMap<>();
 
         private RecordingWorker(String name, WorkerStatus status) {
             this.name = name;
@@ -95,6 +130,7 @@ class MultiAgentOrchestratorTest {
         @Override
         public AgentWorkerTrace execute(WorkerCall call, String conversationContext, String userMessage) {
             executedCallIds.add(call.id());
+            receivedSharedContexts.put(call.id(), call.sharedContext());
             return new AgentWorkerTrace(
                     call.id(),
                     name(),
@@ -114,6 +150,10 @@ class MultiAgentOrchestratorTest {
 
         private List<Integer> executedCallIds() {
             return executedCallIds;
+        }
+
+        private Map<Integer, String> receivedSharedContexts() {
+            return receivedSharedContexts;
         }
     }
 }
