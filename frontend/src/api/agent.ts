@@ -266,13 +266,18 @@ function parseSseEvent(
   const dataLines: string[] = []
 
   for (const line of raw.split(/\r?\n/)) {
-    // 按第一个冒号切分字段：不能匹配 "event: " / "data: "，冒号后的空格是可选的，
-    // 浏览器 EventSource 会自己去掉空格，而 Spring 的 SseEmitter 根本不写这个空格。
+    // 按第一个冒号切分字段。冒号后的空格**不能去掉**：
+    // 我们的生产方是 Spring 的 SseEmitter，它写的是 "data:" + 原文，不额外补空格，
+    // 所以 "data: world" 的正文就是 " world"（那个空格属于内容）。
+    // 曾经这里无条件 replace(/^ /, '')，把每个以空格开头的分片都吃掉一个空格，
+    // 结果英文正文和思考内容拼起来变成 "Theuserisaskingme"；中文分片通常不以空格开头，
+    // 所以只在英文内容上暴露出来。已用 curl 抓原始字节确认（见 docs 记录）。
     const separator = line.indexOf(':')
     if (separator < 0) continue
     const field = line.slice(0, separator)
-    const value = line.slice(separator + 1).replace(/^ /, '')
+    const value = line.slice(separator + 1)
     if (field === 'event') {
+      // 事件名不会有有意义的首尾空格，这里 trim 是安全的
       eventType = value.trim()
     } else if (field === 'data') {
       // 规范允许一个事件带多行 data，用换行拼回原文（Spring 发多行文本就是这么拆的）
