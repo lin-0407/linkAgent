@@ -24,13 +24,17 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Flux;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -520,7 +524,208 @@ public class LLMService {
         }
     }
 
+    /**
+     * 流式执行一轮原生工具决策（普通 Function Calling，<b>非</b> strict）。
+     *
+     * <p><b>为什么另开一条链路，而不是把 {@link #chatWithStrictToolsWithUsage} 改成流式：</b>
+     * 严格 Function Calling 是给「结构化输出」用的（{@link #chatStructuredWithUsage} 那条链），
+     * 它必须拿到完整、可校验的 JSON；而 Agent 对话要的是「边生成边推给前端」。
+     * 两者的响应消费方式根本不同，混在一起会让结构化输出失去 strict 保证。
+     * 所以这里独立实现，<b>严格客户端与 chatStructured 系列保持原样，完全不参与流式</b>。
+     *
+     * <p><b>为什么要自己做分片合并：</b>Spring AI 1.1.4 的 {@code OpenAiChatModel.stream()}
+     * 是逐片原样吐 delta、不做合并的（{@code OpenAiChatModel.java:306} 只做
+     * {@code completionChunks.map(this::chunkToChatCompletion)}），而真实接口返回的
+     * {@code delta.tool_calls[].function.arguments} 是按片到达的，必须按位置拼接后才能解析。
+     * 这一点已用 curl 对真实接口验证过。
+     *
+     * <p><b>思考内容怎么读：</b>Spring AI 把 {@code reasoning_content} 放进助手消息的 metadata，
+     * 键名是 {@code reasoningContent}（{@code OpenAiChatModel.java:323}）。
+     * 模型不返回思考内容时该键为空，回调一次都不会触发。
+     *
+     * @param systemPrompt    系统提示词
+     * @param messages        已累积的对话消息（含历史工具调用与工具结果）
+     * @param tools           当前注册的可用工具，决定 execute_tool 的 toolName 枚举
+     * @param onContent       正文增量回调，每片调用一次，用于 SSE 打字机效果
+     * @param onThinking      思考增量回调，模型不返回思考内容时不会调用
+     * @param disableThinking 是否关闭思考模式。多轮工具调用场景必须关闭：
+     *                        Spring AI 1.1.4 不会把 reasoning_content 写回下一轮请求，
+     *                        继续开启思考会违反 DeepSeek 的工具调用协议。
+     */
+    public ToolCallingCallResult streamWithToolsWithUsage(String systemPrompt,
+                                                          List<Message> messages,
+                                                          Collection<Tool> tools,
+                                                          Consumer<String> onContent,
+                                                          Consumer<String> onThinking,
+                                                          boolean disableThinking) {
+        String messageText = messages == null ? "" : messages.stream()
+                .map(Message::getText)
+                .filter(text -> text != null)
+                .collect(Collectors.joining("\n"));
+        validatePromptLength(systemPrompt, messageText);
+
+        Set<String> allowedToolNames = tools == null ? Set.of() : tools.stream()
+                .map(Tool::getName)
+                .filter(name -> name != null && !name.isBlank())
+                .map(String::trim)
+                .collect(Collectors.toUnmodifiableSet());
+
+        OpenAiChatOptions options = thinkingOptions(disableThinking);
+        if (!allowedToolNames.isEmpty()) {
+            // 非 strict 工具：schema 与严格模式完全一致，只是不要求服务端做 strict 校验，
+            // 这样才能在普通 /chat/completions 上流式返回。
+            options.setTools(List.of(buildToolDispatcher(allowedToolNames, false)));
+            options.setToolChoice("auto");
+            options.setInternalToolExecutionEnabled(false);
+            options.setParallelToolCalls(false);
+        }
+
+        StringBuilder content = new StringBuilder();
+        // 工具调用按「出现顺序」归并：本轮只允许一次调用（parallelToolCalls=false），
+        // 首片带 id 与函数名，后续片只带 arguments 片段，所以三个字段分开累积。
+        List<String> toolIds = new ArrayList<>();
+        List<String> toolNames = new ArrayList<>();
+        List<StringBuilder> toolArguments = new ArrayList<>();
+        AtomicReference<ChatResponse> lastResponse = new AtomicReference<>();
+
+        long startNanos = System.nanoTime();
+        try {
+            Flux<ChatResponse> flux = chatClient.prompt()
+                    .system(systemPrompt == null ? "" : systemPrompt)
+                    .messages(messages == null ? List.of() : messages)
+                    .options(options)
+                    .stream()
+                    .chatResponse();
+
+            // blockLast 消费到流结束；增量在 doOnNext 里同步推给回调，保证前端按到达顺序收到。
+            flux.doOnNext(response -> {
+                lastResponse.set(response);
+                AssistantMessage delta = peekAssistantMessage(response);
+                if (delta == null) {
+                    return;
+                }
+                String textDelta = delta.getText();
+                if (textDelta != null && !textDelta.isEmpty()) {
+                    content.append(textDelta);
+                    if (onContent != null) {
+                        onContent.accept(textDelta);
+                    }
+                }
+                String thinkingDelta = reasoningContentOf(delta);
+                if (!thinkingDelta.isEmpty() && onThinking != null) {
+                    onThinking.accept(thinkingDelta);
+                }
+                mergeToolCallDelta(delta, toolIds, toolNames, toolArguments);
+            }).blockLast();
+
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            LlmCallResult callResult = toCallResult(lastResponse.get(), elapsedMs);
+            recordTextSuccess(callResult);
+
+            List<AssistantMessage.ToolCall> mergedToolCalls = buildMergedToolCalls(toolIds, toolNames, toolArguments);
+            AssistantMessage assistantMessage = AssistantMessage.builder()
+                    .content(content.toString())
+                    .toolCalls(mergedToolCalls)
+                    .build();
+            List<StrictToolCall> toolCalls = allowedToolNames.isEmpty()
+                    ? List.of()
+                    : parseStrictToolCalls(assistantMessage, allowedToolNames);
+            String finalContent = content.length() == 0 ? null : content.toString();
+            if (toolCalls.isEmpty() && TextUtil.isBlank(finalContent)) {
+                throw new IllegalArgumentException("模型既未返回最终内容，也未返回工具调用");
+            }
+            return new ToolCallingCallResult(
+                    assistantMessage,
+                    finalContent,
+                    toolCalls,
+                    callResult.promptTokens(),
+                    callResult.completionTokens(),
+                    callResult.totalTokens(),
+                    elapsedMs
+            );
+        } catch (RuntimeException exception) {
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            recordTextFailure(null, elapsedMs, exception);
+            throw exception;
+        }
+    }
+
+    /** 组装思考选项：disableThinking 为真时显式关闭，与严格链路保持同一套写法。 */
+    private OpenAiChatOptions thinkingOptions(boolean disableThinking) {
+        OpenAiChatOptions options = defaultThinkingOptions();
+        if (disableThinking) {
+            options.setExtraBody(Map.of("thinking", Map.of("type", "disabled")));
+            options.setReasoningEffort(null);
+        }
+        return options;
+    }
+
+    /** 从流式分片里取助手消息，分片可能没有结果（例如只有 usage 的收尾帧），此时返回 null。 */
+    private AssistantMessage peekAssistantMessage(ChatResponse chatResponse) {
+        if (chatResponse == null || chatResponse.getResult() == null) {
+            return null;
+        }
+        return chatResponse.getResult().getOutput();
+    }
+
+    /** 读分片里的思考增量；Spring AI 把它放在 metadata 的 reasoningContent 键上。 */
+    private String reasoningContentOf(AssistantMessage assistantMessage) {
+        Object value = assistantMessage.getMetadata().get("reasoningContent");
+        return value instanceof String text ? text : "";
+    }
+
+    /** 把分片里的工具调用按出现顺序并进三个累积列表。 */
+    private void mergeToolCallDelta(AssistantMessage delta,
+                                     List<String> toolIds,
+                                     List<String> toolNames,
+                                     List<StringBuilder> toolArguments) {
+        if (!delta.hasToolCalls()) {
+            return;
+        }
+        List<AssistantMessage.ToolCall> deltas = delta.getToolCalls();
+        for (int i = 0; i < deltas.size(); i++) {
+            AssistantMessage.ToolCall toolCall = deltas.get(i);
+            while (toolIds.size() <= i) {
+                toolIds.add(null);
+                toolNames.add(null);
+                toolArguments.add(new StringBuilder());
+            }
+            if (TextUtil.hasText(toolCall.id()) && toolIds.get(i) == null) {
+                toolIds.set(i, toolCall.id());
+            }
+            if (TextUtil.hasText(toolCall.name()) && toolNames.get(i) == null) {
+                toolNames.set(i, toolCall.name());
+            }
+            if (TextUtil.hasText(toolCall.arguments())) {
+                toolArguments.get(i).append(toolCall.arguments());
+            }
+        }
+    }
+
+    /** 把累积结果还原成 Spring AI 的 ToolCall 列表，供下一轮消息与参数解析使用。 */
+    private List<AssistantMessage.ToolCall> buildMergedToolCalls(List<String> toolIds,
+                                                                  List<String> toolNames,
+                                                                  List<StringBuilder> toolArguments) {
+        List<AssistantMessage.ToolCall> merged = new ArrayList<>();
+        for (int i = 0; i < toolNames.size(); i++) {
+            if (toolNames.get(i) == null) {
+                continue;
+            }
+            merged.add(new AssistantMessage.ToolCall(
+                    toolIds.get(i),
+                    "function",
+                    toolNames.get(i),
+                    toolArguments.get(i).toString()
+            ));
+        }
+        return merged;
+    }
+
     private OpenAiApi.FunctionTool buildToolDispatcher(Set<String> allowedToolNames) {
+        return buildToolDispatcher(allowedToolNames, true);
+    }
+
+    private OpenAiApi.FunctionTool buildToolDispatcher(Set<String> allowedToolNames, boolean strict) {
         Map<String, Object> toolName = new LinkedHashMap<>();
         toolName.put("type", "string");
         toolName.put("description", "必须选择系统提示词中列出的一个工具名");
@@ -544,7 +749,9 @@ public class LLMService {
                 "调用 LinkAgent 注册中心中的一个工具。每轮最多调用一次；证据足够时直接返回最终回答。",
                 EXECUTE_TOOL_FUNCTION,
                 schema,
-                true
+                // strict=true 时服务端会校验参数结构，只有结构化输出场景需要；
+                // Agent 对话走普通模式，才能在 /chat/completions 上流式返回。
+                strict
         );
         return new OpenAiApi.FunctionTool(function);
     }

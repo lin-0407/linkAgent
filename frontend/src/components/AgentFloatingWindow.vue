@@ -95,8 +95,8 @@ const knowledgeContextQuery = ref('')
 const windowRect = ref<WindowRect>({
   left: 0,
   top: 0,
-  width: 720,
-  height: 660,
+  width: 980,
+  height: 780,
 })
 
 let dragState: DragState | null = null
@@ -118,6 +118,7 @@ const {
   isStreaming,
   streamingContent,
   streamingSteps,
+  streamingThinking,
   isSessionsLoading,
   isSessionsOpen,
   latestStepCount,
@@ -399,8 +400,8 @@ function stopResize(event?: PointerEvent) {
 
 function placeWindowAtDefaultPosition() {
   const maxSize = getViewportBoundedSize()
-  const width = clampNumber(720, minWindowWidth, maxSize.width)
-  const height = clampNumber(660, minWindowHeight, maxSize.height)
+  const width = clampNumber(980, minWindowWidth, maxSize.width)
+  const height = clampNumber(780, minWindowHeight, maxSize.height)
   windowRect.value = constrainRect({
     left: window.innerWidth - width - 28,
     top: window.innerHeight - height - 28,
@@ -720,6 +721,15 @@ function clipText(value: string, maxLength: number) {
             <div class="message assistant">
               <div class="avatar">A</div>
               <div class="bubble">
+                <!--
+                  思考区：后端只在模型真的返回 reasoning_content 时才推 thinking 事件，
+                  没有思考内容时这块整个不出现（不是空占位）。
+                  默认展开，因为生成中用户最想知道"它在想什么"；生成结束后会收进消息里变成可折叠块。
+                -->
+                <details v-if="streamingThinking.trim()" class="agent-streaming-thinking" open>
+                  <summary>思考过程</summary>
+                  <div class="agent-streaming-thinking-body">{{ streamingThinking }}</div>
+                </details>
                 <div class="streaming-content">
                   {{ streamingContent }}
                   <span class="streaming-cursor" aria-hidden="true">▍</span>

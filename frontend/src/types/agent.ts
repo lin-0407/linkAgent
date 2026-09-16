@@ -109,6 +109,8 @@ export type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
   steps?: AgentStep[]
+  /** 模型思考过程原文；模型未开启思考模式或未返回思考内容时为空，界面不渲染思考区 */
+  thinking?: string
   stopReason?: string | null
   executionMode?: AgentExecutionMode
   planTrace?: AgentPlanTrace | null

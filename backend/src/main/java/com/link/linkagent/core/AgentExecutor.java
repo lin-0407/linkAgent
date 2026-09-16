@@ -35,6 +35,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -1213,25 +1214,26 @@ public class AgentExecutor {
             // 走结构化 schema 约束的 JSON ReAct，每步通过 chatStructured 产出 ReActStep
             if (isStructuredKernelEnabled()) {
                 String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
-                String structuredAnswer;
-                if (llmService.isStrictFunctionCallingEnabled()) {
-                    String toolCallingSystemPrompt = buildToolCallingSystemPrompt(toolRegistry.getAllTools());
-                    structuredAnswer = runStrictToolCallingLoopStreaming(
-                            toolCallingSystemPrompt,
-                            structuredSystemPrompt,
-                            conversation,
-                            emitter,
-                            persistenceContext
-                    );
-                } else {
-                    structuredAnswer = runStructuredLoopStreaming(
-                            structuredSystemPrompt, conversation, emitter, persistenceContext
-                    );
-                }
+                String toolCallingSystemPrompt = buildToolCallingSystemPrompt(toolRegistry.getAllTools());
+                // 对话链路优先走真流式工具循环：正文由模型边生成边推给前端。
+                // 注意这里刻意不使用严格 Function Calling —— strict 只服务结构化输出
+                // （LLMService.chatStructuredWithUsage 那条链），对话要的是流式增量。
+                StreamingLoopResult streamed = runStreamingToolLoop(
+                        toolCallingSystemPrompt,
+                        structuredSystemPrompt,
+                        conversation,
+                        emitter,
+                        persistenceContext
+                );
+                String structuredAnswer = streamed.answer();
                 if (structuredAnswer != null) {
                     persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer, persistenceContext.totalTokens);
                     completeAgentTrace(persistenceContext, 1, structuredAnswer, persistenceContext.totalSteps, null);
-                    streamTokens(emitter, structuredAnswer);
+                    // 真流式链路已经把正文逐片推完了，不能再发一遍；
+                    // 回退到结构化 ReAct 时才有完整答案需要切片补发。
+                    if (!streamed.contentStreamed()) {
+                        streamTokens(emitter, structuredAnswer);
+                    }
                 } else {
                     // 迭代次数超限：不持久化，直接发送错误
                     completeAgentTrace(persistenceContext, 2, null, persistenceContext.totalSteps, "迭代次数超过上限");
@@ -1339,7 +1341,134 @@ public class AgentExecutor {
         }
     }
 
-    /** 流式入口复用同一原生消息协议；每次工具完成后仍按现有 SSE step 事件向前端推送。 */
+    /**
+     * 对话链路的真流式工具循环。
+     *
+     * <p>与 {@link #runStrictToolCallingLoopStreaming} 的区别只有一个：模型调用换成流式，
+     * 正文与思考内容在生成过程中就通过 SSE 推给前端，而不是等整段答案生成完再切片补发。
+     * 工具调用仍按原生 tool_calls 走，工具执行、步骤落库、消息累积的逻辑保持一致。
+     *
+     * <p><b>为什么对话不走严格 Function Calling：</b>strict 是给结构化输出用的
+     * （{@link com.link.linkagent.llm.LLMService#chatStructuredWithUsage} 那条链），
+     * 它要求拿到完整响应再校验；对话要的是增量。两者用同一套调用会互相牵制，
+     * 所以这里走普通 Function Calling 的流式接口，结构化输出的 strict 保证不受影响。
+     *
+     * <p>失败时回退到结构化 ReAct，保证「流式不可用」不会变成「对话不可用」。
+     */
+    private StreamingLoopResult runStreamingToolLoop(String systemPrompt,
+                                                     String fallbackSystemPrompt,
+                                                     StringBuilder conversation,
+                                                     SseEmitter emitter,
+                                                     AgentPersistenceContext persistenceContext) throws IOException {
+        List<Message> messages = new ArrayList<>();
+        messages.add(new UserMessage(conversation.toString()));
+        int iteration = 0;
+        while (true) {
+            iteration++;
+            if (iteration > MAX_ITERATIONS) {
+                return new StreamingLoopResult(null, false);
+            }
+            log.info("流式-对话工具循环第{}轮迭代...", iteration);
+
+            ToolCallingCallResult callResult;
+            try {
+                callResult = llmService.streamWithToolsWithUsage(
+                        systemPrompt,
+                        messages,
+                        toolRegistry.getAllTools(),
+                        delta -> sendTokenDelta(emitter, delta),
+                        delta -> sendThinkingDelta(emitter, delta),
+                        // 第二轮起必须关闭思考：Spring AI 1.1.4 不会把 reasoning_content 写回下一轮请求，
+                        // 多轮工具调用继续开启思考会违反 DeepSeek 协议（与严格链路同一处理）。
+                        // 首轮保留配置的思考设置，这样模型返回思考内容时前端才有东西可展示。
+                        iteration > 1
+                );
+            } catch (UncheckedIOException sendFailure) {
+                // SSE 发送失败说明客户端已断开，按断开处理，不要回退重跑一遍
+                throw sendFailure.getCause();
+            } catch (RuntimeException callFailure) {
+                log.warn("流式工具循环调用失败，从第{}轮切回结构化 ReAct：{}", iteration, callFailure.getMessage());
+                String fallback = runStructuredLoopStreaming(
+                        fallbackSystemPrompt, conversation, emitter, persistenceContext, iteration - 1);
+                return new StreamingLoopResult(fallback, false);
+            }
+
+            int stepTokenCount = calculateTokenCount(
+                    callResult.promptTokens(), callResult.completionTokens(), callResult.totalTokens());
+            persistenceContext.totalTokens += stepTokenCount;
+
+            if (callResult.toolCalls().isEmpty()) {
+                String finalAnswer = TextUtil.trimToNull(callResult.content());
+                persistAgentStep(persistenceContext, iteration, "final", finalAnswer,
+                        null, null, null, stepTokenCount);
+                // 正文已经在流式回调里逐片推完了
+                return new StreamingLoopResult(finalAnswer, true);
+            }
+
+            StrictToolCall strictCall = callResult.toolCalls().get(0);
+            ToolCall action = new ToolCall(strictCall.toolName(), strictCall.input());
+            Observation observation = toolExecutor.execute(action);
+            AgentStep step = new AgentStep(
+                    iteration, null, action.name(), action.arguments(), observation.result()
+            );
+            sendSseEvent(emitter, "step", step);
+            persistAgentStep(persistenceContext, iteration, "action", null,
+                    action.name(), action.arguments(), observation.result(), stepTokenCount);
+
+            messages.add(callResult.assistantMessage());
+            messages.add(ToolResponseMessage.builder()
+                    .responses(List.of(new ToolResponseMessage.ToolResponse(
+                            strictCall.id(), strictCall.functionName(), observation.result()
+                    )))
+                    .build());
+            conversation.append("AI:\n")
+                    .append("Action:").append(action.name()).append("\n")
+                    .append("Action Input:").append(action.arguments()).append("\n")
+                    .append("Observation:").append(observation.toolName()).append(":")
+                    .append(observation.result()).append("\n\n");
+        }
+    }
+
+    /**
+     * 推送正文增量。
+     * IOException 是受检异常，进不了响应式回调，这里包成非受检异常穿出去，
+     * 在循环里解包还原，保证「客户端断开」仍然走原有的断开处理分支。
+     */
+    private void sendTokenDelta(SseEmitter emitter, String delta) {
+        try {
+            sendSseEvent(emitter, "token", delta);
+        } catch (IOException exception) {
+            throw new UncheckedIOException(exception);
+        }
+    }
+
+    /** 推送思考增量；模型不返回思考内容时这个方法一次都不会被调用。 */
+    private void sendThinkingDelta(SseEmitter emitter, String delta) {
+        try {
+            sendSseEvent(emitter, "thinking", delta);
+        } catch (IOException exception) {
+            throw new UncheckedIOException(exception);
+        }
+    }
+
+    /**
+     * 流式工具循环的结果。
+     *
+     * @param answer          最终答案；null 表示超出迭代上限
+     * @param contentStreamed 正文是否已在生成过程中推给前端。为 true 时外层不能再补发一遍，
+     *                        为 false 说明走的是回退链路，需要按老办法切片补发。
+     */
+    private record StreamingLoopResult(String answer, boolean contentStreamed) {
+    }
+
+    /**
+     * 流式入口复用同一原生消息协议；每次工具完成后仍按现有 SSE step 事件向前端推送。
+     *
+     * <p><b>注意：对话链路已不再走这里。</b>对话要的是真流式，而严格 Function Calling
+     * 必须拿到完整响应才能校验，两者不兼容，所以 {@code runStreaming} 改走
+     * {@link #runStreamingToolLoop}。本方法暂时保留，是因为它仍是「strict + 流式循环」
+     * 的完整实现，需要回到 strict 路径时可以整体切回；确认长期不用后可删除。
+     */
     private String runStrictToolCallingLoopStreaming(String systemPrompt,
                                                      String fallbackSystemPrompt,
                                                      StringBuilder conversation,

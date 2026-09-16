@@ -57,6 +57,8 @@ export type AgentStreamEvent =
   | { type: 'session'; sessionId: string }
   | { type: 'step'; step: AgentStep }
   | { type: 'token'; text: string }
+  /** 思考增量：纯文本负载，与 token 同样不能走 JSON 解析 */
+  | { type: 'thinking'; text: string }
   | { type: 'error'; message: string }
   | { type: 'done'; sessionId: string }
 
@@ -65,6 +67,8 @@ export interface AgentStreamHandlers {
   onSession?: (sessionId: string) => void
   onStep?: (step: AgentStep) => void
   onToken?: (text: string) => void
+  /** 思考增量：只有模型开启思考模式并真的返回思考内容时才会触发 */
+  onThinking?: (text: string) => void
   onError?: (message: string) => void
   onDone?: (sessionId: string) => void
   /**
@@ -197,6 +201,10 @@ export function sendAgentMessageStream(
               case 'token':
                 handlers.onToken?.(event.text)
                 break
+              // 思考增量：模型开启思考模式时才有，未开启时这个分支一次都不会走到
+              case 'thinking':
+                handlers.onThinking?.(event.text)
+                break
               case 'error':
                 handlers.onError?.(event.message)
                 break
@@ -287,9 +295,13 @@ function parseSseEvent(
 
   const dataStr = dataLines.join('\n')
 
-  // token 事件由后端按纯文本片段发送，不能先 JSON.parse，否则中文和普通文本会被静默丢弃。
+  // token 与 thinking 事件由后端按纯文本片段发送，不能先 JSON.parse，
+  // 否则中文和普通文本会被静默丢弃（曾经就是这么丢事件的）。
   if (eventType === 'token') {
     return { type: 'token', text: dataStr }
+  }
+  if (eventType === 'thinking') {
+    return { type: 'thinking', text: dataStr }
   }
 
   try {

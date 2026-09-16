@@ -1149,8 +1149,8 @@ textarea:focus {
 }
 
 .agent-floating-message-list {
-  gap: 10px;
-  padding: 8px 12px 12px;
+  gap: 12px;
+  padding: 10px 14px 14px;
   background: var(--canvas);
 }
 
@@ -1173,44 +1173,76 @@ textarea:focus {
 }
 
 .agent-floating-message-list .bubble {
-  padding: 10px 12px;
+  padding: 12px 14px;
   border-radius: 8px;
   box-shadow: var(--sh-sm);
 }
 
 .agent-floating-message-list .markdown-body {
-  font-size: 13.5px;
-  line-height: 1.64;
+  /* 窗口放大后正文同步放一号，长回答读起来不费劲 */
+  font-size: 14.5px;
+  line-height: 1.72;
 }
 
 .agent-floating-message-list .markdown-body h1 {
-  font-size: 17px;
+  font-size: 18.5px;
 }
 
 .agent-floating-message-list .markdown-body h2 {
-  font-size: 15.5px;
+  font-size: 16.5px;
 }
 
 .agent-floating-message-list .markdown-body h3 {
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .agent-floating-message-list .markdown-body p {
-  margin-bottom: 9px;
+  margin-bottom: 11px;
 }
 
 .agent-floating-message-list .markdown-body ul,
 .agent-floating-message-list .markdown-body ol {
-  margin: 8px 0 10px;
-  padding-left: 20px;
+  margin: 9px 0 12px;
+  padding-left: 22px;
 }
 
 .agent-floating-message-list .markdown-body li {
-  margin: 4px 0;
+  margin: 5px 0;
 }
 
 .agent-floating-message-list .markdown-body strong {
   font-weight: 700;
+}
+
+/*
+  流式思考区：后端只在模型返回 reasoning_content 时才推 thinking 事件，
+  没返回时这个元素不会被渲染，所以这里不需要额外的隐藏逻辑。
+*/
+.agent-streaming-thinking {
+  margin-bottom: 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  background: rgba(100, 116, 139, 0.06);
+}
+
+.agent-streaming-thinking > summary {
+  padding: 5px 9px;
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-streaming-thinking-body {
+  padding: 0 9px 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+  /* 保留思考原文的换行，限高滚动避免思考长文把对话区顶没 */
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12em;
+  overflow-y: auto;
 }
 
 .agent-floating-empty {

@@ -30,6 +30,12 @@ export function useAgentChat() {
   const streamingContent = ref('')
   /** 流式接收过程中实时累积的步骤列表 */
   const streamingSteps = ref<AgentStep[]>([])
+  /**
+   * 流式期间累积的思考内容。
+   * 只有模型开启思考模式并真的返回 reasoning_content 时才会有值，
+   * 没有值时界面不渲染思考区——即「返回就展示，不返回就不展示」。
+   */
+  const streamingThinking = ref('')
   /** 中断流式连接的函数，调用后 SSE 连接关闭 */
   let abortStream: (() => void) | null = null
   const isSessionsLoading = ref(false)
@@ -109,6 +115,7 @@ export function useAgentChat() {
     // 重置流式状态
     streamingContent.value = ''
     streamingSteps.value = []
+    streamingThinking.value = ''
     isStreaming.value = true
     isLoading.value = true
 
@@ -135,6 +142,11 @@ export function useAgentChat() {
           onToken: (text) => {
             // 逐字符追加，实现打字机效果
             streamingContent.value += text
+            void scrollToBottom()
+          },
+          onThinking: (text) => {
+            // 思考增量：后端只在模型真的返回 reasoning_content 时才推，收到就累积展示
+            streamingThinking.value += text
             void scrollToBottom()
           },
           onWarning: (message) => {
@@ -167,17 +179,21 @@ export function useAgentChat() {
             // 将流式结果固化为一条完整的 assistant 消息
             const hasSteps = streamingSteps.value.length > 0
             const hasContent = streamingContent.value.trim().length > 0
-            if (hasContent || hasSteps) {
+            const hasThinking = streamingThinking.value.trim().length > 0
+            if (hasContent || hasSteps || hasThinking) {
               messages.value.push({
                 id: Date.now(),
                 role: 'assistant',
                 content: hasContent ? streamingContent.value : (hasSteps ? 'Agent 完成推理（详见步骤）' : 'Agent 没有返回内容'),
                 steps: hasSteps ? [...streamingSteps.value] : undefined,
+                // 思考内容随消息固化，用户展开历史消息时仍能看到当时的思考过程
+                thinking: hasThinking ? streamingThinking.value : undefined,
                 executionMode: executionMode.value,
               })
             }
 
             // 清理流式状态
+            streamingThinking.value = ''
             isStreaming.value = false
             isLoading.value = false
             void scrollToBottom()
@@ -195,17 +211,20 @@ export function useAgentChat() {
   function finalizeStreamedOutput(interruptedLabel: string) {
     const hasSteps = streamingSteps.value.length > 0
     const hasContent = streamingContent.value.trim().length > 0
-    if (hasContent || hasSteps) {
+    const hasThinking = streamingThinking.value.trim().length > 0
+    if (hasContent || hasSteps || hasThinking) {
       messages.value.push({
         id: Date.now(),
         role: 'assistant',
         content: hasContent ? `${streamingContent.value} ${interruptedLabel}` : interruptedLabel,
         steps: hasSteps ? [...streamingSteps.value] : undefined,
+        thinking: hasThinking ? streamingThinking.value : undefined,
         executionMode: executionMode.value,
       })
     }
     streamingContent.value = ''
     streamingSteps.value = []
+    streamingThinking.value = ''
   }
 
   /**
@@ -321,6 +340,7 @@ export function useAgentChat() {
     isStreaming,
     streamingContent,
     streamingSteps,
+    streamingThinking,
     isSessionsLoading,
     isSessionsOpen,
     latestStepCount,
