@@ -1059,9 +1059,37 @@ ON DUPLICATE KEY UPDATE
 INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
 VALUES
     -- 长期记忆抽取（阶段 5.3）
+    -- 字段名必须与 LongTermMemoryExtractor 的解析契约一致：shouldRemember / memoryKey / content。
+    -- 历史问题：9e7188d 把这条换成了 {memory, importance, topic, confidence} 版本，模型按新字段输出后
+    -- 解析器取不到 shouldRemember（parseBoolean 兜底为 false），导致长期记忆一条都写不进去。
+    -- 这里回退到与解析器一致的文本；5 个 memoryKey 取值与 LongTermMemory.normalizeMemoryKey 的映射一一对应。
     ('long_term_memory.system', 'SYSTEM', '记忆-长期记忆',
-     '你是 LinkAgent 的记忆提取助手。你的任务是从用户消息和 Agent 回答中提取值得长期保留的信息，包括但不限于：用户偏好、创作风格倾向、对特定内容的明确态度（喜欢/排斥）、习惯性表述方式、以及未来可能有用的上下文事实。必须输出 JSON 对象，字段：{memory（记忆文本，一段简洁陈述，不要重复对话原文）、importance（重要性评分 1-3：1=可选记，2=有意义，3=关键认知，缺失则为2）、topic（记忆主题，如"标题风格""标签偏好""内容类型""发布习惯"）、confidence（置信度 0-1：1=明确表达，0.5=推测，缺失则为1）}。不要编造用户没有表达的内容。',
-     '长期记忆抽取系统提示词：从对话中提取用户偏好和关键事实'),
+     '你是长期记忆抽取器，只判断本轮对话是否包含值得长期保存的用户事实或偏好。
+
+只保存这些内容：
+- 用户长期偏好，例如喜欢 Java、希望回答简洁、偏好中文解释
+- 用户稳定身份，例如 Java 后端学习者、正在做作品集项目
+- 项目长期信息，例如项目技术栈、长期目标、固定约束
+- 用户明确要求后续持续遵守的规则
+
+不保存这些内容：
+- 临时问题、一次性报错、天气时间、工具结果
+- 普通闲聊、情绪表达、短期任务进展
+- 已经明显只对当前会话有用的信息
+
+你必须只输出 JSON，不要输出 Markdown，不要解释。
+memoryKey 只能从下面 5 个值里选择：
+- user.preference.example_language：用户偏好的示例语言、编程语言
+- user.preference.explanation_style：用户偏好的解释方式、回答风格
+- user.profile.summary：用户身份、学习方向、职业目标
+- project.profile.summary：项目定位、技术栈、长期目标
+- project.constraint.summary：项目固定约束、后续必须遵守的规则
+
+格式：
+{"shouldRemember":true,"memoryKey":"user.preference.example_language","content":"用户偏好..."}
+或：
+{"shouldRemember":false,"memoryKey":"","content":""}
+', '长期记忆抽取器的系统提示词：判断本轮对话是否含值得长期保存的事实或偏好'),
     ('long_term_memory.user', 'USER', '记忆-长期记忆',
      '用户消息：{userMessage}\n\nAgent 最终回答：{finalAnswer}\n\n请从以上对话中提取值得长期保留的记忆信息。',
      '长期记忆抽取用户提示词：userMessage 为用户输入，finalAnswer 为 Agent 回答'),
@@ -1149,6 +1177,12 @@ ON DUPLICATE KEY UPDATE
         OR (
             prompt_key = 'pre_publish.user'
             AND SHA2(content, 256) = 'e82fc6d96cdb7c6b69cc686ac4775fa288bd025f8dcbbea27d2acdb64e9c1627'
+        )
+        OR (
+            -- 长期记忆抽取提示词：正文里没有 shouldRemember 就说明与解析器契约不符，必须覆盖。
+            -- 这样写的好处是自带幂等：修好之后正文一定含 shouldRemember，后续再执行脚本不会反复覆盖。
+            prompt_key = 'long_term_memory.system'
+            AND content NOT LIKE '%shouldRemember%'
         ),
         VALUES(content),
         content

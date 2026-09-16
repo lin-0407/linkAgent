@@ -1,6 +1,16 @@
+# 统一给所有容器限制日志体积。
+# 默认的 json-file 驱动不轮转，容器日志会一直涨：线上曾出现单个后端日志涨到 11G，
+# 把 59G 的系统盘写满，导致 MySQL 无法写入。这里改成单文件 50M、最多留 3 个。
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   mysql:
     image: mysql:8.4
+    logging: *default-logging
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
@@ -26,6 +36,7 @@ services:
 
   redis:
     image: redis:7.4-alpine
+    logging: *default-logging
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -38,6 +49,7 @@ services:
 
   etcd:
     image: quay.io/coreos/etcd:v3.5.18
+    logging: *default-logging
     environment:
       ETCD_AUTO_COMPACTION_MODE: revision
       ETCD_AUTO_COMPACTION_RETENTION: "1000"
@@ -56,6 +68,7 @@ services:
   # 每次启动自动执行 init.sql，确保新增表/种子提示词在已有数据库中也生效
   db-init:
     image: mysql:8.4
+    logging: *default-logging
     depends_on:
       mysql:
         condition: service_healthy
@@ -68,6 +81,7 @@ services:
 
   milvus:
     image: milvusdb/milvus:v2.4.17
+    logging: *default-logging
     command: ["milvus", "run", "standalone"]
     environment:
       ETCD_ENDPOINTS: etcd:2379
@@ -94,6 +108,7 @@ services:
       # 后端运行时需执行根目录 scripts 下的受控采集脚本，构建上下文必须覆盖该目录。
       context: .
       dockerfile: backend/Dockerfile
+    logging: *default-logging
     environment:
       DB_URL: "jdbc:mysql://mysql:3306/link_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai"
       DB_USERNAME: ${MYSQL_USER:-link_agent}
@@ -187,6 +202,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    logging: *default-logging
     ports:
       - "${FRONTEND_PORT:-8088}:80"
     depends_on:

@@ -257,6 +257,9 @@ linkAgent/
 ├── backend/                 # Spring Boot 后端与数据库脚本
 ├── frontend/                # Vue 创作台、知识库和设置页面
 ├── scripts/                 # 本地受控采集脚本
+├── skills/                  # Agent 协作技能与项目协作约定
+├── demo/                    # 前端动效与独立页面原型
+├── docs/                    # 文档索引与阶段文档（仅本地保留，未纳入 Git）
 ├── docker-compose.yml       # 本地容器编排
 ├── .env.example             # 配置示例
 └── README.md
