@@ -130,6 +130,7 @@ const {
   sessions,
   sessionsError,
   startNewSession,
+  warningMessage,
 } = useAgentChat()
 
 const floatingWindowStyle = computed(() => ({
@@ -768,6 +769,13 @@ function clipText(value: string, maxLength: number) {
             <small>{{ option.description }}</small>
           </button>
         </div>
+
+        <!-- 非致命告警：连接长时间没有事件、事件格式不识别等。只提示，不打断生成 -->
+        <NotificationToast
+          type="warning"
+          :message="warningMessage"
+          @close="warningMessage = ''"
+        />
 
         <NotificationToast
           type="error"

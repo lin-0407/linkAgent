@@ -36,6 +36,8 @@ export function useAgentChat() {
   const isSessionsOpen = ref(false)
   const executionMode = ref<AgentExecutionMode>('AUTO')
   const errorMessage = ref('')
+  /** 非致命告警（例如 SSE 连接长时间没有事件），只提示不中断生成 */
+  const warningMessage = ref('')
   const sessionsError = ref('')
   const messageListRef = ref<ScrollContainer | null>(null)
 
@@ -73,6 +75,7 @@ export function useAgentChat() {
     }
 
     errorMessage.value = ''
+    warningMessage.value = ''
     inputMessage.value = ''
     messages.value.push({
       id: Date.now(),
@@ -134,10 +137,17 @@ export function useAgentChat() {
             streamingContent.value += text
             void scrollToBottom()
           },
+          onWarning: (message) => {
+            // 非致命异常不打断生成，但要弹出来让作者知道，否则又是"界面没反应又查不到原因"
+            warningMessage.value = message
+          },
           onError: (message) => {
-            // 流式错误：设置错误消息并清理状态
+            // 流式错误：保留已经流出来的内容再收尾，避免用户以为什么都没发生
             errorMessage.value = message
+            // 错误提示会顶掉告警弹窗，避免两个 toast 叠在同一位置
+            warningMessage.value = ''
             abortStream = null
+            finalizeStreamedOutput('[响应中断]')
             isStreaming.value = false
             isLoading.value = false
             resolve()
@@ -179,6 +189,26 @@ export function useAgentChat() {
   }
 
   /**
+   * 把流式过程中累积的内容固化成一条 assistant 消息。
+   * 为什么会话中断和流式异常都要走这里：已经生成出来的部分不能因为连接断了就凭空消失。
+   */
+  function finalizeStreamedOutput(interruptedLabel: string) {
+    const hasSteps = streamingSteps.value.length > 0
+    const hasContent = streamingContent.value.trim().length > 0
+    if (hasContent || hasSteps) {
+      messages.value.push({
+        id: Date.now(),
+        role: 'assistant',
+        content: hasContent ? `${streamingContent.value} ${interruptedLabel}` : interruptedLabel,
+        steps: hasSteps ? [...streamingSteps.value] : undefined,
+        executionMode: executionMode.value,
+      })
+    }
+    streamingContent.value = ''
+    streamingSteps.value = []
+  }
+
+  /**
    * 中断当前正在进行的流式连接。
    * 用户点击停止按钮或切换会话时调用。
    */
@@ -191,19 +221,7 @@ export function useAgentChat() {
     isLoading.value = false
 
     // 如果已有部分流式内容，固化为一条不完整的 assistant 消息
-    const hasSteps = streamingSteps.value.length > 0
-    const hasContent = streamingContent.value.trim().length > 0
-    if (hasContent || hasSteps) {
-      messages.value.push({
-        id: Date.now(),
-        role: 'assistant',
-        content: hasContent ? streamingContent.value + ' [已中断]' : '[已中断]',
-        steps: hasSteps ? [...streamingSteps.value] : undefined,
-        executionMode: executionMode.value,
-      })
-    }
-    streamingContent.value = ''
-    streamingSteps.value = []
+    finalizeStreamedOutput('[已中断]')
   }
 
   function startNewSession() {
@@ -211,6 +229,7 @@ export function useAgentChat() {
     sessionId.value = ''
     messages.value = []
     errorMessage.value = ''
+    warningMessage.value = ''
     inputMessage.value = ''
     clearPersistedSession()
   }
@@ -233,6 +252,7 @@ export function useAgentChat() {
     sessionId.value = session.sessionId
     persistSessionId(session.sessionId)
     errorMessage.value = ''
+    warningMessage.value = ''
     isSessionsOpen.value = false
     await loadSessionMessages(session.sessionId)
     await loadSessions()
@@ -315,5 +335,6 @@ export function useAgentChat() {
     sessionsError,
     startNewSession,
     userMessageCount,
+    warningMessage,
   }
 }
