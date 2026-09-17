@@ -5,9 +5,12 @@ import com.link.linkagent.dto.AgentChatResponse;
 import com.link.linkagent.dto.SessionListItem;
 import com.link.linkagent.dto.SessionMessageItem;
 import com.link.linkagent.core.AgentExecutor;
+import com.link.linkagent.memory.ConversationSessionMapper;
 import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -43,13 +47,19 @@ import java.util.concurrent.CompletableFuture;
 @RequestMapping("/api/agent")
 public class AgentController {
 
+    private static final Logger log = LoggerFactory.getLogger(AgentController.class);
+
     private final AgentExecutor agentExecutor;
     /** 短期记忆服务，用于会话列表和消息历史查询。 */
     private final ShortTermMemory shortTermMemory;
+    /** 会话消息表：摘要检查点持久化在这里，历史接口要把最近一条摘要补在短期记忆之前。 */
+    private final ConversationSessionMapper conversationSessionMapper;
 
-    public AgentController(AgentExecutor agentExecutor, ShortTermMemory shortTermMemory) {
+    public AgentController(AgentExecutor agentExecutor, ShortTermMemory shortTermMemory,
+                           ConversationSessionMapper conversationSessionMapper) {
         this.agentExecutor = agentExecutor;
         this.shortTermMemory = shortTermMemory;
+        this.conversationSessionMapper = conversationSessionMapper;
     }
 
     /**
@@ -168,27 +178,41 @@ public class AgentController {
      * <p>
      * <b>响应格式：</b>JSON 数组，每个元素包含：
      * <ul>
-     *   <li>{@code role} — 消息角色（user / assistant / tool）</li>
-     *   <li>{@code content} — 消息内容</li>
+     *   <li>{@code role} — 消息角色（user / assistant / summary）</li>
+     *   <li>{@code content} — 消息内容；role=summary 时是摘要正文</li>
+     *   <li>{@code tokenCount} — 摘要检查点压缩释放的 token 数，普通消息为 null</li>
      * </ul>
      * <p>
      * <b>用途：</b>前端点击会话后展开消息历史，或用于调试 ReAct 步骤历史。
+     * 被压缩的原文不在返回结果里：只返回最近一条摘要检查点（若有）和它之后保留的消息，与模型实际看到的内容一致。
      *
      * @param sessionId 会话唯一标识（路径参数）
      * @return 会话消息历史列表
      */
     @GetMapping("/sessions/{sessionId}")
     public List<SessionMessageItem> sessionMessages(@org.springframework.web.bind.annotation.PathVariable String sessionId) {
-        return shortTermMemory.getMessages(sessionId).stream()
+        List<SessionMessageItem> items = new ArrayList<>();
+        // 与 DSH 的压缩语义一致：被压缩的原文留在消息表里，对话视图只展示「摘要检查点 + 摘要之后保留的消息」。
+        // 读摘要失败不能连累整段历史：短期记忆才是主展示内容，数据库抖动时降级为只显示它。
+        try {
+            conversationSessionMapper.findLatestSummary(sessionId)
+                    .ifPresent(summary -> items.add(new SessionMessageItem(
+                            summary.getRole(), summary.getContent(), summary.getTokenCount())));
+        } catch (Exception exception) {
+            log.warn("读取摘要检查点失败，本次历史不展示摘要块，sessionId={}, error={}",
+                    sessionId, exception.getMessage());
+        }
+        shortTermMemory.getMessages(sessionId).stream()
                 .map(this::toMessageItem)
-                .toList();
+                .forEach(items::add);
+        return items;
     }
 
     /**
      * 将内存层的 {@link MemoryMessage} 转换为 API 响应层的 {@link SessionMessageItem}。
-     * 只暴露 role 和 content，隐藏内部元数据（如 messageType、timestamp 等）。
+     * 普通消息没有释放 token 的概念，tokenCount 传 null；只有摘要检查点才带这个数字。
      */
     private SessionMessageItem toMessageItem(MemoryMessage message) {
-        return new SessionMessageItem(message.role(), message.content());
+        return new SessionMessageItem(message.role(), message.content(), null);
     }
 }

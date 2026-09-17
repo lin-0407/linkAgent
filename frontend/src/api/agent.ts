@@ -61,6 +61,11 @@ export type AgentStreamEvent =
   | { type: 'thinking'; text: string }
   | { type: 'error'; message: string }
   | { type: 'done'; sessionId: string }
+  /**
+   * 上下文压缩：后端把较早历史合并成摘要后发出。
+   * 前端据此在消息流里留下一条可见记录，用户不会只看到一个没有解释的停顿（与 DSH 在对话里保留压缩记录一致）。
+   */
+  | { type: 'context_compressed'; compressedMessageCount: number; tokensBefore: number; tokensAfter: number; summary: string }
 
 /** SSE 流式事件处理器，由调用方提供业务逻辑 */
 export interface AgentStreamHandlers {
@@ -71,6 +76,13 @@ export interface AgentStreamHandlers {
   onThinking?: (text: string) => void
   onError?: (message: string) => void
   onDone?: (sessionId: string) => void
+  /** 上下文压缩：把较早历史合并为摘要时触发，summary 是摘要正文，可直接展示 */
+  onContextCompressed?: (info: {
+    compressedMessageCount: number
+    tokensBefore: number
+    tokensAfter: number
+    summary: string
+  }) => void
   /**
    * 非致命告警：连接长时间没有事件等异常情况。
    * 流不会因此中断，调用方提示作者去控制台看 [agent-sse] 日志即可。
@@ -211,6 +223,9 @@ export function sendAgentMessageStream(
               case 'done':
                 handlers.onDone?.(event.sessionId)
                 break
+              case 'context_compressed':
+                handlers.onContextCompressed?.(event)
+                break
             }
           }
         }
@@ -321,6 +336,15 @@ function parseSseEvent(
           return null
         }
         return { type: 'step', step: data as AgentStep }
+      case 'context_compressed':
+        // 数字字段统一 Number() 兜底：后端漏字段时展示 0，而不是把 undefined 渲染进界面
+        return {
+          type: 'context_compressed',
+          compressedMessageCount: Number(data?.compressedMessageCount ?? 0),
+          tokensBefore: Number(data?.tokensBefore ?? 0),
+          tokensAfter: Number(data?.tokensAfter ?? 0),
+          summary: typeof data?.summary === 'string' ? data.summary : '',
+        }
       case 'error':
         return { type: 'error', message: typeof data === 'string' ? data : (data?.message ?? '未知错误') }
       case 'done':

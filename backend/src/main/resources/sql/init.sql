@@ -38,10 +38,10 @@ CREATE TABLE IF NOT EXISTS t_conversation_message
 (
     id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     session_id  VARCHAR(64) NOT NULL COMMENT '关联 t_conversation_session.session_id',
-    role        VARCHAR(16) NOT NULL COMMENT '角色：user / assistant / system / tool',
-    content     LONGTEXT    NOT NULL COMMENT '消息内容',
+    role        VARCHAR(16) NOT NULL COMMENT '角色：user / assistant / system / tool / summary（摘要检查点，代表这里压缩过历史）',
+    content     LONGTEXT    NOT NULL COMMENT '消息内容；role=summary 时是摘要正文',
     tool_name   VARCHAR(64)          DEFAULT NULL COMMENT '工具名称（role=tool 时有值）',
-    token_count INT         NOT NULL DEFAULT 0 COMMENT '本条消息消耗的 token 数',
+    token_count INT         NOT NULL DEFAULT 0 COMMENT '本条消息消耗的 token 数；role=summary 时记录本次压缩释放的 token 数',
     create_time DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     is_deleted  TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除',
     KEY idx_session_id (session_id)

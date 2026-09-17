@@ -1,5 +1,6 @@
 package com.link.linkagent.memory;
 
+import com.link.linkagent.memory.model.ConversationMessageRecord;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
@@ -9,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -58,8 +60,18 @@ public class SummaryMemory {
     private final RuntimeSettingService runtimeSettingService;
 
     /**
+     * 会话消息表：摘要检查点（role=summary）落在这里，重启后仍能读到。
+     * 单测构造器不注入时为 null，此时退化为纯内存摘要。
+     */
+    private final ConversationSessionMapper conversationSessionMapper;
+
+    /** 摘要检查点在会话消息表里的角色值，与 mapper 的查询条件保持一致。 */
+    public static final String SUMMARY_MESSAGE_ROLE = "summary";
+
+    /**
      * 会话级摘要缓存，按 sessionId 隔离。
      * 同一 session 的多次请求可能并发到达，ConcurrentHashMap 保证线程安全。
+     * 接了数据库时它只是查询失败时的兜底，不再是唯一真相。
      */
     private final Map<String, String> sessionSummaries = new ConcurrentHashMap<>();
 
@@ -71,11 +83,13 @@ public class SummaryMemory {
     public SummaryMemory(SummaryMemoryProperties properties,
                          ChatModel memorySummaryModel,
                          PromptService promptService,
-                         RuntimeSettingService runtimeSettingService) {
+                         RuntimeSettingService runtimeSettingService,
+                         ConversationSessionMapper conversationSessionMapper) {
         this.properties = properties;
         this.memorySummaryModel = memorySummaryModel;
         this.promptService = promptService;
         this.runtimeSettingService = runtimeSettingService;
+        this.conversationSessionMapper = conversationSessionMapper;
     }
 
     /**
@@ -87,6 +101,8 @@ public class SummaryMemory {
         this.memorySummaryModel = memorySummaryModel;
         this.promptService = promptService;
         this.runtimeSettingService = null;
+        // 单测构造器不接数据库：摘要在内存里生效，持久化路径由生产构造器覆盖。
+        this.conversationSessionMapper = null;
     }
 
     /**
@@ -99,7 +115,20 @@ public class SummaryMemory {
         if (!isSummaryMemoryEnabled()) {
             return "";
         }
-        return sessionSummaries.getOrDefault(sessionId, "");
+        if (conversationSessionMapper == null) {
+            return sessionSummaries.getOrDefault(sessionId, "");
+        }
+        // 摘要检查点是会话历史的一部分，重启后仍然存在；内存 Map 只作为查库失败时的兜底，
+        // 避免一次数据库抖动就让模型彻底丢掉历史。
+        try {
+            return conversationSessionMapper.findLatestSummary(sessionId)
+                    .map(ConversationMessageRecord::getContent)
+                    .map(content -> TextUtil.trimToDefault(content, ""))
+                    .orElse("");
+        } catch (Exception exception) {
+            log.warn("读取摘要检查点失败，回退内存缓存，sessionId={}, error={}", sessionId, exception.getMessage());
+            return sessionSummaries.getOrDefault(sessionId, "");
+        }
     }
 
     /**
@@ -155,7 +184,8 @@ public class SummaryMemory {
      */
     private String buildPrompt(String sessionId, List<MemoryMessage> messages) {
         StringBuilder prompt = new StringBuilder(promptService.get("summary_memory.system")).append("\n\n");
-        String existingSummary = sessionSummaries.getOrDefault(sessionId, "");
+        // 走 getSummary 而不是直接读内存 Map：摘要可能来自数据库（重启后），漏掉它会让第二次压缩丢掉第一次的摘要。
+        String existingSummary = getSummary(sessionId);
         if (TextUtil.hasText(existingSummary)) {
             prompt.append("已有摘要（必须合并进新摘要，不能丢弃其中的信息）：\n")
                     .append(existingSummary)
@@ -178,6 +208,44 @@ public class SummaryMemory {
             return;
         }
         sessionSummaries.put(sessionId, summary.trim());
+    }
+
+    /**
+     * 把一次压缩记成会话历史里的摘要检查点。
+     * <p>
+     * DSH 式语义：摘要是会话里的一条消息，不是后端内存里的黑盒；被压缩的原文仍完整保留在消息表中，
+     * 只是不再进入模型上下文。{@code token_count} 记录本次压缩释放的 token 数，供前端说明「释放了多少」。
+     *
+     * @param sessionId              会话标识
+     * @param summary                摘要正文
+     * @param compressedMessageCount 本次被压缩掉的消息条数
+     * @param tokensBefore           压缩前的上下文 token 数
+     * @param tokensAfter            压缩后的上下文 token 数
+     */
+    public void recordCompactionCheckpoint(String sessionId, String summary, int compressedMessageCount,
+                                           int tokensBefore, int tokensAfter) {
+        if (TextUtil.isBlank(summary)) {
+            return;
+        }
+        String normalized = summary.trim();
+        sessionSummaries.put(sessionId, normalized);
+        if (conversationSessionMapper == null) {
+            return;
+        }
+        try {
+            ConversationMessageRecord record = new ConversationMessageRecord();
+            record.setSessionId(sessionId);
+            record.setRole(SUMMARY_MESSAGE_ROLE);
+            record.setContent(normalized);
+            record.setTokenCount(Math.max(0, tokensBefore - tokensAfter));
+            record.setCreateTime(LocalDateTime.now());
+            conversationSessionMapper.insertMessage(record);
+            log.info("摘要检查点已写入会话历史，sessionId={}, 压缩 {} 条消息, 释放 {} token",
+                    sessionId, compressedMessageCount, record.getTokenCount());
+        } catch (Exception exception) {
+            // 写库失败不影响本轮对话：摘要已经在内存里可用，下一轮仍能带上上下文。
+            log.warn("摘要检查点写入失败，本次仅在内存生效，sessionId={}, error={}", sessionId, exception.getMessage());
+        }
     }
 
     /**

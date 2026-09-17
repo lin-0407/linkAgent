@@ -255,7 +255,7 @@ public class AgentExecutor {
         try {
             // 拼接记忆 + 用户输入作为对话起点；token 超过阈值时在这里先压缩（设计文档 A2 / A5）
             StringBuilder conversation = new StringBuilder(
-                    buildConversationContext(resolvedSessionId, resolvedUserId, userMessage));
+                    buildConversationContext(resolvedSessionId, resolvedUserId, userMessage).text());
 
             AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
             AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
@@ -721,17 +721,17 @@ public class AgentExecutor {
      * @param userMessage 本轮用户输入
      * @return 组装（必要时已压缩）后的上下文文本
      */
-    private String buildConversationContext(String sessionId, String userId, String userMessage) {
+    private ContextAssembly buildConversationContext(String sessionId, String userId, String userMessage) {
         List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(sessionId);
         String context = assembleContext(sessionId, userId, recentMessages, userMessage);
         if (tokenCounter == null) {
             // 单测构造器不注入计量器：跳过压缩判断，行为与改造前一致。
-            return context;
+            return new ContextAssembly(context, null);
         }
         int tokens = tokenCounter.count(context);
         int threshold = summaryMemory.getTokenThreshold();
         if (tokens < threshold) {
-            return context;
+            return new ContextAssembly(context, null);
         }
         int retainedCount = summaryMemory.getRetainedMessageCount();
         int compressibleCount = recentMessages.size() - retainedCount;
@@ -739,18 +739,22 @@ public class AgentExecutor {
             // 没有可压缩的历史消息：超长只可能来自本轮输入本身，压缩无从下手，交给 768k 硬上限兜底。
             log.warn("上下文超过压缩阈值但没有可压缩的历史消息，sessionId={}, tokens={}, threshold={}",
                     sessionId, tokens, threshold);
-            return context;
+            return new ContextAssembly(context, null);
         }
         String summary = summaryMemory.summarize(sessionId, recentMessages.subList(0, compressibleCount));
         if (TextUtil.isBlank(summary)) {
             log.warn("摘要生成失败，本轮不压缩（保留原文），sessionId={}, tokens={}", sessionId, tokens);
-            return context;
+            return new ContextAssembly(context, null);
         }
         shortTermMemory.keepRecentMessages(sessionId, retainedCount);
         String compressed = assembleContext(sessionId, userId, shortTermMemory.getRecentMessages(sessionId), userMessage);
+        int compressedTokens = tokenCounter.count(compressed);
+        // 摘要同时写进会话历史（role=summary 的检查点）：刷新页面或重启后端后，仍然能看到"这里压缩过"和摘要正文。
+        summaryMemory.recordCompactionCheckpoint(sessionId, summary, compressibleCount, tokens, compressedTokens);
         log.info("上下文已按 token 压缩，sessionId={}, 压缩前={} token, 压缩后={} token",
-                sessionId, tokens, tokenCounter.count(compressed));
-        return compressed;
+                sessionId, tokens, compressedTokens);
+        return new ContextAssembly(compressed,
+                new CompactionNotice(summary, compressibleCount, tokens, compressedTokens));
     }
 
     /**
@@ -796,6 +800,29 @@ public class AgentExecutor {
             return result;
         }
         return toolResultCompressor.compressIfNeeded(toolName, result);
+    }
+
+    /** 一次上下文组装的结果：文本，以及本次是否发生了压缩（供流式链路通知前端）。 */
+    private record ContextAssembly(String text, CompactionNotice compaction) {
+    }
+
+    /**
+     * 一次压缩的事实：摘要正文、被压缩的消息条数、压缩前后的 token 数。
+     * 前端用它显示「已把 N 条历史压缩为摘要（X → Y token）」，用户不用对着几秒停顿猜发生了什么。
+     */
+    private record CompactionNotice(String summary, int compressedMessageCount, int tokensBefore, int tokensAfter) {
+    }
+
+    /** 把压缩结果作为 context_compressed 事件推给前端；没有发生压缩时什么都不发。 */
+    private void sendCompactionEvent(SseEmitter emitter, CompactionNotice notice) throws IOException {
+        if (notice == null) {
+            return;
+        }
+        sendSseEvent(emitter, "context_compressed", Map.of(
+                "compressedMessageCount", notice.compressedMessageCount(),
+                "tokensBefore", notice.tokensBefore(),
+                "tokensAfter", notice.tokensAfter(),
+                "summary", notice.summary()));
     }
 
     /**
@@ -1302,8 +1329,10 @@ public class AgentExecutor {
             sendSseEvent(emitter, "session", Map.of("sessionId", resolvedSessionId));
 
             // 拼接记忆 + 用户输入作为对话起点（与 run() 完全一致）；超过阈值时同样先压缩
-            StringBuilder conversation = new StringBuilder(
-                    buildConversationContext(resolvedSessionId, resolvedUserId, userMessage));
+            ContextAssembly assembly = buildConversationContext(resolvedSessionId, resolvedUserId, userMessage);
+            StringBuilder conversation = new StringBuilder(assembly.text());
+            // 压缩会带来几秒停顿，必须发事件说明；前端据此在消息流里显示"已压缩历史"提示（DSH 式可见）。
+            sendCompactionEvent(emitter, assembly.compaction());
 
             // 路由到正确的执行模式
             AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);

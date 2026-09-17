@@ -196,6 +196,19 @@ textarea:focus-visible {
   box-shadow: var(--sh-sm);
 }
 
+/* 摘要检查点：代表「这里压缩过历史」，用虚线和低饱和底色与普通消息区分 */
+.message.summary .avatar {
+  color: var(--ink);
+  background: rgba(100, 116, 139, 0.12);
+  border-style: dashed;
+}
+
+.message.summary .bubble {
+  background: rgba(100, 116, 139, 0.06);
+  border-style: dashed;
+  box-shadow: none;
+}
+
 .markdown-body {
   color: var(--text);
   font-family: var(--font-body);

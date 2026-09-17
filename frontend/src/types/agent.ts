@@ -100,14 +100,22 @@ export type SessionListItem = {
 }
 
 export type SessionMessageItem = {
-  role: 'user' | 'assistant' | string
+  /** summary 表示这是一条摘要检查点：历史在这里被压缩过，content 是摘要正文 */
+  role: 'user' | 'assistant' | 'summary' | string
   content: string
+  /** 摘要检查点压缩释放的 token 数；普通消息为 null */
+  tokenCount?: number | null
 }
 
 export type ChatMessage = {
   id: number
-  role: 'user' | 'assistant'
+  /** summary：摘要检查点，代表「这里压缩过历史」；content 是摘要正文 */
+  role: 'user' | 'assistant' | 'summary'
   content: string
+  /** 摘要检查点释放的 token 数，用于显示"释放了多少" */
+  releasedTokens?: number
+  /** 摘要检查点压缩掉的消息条数；实时事件有，历史回放只有 releasedTokens */
+  compressedMessageCount?: number
   steps?: AgentStep[]
   /** 模型思考过程原文；模型未开启思考模式或未返回思考内容时为空，界面不渲染思考区 */
   thinking?: string

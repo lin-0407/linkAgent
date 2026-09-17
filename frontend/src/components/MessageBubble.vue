@@ -34,6 +34,23 @@ function normalizeMathSyntax(content: string) {
     .replace(/\\\(((?:.|\n)*?)\\\)/g, (_, formula: string) => `$${formula.trim()}$`)
 }
 
+/**
+ * 摘要检查点的标题行：说明这次压缩做了什么，点开才看摘要正文。
+ * 历史回放只有释放 token 数（后端消息表里只存了这个），所以条数缺失时不编数字。
+ */
+function summaryTitle(message: ChatMessage) {
+  const parts: string[] = []
+  if (message.compressedMessageCount) {
+    parts.push(`前 ${message.compressedMessageCount} 条消息已压缩为摘要`)
+  } else {
+    parts.push('较早的历史已压缩为摘要')
+  }
+  if (typeof message.releasedTokens === 'number' && message.releasedTokens > 0) {
+    parts.push(`释放约 ${message.releasedTokens} token`)
+  }
+  return parts.join('，')
+}
+
 function executionModeLabel(mode: ChatMessage['executionMode']) {
   switch (mode) {
     case 'REACT':
@@ -50,7 +67,7 @@ function executionModeLabel(mode: ChatMessage['executionMode']) {
 
 <template>
   <article class="message" :class="message.role">
-    <div class="avatar">{{ message.role === 'user' ? 'U' : 'A' }}</div>
+    <div class="avatar">{{ message.role === 'user' ? 'U' : message.role === 'summary' ? '摘' : 'A' }}</div>
     <div class="bubble">
       <template v-if="message.role === 'assistant'">
         <span v-if="showDiagnostics && message.executionMode" class="agent-mode-badge">
@@ -65,6 +82,16 @@ function executionModeLabel(mode: ChatMessage['executionMode']) {
           <div class="thinking-body">{{ message.thinking }}</div>
         </details>
         <div class="markdown-body" v-html="renderAssistantContent(message.content)"></div>
+      </template>
+      <!--
+        摘要检查点：压缩把原文换成摘要之后，这里是用户回顾"压缩过什么"的唯一入口。
+        默认折叠成一行说明，点开才看摘要正文，避免长摘要淹没后面的对话。
+      -->
+      <template v-else-if="message.role === 'summary'">
+        <details class="summary-block">
+          <summary>{{ summaryTitle(message) }}</summary>
+          <div class="summary-body">{{ message.content }}</div>
+        </details>
       </template>
       <p v-else>{{ message.content }}</p>
 
@@ -81,6 +108,32 @@ function executionModeLabel(mode: ChatMessage['executionMode']) {
 </template>
 
 <style scoped>
+/* 摘要检查点：虚线加低饱和底色，和普通消息、思考区都能一眼区分 */
+.summary-block {
+  border: 1px dashed rgba(100, 116, 139, 0.5);
+  border-radius: 6px;
+  background: rgba(100, 116, 139, 0.08);
+  font-size: 0.9em;
+}
+
+.summary-block > summary {
+  padding: 0.45em 0.7em;
+  cursor: pointer;
+  color: #475569;
+  user-select: none;
+}
+
+.summary-body {
+  padding: 0 0.7em 0.6em;
+  color: #475569;
+  line-height: 1.7;
+  /* 保留模型输出的换行；摘要上限 5000 字，限高滚动避免顶开整个对话 */
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 18em;
+  overflow-y: auto;
+}
+
 /* 思考区默认折叠，点开才看内容：思考往往比答案还长，展开显示会淹没正文 */
 .thinking-block {
   margin-bottom: 0.6em;

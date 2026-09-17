@@ -149,6 +149,18 @@ export function useAgentChat() {
             streamingThinking.value += text
             void scrollToBottom()
           },
+          onContextCompressed: (info) => {
+            // 压缩发生在服务端组装上下文时（首轮模型调用之前）：立刻插一条可见记录，
+            // 用户不会只看到一个没有解释的停顿；刷新后同一条记录由历史接口返回。
+            messages.value.push({
+              id: Date.now(),
+              role: 'summary',
+              content: info.summary || '较早的对话已压缩为摘要',
+              releasedTokens: Math.max(0, info.tokensBefore - info.tokensAfter),
+              compressedMessageCount: info.compressedMessageCount,
+            })
+            void scrollToBottom()
+          },
           onWarning: (message) => {
             // 非致命异常不打断生成，但要弹出来让作者知道，否则又是"界面没反应又查不到原因"
             warningMessage.value = message
@@ -284,6 +296,8 @@ export function useAgentChat() {
         id: Date.now() + index,
         role: normalizeRole(item.role),
         content: item.content,
+        // 摘要检查点带释放 token 数，普通消息是 null
+        releasedTokens: typeof item.tokenCount === 'number' ? item.tokenCount : undefined,
       }))
     } catch (error) {
       messages.value = []
@@ -321,8 +335,12 @@ export function useAgentChat() {
     }
   }
 
-  function normalizeRole(role: string): 'user' | 'assistant' {
+  function normalizeRole(role: string): 'user' | 'assistant' | 'summary' {
     const normalized = role.trim().toLowerCase()
+    // 摘要检查点必须单独成一类：当成 user 会渲染成用户气泡，用户会以为自己发过这段文字
+    if (normalized === 'summary') {
+      return 'summary'
+    }
     if (normalized === 'assistant' || normalized === 'ai' || normalized === 'bot') {
       return 'assistant'
     }

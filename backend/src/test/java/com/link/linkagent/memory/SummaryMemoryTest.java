@@ -1,5 +1,7 @@
 package com.link.linkagent.memory;
 
+import com.link.linkagent.memory.model.ConversationMessageRecord;
+import com.link.linkagent.memory.model.ConversationSessionRecord;
 import com.link.linkagent.prompt.StubPromptService;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -8,6 +10,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -106,8 +109,60 @@ class SummaryMemoryTest {
         assertThat(memory.getRetainedMessageCount()).isZero();
     }
 
+    @Test
+    void shouldPersistAndReloadCompactionCheckpoint() {
+        FakeConversationSessionMapper mapper = new FakeConversationSessionMapper();
+        SummaryMemory memory = new SummaryMemory(
+                new SummaryMemoryProperties(true, TOKEN_THRESHOLD, 2),
+                fixedSummaryModel("summary"),
+                new StubPromptService(),
+                null,
+                mapper);
+
+        memory.recordCompactionCheckpoint("session-1", "压缩后的摘要", 12, 300_000, 4_000);
+
+        // 摘要以 role=summary 的消息落库，释放的 token 数记在 token_count 上（供前端展示）
+        assertThat(mapper.inserted).isNotNull();
+        assertThat(mapper.inserted.getRole()).isEqualTo(SummaryMemory.SUMMARY_MESSAGE_ROLE);
+        assertThat(mapper.inserted.getTokenCount()).isEqualTo(296_000);
+        // 重新读摘要走数据库，模拟重启后仍能拿到上下文
+        assertThat(memory.getSummary("session-1")).isEqualTo("压缩后的摘要");
+    }
+
     private ChatModel fixedSummaryModel(String summary) {
         return prompt -> new ChatResponse(List.of(new Generation(new AssistantMessage(summary))));
+    }
+
+    /** 只承载摘要检查点的假 mapper：其余方法本用例用不到，直接抛异常避免被误用。 */
+    private static class FakeConversationSessionMapper implements ConversationSessionMapper {
+
+        private ConversationMessageRecord inserted;
+
+        @Override
+        public int upsertSession(ConversationSessionRecord session) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public int insertMessage(ConversationMessageRecord message) {
+            this.inserted = message;
+            return 1;
+        }
+
+        @Override
+        public List<ConversationSessionRecord> listSessionsByUser(String userId, int limit) {
+            return List.of();
+        }
+
+        @Override
+        public List<ConversationMessageRecord> listMessagesBySession(String sessionId) {
+            return List.of();
+        }
+
+        @Override
+        public Optional<ConversationMessageRecord> findLatestSummary(String sessionId) {
+            return Optional.ofNullable(inserted);
+        }
     }
 
     private ChatModel countingModel(AtomicInteger callCount) {
