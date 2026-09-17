@@ -156,6 +156,17 @@ const floatingWindowSubtitle = computed(() => {
   return props.developerMode ? activeSessionLabel.value : '围绕当前视频追问'
 })
 
+/**
+ * 首字未到：SSE 连接已建立，但思考内容、步骤、正文一个都没来。
+ * 单独判断这个状态，是为了显示动态思考占位，而不是渲染一个没有内容的空气泡。
+ */
+const isStreamingIdle = computed(
+  () =>
+    !streamingContent.value &&
+    !streamingThinking.value.trim() &&
+    streamingSteps.value.length === 0,
+)
+
 const visibleKnowledgeTopics = computed(() => knowledgeContext.value?.topics.slice(0, 4) ?? [])
 const visibleKnowledgeEvidence = computed(() => knowledgeContext.value?.evidenceItems.slice(0, 5) ?? [])
 
@@ -730,7 +741,21 @@ function clipText(value: string, maxLength: number) {
                   <summary>思考过程</summary>
                   <div class="agent-streaming-thinking-body">{{ streamingThinking }}</div>
                 </details>
-                <div class="streaming-content">
+                <!--
+                  首字未到时的动态占位：SSE 连接已建立，但思考内容、步骤、正文一个都还没来。
+                  这段时间以前渲染的是空气泡加一个光标，用户只看到一个没有内容的框，
+                  所以换成会动的思考占位，让"请求已发出、还在跑"这件事可见。
+                  正文和光标只在真有正文时才渲染：正文为空时那个光标只会加深"这个框是空的"的感觉。
+                -->
+                <div v-if="isStreamingIdle" class="streaming-thinking" aria-label="AI 正在思考">
+                  AI 正在思考
+                  <span class="thinking-dots" aria-hidden="true">
+                    <i></i>
+                    <i></i>
+                    <i></i>
+                  </span>
+                </div>
+                <div v-else-if="streamingContent" class="streaming-content">
                   {{ streamingContent }}
                   <span class="streaming-cursor" aria-hidden="true">▍</span>
                 </div>
