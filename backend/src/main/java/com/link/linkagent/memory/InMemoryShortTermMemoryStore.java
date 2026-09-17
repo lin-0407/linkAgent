@@ -13,7 +13,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 面向本地开发和测试的进程内滑动窗口记忆。
+ * 面向本地开发和测试的进程内短期记忆。
+ * <p>
+ * 不再做条数裁剪：是否压缩由请求 token 数决定，裁剪只发生在摘要压缩之后（设计文档 D1 / A1）。
  */
 @Component
 @ConditionalOnProperty(prefix = "agent.memory.short-term", name = "store-type", havingValue = "memory", matchIfMissing = true)
@@ -33,13 +35,11 @@ public class InMemoryShortTermMemoryStore implements ShortTermMemoryStore {
     }
 
     @Override
-    public void append(String sessionId, MemoryMessage message, int maxMessages) {
+    public void append(String sessionId, MemoryMessage message) {
+        // 只追加不裁剪：10 条滑动窗口已删除，避免出现「早期对话既不进上下文、也没进摘要」的空档。
         Deque<MemoryMessage> messages = sessionMessages.computeIfAbsent(sessionId, key -> new ArrayDeque<>());
         synchronized (messages) {
             messages.addLast(message);
-            while (messages.size() > maxMessages) {
-                messages.removeFirst();
-            }
         }
     }
 

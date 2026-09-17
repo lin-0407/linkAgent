@@ -30,6 +30,8 @@ class CreatorReportAnalysisOutputTest {
 
     @Test
     void shouldRejectCompleteOutputWhenRequiredAnalysisListsAreEmpty() {
+        // competitorComparison 是嵌套记录，Jackson 会先构造它、再执行顶层校验（嵌套校验异常先抛出）。
+        // 这里只保留 coreSellingPoints 一个空列表，让断言不依赖「哪一层先校验」这个实现细节。
         String json = """
                 {
                   "contentSummary": "内容总结",
@@ -43,8 +45,8 @@ class CreatorReportAnalysisOutputTest {
                   "audienceFeedbackSummary": "反馈总结",
                   "competitorComparison": {
                     "benchmarkConclusion": "对标结论",
-                    "ownAdvantages": [],
-                    "ownDisadvantages": [],
+                    "ownAdvantages": ["优势一"],
+                    "ownDisadvantages": ["短板一"],
                     "differentiationStrategy": "差异化策略"
                   },
                   "controversyAndMisunderstanding": [],

@@ -5,6 +5,7 @@ import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.LlmCallResult;
 import com.link.linkagent.llm.StrictToolCall;
 import com.link.linkagent.llm.StructuredCallResult;
+import com.link.linkagent.llm.TokenCounter;
 import com.link.linkagent.llm.ToolCallingCallResult;
 import com.link.linkagent.memory.AgentTraceMapper;
 import com.link.linkagent.memory.ConversationSessionMapper;
@@ -25,6 +26,7 @@ import com.link.linkagent.memory.model.ConversationSessionRecord;
 import com.link.linkagent.tool.Tool;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
+import com.link.linkagent.tool.ToolResultCompressor;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -73,6 +75,12 @@ public class AgentExecutor {
     private final MultiAgentOrchestrator multiAgentOrchestrator;
     private final AgentTraceMapper agentTraceMapper;
     private final ConversationSessionMapper conversationSessionMapper;
+
+    /** 本地 token 计量器；单测构造器不注入时为 null，此时跳过压缩判断。 */
+    private final TokenCounter tokenCounter;
+
+    /** 工具结果体积控制；单测构造器不注入时为 null，此时工具结果原样进上下文。 */
+    private final ToolResultCompressor toolResultCompressor;
     /** 生产环境从运行期设置读取结构化开关；单测不注入设置服务时回退到构造器默认值。 */
     private final boolean structuredKernelDefaultEnabled;
 
@@ -129,11 +137,13 @@ public class AgentExecutor {
                          PlanAndExecuteAgent planAndExecuteAgent,
                          MultiAgentOrchestrator multiAgentOrchestrator,
                          AgentTraceMapper agentTraceMapper,
-                         ConversationSessionMapper conversationSessionMapper) {
+                         ConversationSessionMapper conversationSessionMapper,
+                         TokenCounter tokenCounter,
+                         ToolResultCompressor toolResultCompressor) {
         this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
                 longTermMemoryExtractor, promptService, runtimeSettingService, true,
                 executionModeRouter, planAndExecuteAgent, multiAgentOrchestrator,
-                agentTraceMapper, conversationSessionMapper);
+                agentTraceMapper, conversationSessionMapper, tokenCounter, toolResultCompressor);
     }
 
     public AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
@@ -143,7 +153,7 @@ public class AgentExecutor {
                          PromptService promptService) {
         this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
                 longTermMemoryExtractor, promptService, null, false,
-                new AgentExecutionModeRouter(), null, null, null, null);
+                new AgentExecutionModeRouter(), null, null, null, null, null, null);
     }
 
     AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
@@ -154,7 +164,7 @@ public class AgentExecutor {
                   boolean structuredKernelDefaultEnabled) {
         this(llmService, toolRegistry, toolExecutor, shortTermMemory, summaryMemory, longTermMemory,
                 longTermMemoryExtractor, promptService, null, structuredKernelDefaultEnabled,
-                new AgentExecutionModeRouter(), null, null, null, null);
+                new AgentExecutionModeRouter(), null, null, null, null, null, null);
     }
 
     private AgentExecutor(LLMService llmService, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
@@ -168,7 +178,9 @@ public class AgentExecutor {
                           PlanAndExecuteAgent planAndExecuteAgent,
                           MultiAgentOrchestrator multiAgentOrchestrator,
                           AgentTraceMapper agentTraceMapper,
-                          ConversationSessionMapper conversationSessionMapper) {
+                          ConversationSessionMapper conversationSessionMapper,
+                          TokenCounter tokenCounter,
+                          ToolResultCompressor toolResultCompressor) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
@@ -184,6 +196,8 @@ public class AgentExecutor {
         this.multiAgentOrchestrator = multiAgentOrchestrator;
         this.agentTraceMapper = agentTraceMapper;
         this.conversationSessionMapper = conversationSessionMapper;
+        this.tokenCounter = tokenCounter;
+        this.toolResultCompressor = toolResultCompressor;
     }
 
     /**
@@ -239,13 +253,9 @@ public class AgentExecutor {
         AgentPersistenceContext persistenceContext = startAgentTrace(resolvedSessionId, resolvedUserId, userMessage);
 
         try {
-            // 拼接记忆 + 用户输入作为对话起点，格式与系统提示词约定一致
-            StringBuilder conversation = new StringBuilder();
-            appendLongTermMemory(conversation, longTermMemory.listRecentByUser(resolvedUserId, 10));
-            appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
-            List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
-            appendMemory(conversation, recentMessages);
-            conversation.append("Human:").append(userMessage).append("\n\n");
+            // 拼接记忆 + 用户输入作为对话起点；token 超过阈值时在这里先压缩（设计文档 A2 / A5）
+            StringBuilder conversation = new StringBuilder(
+                    buildConversationContext(resolvedSessionId, resolvedUserId, userMessage));
 
             AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
             AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
@@ -308,7 +318,8 @@ public class AgentExecutor {
                 log.info("正在进行第{}轮ReAct迭代...", iteration);
 
                 // 1. 调用 LLM，传入完整对话历史（含之前所有轮次的 Thought/Action/Observation）
-                LlmCallResult llmResult = llmService.chatWithUsage(systemPrompt, conversation.toString());
+                logContextBudget(systemPrompt, conversation);
+            LlmCallResult llmResult = llmService.chatWithUsage(systemPrompt, conversation.toString());
                 String llmAnswer = llmResult.content();
                 int stepTokenCount = calculateTokenCount(llmResult.promptTokens(), llmResult.completionTokens(), llmResult.totalTokens());
                 persistenceContext.totalTokens += stepTokenCount;
@@ -361,6 +372,8 @@ public class AgentExecutor {
                 // 5. 执行工具，得到 Observation
                 // ToolExecutor 内部负责校验工具是否存在、参数是否合法，并捕获工具执行异常返回错误 Observation
                 Observation observation = toolExecutor.execute(action);
+                // 工具结果进上下文前先做体积控制（A7 / D18）：原文仍完整落 t_agent_step
+                String boundedResult = boundedToolResult(observation.toolName(), observation.result());
                 log.info("ReAct 第{}轮工具执行完成，tool={}", iteration, observation.toolName());
                 steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
                 persistAgentStep(persistenceContext, iteration, "action", thought,
@@ -376,7 +389,7 @@ public class AgentExecutor {
                         .append("Observation:")
                         .append(observation.toolName())
                         .append(":")
-                        .append(observation.result())
+                        .append(boundedResult)
                         .append("\n\n");
             }
         } catch (RuntimeException exception) {
@@ -451,6 +464,7 @@ public class AgentExecutor {
             }
             log.debug("任务模式 ReAct 第{}轮迭代", iteration);
 
+            logContextBudget(systemPrompt, conversation);
             String llmAnswer = llmService.chat(systemPrompt, conversation.toString());
 
             // 优先检测 Final Answer：拿到自由文本结论即终止
@@ -481,6 +495,8 @@ public class AgentExecutor {
             // 只记录工具名，不记录 Action Input，避免把搜索词或任务材料重复写入日志。
             log.debug("任务模式 ReAct 第{}轮准备调用工具，tool={}", iteration, action.name());
             Observation observation = toolExecutor.execute(action);
+            // 工具结果进上下文前先做体积控制（A7 / D18）：原文仍完整落 t_agent_step
+            String boundedResult = boundedToolResult(observation.toolName(), observation.result());
             log.debug("任务模式 ReAct 第{}轮工具执行完成，tool={}", iteration, observation.toolName());
             steps.add(new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
 
@@ -489,7 +505,7 @@ public class AgentExecutor {
                     .append("Action:").append(action.name()).append("\n")
                     .append("Action Input:").append(action.arguments()).append("\n")
                     .append("Observation:").append(observation.toolName()).append(":")
-                    .append(observation.result()).append("\n\n");
+                    .append(boundedResult).append("\n\n");
         }
     }
 
@@ -638,11 +654,11 @@ public class AgentExecutor {
     }
 
     /**
-     * 将短期记忆（最近 N 轮对话）拼接到对话上下文中，格式为 "Recent conversation:" + 多行 "role:content"。
+     * 将短期记忆拼接到对话上下文中，格式为 "Recent conversation:" + 多行 "role:content"。
      * <p>
      * 短期记忆位于摘要之后、用户消息之前，为 LLM 提供最直接的对话连续性上下文。
-     * 当摘要触发后，短期记忆只保留最近 N 条消息（由 summaryMemory.getRetainedMessageCount 控制），
-     * 更早的消息被摘要压缩，避免上下文膨胀。
+     * 不再按条数裁剪：只有请求 token 超过阈值、摘要成功生成后，才裁掉被摘要覆盖的旧消息
+     * （见 buildConversationContext）。
      */
     private void appendMemory(StringBuilder conversation, List<MemoryMessage> messages) {
         if (messages.isEmpty()) {
@@ -687,15 +703,112 @@ public class AgentExecutor {
     }
 
     /**
-     * 持久化一次「面向用户的聊天回合」：写短期记忆 + 按需触发摘要 + 抽取长期记忆。
+     * 组装一次请求的对话上下文，并在 token 超过阈值时先压缩（设计文档 A2 / A3 / A5）。
+     *
+     * <h3>为什么在这里判断</h3>
+     * 计量对象是「组装好准备发出去的上下文」——长期记忆只有几百 token、摘要上限 5000 字，
+     * 真正会变大的是短期记忆（不再按条数裁剪）与本轮用户输入。
+     * 系统提示词与工具定义（合计约 300 token）不在这里计量：它们相对 256k 阈值可以忽略，
+     * 且要等执行模式路由完成后才知道用哪一份提示词。
+     *
+     * <h3>压缩规则</h3>
+     * 保留最近 {@code retainedMessageCount} 条消息，其余交给摘要承载；摘要必须成功返回才裁剪原文，
+     * 否则宁可这轮继续超阈值，也不能出现「原文已删、摘要没有」的空档（设计文档 D4 / D6）。
+     * 被压缩消息的原文不再保留，这是设计文档 A5 的明确取舍。
+     *
+     * @param sessionId   会话标识
+     * @param userId      用户标识
+     * @param userMessage 本轮用户输入
+     * @return 组装（必要时已压缩）后的上下文文本
+     */
+    private String buildConversationContext(String sessionId, String userId, String userMessage) {
+        List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(sessionId);
+        String context = assembleContext(sessionId, userId, recentMessages, userMessage);
+        if (tokenCounter == null) {
+            // 单测构造器不注入计量器：跳过压缩判断，行为与改造前一致。
+            return context;
+        }
+        int tokens = tokenCounter.count(context);
+        int threshold = summaryMemory.getTokenThreshold();
+        if (tokens < threshold) {
+            return context;
+        }
+        int retainedCount = summaryMemory.getRetainedMessageCount();
+        int compressibleCount = recentMessages.size() - retainedCount;
+        if (compressibleCount <= 0) {
+            // 没有可压缩的历史消息：超长只可能来自本轮输入本身，压缩无从下手，交给 768k 硬上限兜底。
+            log.warn("上下文超过压缩阈值但没有可压缩的历史消息，sessionId={}, tokens={}, threshold={}",
+                    sessionId, tokens, threshold);
+            return context;
+        }
+        String summary = summaryMemory.summarize(sessionId, recentMessages.subList(0, compressibleCount));
+        if (TextUtil.isBlank(summary)) {
+            log.warn("摘要生成失败，本轮不压缩（保留原文），sessionId={}, tokens={}", sessionId, tokens);
+            return context;
+        }
+        shortTermMemory.keepRecentMessages(sessionId, retainedCount);
+        String compressed = assembleContext(sessionId, userId, shortTermMemory.getRecentMessages(sessionId), userMessage);
+        log.info("上下文已按 token 压缩，sessionId={}, 压缩前={} token, 压缩后={} token",
+                sessionId, tokens, tokenCounter.count(compressed));
+        return compressed;
+    }
+
+    /**
+     * 按固定顺序拼接「长期记忆 → 摘要 → 短期记忆 → 用户输入」。
+     * <p>
+     * 顺序天然满足「固定文本靠前、变化内容靠后」的 KV cache 要求；
+     * 这次重构只改各段的内容来源，不改顺序。
+     */
+    private String assembleContext(String sessionId, String userId, List<MemoryMessage> messages, String userMessage) {
+        StringBuilder conversation = new StringBuilder();
+        appendLongTermMemory(conversation, longTermMemory.listRecentByUser(userId, 10));
+        appendSummary(conversation, summaryMemory.getSummary(sessionId));
+        appendMemory(conversation, messages);
+        conversation.append("Human:").append(userMessage).append("\n\n");
+        return conversation.toString();
+    }
+
+    /**
+     * 每次调用模型前计量当前请求体积（设计文档 A3）。
+     * <p>
+     * 这里只观测不压缩：请求内部的增长只可能来自工具结果和本轮用户输入——
+     * 工具结果进上下文前已被 {@link ToolResultCompressor} 限制体积，用户输入本身没有可压缩的对象，
+     * 记忆部分在组装时已经压缩过。真正的硬兜底是 LLMService 的 768k token 上限。
+     */
+    private void logContextBudget(String systemPrompt, StringBuilder conversation) {
+        if (tokenCounter == null) {
+            return;
+        }
+        int tokens = tokenCounter.count(systemPrompt) + tokenCounter.count(conversation.toString());
+        int threshold = summaryMemory.getTokenThreshold();
+        if (tokens >= threshold) {
+            log.warn("本次请求已超过记忆压缩阈值，tokens={}, threshold={}", tokens, threshold);
+        }
+    }
+
+    /**
+     * 工具结果进上下文前的体积控制（设计文档 A7 / D18）。
+     * <p>
+     * 只影响模型看到的那一份内容；原文仍完整写入 t_agent_step.tool_output 供审计与回查。
+     */
+    private String boundedToolResult(String toolName, String result) {
+        if (toolResultCompressor == null) {
+            return result;
+        }
+        return toolResultCompressor.compressIfNeeded(toolName, result);
+    }
+
+    /**
+     * 持久化一次「面向用户的聊天回合」：写短期记忆 + 抽取长期记忆。
      * 抽成方法是因为文本路与结构化路（5.4）在拿到 finalAnswer 后都要做同一件事，避免两处重复。
+     * 摘要压缩已上移到上下文组装（按 token 判断），这里不再触发。
      */
     private void persistChatTurn(String sessionId, String userId, String userMessage, String finalAnswer) {
         persistChatTurn(sessionId, userId, userMessage, finalAnswer, 0);
     }
 
     /**
-     * 持久化一次「面向用户的聊天回合」：写短期记忆、MySQL 消息表、按需摘要和长期记忆。
+     * 持久化一次「面向用户的聊天回合」：写短期记忆、MySQL 消息表，并抽取长期记忆。
      * <p>
      * MySQL 消息表写入放在短期记忆之后，是因为短期记忆直接影响下一轮对话上下文；MySQL 是历史回放副本，
      * 即使失败也不能阻断用户已经拿到的答案。
@@ -704,10 +817,7 @@ public class AgentExecutor {
         shortTermMemory.append(sessionId, "Human", userMessage);
         shortTermMemory.append(sessionId, "AI", finalAnswer);
         persistConversationMessages(sessionId, userMessage, finalAnswer, assistantTokenCount);
-        if (summaryMemory.trySummarize(sessionId, shortTermMemory.getRecentMessages(sessionId))) {
-            shortTermMemory.keepRecentMessages(sessionId, summaryMemory.getRetainedMessageCount());
-            log.info("摘要记忆已达到触发条件，sessionId={}", sessionId);
-        }
+        // 摘要触发已上移到上下文组装（按 token 判断），这里只负责写入和长期记忆提取。
         tryExtractAndSaveLongTermMemory(userId, sessionId, userMessage, finalAnswer);
     }
 
@@ -907,6 +1017,7 @@ public class AgentExecutor {
             log.info("结构化 ReAct 第{}轮迭代...", iteration);
 
             // chatStructured 内部已对解析失败重试；仍失败则抛出（含成本 guard 的 400），交上层按错误返回，不在此吞掉
+            logContextBudget(systemPrompt, conversation);
             StructuredCallResult<ReActStep> callResult =
                     llmService.chatStructuredWithUsage(systemPrompt, conversation.toString(), ReActStep.class);
             ReActStep step = callResult.entity();
@@ -938,6 +1049,8 @@ public class AgentExecutor {
             // 空串传递"我知道这个工具存在，但参数为空"的明确语义
             ToolCall action = new ToolCall(step.action(), step.actionInput() == null ? "" : step.actionInput());
             Observation observation = toolExecutor.execute(action);
+            // 工具结果进上下文前先做体积控制（A7 / D18）：原文仍完整落 t_agent_step
+            String boundedResult = boundedToolResult(observation.toolName(), observation.result());
             steps.add(new AgentStep(iteration, step.thought(), action.name(), action.arguments(), observation.result()));
             persistAgentStep(persistenceContext, iteration, "action", step.thought(),
                     action.name(), action.arguments(), observation.result(), stepTokenCount);
@@ -947,7 +1060,7 @@ public class AgentExecutor {
                     .append("Action:").append(action.name()).append("\n")
                     .append("Action Input:").append(action.arguments()).append("\n")
                     .append("Observation:").append(observation.toolName()).append(":")
-                    .append(observation.result()).append("\n\n");
+                    .append(boundedResult).append("\n\n");
         }
     }
 
@@ -973,6 +1086,7 @@ public class AgentExecutor {
             log.info("严格 Function Calling 第{}轮迭代...", iteration);
 
             ToolCallingCallResult callResult;
+            logContextBudget(systemPrompt, conversation);
             try {
                 callResult = llmService.chatWithStrictToolsWithUsage(
                         systemPrompt, messages, toolRegistry.getAllTools()
@@ -1008,6 +1122,8 @@ public class AgentExecutor {
             StrictToolCall strictCall = callResult.toolCalls().get(0);
             ToolCall action = new ToolCall(strictCall.toolName(), strictCall.input());
             Observation observation = toolExecutor.execute(action);
+            // 工具结果进上下文前先做体积控制（A7 / D18）：原文仍完整落 t_agent_step
+            String boundedResult = boundedToolResult(observation.toolName(), observation.result());
             AgentStep step = new AgentStep(
                     iteration, null, action.name(), action.arguments(), observation.result()
             );
@@ -1019,7 +1135,7 @@ public class AgentExecutor {
             messages.add(callResult.assistantMessage());
             messages.add(ToolResponseMessage.builder()
                     .responses(List.of(new ToolResponseMessage.ToolResponse(
-                            strictCall.id(), strictCall.functionName(), observation.result()
+                            strictCall.id(), strictCall.functionName(), boundedResult
                     )))
                     .build());
 
@@ -1028,7 +1144,7 @@ public class AgentExecutor {
                     .append("Action:").append(action.name()).append("\n")
                     .append("Action Input:").append(action.arguments()).append("\n")
                     .append("Observation:").append(observation.toolName()).append(":")
-                    .append(observation.result()).append("\n\n");
+                    .append(boundedResult).append("\n\n");
         }
     }
 
@@ -1185,13 +1301,9 @@ public class AgentExecutor {
             // 首先发送 session 事件，让前端知道当前会话 ID
             sendSseEvent(emitter, "session", Map.of("sessionId", resolvedSessionId));
 
-            // 拼接记忆 + 用户输入作为对话起点（与 run() 完全一致）
-            StringBuilder conversation = new StringBuilder();
-            appendLongTermMemory(conversation, longTermMemory.listRecentByUser(resolvedUserId, 10));
-            appendSummary(conversation, summaryMemory.getSummary(resolvedSessionId));
-            List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(resolvedSessionId);
-            appendMemory(conversation, recentMessages);
-            conversation.append("Human:").append(userMessage).append("\n\n");
+            // 拼接记忆 + 用户输入作为对话起点（与 run() 完全一致）；超过阈值时同样先压缩
+            StringBuilder conversation = new StringBuilder(
+                    buildConversationContext(resolvedSessionId, resolvedUserId, userMessage));
 
             // 路由到正确的执行模式
             AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
@@ -1300,6 +1412,7 @@ public class AgentExecutor {
             }
             log.info("流式-结构化 ReAct 第{}轮迭代...", iteration);
 
+            logContextBudget(systemPrompt, conversation);
             StructuredCallResult<ReActStep> callResult =
                     llmService.chatStructuredWithUsage(systemPrompt, conversation.toString(), ReActStep.class);
             ReActStep step = callResult.entity();
@@ -1327,6 +1440,8 @@ public class AgentExecutor {
             // 执行工具
             ToolCall action = new ToolCall(step.action(), step.actionInput() == null ? "" : step.actionInput());
             Observation observation = toolExecutor.execute(action);
+            // 工具结果进上下文前先做体积控制（A7 / D18）：原文仍完整落 t_agent_step
+            String boundedResult = boundedToolResult(observation.toolName(), observation.result());
             // 立即推送步骤事件给前端
             sendSseEvent(emitter, "step", new AgentStep(iteration, step.thought(), action.name(), action.arguments(), observation.result()));
             persistAgentStep(persistenceContext, iteration, "action", step.thought(),
@@ -1337,7 +1452,7 @@ public class AgentExecutor {
                     .append("Action:").append(action.name()).append("\n")
                     .append("Action Input:").append(action.arguments()).append("\n")
                     .append("Observation:").append(observation.toolName()).append(":")
-                    .append(observation.result()).append("\n\n");
+                    .append(boundedResult).append("\n\n");
         }
     }
 
@@ -1371,6 +1486,7 @@ public class AgentExecutor {
             log.info("流式-对话工具循环第{}轮迭代...", iteration);
 
             ToolCallingCallResult callResult;
+            logContextBudget(systemPrompt, conversation);
             try {
                 callResult = llmService.streamWithToolsWithUsage(
                         systemPrompt,
@@ -1408,6 +1524,8 @@ public class AgentExecutor {
             StrictToolCall strictCall = callResult.toolCalls().get(0);
             ToolCall action = new ToolCall(strictCall.toolName(), strictCall.input());
             Observation observation = toolExecutor.execute(action);
+            // 工具结果进上下文前先做体积控制（A7 / D18）：原文仍完整落 t_agent_step
+            String boundedResult = boundedToolResult(observation.toolName(), observation.result());
             AgentStep step = new AgentStep(
                     iteration, null, action.name(), action.arguments(), observation.result()
             );
@@ -1418,14 +1536,14 @@ public class AgentExecutor {
             messages.add(callResult.assistantMessage());
             messages.add(ToolResponseMessage.builder()
                     .responses(List.of(new ToolResponseMessage.ToolResponse(
-                            strictCall.id(), strictCall.functionName(), observation.result()
+                            strictCall.id(), strictCall.functionName(), boundedResult
                     )))
                     .build());
             conversation.append("AI:\n")
                     .append("Action:").append(action.name()).append("\n")
                     .append("Action Input:").append(action.arguments()).append("\n")
                     .append("Observation:").append(observation.toolName()).append(":")
-                    .append(observation.result()).append("\n\n");
+                    .append(boundedResult).append("\n\n");
         }
     }
 
@@ -1486,6 +1604,7 @@ public class AgentExecutor {
             log.info("流式-严格 Function Calling 第{}轮迭代...", iteration);
 
             ToolCallingCallResult callResult;
+            logContextBudget(systemPrompt, conversation);
             try {
                 callResult = llmService.chatWithStrictToolsWithUsage(
                         systemPrompt, messages, toolRegistry.getAllTools()
@@ -1519,6 +1638,8 @@ public class AgentExecutor {
             StrictToolCall strictCall = callResult.toolCalls().get(0);
             ToolCall action = new ToolCall(strictCall.toolName(), strictCall.input());
             Observation observation = toolExecutor.execute(action);
+            // 工具结果进上下文前先做体积控制（A7 / D18）：原文仍完整落 t_agent_step
+            String boundedResult = boundedToolResult(observation.toolName(), observation.result());
             AgentStep step = new AgentStep(
                     iteration, null, action.name(), action.arguments(), observation.result()
             );
@@ -1529,14 +1650,14 @@ public class AgentExecutor {
             messages.add(callResult.assistantMessage());
             messages.add(ToolResponseMessage.builder()
                     .responses(List.of(new ToolResponseMessage.ToolResponse(
-                            strictCall.id(), strictCall.functionName(), observation.result()
+                            strictCall.id(), strictCall.functionName(), boundedResult
                     )))
                     .build());
             conversation.append("AI:\n")
                     .append("Action:").append(action.name()).append("\n")
                     .append("Action Input:").append(action.arguments()).append("\n")
                     .append("Observation:").append(observation.toolName()).append(":")
-                    .append(observation.result()).append("\n\n");
+                    .append(boundedResult).append("\n\n");
         }
     }
 
@@ -1560,6 +1681,7 @@ public class AgentExecutor {
             log.info("流式-文本 ReAct 第{}轮迭代...", iteration);
 
             // 1. 调用 LLM，获得完整响应
+            logContextBudget(systemPrompt, conversation);
             LlmCallResult llmResult = llmService.chatWithUsage(systemPrompt, conversation.toString());
             String llmAnswer = llmResult.content();
             int stepTokenCount = calculateTokenCount(llmResult.promptTokens(), llmResult.completionTokens(), llmResult.totalTokens());
@@ -1598,6 +1720,8 @@ public class AgentExecutor {
 
             // 5. 执行工具，得到 Observation
             Observation observation = toolExecutor.execute(action);
+            // 工具结果进上下文前先做体积控制（A7 / D18）：原文仍完整落 t_agent_step
+            String boundedResult = boundedToolResult(observation.toolName(), observation.result());
             // 立即推送步骤事件给前端
             sendSseEvent(emitter, "step", new AgentStep(iteration, thought, action.name(), action.arguments(), observation.result()));
             persistAgentStep(persistenceContext, iteration, "action", thought,
@@ -1608,7 +1732,7 @@ public class AgentExecutor {
                     .append("Action:").append(action.name()).append("\n")
                     .append("Action Input:").append(action.arguments()).append("\n")
                     .append("Observation:").append(observation.toolName()).append(":")
-                    .append(observation.result()).append("\n\n");
+                    .append(boundedResult).append("\n\n");
         }
     }
 

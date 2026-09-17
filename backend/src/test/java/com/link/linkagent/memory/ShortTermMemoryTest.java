@@ -23,7 +23,7 @@ class ShortTermMemoryTest {
     }
 
     @Test
-    void shouldDropOldestMessagesWhenWindowIsFull() {
+    void shouldKeepAllMessagesBecauseWindowIsRemoved() {
         ShortTermMemory memory = new ShortTermMemory(new InMemoryShortTermMemoryStore());
 
         for (int i = 1; i <= 12; i++) {
@@ -32,8 +32,9 @@ class ShortTermMemoryTest {
 
         List<MemoryMessage> messages = memory.getRecentMessages("session-1");
 
-        assertThat(messages).hasSize(10);
-        assertThat(messages.getFirst().content()).isEqualTo("message-3");
+        // 10 条滑动窗口已删除：是否压缩由请求 token 数决定，不再按条数丢消息。
+        assertThat(messages).hasSize(12);
+        assertThat(messages.getFirst().content()).isEqualTo("message-1");
         assertThat(messages.getLast().content()).isEqualTo("message-12");
     }
 

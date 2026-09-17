@@ -84,6 +84,18 @@
             <artifactId>spring-ai-rag</artifactId>
         </dependency>
 
+        <!-- ===== Tokenizer（记忆系统 token 计量） ===== -->
+        <!-- 为什么引入 DJL 而不是复用 Spring AI 自带的 JTokkitTokenCountEstimator：
+             JTokkit 默认 CL100K_BASE，对中文高估 28%~52%（见记忆系统重构设计文档 9.3 第七节实测），
+             量出来的阈值含义会整体失真；只有官方 tokenizer.json 的计数才和服务端一致。
+             tokenizers 0.38.0 的 jar 内自带 linux/osx/win 原生库，运行时不需要联网下载原生库；
+             ai.djl:api 由它传递依赖引入，无需单独声明。 -->
+        <dependency>
+            <groupId>ai.djl.huggingface</groupId>
+            <artifactId>tokenizers</artifactId>
+            <version>0.38.0</version>
+        </dependency>
+
         <!-- ===== 数据层 ===== -->
         <!-- Redis 短期记忆 -->
         <dependency>

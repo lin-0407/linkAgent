@@ -3,7 +3,6 @@ package com.link.linkagent.memory;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.Cursor;
-import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -14,7 +13,10 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * 面向多实例部署的 Redis 滑动窗口记忆。
+ * 面向多实例部署的 Redis 短期记忆。
+ * <p>
+ * 不再做 LTRIM 裁剪：按条数保留会让「早期对话」永远进不了上下文，
+ * 现在只在 token 超过压缩阈值时由上层生成摘要并裁剪（设计文档 D1 / A1）。
  */
 @Component
 @ConditionalOnProperty(prefix = "agent.memory.short-term", name = "store-type", havingValue = "redis")
@@ -42,11 +44,9 @@ public class RedisShortTermMemoryStore implements ShortTermMemoryStore {
     }
 
     @Override
-    public void append(String sessionId, MemoryMessage message, int maxMessages) {
-        ListOperations<String, String> operations = redisTemplate.opsForList();
-        String key = buildKey(sessionId);
-        operations.rightPush(key, serialize(message));
-        operations.trim(key, -maxMessages, -1);
+    public void append(String sessionId, MemoryMessage message) {
+        // 只追加不裁剪：裁剪时机由摘要压缩决定，保留最近 N 条的规则已删除。
+        redisTemplate.opsForList().rightPush(buildKey(sessionId), serialize(message));
     }
 
     @Override

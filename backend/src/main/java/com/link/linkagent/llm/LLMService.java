@@ -79,6 +79,9 @@ public class LLMService {
     /** Prompt 长度限制配置：在调用模型前短路超限请求，避免产生无效 Token 消耗。 */
     private final LlmCallGuardProperties guardProperties;
 
+    /** 本地 token 计量器：guard 上限按 token 比较，字符数与 token 数不成比例，不能混用。 */
+    private final TokenCounter tokenCounter;
+
     /** 运行期设置服务：用于读取"成本保护开关"等可动态调整的配置，生产环境实时生效无需重启。 */
     private final RuntimeSettingService runtimeSettingService;
 
@@ -107,6 +110,7 @@ public class LLMService {
     protected LLMService() {
         this.chatClient = null;
         this.guardProperties = new LlmCallGuardProperties();
+        this.tokenCounter = new TokenCounter();
         this.runtimeSettingService = null;
         this.llmApiUsageService = null;
         this.objectMapper = new ObjectMapper();
@@ -130,6 +134,7 @@ public class LLMService {
     @Autowired
     public LLMService(ChatClient.Builder builder,
                       LlmCallGuardProperties guardProperties,
+                      TokenCounter tokenCounter,
                       RuntimeSettingService runtimeSettingService,
                       LlmApiUsageService llmApiUsageService,
                       ObjectMapper objectMapper,
@@ -138,6 +143,7 @@ public class LLMService {
                       StrictFunctionCallingClient strictFunctionCallingClient) {
         this.chatClient = builder.build();
         this.guardProperties = guardProperties;
+        this.tokenCounter = tokenCounter;
         this.runtimeSettingService = runtimeSettingService;
         this.llmApiUsageService = llmApiUsageService;
         this.objectMapper = objectMapper;
@@ -155,6 +161,8 @@ public class LLMService {
     LLMService(LlmCallGuardProperties guardProperties) {
         this.chatClient = null;
         this.guardProperties = guardProperties;
+        // 单测直接使用真实计量器（懒加载，只在真正调用 validatePromptLength 时才解析词表）。
+        this.tokenCounter = new TokenCounter();
         this.runtimeSettingService = null;
         this.llmApiUsageService = null;
         this.objectMapper = new ObjectMapper();
@@ -853,7 +861,13 @@ public class LLMService {
     }
 
     /**
-     * 校验 Prompt 总长度是否超出限制——在调用模型前短路，把超限问题控制在业务层。
+     * 校验本次请求的输入是否超出成本保护上限——在调用模型前短路，把超限问题控制在业务层。
+     * <p>
+     * <b>为什么按 token 而不是字符</b>
+     * 字符数与 token 数不成比例（中文实测约 0.55 token/字符，代码和 JSON 约 0.25），
+     * 同一个字符上限对中文文稿和代码的约束强度差一倍以上，也没法和 256k 压缩阈值、1M 窗口换算。
+     * 所以这里改用官方词表在本地计量，计量对象是 LLMService 实际收到的全部文本：
+     * 系统提示词 + 全部消息（含对话历史与工具结果）；工具定义约 160 token，不在其中。
      * <p>
      * <b>为什么在调用前校验而非事后检查</b>
      * DeepSeek 的 API 在 prompt 超长时仍可能接受请求但返回截断结果，或者在中间件层返回 400——
@@ -861,30 +875,31 @@ public class LLMService {
      * 而非让用户得到一个不完整的回答或神秘的 400 错误。
      * <p>
      * <b>安全下限保护</b>
-     * Math.max(1, ...)：当 guardProperties.getMaxPromptChars() 被误配为 0 时（配置错误或未初始化），
-     * 不会让所有请求都绕过校验——至少保留 1 个字符的下限，但实际场景中 1 字符意味着几乎所有请求
-     * 都会被拒，这是一种"fail-safe"设计：配错配置宁可全部拒绝，也不悄无声息地放行成本。
+     * Math.max(1, ...)：当 maxPromptTokens 被误配为 0 时（配置错误或未初始化），
+     * 不会让所有请求都绕过校验——至少保留 1 token 的下限，实际效果是几乎所有请求都被拒，
+     * 这是一种"fail-safe"设计：配错配置宁可全部拒绝，也不悄无声息地放行成本。
      * <p>
      * 可见性：包级别（default）——仅 LLMService 自身和同包测试可见，外部不允许绕过校验直接调模型。
      *
      * @param systemPrompt 系统提示词
      * @param userMessage 用户输入文本
-     * @throws ResponseStatusException (HTTP 400) 当总 prompt 长度超过限制时
+     * @throws ResponseStatusException (HTTP 400) 当输入 token 数超过限制时
      */
     void validatePromptLength(String systemPrompt, String userMessage) {
         if (!isGuardEnabled()) {
             return;
         }
-        // 关闭保护必须显式设置 enabled=false，避免字符上限误配成 0 时反而绕过成本保护。
-        int maxPromptChars = Math.max(1, guardProperties.getMaxPromptChars());
-        int promptChars = safeLength(systemPrompt) + safeLength(userMessage);
-        if (promptChars <= maxPromptChars) {
+        // 关闭保护必须显式设置 enabled=false，避免上限误配成 0 时反而绕过成本保护。
+        int maxPromptTokens = Math.max(1, guardProperties.getMaxPromptTokens());
+        int promptTokens = tokenCounter.count(systemPrompt) + tokenCounter.count(userMessage);
+        if (promptTokens <= maxPromptTokens) {
             return;
         }
         // 在调用模型前短路，是为了把超限问题控制在业务层，避免已经产生模型请求后才失败。
         throw new ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
-                "本次 AI 分析输入过长，当前限制为 " + maxPromptChars + " 个字符，请先精简文稿、评论或弹幕样例后重试。"
+                "本次 AI 分析输入过长，当前限制约 " + maxPromptTokens + " token（按模型分词计量），"
+                        + "请先精简文稿、评论或弹幕样例后重试。"
         );
     }
 
@@ -899,15 +914,6 @@ public class LLMService {
         return runtimeSettingService == null
                 ? guardProperties.isEnabled()
                 : runtimeSettingService.isLlmGuardEnabled();
-    }
-
-    /**
-     * 安全取字符串长度：null 视为 0 长度，避免 NPE。
-     * 用在 Prompt 长度校验中，因为 systemPrompt 和 userMessage 理论上不应为 null，
-     * 但防御性编程接受任何输入（网关/前端可能传 null）。
-     */
-    private int safeLength(String text) {
-        return text == null ? 0 : text.length();
     }
 
     /**

@@ -17,6 +17,7 @@ import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.prompt.StubPromptService;
+import com.link.linkagent.prompt.service.PromptService;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -74,7 +75,7 @@ class PrePublishSuggestionServiceTest {
                 emptyContextService(),
                 llmService,
                 new ObjectMapper(),
-                new StubPromptService());
+                placeholderPromptService());
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
@@ -106,7 +107,7 @@ class PrePublishSuggestionServiceTest {
                 emptyContextService(),
                 llmService,
                 new ObjectMapper(),
-                new StubPromptService());
+                placeholderPromptService());
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
@@ -280,6 +281,24 @@ class PrePublishSuggestionServiceTest {
         record.setCreateTime(LocalDateTime.now());
         record.setUpdateTime(LocalDateTime.now());
         return record;
+    }
+
+    /**
+     * 带占位符的提示词桩。
+     * 真实模板 pre_publish.user 里有 {preferenceMode}、{preferenceContext} 等占位符，
+     * 而 PromptService.render 只做字符串替换；纯文本桩里没有占位符，断言不到"偏好到底有没有进提示词"。
+     * 这个桩把这两个占位符补回来，让用例验证的是渲染链路而不是桩文本本身。
+     */
+    private PromptService placeholderPromptService() {
+        return new StubPromptService() {
+            @Override
+            public String get(String key) {
+                if ("pre_publish.user".equals(key)) {
+                    return "[test-prompt:pre_publish.user] 偏好使用方式：{preferenceMode}\n历史偏好与语境：{preferenceContext}";
+                }
+                return super.get(key);
+            }
+        };
     }
 
     private CreatorPreferenceRecord createPreferenceRecord() {

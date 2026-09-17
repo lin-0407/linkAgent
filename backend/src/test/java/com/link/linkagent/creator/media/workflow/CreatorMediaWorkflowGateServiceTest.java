@@ -268,7 +268,10 @@ class CreatorMediaWorkflowGateServiceTest {
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(exception.getReason()).contains("尚未通过媒体探测");
         verify(mapper).recoverStaleDraftVideoProbe(
-                "task-1", "default", "version-1", any(LocalDateTime.class));
+                org.mockito.ArgumentMatchers.eq("task-1"),
+                org.mockito.ArgumentMatchers.eq("default"),
+                org.mockito.ArgumentMatchers.eq("version-1"),
+                any(LocalDateTime.class));
     }
 
     @Test

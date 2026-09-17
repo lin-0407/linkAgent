@@ -40,6 +40,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -496,9 +497,9 @@ public class WebSearchTool implements Tool {
 
     /** 解析 HTML 时保留段落、标题和列表的换行，删除脚本、导航、表单等不适合模型阅读的区域。 */
     String cleanHtmlToText(String html) {
-        ContentRootDetector detector = new ContentRootDetector();
+        ContentRootDetector detector = new ContentRootDetector(html);
         parseHtml(html, detector);
-        TextCleaner cleaner = new TextCleaner(detector.hasContentRoot);
+        TextCleaner cleaner = new TextCleaner(detector.hasContentRoot, html);
         parseHtml(html, cleaner);
         return cleaner.text.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
     }
@@ -631,14 +632,49 @@ public class WebSearchTool implements Tool {
         }
     }
 
+    /** main/article 视为正文容器：页面里出现它们时只保留容器内部的内容。 */
+    private static boolean isContentRootTag(HTML.Tag tag) {
+        String tagName = tag.toString().toLowerCase();
+        return "main".equals(tagName) || "article".equals(tagName);
+    }
+
+    /**
+     * 判断未知标签的回调是开标签还是闭标签。
+     * <p>
+     * JDK 自带的 HTML 解析器对未知标签的开、闭标签给的是同一个 simpleTag 回调，
+     * 只能靠源码位置区分：位置处以 "&lt;/" 开头的就是闭标签（已用 jshell 探针实测）。
+     */
+    private static boolean isClosingTag(String source, int position) {
+        return position >= 0 && position + 1 < source.length()
+                && source.charAt(position) == '<' && source.charAt(position + 1) == '/';
+    }
+
     /** 先扫描页面是否存在正文容器，避免在正文清洗阶段把导航和推荐区一并保留。 */
     private static final class ContentRootDetector extends HTMLEditorKit.ParserCallback {
+        private final String source;
         private boolean hasContentRoot;
+
+        private ContentRootDetector(String source) {
+            this.source = source;
+        }
 
         @Override
         public void handleStartTag(HTML.Tag tag, MutableAttributeSet attributes, int position) {
-            String tagName = tag.toString().toLowerCase();
-            if ("main".equals(tagName) || "article".equals(tagName)) {
+            markContentRoot(tag, position);
+        }
+
+        @Override
+        public void handleSimpleTag(HTML.Tag tag, MutableAttributeSet attributes, int position) {
+            markContentRoot(tag, position);
+        }
+
+        /**
+         * 为什么 simpleTag 也要处理：JDK 解析器只对已知标签触发 handleStartTag/EndTag，
+         * main、article 这类 HTML5 标签在它眼里是未知标签，只会走 handleSimpleTag，
+         * 只处理 handleStartTag 会让正文容器检测永远为 false。
+         */
+        private void markContentRoot(HTML.Tag tag, int position) {
+            if (isContentRootTag(tag) && !isClosingTag(source, position)) {
                 hasContentRoot = true;
             }
         }
@@ -646,18 +682,27 @@ public class WebSearchTool implements Tool {
 
     /** HTML 正文清洗回调：保留标题、段落和列表的文字层级。 */
     private static final class TextCleaner extends HTMLEditorKit.ParserCallback {
+
+        /** 明确丢弃的区域：脚本、样式、导航、页头页脚和表单对模型理解正文没有价值。 */
+        private static final Set<String> IGNORED_TAG_NAMES = Set.of(
+                "head", "script", "style", "noscript", "svg", "nav", "header", "footer", "form", "aside", "iframe");
+
         private final StringBuilder text = new StringBuilder();
         private final boolean onlyContentRoot;
+        private final String source;
         private int contentRootDepth;
         private int ignoredDepth;
+        /** 同一个未知标签可能被 start 与 simple 两个回调各报一次，记下位置避免重复计数。 */
+        private int lastUnknownTagPosition = -1;
 
-        private TextCleaner(boolean onlyContentRoot) {
+        private TextCleaner(boolean onlyContentRoot, String source) {
             this.onlyContentRoot = onlyContentRoot;
+            this.source = source;
         }
 
         @Override
         public void handleStartTag(HTML.Tag tag, MutableAttributeSet attributes, int position) {
-            if (onlyContentRoot && isContentRoot(tag)) {
+            if (onlyContentRoot && isContentRootTag(tag)) {
                 contentRootDepth++;
                 return;
             }
@@ -680,7 +725,7 @@ public class WebSearchTool implements Tool {
 
         @Override
         public void handleEndTag(HTML.Tag tag, int position) {
-            if (onlyContentRoot && isContentRoot(tag)) {
+            if (onlyContentRoot && isContentRootTag(tag)) {
                 contentRootDepth = Math.max(0, contentRootDepth - 1);
                 return;
             }
@@ -698,10 +743,41 @@ public class WebSearchTool implements Tool {
 
         @Override
         public void handleSimpleTag(HTML.Tag tag, MutableAttributeSet attributes, int position) {
+            if (handleUnknownTag(tag, position)) {
+                return;
+            }
             if ((!onlyContentRoot || contentRootDepth > 0)
                     && ignoredDepth == 0 && HTML.Tag.BR.equals(tag)) {
                 text.append("\n");
             }
+        }
+
+        /**
+         * 处理正文容器与忽略区里的未知标签（main、article、nav、header 等）。
+         * <p>
+         * 为什么必须放在 simpleTag：JDK 解析器把未知标签统一当 simpleTag 回调，开、闭标签共用同一个回调，
+         * 只能靠源码位置区分（见 isClosingTag）。已知标签（script、style、form 等）仍走
+         * handleStartTag/handleEndTag，不受这里影响；位置去重是为了防止个别实现同时报 start 和 simple。
+         *
+         * @return true 表示该标签已按容器或忽略区处理，调用方不再走块级标签逻辑
+         */
+        private boolean handleUnknownTag(HTML.Tag tag, int position) {
+            boolean contentRoot = isContentRootTag(tag);
+            boolean ignored = IGNORED_TAG_NAMES.contains(tag.toString().toLowerCase());
+            if (!contentRoot && !ignored) {
+                return false;
+            }
+            if (position == lastUnknownTagPosition) {
+                return true;
+            }
+            lastUnknownTagPosition = position;
+            boolean closing = isClosingTag(source, position);
+            if (contentRoot) {
+                contentRootDepth = closing ? Math.max(0, contentRootDepth - 1) : contentRootDepth + 1;
+            } else {
+                ignoredDepth = closing ? Math.max(0, ignoredDepth - 1) : ignoredDepth + 1;
+            }
+            return true;
         }
 
         @Override
@@ -712,16 +788,7 @@ public class WebSearchTool implements Tool {
         }
 
         private boolean isIgnoredTag(HTML.Tag tag) {
-            String tagName = tag.toString().toLowerCase();
-            return switch (tagName) {
-                case "head", "script", "style", "noscript", "svg", "nav", "header", "footer", "form", "aside", "iframe" -> true;
-                default -> false;
-            };
-        }
-
-        private boolean isContentRoot(HTML.Tag tag) {
-            String tagName = tag.toString().toLowerCase();
-            return "main".equals(tagName) || "article".equals(tagName);
+            return IGNORED_TAG_NAMES.contains(tag.toString().toLowerCase());
         }
 
         private boolean isBlockTag(HTML.Tag tag) {

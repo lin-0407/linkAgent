@@ -448,7 +448,7 @@ class CreativeIdeaManualEvaluationTest {
                 toolRegistry,
                 toolExecutor,
                 new ShortTermMemory(new InMemoryShortTermMemoryStore()),
-                new SummaryMemory(new SummaryMemoryProperties(false, 8, 2),
+                new SummaryMemory(new SummaryMemoryProperties(false, 256_000, 2),
                         prompt -> new org.springframework.ai.chat.model.ChatResponse(List.of()),
                         new StubPromptService()),
                 new LongTermMemory(null),

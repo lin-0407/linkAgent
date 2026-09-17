@@ -96,23 +96,24 @@ class RedisShortTermMemoryStoreTest {
     }
 
     @Test
-    void shouldTrimMessagesByConfiguredWindowSize() {
-        store.append("session-1", new MemoryMessage("Human", "first"), 2);
-        store.append("session-1", new MemoryMessage("AI", "second"), 2);
-        store.append("session-1", new MemoryMessage("Human", "third"), 2);
+    void shouldAppendMessagesWithoutWindowTrimming() {
+        store.append("session-1", new MemoryMessage("Human", "first"));
+        store.append("session-1", new MemoryMessage("AI", "second"));
+        store.append("session-1", new MemoryMessage("Human", "third"));
 
         List<MemoryMessage> messages = store.getRecentMessages("session-1");
 
+        // 按条数裁剪（LTRIM）已删除：存储层只负责追加，裁剪由摘要压缩后的 replaceMessages 完成。
         assertThat(messages)
                 .extracting(MemoryMessage::content)
-                .containsExactly("second", "third");
+                .containsExactly("first", "second", "third");
     }
 
     @Test
     void shouldKeepEscapedMessageContentReadable() {
         String content = "line-1\nline-2\twith-tab\\slash";
 
-        store.append("session-escape", new MemoryMessage("Human", content), 10);
+        store.append("session-escape", new MemoryMessage("Human", content));
 
         assertThat(store.getRecentMessages("session-escape"))
                 .containsExactly(new MemoryMessage("Human", content));
@@ -120,8 +121,8 @@ class RedisShortTermMemoryStoreTest {
 
     @Test
     void shouldReplaceMessages() {
-        store.append("session-1", new MemoryMessage("Human", "first"), 10);
-        store.append("session-1", new MemoryMessage("AI", "second"), 10);
+        store.append("session-1", new MemoryMessage("Human", "first"));
+        store.append("session-1", new MemoryMessage("AI", "second"));
 
         store.replaceMessages("session-1", List.of(new MemoryMessage("Human", "latest")));
 
@@ -131,9 +132,9 @@ class RedisShortTermMemoryStoreTest {
 
     @Test
     void shouldListSessionsWithLatestPreviewAndMessageCount() {
-        store.append("session-short", new MemoryMessage("Human", "hello"), 10);
-        store.append("session-long", new MemoryMessage("Human", "first"), 10);
-        store.append("session-long", new MemoryMessage("AI", "second response"), 10);
+        store.append("session-short", new MemoryMessage("Human", "hello"));
+        store.append("session-long", new MemoryMessage("Human", "first"));
+        store.append("session-long", new MemoryMessage("AI", "second response"));
 
         List<SessionInfo> sessions = store.listSessions();
 

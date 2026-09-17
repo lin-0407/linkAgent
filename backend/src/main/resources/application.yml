@@ -109,6 +109,10 @@ agent:
       # 单页正文超过 2000 字时，合并为一次轻量模型调用压缩，失败后自动保留原文。
       compression-enabled: ${WEB_SEARCH_COMPRESSION_ENABLED:true}
       compression-model: ${WEB_SEARCH_COMPRESSION_MODEL:deepseek-v4-flash}
+    # 工具结果体积控制：单条超过 2000 字符先摘要再进上下文，原文仍完整落 t_agent_step（A7 / D18）。
+    result-compression:
+      enabled: ${TOOL_RESULT_COMPRESSION_ENABLED:true}
+      model: ${TOOL_RESULT_COMPRESSION_MODEL:deepseek-v4-flash}
     execution:
       timeout-seconds: ${TOOL_EXECUTION_TIMEOUT_SECONDS:10}
       max-retries: ${TOOL_EXECUTION_MAX_RETRIES:0}
@@ -119,15 +123,20 @@ agent:
   llm:
     guard:
       enabled: ${LLM_GUARD_ENABLED:true}
-      max-prompt-chars: ${LLM_GUARD_MAX_PROMPT_CHARS:30000}
+      # 请求入口硬上限，单位 token（官方词表本地计量）。768k 只是兜底：
+      # 正常请求在 256k 就由记忆压缩处理，走不到这条线。
+      max-prompt-tokens: ${LLM_GUARD_MAX_PROMPT_TOKENS:768000}
 
   memory:
     short-term:
       # memory：进程内 Map；redis：共享 Redis List
       store-type: ${SHORT_TERM_MEMORY_STORE_TYPE:memory}
     summary:
-      enabled: ${SUMMARY_MEMORY_ENABLED:false}
-      trigger-message-count: ${SUMMARY_MEMORY_TRIGGER_MESSAGE_COUNT:8}
+      # 默认开启：短期记忆已不再按条数裁剪，摘要压缩是它唯一的瘦身路径；
+      # 关掉后长对话只能被下面的 token 硬上限拦下并直接报 400。
+      enabled: ${SUMMARY_MEMORY_ENABLED:true}
+      # 触发压缩的 token 阈值（官方词表本地计量）。256k 占 1M 窗口的 25.6%，给输出（上限 384K）留足余量。
+      trigger-token-threshold: ${SUMMARY_MEMORY_TRIGGER_TOKEN_THRESHOLD:256000}
       retained-message-count: ${SUMMARY_MEMORY_RETAINED_MESSAGE_COUNT:2}
 
 # ========== DeepSeek Flash 思考模式 ==========

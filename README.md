@@ -158,7 +158,10 @@ docker compose logs -f backend
 | `DEEPSEEK_REASONING_EFFORT` | `max` | DeepSeek Flash 思考强度，仅支持 `low`、`high`、`max` |
 | `LINKAGENT_AES_KEY` | 空 | 加密设置页保存的模型密钥 |
 | `LLM_GUARD_ENABLED` | `true` | 是否启用 Prompt 长度保护 |
-| `LLM_GUARD_MAX_PROMPT_CHARS` | `30000` | 单次模型输入字符上限 |
+| `LLM_GUARD_MAX_PROMPT_TOKENS` | `768000` | 单次模型输入 token 上限（官方词表本地计量） |
+| `SUMMARY_MEMORY_ENABLED` | `true` | 是否启用摘要压缩；关闭后不再按条数裁剪，只剩 token 硬上限兜底 |
+| `SUMMARY_MEMORY_TRIGGER_TOKEN_THRESHOLD` | `256000` | 上下文超过该 token 数时先摘要再裁剪短期记忆 |
+| `TOOL_RESULT_COMPRESSION_ENABLED` | `true` | 超长工具结果是否先摘要再进上下文 |
 
 ### RAG 与向量检索
 

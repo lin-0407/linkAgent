@@ -16,10 +16,11 @@ class LLMServiceTest {
     void shouldRejectPromptWhenGuardEnabledAndPromptTooLong() {
         LlmCallGuardProperties properties = new LlmCallGuardProperties();
         properties.setEnabled(true);
-        properties.setMaxPromptChars(10);
+        // 上限 1 token：任何正常中英文输入都会超过它，这里验证的是「按 token 拦截」这条路径本身。
+        properties.setMaxPromptTokens(1);
         LLMService service = new LLMService(properties);
 
-        assertThatThrownBy(() -> service.validatePromptLength("system", "123456"))
+        assertThatThrownBy(() -> service.validatePromptLength("这是一段系统提示词", "这是一段用户输入"))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("输入过长");
     }
@@ -28,7 +29,7 @@ class LLMServiceTest {
     void shouldAllowPromptWhenGuardDisabled() {
         LlmCallGuardProperties properties = new LlmCallGuardProperties();
         properties.setEnabled(false);
-        properties.setMaxPromptChars(10);
+        properties.setMaxPromptTokens(1);
         LLMService service = new LLMService(properties);
 
         assertThatCode(() -> service.validatePromptLength("system", "123456789012345"))
@@ -36,15 +37,15 @@ class LLMServiceTest {
     }
 
     @Test
-    void shouldNotDisableGuardWhenMaxPromptCharsIsZero() {
+    void shouldNotDisableGuardWhenMaxPromptTokensIsZero() {
         LlmCallGuardProperties properties = new LlmCallGuardProperties();
         properties.setEnabled(true);
-        properties.setMaxPromptChars(0);
+        properties.setMaxPromptTokens(0);
         LLMService service = new LLMService(properties);
 
         assertThatThrownBy(() -> service.validatePromptLength("system", "user"))
                 .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("当前限制为 1 个字符");
+                .hasMessageContaining("当前限制约 1 token");
     }
 
     @Test
