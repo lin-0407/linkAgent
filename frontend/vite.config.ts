@@ -1,8 +1,13 @@
 import { fileURLToPath, URL } from 'node:url'
 
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
+
+// 代理目标可覆盖：默认仍是 localhost:8080；本机后端换端口时用 frontend/.env.local 里的
+// VITE_API_PROXY_TARGET 指定（.env.local 被 frontend/.gitignore 的 *.local 规则忽略），仓库默认值不变。
+const env = loadEnv(process.env.NODE_ENV ?? 'development', process.cwd(), '')
+const apiProxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8080'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -13,7 +18,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: apiProxyTarget,
         changeOrigin: true,
       },
     },

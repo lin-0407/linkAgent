@@ -287,6 +287,8 @@ export function useAgentChat() {
     isSessionsOpen.value = false
     await loadSessionMessages(session.sessionId)
     await loadSessions()
+    // 换会话等于换了全部内容，直接贴到最新消息
+    await scrollToBottom()
   }
 
   async function loadSessionMessages(targetSessionId: string) {
@@ -306,6 +308,13 @@ export function useAgentChat() {
     }
   }
 
+  /**
+   * 滚到底部。
+   * 为什么用瞬时定位而不是 behavior:'smooth'：流式输出时每个 token 都会调用一次，
+   * 平滑动画的耗时远大于 token 到达间隔，新动画不断打断旧动画，滚动位置就永远追不上内容
+   * （实测流式追加 150 次后仍落后 5000px 以上，而且流结束后也不会自己补上，
+   * 表现就是"滚动条跟不上输出，只有关掉浮窗重开才正常"）。
+   */
   async function scrollToBottom() {
     await nextTick()
     const el = messageListRef.value
@@ -313,10 +322,7 @@ export function useAgentChat() {
       return
     }
 
-    el.scrollTo({
-      top: el.scrollHeight,
-      behavior: 'smooth',
-    })
+    el.scrollTo({ top: el.scrollHeight })
   }
 
   function persistSessionId(value: string) {

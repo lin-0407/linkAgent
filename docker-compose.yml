@@ -108,8 +108,14 @@ services:
       # 后端运行时需执行根目录 scripts 下的受控采集脚本，构建上下文必须覆盖该目录。
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        # 默认官方 apt 源；本地直连不稳定时在 .env 里设 APT_UBUNTU_MIRROR=http://mirrors.aliyun.com。
+        APT_UBUNTU_MIRROR: ${APT_UBUNTU_MIRROR:-http://archive.ubuntu.com}
     logging: *default-logging
     environment:
+      # 容器内端口钉死 8080：nginx 把 /api 代理到 backend:8080，而 application.yml 里的 server.port
+      # 在本地可能被改成别的值（例如避开宿主机 8080 上的其它服务）。这里显式覆盖，容器内不受影响。
+      SERVER_PORT: "8080"
       DB_URL: "jdbc:mysql://mysql:3306/link_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai"
       DB_USERNAME: ${MYSQL_USER:-link_agent}
       DB_PASSWORD: ${MYSQL_PASSWORD:-link_agent_password}

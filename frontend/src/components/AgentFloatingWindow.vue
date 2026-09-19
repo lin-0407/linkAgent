@@ -128,6 +128,7 @@ const {
   sendMessage,
   stopStreaming,
   sessionId,
+  scrollToBottom,
   sessions,
   sessionsError,
   startNewSession,
@@ -187,6 +188,9 @@ function openFloatingWindow() {
   isMinimized.value = false
   keepWindowInsideViewport()
   focusComposer()
+  // 浮窗关闭时消息列表整个被销毁，重开后滚动位置从 0 开始；
+  // 这里补一次贴底，避免"重开浮窗后停在最旧的一条消息上"。
+  void scrollToBottom()
 }
 
 function closeFloatingWindow() {

@@ -82,8 +82,10 @@ public class TokenCounter {
             synchronized (current) {
                 return current.encode(text, false, false).getIds().length;
             }
-        } catch (RuntimeException exception) {
-            logFallbackOnce(exception);
+        } catch (Throwable error) {
+            // 必须兜住 Throwable：DJL 的原生库加载失败抛的是 NoClassDefFoundError / UnsatisfiedLinkError
+            // 这类 Error，只 catch Exception 会让它们直接击穿到调用方（历史上表现为流式接口静默挂住）。
+            logFallbackOnce(error);
             return fallbackCount(text);
         }
     }
@@ -110,8 +112,9 @@ public class TokenCounter {
             HuggingFaceTokenizer loaded = HuggingFaceTokenizer.newInstance(stream, TOKENIZER_OPTIONS);
             log.info("DeepSeek 官方词表加载完成，本地 token 计量可用");
             return loaded;
-        } catch (Exception exception) {
-            logFallbackOnce(exception);
+        } catch (Throwable error) {
+            // 同上：类初始化失败（ExceptionInInitializerError）也是 Error，必须一起兜住。
+            logFallbackOnce(error);
             return null;
         }
     }
@@ -121,10 +124,10 @@ public class TokenCounter {
     }
 
     /** 兜底只提示一次，避免每次模型调用都刷同一条日志。 */
-    private void logFallbackOnce(Exception exception) {
+    private void logFallbackOnce(Throwable error) {
         if (fallbackLogged.compareAndSet(false, true)) {
-            log.error("DeepSeek 官方词表不可用，token 计量已降级为按字符估算（阈值会有偏差）：{}",
-                    exception.getMessage());
+            log.error("DeepSeek 官方词表不可用（{}），token 计量已降级为按字符估算（阈值会有偏差）：{}",
+                    error.getClass().getName(), error.getMessage());
         }
     }
 }

@@ -1,5 +1,6 @@
 server:
-  port: 8080
+  # 本地 IDE 默认 8081（前端 vite 代理指向它）；容器通过 SERVER_PORT 覆盖为 8080（nginx 固定代理 backend:8080）。
+  port: ${SERVER_PORT:8081}
   # HTTPS 反向代理存在时，让 request.isSecure() 正确识别外层协议。
   # 设置为 framework 后，Spring 会解析 X-Forwarded-Proto / X-Forwarded-Ssl，
   # 从而只在 HTTPS 请求中给媒体会话 Cookie 设置 Secure；HTTP 演示环境不依赖此项。
@@ -8,6 +9,12 @@ server:
 spring:
   application:
     name: link-agent
+
+  # 本地 IDE 固定走 dev：本机相关的值（数据库地址、密钥、开关）都写在 application-dev.yml 里，
+  # 那个文件在 .gitignore 中，内容与仓库根目录 .env 一致，两边不会互相污染。
+  # 容器/线上没有这个文件：profile 激活后加载不到任何东西，仍然用 docker-compose 的环境变量。
+  profiles:
+    active: dev
 
   servlet:
     multipart:

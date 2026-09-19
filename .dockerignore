@@ -7,6 +7,8 @@ backend/*
 !backend/pom.xml
 !backend/src/
 !backend/src/**
+# 本地 dev 配置是 gitignore 的私人文件（含本机库地址和密钥），绝不能打进镜像。
+backend/src/main/resources/application-dev.yml
 
 !scripts/
 !scripts/**

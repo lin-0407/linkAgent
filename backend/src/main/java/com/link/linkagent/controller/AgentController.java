@@ -21,6 +21,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -136,9 +137,23 @@ public class AgentController {
         // 异步执行 Agent 推理：让 Controller 立即返回 emitter 建立 SSE 连接，
         // Agent 推理在独立线程中逐步推送事件；不阻塞 HTTP 响应发送
         CompletableFuture.runAsync(() -> {
-            agentExecutor.runStreaming(
-                    request.sessionId(), request.userId(), request.message(),
-                    request.executionMode(), emitter);
+            try {
+                agentExecutor.runStreaming(
+                        request.sessionId(), request.userId(), request.message(),
+                        request.executionMode(), emitter);
+            } catch (Throwable error) {
+                // 为什么必须兜住 Throwable：runStreaming 只处理 Exception，NoClassDefFoundError、
+                // UnsatisfiedLinkError 这类 Error 会直接逃出异步任务，而 CompletableFuture 会把它们吞掉——
+                // 结果就是客户端"发了消息一直没有响应"，日志里连一行都没有。
+                log.error("流式 Agent 执行抛出未捕获错误，sessionId={}", request.sessionId(), error);
+                try {
+                    emitter.send(SseEmitter.event().name("error")
+                            .data(Map.of("message", "服务内部错误：" + error.getClass().getSimpleName())));
+                } catch (Exception ignored) {
+                    // 客户端可能已断开，这里不再二次处理
+                }
+                emitter.completeWithError(error);
+            }
         });
         return emitter;
     }
