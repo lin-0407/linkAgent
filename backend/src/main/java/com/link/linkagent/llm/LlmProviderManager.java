@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
@@ -244,6 +245,8 @@ public class LlmProviderManager {
 
         // 发送 HTTP 请求
         RestClient restClient = RestClient.builder()
+                // 备用链同样绕过 Boot builder，保持与正式、strict 调用一致的分块响应读取方式。
+                .requestFactory(new JdkClientHttpRequestFactory())
                 .baseUrl(provider.getBaseUrl())
                 .build();
 

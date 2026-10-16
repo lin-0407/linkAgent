@@ -19,6 +19,7 @@ import {
 import CompetitorAnalysisModal from '@/components/creator/CompetitorAnalysisModal.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
 import KnowledgeImportForm from '@/components/knowledge/KnowledgeImportForm.vue'
+import KnowledgeAutoCollection from '@/components/knowledge/KnowledgeAutoCollection.vue'
 import KnowledgeVideoList from '@/components/knowledge/KnowledgeVideoList.vue'
 import KnowledgeTopicSearch from '@/components/knowledge/KnowledgeTopicSearch.vue'
 import { knowledgeTierLabel } from '@/components/knowledge/knowledgeDisplay'
@@ -198,6 +199,11 @@ function handlePageChange(targetPage: number) {
   void loadList()
 }
 
+function handleAutoCollectionFinished() {
+  page.value = 1
+  void loadList()
+}
+
 async function submitSearch(query: string, tier: string, category: string, strategy: string, targetPage: number) {
   if (searching.value) {
     return
@@ -277,6 +283,8 @@ onMounted(() => {
         :message="notice?.message ?? ''"
         @close="closeNotice"
       />
+
+      <KnowledgeAutoCollection @finished="handleAutoCollectionFinished" />
 
       <KnowledgeVideoList
         :items="items"

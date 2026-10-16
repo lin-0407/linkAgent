@@ -1,4 +1,6 @@
 import type {
+  ReferenceAutoCollectionSettings,
+  ReferenceAutoCollectionState,
   ReferenceVideo,
   ReferenceVideoAnalysisContext,
   ReferenceVideoFetchImportPayload,
@@ -11,6 +13,18 @@ import type {
   ReferenceVideoTopicSearchResult,
 } from '@/types/knowledge'
 import { get, post } from './http'
+
+export function getReferenceAutoCollection() {
+  return get<ReferenceAutoCollectionState>('/knowledge/reference-videos/auto-collection')
+}
+
+export function startReferenceAutoCollection(settings: ReferenceAutoCollectionSettings) {
+  return post<ReferenceAutoCollectionState>('/knowledge/reference-videos/auto-collection', settings)
+}
+
+export function stopReferenceAutoCollection() {
+  return post<ReferenceAutoCollectionState>('/knowledge/reference-videos/auto-collection/stop')
+}
 
 // ── 案例库 CRUD ──
 

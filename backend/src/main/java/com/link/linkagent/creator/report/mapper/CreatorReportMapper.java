@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.report.mapper;
 
 import com.link.linkagent.creator.report.model.CreatorReportRecord;
+import com.link.linkagent.creator.report.model.CreatorReportHistorySummary;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -13,7 +14,7 @@ import java.util.Optional;
 
 /**
  * 创作复盘报告访问层。
- * 当前每个任务只保留一份最新复盘报告，先满足 MVP 闭环，后续需要对比时再引入版本表。
+ * 最新报告供工作台和偏好读取，每次成功生成另存不可覆盖的历史快照。
  */
 @Mapper
 public interface CreatorReportMapper {
@@ -108,4 +109,36 @@ public interface CreatorReportMapper {
             @Result(column = "update_time", property = "updateTime")
     })
     Optional<CreatorReportRecord> findByTaskId(@Param("taskId") String taskId);
+    // 历史标识沿用本次报告标识，补存旧最新报告时可幂等，重新生成仍产生新标识。
+    @Insert("""
+            INSERT INTO creator_report_history
+                (history_id, task_id, feedback_report_id, competitor_report_id, report_snapshot)
+            VALUES (#{historyId}, #{taskId}, #{feedbackReportId}, #{competitorReportId}, #{snapshot})
+            ON DUPLICATE KEY UPDATE history_id = VALUES(history_id)
+            """)
+    int insertHistory(@Param("historyId") String historyId, @Param("taskId") String taskId,
+                      @Param("feedbackReportId") String feedbackReportId,
+                      @Param("competitorReportId") String competitorReportId,
+                      @Param("snapshot") String snapshot);
+
+    @Select("""
+            SELECT history_id AS historyId,
+                   LEFT(JSON_UNQUOTE(JSON_EXTRACT(report_snapshot, '$.overallConclusion')), 160) AS overallConclusion,
+                   CASE WHEN feedback_report_id IS NULL THEN NULL
+                        ELSE competitor_report_id IS NOT NULL END AS hasCompetitor,
+                   create_time AS createTime
+            FROM creator_report_history WHERE task_id = #{taskId}
+            ORDER BY create_time DESC, id DESC LIMIT #{size} OFFSET #{offset}
+            """)
+    List<CreatorReportHistorySummary> listHistory(@Param("taskId") String taskId,
+                                                @Param("size") int size, @Param("offset") int offset);
+
+    @Select("SELECT COUNT(*) FROM creator_report_history WHERE task_id = #{taskId}")
+    long countHistory(@Param("taskId") String taskId);
+
+    @Select("""
+            SELECT report_snapshot FROM creator_report_history
+            WHERE task_id = #{taskId} AND history_id = #{historyId} LIMIT 1
+            """)
+    Optional<String> findHistorySnapshot(@Param("taskId") String taskId, @Param("historyId") String historyId);
 }

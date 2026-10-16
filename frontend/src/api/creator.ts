@@ -12,6 +12,7 @@ import type {
   CreatorFeedbackImportResult,
   CreatorFeedbackReport,
   CreatorReport,
+  CreatorReportHistoryPage,
   CreatorEvalCase,
   CreatorEvalPromptVersionStats,
   CreatorEvalResult,
@@ -345,6 +346,18 @@ export function analyzeCreatorReport(taskId: string) {
 
 export function getCreatorReport(taskId: string) {
   return get<CreatorReport>(`/creator/tasks/${encodeURIComponent(taskId)}/report`)
+}
+
+export function listCreatorReportHistory(taskId: string, page = 1, size = 10) {
+  return get<CreatorReportHistoryPage>(`/creator/tasks/${encodeURIComponent(taskId)}/report/history`, {
+    params: { page, size },
+  })
+}
+
+export function getCreatorReportHistory(taskId: string, historyId: string) {
+  return get<CreatorReport>(
+    `/creator/tasks/${encodeURIComponent(taskId)}/report/history/${encodeURIComponent(historyId)}`,
+  )
 }
 
 export function exportCreatorReportMarkdown(taskId: string) {

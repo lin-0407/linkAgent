@@ -74,13 +74,21 @@ public class DeepSeekThinkingOptionsFactory {
     }
 
     /**
+     * 当前模型与运行期设置下，本次请求是否会实际带上思考参数。
+     * <p>
+     * 抽成公开判断是因为调用方要据此选择请求形状：思考模式不接受强制 tool_choice
+     * （指定具体函数返回 {@code 400 Thinking mode does not support this tool_choice}，2026-09-19 真实接口实测），
+     * 严格结构化调用需要在「强制结果函数」和 auto 之间切换。
+     */
+    public boolean isThinkingEnabled(String modelName) {
+        return DeepSeekThinkingProperties.isDeepSeekFlashModel(effectiveModelName(modelName)) && isEnabled();
+    }
+
+    /**
      * 返回日志需要记录的思考等级；非 Flash 或关闭思考时为空，避免把未发送的参数伪装成实际请求参数。
      */
     public String reasoningEffortForLog(String modelName) {
-        if (!DeepSeekThinkingProperties.isDeepSeekFlashModel(effectiveModelName(modelName)) || !isEnabled()) {
-            return null;
-        }
-        return reasoningEffort();
+        return isThinkingEnabled(modelName) ? reasoningEffort() : null;
     }
 
     public String effectiveModelName(String modelName) {

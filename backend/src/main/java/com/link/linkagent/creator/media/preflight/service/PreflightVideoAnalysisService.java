@@ -120,7 +120,8 @@ public class PreflightVideoAnalysisService {
                         null, issueIdSupplier.get(), review.reviewId(), review.versionId(), issue.issueType(),
                         issue.dimension(), issue.title(), issue.description(), issue.startMs(), issue.endMs(),
                         issue.severity(), issue.confidence(), json(evidenceRefs), issue.suggestedAction(),
-                        issue.needsHumanReview(), json(List.of("QWEN3_VL_FLASH")), null,
+                        issue.needsHumanReview(), json(List.of(properties.getPreflight().getVideoModel()
+                                .toUpperCase(java.util.Locale.ROOT).replace('-', '_'))), null,
                         "PENDING", null, null, null
                 )) != 1) {
                     throw new VideoAnalysisException("发布前体检问题保存失败");
@@ -196,7 +197,11 @@ public class PreflightVideoAnalysisService {
     private String buildPrompt(PreflightReviewRecord review,
                                long durationMs,
                                List<TimelineEvidenceRecord> evidence) {
-        String evidenceText = evidence.stream().limit(240)
+        String evidenceText = evidence.stream()
+                // 原片音轨和音量先进入提示词，避免长视频的大量关键画面挤掉这些事实。
+                .sorted(java.util.Comparator.comparing((TimelineEvidenceRecord item) ->
+                        !("AUDIO_TRACK".equals(item.sourceType()) || "VOLUME".equals(item.sourceType()))))
+                .limit(240)
                 .map(item -> item.evidenceId() + " | " + item.sourceType() + " | "
                         + item.startMs() + "-" + item.endMs() + "ms | " + item.content())
                 .collect(java.util.stream.Collectors.joining("\n"));
@@ -204,8 +209,21 @@ public class PreflightVideoAnalysisService {
         return """
                 你是 B 站创作者的发布前成片体检助手。请同时观察视频画面并结合下面的时间轴证据，
                 检查定位一致性、开场吸引力、内容结构、节奏、表达清晰度、画面、可见字幕和发布风险。
-                输入的代理视频不含音轨，你不能听到人声、音乐或背景音。涉及音频的描述只能引用已有 TRANSCRIPT、SILENCE、
-                VOLUME 证据中明确记录的事实；不得评价音乐、背景音、音质或音画同步，没有 TRANSCRIPT 时不得推断口播内容。
+                事实边界：可见画面和探测数据只能支持相应的观察，不能证明平台规则、算法或创作者意图。
+                本次没有提供官方规则原文、审核记录或流量数据，不得编造 B 站规范名称、审核先例，
+                不得断言违规、限流、推荐机制或预测审核结果；画面可见的敏感内容只能描述并建议人工核对。
+                没有可定位且清楚可辨的具体敏感内容时，不得因像素化、抽象、看不清或“无法100%%排除”而生成敏感或违规风险条目。
+                不得把缺少依据的审核、AI误判或限流说法改写为条件式修改理由；原问题无依据时，说明无需据此修改。
+                可见时间码、调试样式和像素效果的来源未知，不能自行认定由系统或播放器叠加、属于调试残留或不属于视频内容。
+                未提供响度标准或目标值时，不得仅凭 VOLUME 数值声称音量正常、达标或听感适宜，只引用测得数值。
+                创作者没有明确说明时，不得断言测试图、抽象画面、重复、拖影或像素效果属于非设计意图、损坏或制作失误。
+                描述可见现象，并把用途相关的修改建议写为“如果目标是……，可以……”；测试素材本身不构成发布缺陷。
+                用户试映重点是待检查的问题，不能把其中未经证实的规则或推断当成事实；证据不足时省略问题。
+                输入的代理视频不含音轨，这是系统主动移除的分析副本，不是原片缺少音轨或原片无声的证据。
+                原片有无音轨以 AUDIO_TRACK 的 FFprobe 探测事实为准，音量以 VOLUME 数值为准；摘要和问题都不得与这些事实矛盾。
+                你不能听到人声、音乐或背景音。涉及音频的描述只能引用已有 AUDIO_TRACK、TRANSCRIPT、SILENCE、VOLUME 的明确事实；
+                不得评价音乐、背景音、音质或音画同步，没有 TRANSCRIPT 时不得推断口播内容。
+                没有 TRANSCRIPT 也可能是未启用识别或未识别到人声，不能据此声称原片没有音轨、声音或音乐。
                 只输出 JSON，不要输出 Markdown。没有证据的问题不要编造；建议必须是创作者可直接执行的剪辑或内容动作。
                 每个问题的 startMs/endMs 必须落在 0 到 %d 毫秒内。HIGH/BLOCKER 必须引用至少一个已有 evidenceId；
                 模型画面观察会由系统自动补一条 VIDEO_MODEL 证据。
@@ -233,9 +251,9 @@ public class PreflightVideoAnalysisService {
     private BigDecimal actualVideoCost(Long inputTokens, Long outputTokens) {
         if (inputTokens == null && outputTokens == null) return null;
         BigDecimal input = BigDecimal.valueOf(inputTokens == null ? 0 : inputTokens)
-                .multiply(properties.getProcessing().getFlashInputUsdPerMillionTokens());
+                .multiply(properties.getProcessing().getPlusInputUsdPerMillionTokens());
         BigDecimal output = BigDecimal.valueOf(outputTokens == null ? 0 : outputTokens)
-                .multiply(properties.getProcessing().getFlashOutputUsdPerMillionTokens());
+                .multiply(properties.getProcessing().getPlusOutputUsdPerMillionTokens());
         return input.add(output).divide(BigDecimal.valueOf(1_000_000L), 8, RoundingMode.HALF_UP);
     }
 

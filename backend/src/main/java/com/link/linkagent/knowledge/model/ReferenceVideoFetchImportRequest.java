@@ -7,7 +7,7 @@ import jakarta.validation.constraints.Size;
  * 「输入 BV → 后端调脚本采集 → 自动清洗导入」一键接口的请求体。
  * <p>
  * 单 BV 是项目约束里明确允许的「用户显式触发限量采集」，所以走前端→后端→脚本这条显式链路；
- * 榜单批量仍只能在离线脚本里跑（不进后端）。tier / category 可选，留空时由脚本与导入服务按 manual_bv 兜底。
+ * 自动发现批量采集由独立自动采集入口调用既有脚本。tier / category 可选，留空时按 manual_bv 兜底。
  */
 public record ReferenceVideoFetchImportRequest(
 

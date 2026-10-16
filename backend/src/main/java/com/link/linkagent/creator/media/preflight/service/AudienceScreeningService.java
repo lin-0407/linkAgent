@@ -30,7 +30,7 @@ import java.util.UUID;
 @ConditionalOnProperty(prefix = "creator.media", name = "enabled", havingValue = "true")
 public class AudienceScreeningService {
 
-    private static final String PROMPT_VERSION = "audience_screening_v1";
+    private static final String PROMPT_VERSION = "audience_screening_v3_evidence_bounds";
     private static final Set<String> PERSONAS = Set.of("CASUAL", "TARGET", "CORE_FAN");
 
     private final PreflightReviewMapper mapper;
@@ -157,6 +157,18 @@ public class AudienceScreeningService {
                 你是 B 站创作者的发布前三类观众试映助手。你没有真实观众数据，只能基于给定摘要、问题和证据做试映假设。
                 必须一次返回 CASUAL、TARGET、CORE_FAN 三类角色，不得声称已经采访真实用户，不得给出精确播放量、留存率或转化率。
                 结论使用“可能、倾向、试映假设”等克制表达，并给创作者简短、可理解的反馈。
+                摘要、问题和 VIDEO_MODEL 是上游模型判断，不能代替独立事实；重复出现或高置信度不能证明它们成立。
+                本次没有提供官方规则原文、审核记录或流量数据，不得沿用或编造 B 站规范名称、审核先例，
+                不得断言违规、限流、推荐机制或预测审核结果；改用观众能观察到的现象及条件式建议。
+                没有可定位且清楚可辨的具体敏感内容时，不得因像素化、抽象、看不清或“无法100%排除”而生成敏感或违规风险条目。
+                不得把缺少依据的审核、AI误判或限流说法改写为条件式修改理由；原问题无依据时，说明无需据此修改。
+                可见时间码、调试样式和像素效果的来源未知，不能自行认定由系统或播放器叠加、属于调试残留或不属于视频内容。
+                未提供响度标准或目标值时，不得仅凭 VOLUME 数值声称音量正常、达标或听感适宜，只引用测得数值。
+                创作者没有明确说明时，不得把测试图、抽象画面、重复、拖影或像素效果断言为非设计意图、损坏或制作失误。
+                “可能”或低置信度不能用于补造缺失的事实。作者关注重点中的未经证实推断也不是事实依据。
+                未提供创作者历史作品和真实粉丝反馈时，不得声称既有风格、内容重复或粉丝实际期待；明确这些信息未知。
+                原片音轨以 AUDIO_TRACK 的 FFprobe 探测事实为准，音量以 VOLUME 为准；摘要或模型问题与探测事实冲突时，以探测事实为准。
+                分析代理视频主动去掉音轨不表示原片无声，没有转写文本也不表示原片没有音轨、声音或音乐；不得臆测声音类型或音质。
                 """;
     }
 
@@ -167,8 +179,12 @@ public class AudienceScreeningService {
                 .map(issue -> issue.issueId() + " | " + issue.severity() + " | " + issue.startMs()
                         + "-" + issue.endMs() + "ms | " + issue.title() + " | " + issue.description())
                 .collect(java.util.stream.Collectors.joining("\n"));
-        String evidenceText = evidence.stream().limit(160)
-                .map(item -> item.evidenceId() + " | " + item.startMs() + "-" + item.endMs()
+        String evidenceText = evidence.stream()
+                // 原片音轨和音量先进入提示词，避免长视频的大量关键画面挤掉这些事实。
+                .sorted(java.util.Comparator.comparing((TimelineEvidenceRecord item) ->
+                        !("AUDIO_TRACK".equals(item.sourceType()) || "VOLUME".equals(item.sourceType()))))
+                .limit(160)
+                .map(item -> item.evidenceId() + " | " + item.sourceType() + " | " + item.startMs() + "-" + item.endMs()
                         + "ms | " + item.content())
                 .collect(java.util.stream.Collectors.joining("\n"));
         return """
@@ -184,7 +200,7 @@ public class AudienceScreeningService {
                 角色关注点：
                 - CASUAL：前 30 秒是否看懂、是否愿意继续、哪里可能感到拖沓。
                 - TARGET：核心承诺是否兑现、步骤是否有用、还缺什么证据。
-                - CORE_FAN：是否符合创作者既有风格、是否重复、期待是否被满足。
+                - CORE_FAN：从熟悉创作者的假想角色关注表达连贯性；只有给定历史作品或粉丝反馈时才比较风格、重复和期待。
 
                 每个角色返回：personaType、overallReaction、interestPoints、confusionPoints、dropRisks、
                 evidenceRefs、affectedIssueIds、confidence。引用只能使用上面出现的 evidenceId 和 issueId。

@@ -1,10 +1,12 @@
 package com.link.linkagent.creator.competitor.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorAnalyzeRequest;
+import com.link.linkagent.creator.competitor.model.CreatorCompetitorAnalysisOutput;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportRecord;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportResponse;
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorSampleRecord;
@@ -31,11 +33,13 @@ import com.link.linkagent.util.TextUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * 竞品分析服务 —— 通过 B 站同类优秀视频建立对照基准，输出差异化策略和改进建议。
@@ -78,6 +82,18 @@ public class CreatorCompetitorService {
      */
     private static final int MATERIAL_MAX_LENGTH = 4000;
 
+    // 公开计数不能解释流量来源或算法；运行时补充，避免旧库与自定义模板漏掉依据约束。
+    private static final String COMPETITOR_EVIDENCE_BOUNDARY = """
+            竞品分析必须区分已提供的事实、未知项和待验证建议。
+            播放、点赞、投币、收藏、评论、弹幕计数只支持描述计数或计算相应比率；没有流量来源数据、完播数据或独立观众数据时，不能反推主要依赖推荐流、看完即赞、讨论人数占比或完播效果。
+            没有可核验的平台来源时，不得断言B站推荐算法、审核规范、流量惩罚、互动权重或分发机制；改进建议只能说明待验证的观众体验假设，不能编写平台规则作理由。
+            未读取竞品视频本身时，标题、简介及精选评论弹幕不能证明镜头、音效、节奏、内容结构或创作者的创作意图；完全缺失的内容依据不能用“推断”或“低置信度”补足。
+            自身材料和发布方案属于草稿或发布前设想，不等于已发布事实；缺少发布后原文时不得把草稿当作正式标题、实际内容或已采用策略。
+            任务名称只是管理标识，不是视频内容依据；具体优势或短板无法确认时，在对应字段中明确资料不足、无法判断。
+            不同视频的发布时间、统计时点、曝光规模或样本范围不一致时，比例只能描述各自快照，不能仅凭绝对量或比率断定质量优劣和因果。
+            """;
+
+
     /**
      * 竞品样本（如字幕/文稿）的最大截断长度。
      * 12000 字符对应约 5000~7000 Token。竞品视频的全量字幕可能数万字，
@@ -104,6 +120,10 @@ public class CreatorCompetitorService {
     private final ObjectMapper objectMapper;
     /** 提示词模板服务（加载和渲染竞品分析的系统/用户提示词模板） */
     private final PromptService promptService;
+    /** 事务模板：竞品分析模型调用在事务外，报告落库单独走短事务 */
+    private final TransactionTemplate transactionTemplate;
+    /** 只读已核验 BV 的正式公开资料，入口与保存前复核使用同一快照读法。 */
+    private final CreatorPublishedVideoContextService publishedVideoContextService;
 
     public CreatorCompetitorService(CreatorTaskMapper creatorTaskMapper,
                                     CreatorSuggestionMapper creatorSuggestionMapper,
@@ -113,7 +133,9 @@ public class CreatorCompetitorService {
                                     KnowledgeReferenceVideoMapper knowledgeReferenceVideoMapper,
                                     LLMService llmService,
                                     ObjectMapper objectMapper,
-                                    PromptService promptService) {
+                                    PromptService promptService,
+                                    TransactionTemplate transactionTemplate,
+                                    CreatorPublishedVideoContextService publishedVideoContextService) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
@@ -123,6 +145,8 @@ public class CreatorCompetitorService {
         this.llmService = llmService;
         this.objectMapper = objectMapper;
         this.promptService = promptService;
+        this.transactionTemplate = transactionTemplate;
+        this.publishedVideoContextService = publishedVideoContextService;
     }
 
     /**
@@ -203,23 +227,12 @@ public class CreatorCompetitorService {
      * @param request 分析请求，含可选的 customGuidance、analysisFocus、extraRequirement
      * @return 完整的竞品分析报告响应（含解析后的结构化字段）
      */
-    @Transactional
     public CreatorCompetitorReportResponse analyze(String taskId, CreatorCompetitorAnalyzeRequest request) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
-        CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord);
-        // 手动竞品分析要求先登记竞品视频（BV + 文稿），与参考案例路径不同
-        CreatorCompetitorSampleRecord sampleRecord = creatorCompetitorMapper.findCompetitorVideoByTaskId(taskRecord.getTaskId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先提交同类型竞品视频"));
-        List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
-        CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId()).orElse(null);
-        return executeAnalyze(
-                taskRecord,
-                materials,
-                suggestionRecord,
-                feedbackReportRecord,
-                sampleRecord,
-                request
-        );
+        // 手动竞品分析要求先登记竞品视频（BV + 文稿），与参考案例路径不同；
+        // 读法和校验都收在 buildManualCompetitorPrompt 里，保存前复核复用同一份读法。
+        return executeAnalyze(taskRecord.getTaskId(),
+                () -> buildManualCompetitorPrompt(taskRecord.getTaskId(), request));
     }
 
     /**
@@ -246,73 +259,104 @@ public class CreatorCompetitorService {
      * @param request          分析请求，含可选的 customGuidance、analysisFocus、extraRequirement
      * @return 完整的竞品分析报告响应
      */
-    @Transactional
     public CreatorCompetitorReportResponse analyzeByReferenceVideo(
             String taskId, String referenceVideoId, CreatorCompetitorAnalyzeRequest request) {
         // 1. 校验任务存在
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
-        CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord);
-        // 2. 从知识库读取参考案例视频数据
-        ReferenceVideoRecord refVideo = knowledgeReferenceVideoMapper.findByVideoId(referenceVideoId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "参考案例不存在"));
-        // 3. 读取优质评论/弹幕作为"竞品反馈/样本"（取 50 条高价值证据，避免上下文溢出）
-        List<ReferenceVideoItemRecord> refItems = knowledgeReferenceVideoMapper.listEvidenceItemsByVideoId(referenceVideoId, 50);
-        // 4. 加载任务的其他上下文数据（素材、选题建议、数据反馈）
-        List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
-        CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId()).orElse(null);
-        // 5. 将参考案例数据组装为虚拟竞品样本记录，复用已有 prompt 拼装逻辑
-        CreatorCompetitorSampleRecord virtualSample = buildVirtualSampleFromReference(refVideo, refItems);
-        // 6. 执行分析（复用核心引擎）
-        return executeAnalyze(
-                taskRecord,
-                materials,
-                suggestionRecord,
-                feedbackReportRecord,
-                virtualSample,
-                request
-        );
+        // 2. 读参考案例、素材和选题建议并渲染提示词（保存前复核复用同一份读法）
+        return executeAnalyze(taskRecord.getTaskId(),
+                () -> buildReferenceCompetitorPrompt(taskRecord.getTaskId(), referenceVideoId, request));
     }
 
     /**
-     * 核心分析执行引擎：组装 prompt → LLM 调用 → 解析 → 持久化 → 更新任务状态。
+     * 按手动登记的竞品样例读取上下文并渲染提示词。
      * <p>
-     * 抽取为独立方法供 {@link #analyze} 和 {@link #analyzeByReferenceVideo} 共用，
-     * 避免 LLM 调用、结果解析、报告持久化三块逻辑在两处重复维护。
+     * 入口校验和保存前复核都调用它，保证两处读的字段完全一致：如果只在入口读、保存时不重读，
+     * 推理期间被改掉的前置数据就查不出来。
+     */
+    private String buildManualCompetitorPrompt(String taskId, CreatorCompetitorAnalyzeRequest request) {
+        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord);
+        CreatorCompetitorSampleRecord sampleRecord = creatorCompetitorMapper.findCompetitorVideoByTaskId(taskRecord.getTaskId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先提交同类型竞品视频"));
+        List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
+        CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId()).orElse(null);
+        return buildUserPrompt(taskRecord, materials, sampleRecord, suggestionRecord, feedbackReportRecord, request);
+    }
+
+    /**
+     * 按参考案例读取上下文并渲染提示词，读法与 {@link #buildManualCompetitorPrompt} 对应。
+     */
+    private String buildReferenceCompetitorPrompt(String taskId,
+                                                  String referenceVideoId,
+                                                  CreatorCompetitorAnalyzeRequest request) {
+        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord);
+        // 从知识库读取参考案例视频数据
+        ReferenceVideoRecord refVideo = knowledgeReferenceVideoMapper.findByVideoId(referenceVideoId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "参考案例不存在"));
+        // 读取优质评论/弹幕作为"竞品反馈/样本"（取 50 条高价值证据，避免上下文溢出）
+        List<ReferenceVideoItemRecord> refItems = knowledgeReferenceVideoMapper.listEvidenceItemsByVideoId(referenceVideoId, 50);
+        // 加载任务的其他上下文数据（素材、选题建议、数据反馈）
+        List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
+        CreatorSuggestionRecord suggestionRecord = creatorSuggestionMapper.findByTaskId(taskRecord.getTaskId()).orElse(null);
+        // 将参考案例数据组装为虚拟竞品样本记录，复用已有 prompt 拼装逻辑
+        CreatorCompetitorSampleRecord virtualSample = buildVirtualSampleFromReference(refVideo, refItems);
+        return buildUserPrompt(taskRecord, materials, virtualSample, suggestionRecord, feedbackReportRecord, request);
+    }
+
+    /**
+     * 核心分析执行引擎：取提示词 → 事务外 LLM 调用 → 新短事务里复核后落库并推进任务状态。
      * <p>
-     * 设计约束：本方法不关心 {@code sampleRecord} 的来源——它可以是用户手动登记的
-     * 竞品视频记录，也可以是从参考案例知识库组装出的虚拟记录。
-     * 只要字段（competitorBvId、competitorVideoName、competitorSamples 等）被正确填充，
-     * 下游的 {@link #buildUserPrompt} 就能无差别处理。
+     * 提示词用 {@link Supplier} 传进来而不是直接传字符串，是为了让保存阶段能用同一套读法再算一次，
+     * 从而发现"推理期间前置数据被改"的情况。两条入口（手动样例、参考案例）共用本方法。
      *
-     * @param taskRecord           已校验存在的创作任务
-     * @param materials            任务的创作素材列表
-     * @param suggestionRecord     选题建议（可为 null）
-     * @param feedbackReportRecord 已完成且结构完整的数据反馈报告
-     * @param sampleRecord         竞品样本记录（实体或虚拟）
-     * @param request              分析请求参数
+     * @param taskId         已校验存在的创作任务标识
+     * @param promptSupplier 按当前数据库状态读取上下文并渲染提示词的读法
      * @return 完整的竞品分析报告响应
      */
-    private CreatorCompetitorReportResponse executeAnalyze(
-            CreatorTaskRecord taskRecord,
-            List<CreatorMaterialRecord> materials,
-            CreatorSuggestionRecord suggestionRecord,
-            CreatorFeedbackReportRecord feedbackReportRecord,
-            CreatorCompetitorSampleRecord sampleRecord,
-            CreatorCompetitorAnalyzeRequest request) {
+    private CreatorCompetitorReportResponse executeAnalyze(String taskId, Supplier<String> promptSupplier) {
+        // 这一步同时承担入口校验：缺前置报告或竞品样例会在这里抛出与原来一致的错误
+        String competitorPrompt = promptSupplier.get();
         String rawOutput;
-        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "同类型视频竞品分析")) {
-            rawOutput = llmService.chat(
-                    buildSystemPrompt(),
-                    buildUserPrompt(taskRecord, materials, sampleRecord, suggestionRecord, feedbackReportRecord, request)
-            );
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskId, "同类型视频竞品分析")) {
+            // 复用反馈与复盘已有的结构化重试机制，先拿到完整对象再进入保存事务。
+            try {
+                CreatorCompetitorAnalysisOutput output = llmService.chatStructured(
+                        buildSystemPrompt(), competitorPrompt, CreatorCompetitorAnalysisOutput.class);
+                if (output == null) {
+                    throw new IllegalArgumentException("竞品分析输出为空");
+                }
+                rawOutput = objectMapper.writeValueAsString(output);
+            } catch (JsonProcessingException | IllegalArgumentException exception) {
+                throw new IllegalArgumentException("竞品分析输出格式或内容不完整", exception);
+            }
         }
-        CreatorCompetitorReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), rawOutput);
+        return transactionTemplate.execute(status ->
+                persistCompetitorReport(taskId, competitorPrompt, rawOutput, promptSupplier));
+    }
+
+    /**
+     * 在新短事务里保存竞品报告，保存前用同一套读法重算提示词。
+     * <p>
+     * 复盘链路的前置报告被重新生成或失效、任务材料被改，都会让重算结果不同；
+     * 此时这次基于旧依据的分析结论不能落库，否则旧结论会盖掉新状态。
+     */
+    private CreatorCompetitorReportResponse persistCompetitorReport(String taskId,
+                                                                   String generatedPrompt,
+                                                                   String rawOutput,
+                                                                   Supplier<String> promptSupplier) {
+        if (!generatedPrompt.equals(promptSupplier.get())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "竞品分析依据在分析期间发生变化，本次结果已丢弃，请重新分析");
+        }
+        CreatorCompetitorReportRecord reportRecord = buildReportRecord(taskId, rawOutput);
         // 新竞品结果一旦确认可用，旧总体复盘和它生成的偏好就失去依据，必须在同一事务内先失效。
-        reviewInvalidationMapper.invalidateCreatorReport(taskRecord.getTaskId());
-        reviewInvalidationMapper.invalidateGeneratedPreference(taskRecord.getTaskId());
+        reviewInvalidationMapper.invalidateCreatorReport(taskId);
+        reviewInvalidationMapper.invalidateGeneratedPreference(taskId);
         creatorCompetitorMapper.upsertReport(reportRecord);
-        creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.COMPETITOR_ANALYZED.name());
-        return getReport(taskRecord.getTaskId());
+        creatorTaskMapper.updateTaskStatus(taskId, CreatorTaskStatus.COMPETITOR_ANALYZED.name());
+        return getReport(taskId);
     }
 
     /**
@@ -436,7 +480,7 @@ public class CreatorCompetitorService {
      * @return 竞品分析的系统提示词文本
      */
     private String buildSystemPrompt() {
-        return promptService.get("competitor.system");
+        return promptService.get("competitor.system") + "\n" + COMPETITOR_EVIDENCE_BOUNDARY;
     }
 
     /**
@@ -465,8 +509,10 @@ public class CreatorCompetitorService {
                                    CreatorSuggestionRecord suggestionRecord,
                                    CreatorFeedbackReportRecord feedbackReportRecord,
                                    CreatorCompetitorAnalyzeRequest request) {
-        return promptService.render("competitor.user", Map.ofEntries(
-                Map.entry("taskName", taskRecord.getTaskName()),
+        String competitorSamples = limitSection(sampleRecord.getCompetitorSamples(), SAMPLE_MAX_LENGTH);
+        String renderedPrompt = promptService.render("competitor.user", Map.ofEntries(
+                // 与反馈和复盘一致，管理名称不进入视频事实分析。
+                Map.entry("taskName", "不参与分析（管理名称不是已发布视频内容）"),
                 Map.entry("taskId", taskRecord.getTaskId()),
                 Map.entry("customGuidance", TextUtil.trimToDefault(request.customGuidance(), "未提供")),
                 Map.entry("analysisFocus", TextUtil.trimToDefault(request.analysisFocus(), "未提供")),
@@ -479,8 +525,14 @@ public class CreatorCompetitorService {
                 Map.entry("materials", buildMaterialPrompt(materials)),
                 Map.entry("suggestionResult", buildSuggestionPrompt(suggestionRecord)),
                 Map.entry("feedbackResult", buildFeedbackReportPrompt(feedbackReportRecord)),
-                Map.entry("competitorSamples", limitSection(sampleRecord.getCompetitorSamples(), SAMPLE_MAX_LENGTH))
+                Map.entry("competitorSamples", competitorSamples)
         ));
+        // 存量默认模板漏掉样本占位符；确保原文进入模型，已含完整原文的自定义模板不重复追加。
+        String promptWithSamples = renderedPrompt.contains(competitorSamples) ? renderedPrompt
+                : renderedPrompt + "\n\n【竞品样本原文（本次提供的证据）】\n" + competitorSamples;
+        // 运行时追加，保证旧库和自定义模板均收到核验后的正式发布资料。
+        return promptWithSamples + "\n\n【自身已绑定视频的正式发布资料】\n"
+                + publishedVideoContextService.buildPrompt(taskRecord);
     }
 
     /**
@@ -753,6 +805,8 @@ public class CreatorCompetitorService {
      */
     private String buildReferenceSamples(ReferenceVideoRecord refVideo, List<ReferenceVideoItemRecord> refItems) {
         StringBuilder sb = new StringBuilder();
+        sb.append("资料边界：未读取视频本体；本次精选证据").append(refItems.size())
+                .append("条，与平台评论/弹幕总量不是同一口径。\n\n");
         // 第一块：视频简介 —— 帮助 AI 理解视频讲了什么
         if (TextUtil.hasText(refVideo.getDescription())) {
             sb.append("【视频简介】\n").append(refVideo.getDescription()).append("\n\n");
@@ -788,40 +842,30 @@ public class CreatorCompetitorService {
      * @return 格式化的额外上下文文本
      */
     private String buildReferenceExtraContext(ReferenceVideoRecord refVideo) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("来源：参考案例库（层级=").append(TextUtil.trimToDefault(refVideo.getTier(), "未知")).append("）");
-        if (refVideo.getViewCount() != null && refVideo.getViewCount() > 0) {
-            sb.append("，播放量=").append(formatLargeNumber(refVideo.getViewCount()));
-        }
-        if (refVideo.getLikeCount() != null && refVideo.getLikeCount() > 0) {
-            sb.append("，点赞=").append(formatLargeNumber(refVideo.getLikeCount()));
-        }
-        if (refVideo.getDanmakuCount() != null && refVideo.getDanmakuCount() > 0) {
-            sb.append("，弹幕=").append(formatLargeNumber(refVideo.getDanmakuCount()));
-        }
-        if (refVideo.getReplyCount() != null && refVideo.getReplyCount() > 0) {
-            sb.append("，评论=").append(formatLargeNumber(refVideo.getReplyCount()));
-        }
-        if (refVideo.getQualityScore() != null) {
-            sb.append("，质量分=").append(refVideo.getQualityScore());
-        }
-        return sb.toString();
+        // 这里用于计算和复核，不能用展示用的“万”截断整数，也不能把零隐藏成缺失数据。
+        return """
+                来源：参考案例库（层级=%s）；未读取视频本体。
+                播放量：%s
+                点赞数：%s
+                投币数：%s
+                收藏数：%s
+                平台评论总量：%s
+                平台弹幕总量：%s
+                发布时间（东八区）：%s
+                统计采集时间（东八区）：%s
+                采集筛选指数：%s（仅用于候选筛选，不是内容质量证明）
+                """.formatted(
+                TextUtil.trimToDefault(refVideo.getTier(), "未知"),
+                referenceMetric(refVideo.getViewCount()), referenceMetric(refVideo.getLikeCount()),
+                referenceMetric(refVideo.getCoinCount()), referenceMetric(refVideo.getFavoriteCount()),
+                referenceMetric(refVideo.getReplyCount()), referenceMetric(refVideo.getDanmakuCount()),
+                refVideo.getPublishedAt() == null ? TextUtil.trimToDefault(refVideo.getPublishTimeText(), "未提供")
+                        : refVideo.getPublishedAt().toString(),
+                refVideo.getStatsFetchedAt() == null ? "未提供" : refVideo.getStatsFetchedAt().toString(),
+                refVideo.getVideoIndexScore() == null ? "未提供" : refVideo.getVideoIndexScore().toPlainString());
     }
 
-    /**
-     * 将大数值格式化为中文友好的展示形式。
-     * <p>
-     * 为什么用"万"而非纯数字：LLM 对"12.5万"的理解比对"125000"的理解更准确，
-     * 因为训练语料中中文数字带单位的表达更常见。且热度数据本身是估算值，
-     * 精确到个位反而误导 AI 以为这是精确统计。
-     *
-     * @param count 原始数值
-     * @return 格式化后的字符串（如 "12.5万"、"8900"）
-     */
-    private String formatLargeNumber(long count) {
-        if (count >= 10000) {
-            return String.format("%.1f万", count / 10000.0);
-        }
-        return String.valueOf(count);
+    private String referenceMetric(Long value) {
+        return value == null ? "未提供" : value.toString();
     }
 }

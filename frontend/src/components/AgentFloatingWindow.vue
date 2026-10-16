@@ -519,7 +519,10 @@ function clampNumber(value: number, min: number, max: number) {
 }
 
 function shouldIgnorePointerDown(target: EventTarget | null) {
-  return target instanceof HTMLElement && Boolean(target.closest('button, textarea, input, select, a'))
+  // 关闭按钮里是 <X /> 图标，点到图标笔画时事件目标是最内层的 SVGElement 而不是 HTMLElement；
+  // 原来只判 HTMLElement，会让这一下漏判成拖拽，指针被 header 捕获后 click 就落不到按钮上，
+  // 表现就是"按关闭没反应、反而把窗口拖走了"。所以这里放宽到 Element，让按钮内的图标一并被排除。
+  return target instanceof Element && Boolean(target.closest('button, textarea, input, select, a'))
 }
 
 function capturePointer(event: PointerEvent) {

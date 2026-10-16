@@ -9,6 +9,7 @@ const {
   openGuidanceEditor,
   feedbackDashboard,
   feedbackFetchResult,
+  feedbackReport,
   openResultModal,
   canEnterFeedback,
   feedbackImportFile,
@@ -86,6 +87,14 @@ function refreshBindingAfterSync() {
           @click="openResultModal('feedbackDashboard')"
         >
           查看导入结果
+        </button>
+        <button
+          v-if="feedbackReport"
+          type="button"
+          class="creator-secondary-action"
+          @click="openResultModal('feedbackReport')"
+        >
+          查看反馈分析
         </button>
         <button
           type="button"

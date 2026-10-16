@@ -304,7 +304,7 @@ const creatorStepMetas = computed<CreatorStepMeta[]>(() => {
   }
   steps.push(
     { key: 'feedback', label: '观众反馈', shortLabel: '反馈', description: '收集观众意见与反馈' },
-    { key: 'report', label: '总体复盘', shortLabel: '复盘', description: '汇总反馈与竞品结论' },
+    { key: 'report', label: '总体复盘', shortLabel: '复盘', description: '汇总反馈与可选竞品结论' },
   )
   return steps
 })

@@ -47,11 +47,12 @@ public class MediaProcessingCostEstimator {
         long plusOutputTokens = plusReviewFrameCount * 800L;
 
         CreatorMediaProperties.Processing pricing = mediaProperties.getProcessing();
+        // 保留旧返回字段兼容历史任务；全片分析已切换 Plus，必须与片段采用同一套 Plus 单价。
         BigDecimal flashCost = tokenCost(
                 flashInputTokens,
                 flashOutputTokens,
-                pricing.getFlashInputUsdPerMillionTokens(),
-                pricing.getFlashOutputUsdPerMillionTokens()
+                pricing.getPlusInputUsdPerMillionTokens(),
+                pricing.getPlusOutputUsdPerMillionTokens()
         );
         BigDecimal plusCost = tokenCost(
                 plusInputTokens,

@@ -1574,8 +1574,8 @@ function toMessage(error: unknown) {
               v-model="processingOptions.modelPlan"
               :disabled="processingIsActive || processingBusy"
             >
-              <option value="FLASH">Flash · 基础观察</option>
-              <option value="FLASH_PLUS_REVIEW">Flash + Plus · 抽样复核</option>
+              <option value="FLASH">Plus · 基础观察</option>
+              <option value="FLASH_PLUS_REVIEW">Plus · 全片观察与抽样复核</option>
             </select>
           </label>
           <label class="preflight-check-option">

@@ -188,7 +188,8 @@ public class PreflightSegmentReviewService {
                 null, false, step.stepId(), json(java.util.Map.of(
                         "model", properties.getPreflight().getSegmentReviewModel(),
                         "issueId", issue.issueId(),
-                        "confirmed", parsed.confirmed()
+                        "confirmed", parsed.confirmed(),
+                        "originalTitle", issue.title()
                 ))
         );
         if (mapper.insertEvidence(evidence) != 1) {
@@ -199,7 +200,8 @@ public class PreflightSegmentReviewService {
         LinkedHashSet<String> sourceTypes = new LinkedHashSet<>(stringList(issue.sourceTypes()));
         sourceTypes.add("QWEN3_VL_PLUS");
         if (mapper.updateIssueAfterSegmentReview(
-                review.reviewId(), issue.issueId(), parsed.description(), parsed.severity(),
+                review.reviewId(), issue.issueId(),
+                parsed.confirmed() ? issue.title() : "原问题未被复核确认", parsed.description(), parsed.severity(),
                 parsed.confidence(), parsed.suggestedAction(), json(evidenceRefs), json(sourceTypes)
         ) != 1) {
             throw new SegmentReviewException("重点片段复核问题保存失败");
@@ -221,7 +223,8 @@ public class PreflightSegmentReviewService {
                     confirmed ? severity : "LOW",
                     confidence,
                     requiredText(root, "description"),
-                    requiredText(root, "suggestedAction")
+                    // 否认问题后仍返回“避免误判”等建议会继续污染报告，未确认时不让这种动作进入修改清单。
+                    confirmed ? requiredText(root, "suggestedAction") : "原问题未被复核确认，无需据此修改。"
             );
         } catch (SegmentReviewException exception) {
             throw exception;
@@ -234,15 +237,32 @@ public class PreflightSegmentReviewService {
                                SegmentRange range,
                                List<TimelineEvidenceRecord> evidence) {
         String nearbyEvidence = evidence.stream()
-                .filter(item -> item.endMs() >= range.startMs() && item.startMs() <= range.endMs())
+                .filter(item -> "AUDIO_TRACK".equals(item.sourceType()) || "VOLUME".equals(item.sourceType())
+                        || item.endMs() >= range.startMs() && item.startMs() <= range.endMs())
+                // 原片音轨和音量先进入提示词，避免长视频的大量关键画面挤掉这些事实。
+                .sorted(java.util.Comparator.comparing((TimelineEvidenceRecord item) ->
+                        !("AUDIO_TRACK".equals(item.sourceType()) || "VOLUME".equals(item.sourceType()))))
                 .limit(30)
-                .map(item -> item.evidenceId() + " | " + item.startMs() + "-" + item.endMs()
+                .map(item -> item.evidenceId() + " | " + item.sourceType() + " | " + item.startMs() + "-" + item.endMs()
                         + "ms | " + item.content())
                 .collect(java.util.stream.Collectors.joining("\n"));
         return """
                 你正在复核一个已经由全片粗审提出的重点问题。只观察当前短片，不要推断短片之外的内容。
                 请校正严重程度、置信度、证据化说明和可执行修改动作。若原问题不成立，confirmed=false，
                 severity 使用 LOW，并直白说明为什么不成立。只输出 JSON，不要输出 Markdown。
+                原问题、原说明、原建议和 VIDEO_MODEL 都是待核实的模型判断，不是独立事实或官方依据。
+                本次没有提供官方规则原文、审核记录或流量数据，不得沿用或编造 B 站规范名称、审核先例，
+                不得断言违规、限流、推荐机制或预测审核结果；可见敏感内容只描述并建议人工核对。
+                没有可定位且清楚可辨的具体敏感内容时，不得因像素化、抽象、看不清或“无法100%%排除”而生成敏感或违规风险条目。
+                不得把缺少依据的审核、AI误判或限流说法改写为条件式修改理由；原问题无依据时，说明无需据此修改。
+                可见时间码、调试样式和像素效果的来源未知，不能自行认定由系统或播放器叠加、属于调试残留或不属于视频内容。
+                未提供响度标准或目标值时，不得仅凭 VOLUME 数值声称音量正常、达标或听感适宜，只引用测得数值。
+                创作者没有明确说明时，不得把测试图、抽象画面、重复、拖影或像素效果断言为非设计意图、损坏或制作失误。
+                若原问题仅依赖上述无依据判断，应返回 confirmed=false；不得另造平台理由来确认原问题。
+                修改建议必须针对已证实的可见现象；用途不明确时用“如果目标是……，可以……”表达。
+                当前短片是主动移除音轨的分析副本，不能凭听不到声音判断原片无音轨或无声。
+                原片音轨以 AUDIO_TRACK 的 FFprobe 事实为准，音量以 VOLUME 为准；没有转写文本不代表原片无声。
+                不得评价音乐、背景音、音质或音画同步；若原问题违背原片音轨事实，应判为不成立。
 
                 原问题：%s
                 原说明：%s

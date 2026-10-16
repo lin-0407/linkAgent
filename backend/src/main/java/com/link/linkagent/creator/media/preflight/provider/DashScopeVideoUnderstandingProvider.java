@@ -15,7 +15,7 @@ import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
 
-/** 通过 DashScope OpenAI 兼容接口执行单次 Qwen3-VL-Flash 全片粗审。 */
+/** 通过 DashScope OpenAI 兼容接口执行单次 Qwen3-VL-Plus 全片粗审。 */
 @Component
 @ConditionalOnProperty(prefix = "creator.media", name = "enabled", havingValue = "true")
 public class DashScopeVideoUnderstandingProvider implements VideoUnderstandingProvider {
@@ -66,7 +66,7 @@ public class DashScopeVideoUnderstandingProvider implements VideoUnderstandingPr
         return buildRequest(
                 videoUrl,
                 prompt,
-                properties == null ? "qwen3-vl-flash" : properties.getVideoModel(),
+                properties == null ? "qwen3-vl-plus" : properties.getVideoModel(),
                 properties == null ? 0.2d : properties.getVideoFps()
         );
     }

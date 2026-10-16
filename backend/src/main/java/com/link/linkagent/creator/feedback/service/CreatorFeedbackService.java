@@ -98,6 +98,20 @@ public class CreatorFeedbackService {
 
     /** 反馈/报告文本最大长度，超长截断防止 prompt 过大 */
     private static final int FEEDBACK_MAX_LENGTH = 12000;
+    // 不让管理用名先污染反馈报告，再作为发布后结论被总体复盘沿用。
+    private static final String TASK_NAME_EVIDENCE_BOUNDARY = """
+            任务名称仅作管理标识，不是视频标题、主题、类型或内容证据；本次不提供任务名称，不得据此判断视频讲了什么。
+            复制粘贴梗和泛化评价没有明确指向视频内容时，不得推断具体题材、时间线或创作者定位；不能把泛化玩梗与管理信息组合成内容事实。
+            下一期选题和行动建议必须依据样本中的明确信号；无法确认视频内容时只提出收集具体反馈等有依据的建议，不得凭管理用名补出选题。
+            """;
+
+    // 只约束生成格式，不对正文做全局解码，避免破坏评论、代码和路径中的合法反斜杠。
+    private static final String TEXT_SERIALIZATION_BOUNDARY = """
+            JSON 或结果函数参数只序列化一次：每个字符串字段的内容是读者实际阅读的正文，不是预先 JSON 编码后的字符串。
+            自然语言引述优先使用中文引号“”，不要在正文里保留仅用于 JSON 序列化的反斜杠；输出应在正常 JSON 解析后直接可读。
+            代码、正则表达式、文件路径及引用原文中的合法反斜杠必须保持不变；不要对这些内容全局去转义或改写。
+            """;
+
     /** 用户上传文件大小上限(5MB)，防止超大文件消耗内存 */
     private static final int IMPORT_FILE_MAX_SIZE = 5 * 1024 * 1024;
     /** 脚本生成 JSON 文件大小上限(20MB)，B站热门视频的评论弹幕量可能很大 */
@@ -238,30 +252,61 @@ public class CreatorFeedbackService {
      * <p>
      * LLM 调用包裹在 LlmUsageContext 中，用于 Langfuse 追踪和 Token 用量统计。
      *
+     * <p>
+     * <b>事务边界</b>：模型调用在事务外，落库放在新短事务里，写之前复核样例输入是否仍然有效。
+     * 原来整个方法一个事务，模型推理几十秒期间一直占着数据库连接，还会把任务行锁住。
+     *
      * @param taskId 创作任务 ID
      * @param request 分析请求，含自定义指导、分析焦点、额外要求等可选项
      * @return 结构化分析报告
-     * @throws ResponseStatusException 404 任务不存在，400 反馈样例未提交
+     * @throws ResponseStatusException 404 任务不存在，400 反馈样例未提交，409 样例在分析期间变化
      */
-    @Transactional
     public CreatorFeedbackReportResponse analyze(String taskId, CreatorFeedbackAnalyzeRequest request) {
         CreatorTaskRecord taskRecord = getTaskReadyForFeedback(taskId);
-        CreatorFeedbackRecord feedbackRecord = creatorFeedbackMapper.findFeedbackByTaskId(taskRecord.getTaskId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先提交评论或弹幕样例"));
+        CreatorFeedbackRecord feedbackRecord = requireFeedbackRecord(taskRecord.getTaskId());
+        // 写库前要用同一份提示词复核输入，所以这里先把它固定下来
+        String analysisPrompt = buildUserPrompt(taskRecord, feedbackRecord, request);
 
         CreatorFeedbackAnalysisOutput analysisOutput;
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "评论弹幕分析")) {
             analysisOutput = llmService.chatStructured(
                     buildSystemPrompt(),
-                    buildUserPrompt(taskRecord, feedbackRecord, request),
+                    analysisPrompt,
                     CreatorFeedbackAnalysisOutput.class
             );
+        }
+        return transactionTemplate.execute(status ->
+                persistFeedbackAnalysis(taskRecord.getTaskId(), request, analysisPrompt, analysisOutput));
+    }
+
+    /**
+     * 在新短事务里保存分析报告，保存前复核样例没有在推理期间被换掉。
+     * <p>
+     * 用户重新导入或粘贴样例会改写样例文本；这次推理基于旧样例，结论不能盖到新样例上。
+     */
+    private CreatorFeedbackReportResponse persistFeedbackAnalysis(String taskId,
+                                                                  CreatorFeedbackAnalyzeRequest request,
+                                                                  String generatedPrompt,
+                                                                  CreatorFeedbackAnalysisOutput analysisOutput) {
+        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        CreatorFeedbackRecord feedbackRecord = requireFeedbackRecord(taskRecord.getTaskId());
+        if (!generatedPrompt.equals(buildUserPrompt(taskRecord, feedbackRecord, request))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "反馈样例在分析期间发生变化，本次分析结果已丢弃，请重新分析");
         }
         CreatorFeedbackReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), analysisOutput);
         creatorFeedbackMapper.upsertReport(reportRecord);
         invalidateAfterFeedbackAnalysis(taskRecord.getTaskId());
         creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.FEEDBACK_ANALYZED.name());
         return getReport(taskRecord.getTaskId());
+    }
+
+    /**
+     * 读取已提交的评论弹幕样例，缺失时按"用户还没提交样例"报 400。
+     */
+    private CreatorFeedbackRecord requireFeedbackRecord(String taskId) {
+        return creatorFeedbackMapper.findFeedbackByTaskId(taskId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先提交评论或弹幕样例"));
     }
 
     /**
@@ -284,12 +329,14 @@ public class CreatorFeedbackService {
      * 支持 JSON 和 TXT 两种格式；JSON 是脚本输出的标准格式（含结构化字段和指标），
      * TXT 是兼容入口（只能按区块做基础解析）。导入后自动触发 LLM 批量分类。
      *
+     * <p>
+     * 事务边界：解析与 LLM 分类都在事务外，只有最后的明细替换落库走短事务。
+     *
      * @param taskId 创作任务 ID
      * @param file 上传文件（MultipartFile），支持 .json 和 .txt
      * @return 导入结果（含评论数、弹幕数、指标是否存在、警告信息）
      * @throws ResponseStatusException 400 文件不符合要求，404 任务不存在
      */
-    @Transactional
     public CreatorFeedbackImportResponse importFeedback(String taskId, MultipartFile file) {
         CreatorTaskRecord taskRecord = getTaskReadyForFeedback(taskId);
         validateImportFile(file);
@@ -303,8 +350,8 @@ public class CreatorFeedbackService {
      * 从 B 站采集评论弹幕（BV 号驱动脚本采集）。
      * <p>
      * 执行流程：提取 BV 号 → 定位项目根目录和脚本路径 → 运行 Python 脚本
-     * → 读取脚本生成的 JSON → 在事务中导入明细。脚本执行不在事务内（脚本涉及网络 IO），
-     * 但后续落库通过 TransactionTemplate 手动控制事务边界。
+     * → 读取脚本生成的 JSON → 分类后落库（落库走导入方法内部的短事务）。
+     * 脚本执行不在事务内（脚本涉及网络 IO），LLM 分类同样在事务外，只有写库阶段开事务。
      *
      * @param taskId 创作任务 ID
      * @param request 采集请求，含 BV 输入、最大评论数、最大弹幕数等参数
@@ -327,13 +374,13 @@ public class CreatorFeedbackService {
         String jsonFileName = bvid + "_feedback.json";
         Path jsonPath = outputDir.resolve(jsonFileName).normalize();
         String jsonText = readGeneratedText(jsonPath);
-        CreatorFeedbackImportResponse importResponse = transactionTemplate.execute(status -> importFeedbackText(
+        CreatorFeedbackImportResponse importResponse = importFeedbackText(
                 taskRecord,
                 jsonFileName,
                 jsonText,
                 "从页面 BV 参数 " + bvid + " 执行项目内脚本导入",
                 List.of()
-        ));
+        );
         if (importResponse == null) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "评论弹幕导入事务没有返回结果");
         }
@@ -476,13 +523,17 @@ public class CreatorFeedbackService {
      * <ol>
      *   <li>解析文本（JSON 或 TXT 格式）为明细列表</li>
      *   <li>截断超出限制的明细条数</li>
-     *   <li>应用任务 ID 并触发 LLM 批量分类（失败自动降级关键词规则）</li>
-     *   <li>覆盖式导入：软删除旧明细 → 批量插入新明细 → 更新指标（如有）</li>
+     *   <li>应用任务 ID 与规则前置过滤（不需要模型）</li>
+     *   <li>在事务外触发 LLM 批量分类（失败自动降级关键词规则）</li>
+     *   <li>短事务内覆盖式导入：软删除旧明细 → 批量插入新明细 → 更新指标（如有）</li>
      *   <li>回填旧分析入口的样例文本（兼容旧接口）</li>
      * </ol>
      * <p>
      * 为什么每次导入都覆盖旧明细：为了让仪表盘、分析报告和手动粘贴入口看到同一批样例，
      * 避免数据来源不一致导致的"仪表盘显示 200 条新明细，但旧分析入口仍用旧样例"这种断层。
+     * <p>
+     * 事务边界：分类是一次或多次模型调用，必须放在事务外；写库阶段的软删除与批量插入必须同一事务，
+     * 否则用户可能看到"旧明细已删、新明细没进来"的空窗。
      *
      * @param taskRecord 创作任务记录
      * @param fileName 导入文件名（用于判断 JSON 还是 TXT 解析路径）
@@ -503,16 +554,41 @@ public class CreatorFeedbackService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "导入文件没有可用的评论或弹幕内容");
         }
 
-        applyTaskIdAndClassification(taskRecord.getTaskId(), items);
+        // 先做不需要模型的规则过滤，减少送进模型的条数，再把 LLM 分类放在事务外执行
+        List<CreatorFeedbackItemRecord> itemsNeedingClassification =
+                applyTaskIdAndRuleFilters(taskRecord.getTaskId(), items);
+        classifyItemsWithFallback(itemsNeedingClassification);
+
+        CreatorFeedbackImportResponse importResponse = transactionTemplate.execute(status -> persistImportedFeedback(
+                taskRecord,
+                items,
+                importedFeedback.metric(),
+                sourceDescription,
+                warnings
+        ));
+        if (importResponse == null) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "评论弹幕导入事务没有返回结果");
+        }
+        return importResponse;
+    }
+
+    /**
+     * 短事务内的导入落库：先软删旧明细再插入新批次，最后回填旧入口样例并让下游结论失效。
+     */
+    private CreatorFeedbackImportResponse persistImportedFeedback(CreatorTaskRecord taskRecord,
+                                                                 List<CreatorFeedbackItemRecord> items,
+                                                                 CreatorFeedbackMetricRecord metric,
+                                                                 String sourceDescription,
+                                                                 List<String> warnings) {
         // 每次导入都让新批次覆盖旧明细，是为了让仪表盘、旧分析入口和当前页面看到同一批样例。
         creatorFeedbackMapper.softDeleteItemsByTaskId(taskRecord.getTaskId());
         creatorFeedbackMapper.softDeleteMetricByTaskId(taskRecord.getTaskId());
         for (CreatorFeedbackItemRecord item : items) {
             creatorFeedbackMapper.insertItem(item);
         }
-        if (importedFeedback.metric() != null) {
-            importedFeedback.metric().setTaskId(taskRecord.getTaskId());
-            creatorFeedbackMapper.upsertMetric(importedFeedback.metric());
+        if (metric != null) {
+            metric.setTaskId(taskRecord.getTaskId());
+            creatorFeedbackMapper.upsertMetric(metric);
         }
         // 旧 LLM 分析接口仍读取整段样例；这里回填旧表，是为了让"导入后直接分析反馈"这条链路不断。
         upsertLegacyFeedbackFromItems(taskRecord.getTaskId(), sourceDescription, items);
@@ -524,7 +600,7 @@ public class CreatorFeedbackService {
                 taskRecord.getTaskId(),
                 commentCount,
                 danmakuCount,
-                importedFeedback.metric() != null,
+                metric != null,
                 warnings
         );
     }
@@ -1069,19 +1145,20 @@ public class CreatorFeedbackService {
     }
 
     /**
-     * 为导入明细应用任务 ID 并执行分类（两阶段流水线）。
+     * 为导入明细应用任务 ID，并做不需要模型的第一阶段过滤（规则前置）。
      * <p>
-     * 第一阶段（规则前置）：过滤空语义和重复内容——这两个判断不需要 LLM，
-     * 规则即可 100% 准确判断。先过滤可以降低 LLM 待分类条数，节省 Token 成本。
+     * 过滤空语义和重复内容——这两个判断不需要 LLM，规则即可 100% 准确判断。
+     * 先过滤可以降低 LLM 待分类条数，节省 Token 成本。
      * <p>
-     * 第二阶段（LLM 分类）：使用 LLM 批量分类剩余的"有效内容"，分批次提交避免
-     * prompt 过长。LLM 失败时自动降级为关键词规则分类，保证导入流程不中断——
-     * 宁可分类精度降低，也不让用户因为一次 LLM 故障就无法导入数据。
+     * 为什么拆成两段：本方法不调用模型，可以和写库事务一起重新安排；
+     * 真正的 LLM 分类被放进 {@link #classifyItemsWithFallback(List)}，必须在事务外调用。
      *
      * @param taskId 创作任务 ID
      * @param items 待分类明细列表（原地修改，每个 item 会被设置 taskId / noise / category / sentiment / reason）
+     * @return 还需要 LLM 分类的明细列表
      */
-    private void applyTaskIdAndClassification(String taskId, List<CreatorFeedbackItemRecord> items) {
+    private List<CreatorFeedbackItemRecord> applyTaskIdAndRuleFilters(String taskId,
+                                                                     List<CreatorFeedbackItemRecord> items) {
         Map<String, Integer> seenContent = new LinkedHashMap<>();
         // 第一步：过滤空语义和重复内容（不需要 LLM，规则即可准确判断）
         List<CreatorFeedbackItemRecord> itemsNeedingClassification = new ArrayList<>();
@@ -1107,12 +1184,21 @@ public class CreatorFeedbackService {
             item.setNoise(false);
             itemsNeedingClassification.add(item);
         }
+        return itemsNeedingClassification;
+    }
 
+    /**
+     * 第二阶段：使用 LLM 批量分类剩余的"有效内容"，分批次提交避免 prompt 过长。
+     * <p>
+     * LLM 失败时自动降级为关键词规则分类，保证导入流程不中断——宁可分类精度降低，
+     * 也不让用户因为一次 LLM 故障就无法导入数据。
+     * <p>
+     * 本方法必须在数据库事务外调用：一次导入可能触发多批模型调用，包在事务里会长期占用连接。
+     */
+    private void classifyItemsWithFallback(List<CreatorFeedbackItemRecord> itemsNeedingClassification) {
         if (itemsNeedingClassification.isEmpty()) {
             return;
         }
-
-        // 第二步：使用 LLM 批量分类，如果失败则降级为关键词规则
         boolean llmClassified = classifyItemsByLlm(itemsNeedingClassification);
         if (!llmClassified) {
             // LLM 分类失败时降级为关键词规则，保证导入流程不中断
@@ -1619,13 +1705,14 @@ public class CreatorFeedbackService {
      * 避免数据库模板与代码字段定义各维护一份后发生漂移。
      */
     private String buildSystemPrompt() {
-        return promptService.get("feedback_analyze.system");
+        return promptService.get("feedback_analyze.system") + "\n" + TASK_NAME_EVIDENCE_BOUNDARY
+                + "\n" + TEXT_SERIALIZATION_BOUNDARY;
     }
 
     /**
      * 构建反馈分析 User Prompt。
      * <p>
-     * 模板变量包括：任务名称、任务 ID、自定义指导、分析焦点、额外要求、补充上下文、
+     * 模板变量包括：管理名称固定说明、任务 ID、自定义指导、分析焦点、额外要求、补充上下文、
      * 评论样例、弹幕样例。所有可选字段统一用"未提供"占位，避免模板中存在 null 字符串。
      * 评论弹幕样例在传参前已截断至 FEEDBACK_MAX_LENGTH，防止超长文本撑爆 prompt 窗口。
      *
@@ -1637,8 +1724,9 @@ public class CreatorFeedbackService {
     private String buildUserPrompt(CreatorTaskRecord taskRecord,
                                    CreatorFeedbackRecord feedbackRecord,
                                    CreatorFeedbackAnalyzeRequest request) {
-        return promptService.render("feedback_analyze.user", Map.of(
-                "taskName", taskRecord.getTaskName(),
+        String renderedPrompt = promptService.render("feedback_analyze.user", Map.of(
+                // 保留旧模板占位符，但去掉管理用名，避免被模型当作已发布题材。
+                "taskName", "不参与分析（管理名称不是已发布视频内容）",
                 "taskId", taskRecord.getTaskId(),
                 "customGuidance", TextUtil.trimToDefault(request.customGuidance(), "未提供"),
                 "analysisFocus", TextUtil.trimToDefault(request.analysisFocus(), "未提供"),
@@ -1647,6 +1735,34 @@ public class CreatorFeedbackService {
                 "commentSamples", normalizeFeedback(feedbackRecord.getCommentSamples()),
                 "danmakuSamples", normalizeFeedback(feedbackRecord.getDanmakuSamples())
         ));
+        // 在模板之外补充统计，已有数据库模板和用户自定义模板也能立即获得真实条数。
+        return renderedPrompt + "\n\n" + buildFeedbackSampleContext(taskRecord.getTaskId(), feedbackRecord)
+                + "\n\n【任务标识与反馈内容依据】\n" + TASK_NAME_EVIDENCE_BOUNDARY;
+    }
+
+    /** 导入条数取自当前有效明细；手动粘贴没有条目边界，不能按换行猜测数量。 */
+    private String buildFeedbackSampleContext(String taskId, CreatorFeedbackRecord feedbackRecord) {
+        List<CreatorFeedbackDashboardStatRecord> stats = creatorFeedbackMapper.listDashboardStats(taskId);
+        long commentCount = countDashboardStat(stats, "SOURCE", "COMMENT");
+        long danmakuCount = countDashboardStat(stats, "SOURCE", "DANMAKU");
+        String counts = commentCount + danmakuCount > 0
+                ? "当前有效导入明细：评论%d条，弹幕%d条。条数不是该视频在平台上的反馈总量。"
+                    .formatted(commentCount, danmakuCount)
+                : "当前来源为手动粘贴文本：评论条数%s，弹幕条数%s。不得按换行、句子或话题数量估算条数。"
+                    .formatted(TextUtil.hasText(feedbackRecord.getCommentSamples()) ? "无法确认" : "为0",
+                            TextUtil.hasText(feedbackRecord.getDanmakuSamples()) ? "无法确认" : "为0");
+        boolean truncated = isFeedbackTruncated(feedbackRecord.getCommentSamples())
+                || isFeedbackTruncated(feedbackRecord.getDanmakuSamples());
+        return "样本数量与分析边界（以系统统计为准）：\n" + counts + "\n"
+                + (truncated
+                    ? "样本文本已截断，只能分析可见内容；不得声称已阅读全部导入明细，也不得把导入总数当作实际阅读条数。"
+                    : "本次样本文本未截断。")
+                + "\n如报告提及样本条数，必须遵循上述统计；未知条数不得补写约数。";
+    }
+
+    private boolean isFeedbackTruncated(String samples) {
+        return TextUtil.hasText(samples) && (samples.trim().length() > FEEDBACK_MAX_LENGTH
+                || samples.contains("[导入内容过长，旧分析入口已截断]"));
     }
 
     /**

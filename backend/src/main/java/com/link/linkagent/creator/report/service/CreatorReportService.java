@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.report.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
@@ -15,6 +16,7 @@ import com.link.linkagent.creator.report.model.CreatorReportAnalyzeRequest;
 import com.link.linkagent.creator.report.model.CreatorReportAnalysisOutput;
 import com.link.linkagent.creator.report.model.CreatorReportRecord;
 import com.link.linkagent.creator.report.model.CreatorReportResponse;
+import com.link.linkagent.creator.report.model.CreatorReportHistoryPage;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
@@ -25,7 +27,7 @@ import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Iterator;
@@ -44,7 +46,7 @@ import java.util.UUID;
  *
  * <h3>核心设计决策</h3>
  * <ol>
- *   <li><b>发布后依赖校验</b>：analyze 方法只强制要求反馈分析和竞品分析完成；视频指标
+ *   <li><b>发布后依赖校验</b>：analyze 方法只强制要求反馈分析完成，竞品分析可选；视频指标
  *       允许缺失，因为手动反馈不一定包含播放、点赞等公开指标。</li>
  *   <li><b>跨期趋势对比</b>：复盘报告不仅看当期表现，还会拉取同一创作者近期已完成
  *       复盘的历史报告，让 LLM 识别"反复出现的问题"和"持续进步的方向"，输出比单期
@@ -69,6 +71,23 @@ public class CreatorReportService {
     /** 跨期对比中每期报告的单个段落最大长度，比 SECTION_MAX_LENGTH 更紧以控制上下文总量 */
     private static final int CROSS_PERIOD_SECTION_MAX_LENGTH = 3000;
 
+    // 旧数据库和自定义模板仍可能显示管理信息，运行时补充约束，避免误当成视频内容。
+    private static final String CONTENT_EVIDENCE_BOUNDARY = """
+            任务名称（包括历史任务名称）仅是工作台管理标识，不是正式视频标题、简介、主题或内容证据，不得据此推断视频讲了什么。
+            contentSummary 只概括发布后资料支持的内容发现；具体视频内容无法获知时直接说明，不得写成“复盘名称所示”的主题。
+            titleDescriptionReview 只能评价发布后资料明确提供的正式标题、简介、标签和分区；缺少原文时明确无法评价，不得用任务名称代替。
+            反馈或竞品报告中的改进建议不代表当前视频已经采用的标题、简介或内容，不能把建议改写成已发布事实。
+            无法从发布后资料中的明确反馈确认具体题材时，nextActionSuggestions 不得沿用上游或历史报告中缺乏样本依据的具体选题方向，只提出收集具体证据或内容中性的行动。
+            “推测”或“低置信度”不能补足完全缺失的题材证据；泛化玩梗不等于视频主题或创作者定位。
+            """;
+
+    // 只约束生成格式，不对正文做全局解码，避免破坏评论、代码和路径中的合法反斜杠。
+    private static final String TEXT_SERIALIZATION_BOUNDARY = """
+            JSON 或结果函数参数只序列化一次：每个字符串字段的内容是读者实际阅读的正文，不是预先 JSON 编码后的字符串。
+            自然语言引述优先使用中文引号“”，不要在正文里保留仅用于 JSON 序列化的反斜杠；输出应在正常 JSON 解析后直接可读。
+            代码、正则表达式、文件路径及引用原文中的合法反斜杠必须保持不变；不要对这些内容全局去转义或改写。
+            """;
+
     /** 任务 CRUD 的 DAO 层 */
     private final CreatorTaskMapper creatorTaskMapper;
     /** 观众反馈分析报告的 DAO */
@@ -87,6 +106,10 @@ public class CreatorReportService {
     private final PromptService promptService;
     /** 发布后流程门禁，避免存量前置数据绕过成片试映重新生成复盘报告。 */
     private final CreatorMediaWorkflowGateService mediaWorkflowGateService;
+    /** 事务模板：复盘模型调用在事务外，落库单独走短事务 */
+    private final TransactionTemplate transactionTemplate;
+    /** 只读已核验 BV 的正式公开资料，入口与保存前复核使用同一快照读法。 */
+    private final CreatorPublishedVideoContextService publishedVideoContextService;
     public CreatorReportService(CreatorTaskMapper creatorTaskMapper,
                                 CreatorFeedbackMapper creatorFeedbackMapper,
                                 CreatorCompetitorMapper creatorCompetitorMapper,
@@ -95,7 +118,9 @@ public class CreatorReportService {
                                 LLMService llmService,
                                 ObjectMapper objectMapper,
                                 PromptService promptService,
-                                CreatorMediaWorkflowGateService mediaWorkflowGateService) {
+                                CreatorMediaWorkflowGateService mediaWorkflowGateService,
+                                TransactionTemplate transactionTemplate,
+                                    CreatorPublishedVideoContextService publishedVideoContextService) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
         this.creatorCompetitorMapper = creatorCompetitorMapper;
@@ -105,6 +130,8 @@ public class CreatorReportService {
         this.objectMapper = objectMapper;
         this.promptService = promptService;
         this.mediaWorkflowGateService = mediaWorkflowGateService;
+        this.transactionTemplate = transactionTemplate;
+        this.publishedVideoContextService = publishedVideoContextService;
     }
 
     /**
@@ -113,7 +140,7 @@ public class CreatorReportService {
      * <p>执行流程：
      * <ol>
      *   <li>校验任务存在性</li>
-     *   <li>强制校验两道发布后关口：反馈分析、竞品分析均需已完成（缺一则抛错）</li>
+     *   <li>校验反馈分析已完成，按需读取完整竞品分析</li>
      *   <li>读取反馈导入时保存的视频公开指标；指标缺失时明确标记，不阻止复盘</li>
      *   <li>构建跨期对比上下文（创作者历史报告摘要）</li>
      *   <li>调用 LLM 生成并校验结构化复盘报告</li>
@@ -122,43 +149,95 @@ public class CreatorReportService {
      *   <li>将任务状态推进到 ANALYZED</li>
      * </ol>
      *
-     * <p>反馈和竞品报告缺一就必须报错，因为它们共同描述发布后的观众反应和同类表现；
+     * <p>反馈报告必须完整，竞品报告可选；
      * 发布方案、制作蓝图和任务原始素材属于发布前决策，不作为复盘依据。
+     *
+     * <p>
+     * <b>事务边界</b>：读取与模型调用都在事务外，落库放在新短事务里，写之前重跑入口校验并复核输入。
+     * 复盘读的是反馈和竞品两份已落库结论，推理期间它们可能被重新生成或被失效，旧结论不能盖上去。
      *
      * @param taskId  创作任务 ID
      * @param request 用户对复盘分析的自定义要求（聚焦方向、补充说明等）
      * @return 结构化的复盘报告
      * @throws ResponseStatusException 发布后分析结果不存在时抛 BAD_REQUEST，阶段或结果不完整时抛 CONFLICT
      */
-    @Transactional
     public CreatorReportResponse analyze(String taskId, CreatorReportAnalyzeRequest request) {
         CreatorTaskRecord taskRecord = getTaskReadyForReport(taskId);
         // 复盘只校验发布后分析结果，已有成片任务无需补造发布方案或制作蓝图。
         CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord.getTaskId());
-        CreatorCompetitorReportRecord competitorReportRecord = requireParsedCompetitorReport(taskRecord.getTaskId());
+        CreatorCompetitorReportRecord competitorReportRecord = findParsedCompetitorReport(taskRecord.getTaskId());
         CreatorFeedbackMetricRecord videoMetricRecord = creatorFeedbackMapper
                 .findMetricByTaskId(taskRecord.getTaskId())
                 .orElse(null);
 
         // 拉取同一创作者最近几期复盘报告摘要，供 LLM 识别"反复出现的问题"和"持续进步的方向"
         String crossPeriodContext = buildCrossPeriodContext(taskRecord);
+        String reportPrompt = buildUserPrompt(taskRecord, videoMetricRecord, feedbackReportRecord,
+                competitorReportRecord, crossPeriodContext, request);
 
         CreatorReportAnalysisOutput analysisOutput;
         // 用 try-with-resources 打开用量上下文，确保 LLM 调用被 Langfuse 正确追踪
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "创作复盘报告")) {
             analysisOutput = llmService.chatStructured(
                     buildSystemPrompt(),
-                    buildUserPrompt(taskRecord, videoMetricRecord, feedbackReportRecord, competitorReportRecord,
-                            crossPeriodContext, request),
+                    reportPrompt,
                     CreatorReportAnalysisOutput.class
             );
         }
+        return transactionTemplate.execute(status ->
+                persistReportAnalysis(taskRecord.getTaskId(), request, reportPrompt, analysisOutput));
+    }
+
+    /**
+     * 在新短事务里保存复盘报告，保存前重跑入口校验并用同一套读法重算提示词。
+     * <p>
+     * 上游反馈或竞品报告在推理期间被重新生成、被失效（重新分析反馈会让下游结论失效），
+     * 重算出来的提示词就不一样，这次复盘结果直接丢弃。
+     */
+    private CreatorReportResponse persistReportAnalysis(String taskId,
+                                                        CreatorReportAnalyzeRequest request,
+                                                        String generatedPrompt,
+                                                        CreatorReportAnalysisOutput analysisOutput) {
+        CreatorTaskRecord taskRecord = getTaskReadyForReport(taskId);
+        CreatorFeedbackReportRecord feedbackReportRecord = requireParsedFeedbackReport(taskRecord.getTaskId());
+        CreatorCompetitorReportRecord competitorReportRecord = findParsedCompetitorReport(taskRecord.getTaskId());
+        CreatorFeedbackMetricRecord videoMetricRecord = creatorFeedbackMapper
+                .findMetricByTaskId(taskRecord.getTaskId())
+                .orElse(null);
+        String crossPeriodContext = buildCrossPeriodContext(taskRecord);
+        String currentPrompt = buildUserPrompt(taskRecord, videoMetricRecord, feedbackReportRecord,
+                competitorReportRecord, crossPeriodContext, request);
+        if (!generatedPrompt.equals(currentPrompt)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "发布资料、反馈或竞品分析结果在复盘期间发生变化，本次复盘结果已丢弃，请重新生成");
+        }
+
+        // 不让模型在未提供竞品时写入虚构的相对优势和短板。
+        if (competitorReportRecord == null) {
+            analysisOutput = new CreatorReportAnalysisOutput(
+                    analysisOutput.contentSummary(), analysisOutput.coreSellingPoints(),
+                    analysisOutput.titleDescriptionReview(), analysisOutput.audienceFeedbackSummary(),
+                    new CreatorReportAnalysisOutput.CompetitorComparison(
+                            "未提供竞品分析，本次仅复盘自身视频与观众反馈。",
+                            List.of("未提供竞品对比数据，无法判断相对优势。"),
+                            List.of("未提供竞品对比数据，无法判断相对短板。"),
+                            "补充竞品分析后可重新生成复盘。"),
+                    analysisOutput.controversyAndMisunderstanding(), analysisOutput.nextActionSuggestions(),
+                    analysisOutput.creatorPreferenceInsight(), analysisOutput.overallConclusion());
+        }
+        // 首次升级后重新生成时，把仍可读取的旧最新报告补存一次；旧输入来源不可恢复，留空。
+        creatorReportMapper.findByTaskId(taskId).filter(old -> "PARSED".equals(old.getParseStatus()))
+                .ifPresent(old -> creatorReportMapper.insertHistory(old.getReportId(), taskId,
+                        null, null, writeJson(toResponse(old))));
         CreatorReportRecord reportRecord = buildReportRecord(taskRecord.getTaskId(), analysisOutput);
         creatorReportMapper.upsert(reportRecord);
         // 复盘完成后，将 LLM 识别出的创作者偏好洞察沉淀到偏好表，供后续发布前优化复用
         creatorPreferenceService.saveFromReport(taskRecord, reportRecord);
         creatorTaskMapper.updateTaskStatus(taskRecord.getTaskId(), CreatorTaskStatus.ANALYZED.name());
-        return getReport(taskRecord.getTaskId());
+        CreatorReportResponse response = getReport(taskRecord.getTaskId());
+        creatorReportMapper.insertHistory(response.reportId(), taskId, feedbackReportRecord.getReportId(),
+                competitorReportRecord == null ? null : competitorReportRecord.getReportId(), writeJson(response));
+        return response;
     }
 
     /**
@@ -205,9 +284,10 @@ public class CreatorReportService {
                 "创作复盘"
         );
         String status = taskRecord.getStatus();
-        if (!CreatorTaskStatus.COMPETITOR_ANALYZED.name().equals(status)
+        if (!CreatorTaskStatus.FEEDBACK_ANALYZED.name().equals(status)
+                && !CreatorTaskStatus.COMPETITOR_ANALYZED.name().equals(status)
                 && !CreatorTaskStatus.ANALYZED.name().equals(status)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "请先完成同类型视频竞品分析，再生成总体复盘");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "请先完成评论弹幕分析，再生成总体复盘");
         }
         return taskRecord;
     }
@@ -224,16 +304,29 @@ public class CreatorReportService {
         return record;
     }
 
-    private CreatorCompetitorReportRecord requireParsedCompetitorReport(String taskId) {
-        CreatorCompetitorReportRecord record = creatorCompetitorMapper.findReportByTaskId(taskId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "请先完成同类型视频竞品分析"));
-        if (!"PARSED".equals(record.getParseStatus())) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "当前竞品分析报告不完整，请重新完成竞品分析"
-            );
+    /** 竞品是可选材料，存量未完整解析的结果也不作为复盘依据。 */
+    private CreatorCompetitorReportRecord findParsedCompetitorReport(String taskId) {
+        return creatorCompetitorMapper.findReportByTaskId(taskId)
+                .filter(record -> "PARSED".equals(record.getParseStatus())).orElse(null);
+    }
+
+    public CreatorReportHistoryPage listHistory(String taskId, int page, int size) {
+        String normalizedTaskId = getTaskRecord(taskId).getTaskId();
+        return new CreatorReportHistoryPage(
+                creatorReportMapper.listHistory(normalizedTaskId, size, (page - 1) * size),
+                creatorReportMapper.countHistory(normalizedTaskId), page, size);
+    }
+
+    /** 历史只读查询不重跑媒体门禁，并且必须同时匹配任务，防止读到另一任务的快照。 */
+    public CreatorReportResponse getHistory(String taskId, String historyId) {
+        String normalizedTaskId = getTaskRecord(taskId).getTaskId();
+        String snapshot = creatorReportMapper.findHistorySnapshot(normalizedTaskId, historyId.trim())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "复盘历史不存在"));
+        try {
+            return objectMapper.readValue(snapshot, CreatorReportResponse.class);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("复盘历史快照读取失败", exception);
         }
-        return record;
     }
 
     /** 按任务 ID 查复盘报告记录，不存在抛 404 */
@@ -315,8 +408,8 @@ public class CreatorReportService {
                 CreatorReportRecord report = creatorReportMapper.findByTaskId(task.getTaskId()).orElse(null);
                 // 只取 PARSED 状态的报告：RAW_ONLY 说明 LLM 输出不可靠，跳过
                 if (report != null && "PARSED".equals(report.getParseStatus())) {
-                    builder.append("--- 第").append(i + 1).append("期：")
-                            .append(TextUtil.trimToDefault(task.getTaskName(), "未命名"))
+                    builder.append("--- 第").append(i + 1).append("期任务ID：")
+                            .append(task.getTaskId())
                             .append(" ---\n");
                     // 只取四个最有信息量的维度做跨期对比，每个维度都做长度截断防膨胀
                     builder.append("总判断：")
@@ -354,7 +447,11 @@ public class CreatorReportService {
 
     /** 从提示词模板服务中加载复盘报告的系统提示词 */
     private String buildSystemPrompt() {
-        return promptService.get("report.system");
+        return promptService.get("report.system")
+                + "\n竞品分析是可选材料。未提供时，competitorComparison 所有文本明确标记未提供竞品，"
+                + "ownAdvantages 和 ownDisadvantages 各填写一条无法判断的说明，不得编造对比；其余部分正常复盘自身视频。"
+                + "\n" + CONTENT_EVIDENCE_BOUNDARY
+                + "\n" + TEXT_SERIALIZATION_BOUNDARY;
     }
 
     /**
@@ -376,7 +473,8 @@ public class CreatorReportService {
                                    String crossPeriodContext,
                                    CreatorReportAnalyzeRequest request) {
         return promptService.render("report.user", Map.of(
-                "taskName", taskRecord.getTaskName(),
+                // 保留旧模板的占位符，但不向模型传名称，避免管理用名先污染内容判断。
+                "taskName", "不参与分析（管理名称不是已发布视频内容）",
                 "taskId", taskRecord.getTaskId(),
                 "customGuidance", TextUtil.trimToDefault(request.customGuidance(), "未提供"),
                 "reviewFocus", TextUtil.trimToDefault(request.reviewFocus(), "未提供"),
@@ -385,7 +483,8 @@ public class CreatorReportService {
                 "feedbackResult", buildFeedbackReportPrompt(feedbackReportRecord),
                 "competitorResult", buildCompetitorReportPrompt(competitorReportRecord),
                 "crossPeriodContext", crossPeriodContext
-        ));
+        )) + "\n\n【任务标识与视频内容依据】\n" + CONTENT_EVIDENCE_BOUNDARY
+                + "\n\n【自身已绑定视频的正式发布资料】\n" + publishedVideoContextService.buildPrompt(taskRecord);
     }
 
     /** 视频指标可能未随反馈导入，缺失时明确标记，避免模型补造发布表现。 */
@@ -400,13 +499,15 @@ public class CreatorReportService {
                 收藏数：%s
                 分享数：%s
                 数据来源：%s
+                指标导入时间（东八区，非平台统计时间）：%s
                 """.formatted(
                 formatMetricValue(record.getViewCount()),
                 formatMetricValue(record.getLikeCount()),
                 formatMetricValue(record.getCoinCount()),
                 formatMetricValue(record.getFavoriteCount()),
                 formatMetricValue(record.getShareCount()),
-                TextUtil.trimToDefault(record.getSource(), "未提供")
+                TextUtil.trimToDefault(record.getSource(), "未提供"),
+                record.getCreateTime() == null ? "未提供" : record.getCreateTime().toString()
         );
     }
 
@@ -425,9 +526,9 @@ public class CreatorReportService {
                 争议点：%s
                 误解点：%s
                 误解来源分析：%s
-                下一期内容建议：%s
+                下一期内容建议（不是本期内容证据，采用前须核对反馈依据）：%s
                 互动回应建议：%s
-                反馈行动计划：%s
+                反馈行动计划（采用前须核对反馈依据）：%s
                 解析状态：%s
                 """.formatted(
                 normalizeSection(record.getFeedbackSummary()),
@@ -447,6 +548,9 @@ public class CreatorReportService {
 
     /** 将竞品对比报告格式化为提示词片段 */
     private String buildCompetitorReportPrompt(CreatorCompetitorReportRecord record) {
+        if (record == null) {
+            return "未提供完整竞品分析。本次只根据自身视频指标和观众反馈复盘，不得编造竞品或相对优势、短板。";
+        }
         return """
                 竞品整体打法：%s
                 竞品优势：%s

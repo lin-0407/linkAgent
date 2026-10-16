@@ -31,6 +31,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
@@ -109,6 +110,8 @@ public class PrePublishSuggestionService {
     private final PrePublishEvidenceCollector evidenceCollector;
     /** 发布前优化建议审查器，用确定性规则标记无证据和夸大承诺等质量问题 */
     private final PrePublishSuggestionAuditor suggestionAuditor;
+    /** 事务模板：候选在事务外生成，保存单独走短事务，避免模型调用期间占着数据库连接 */
+    private final TransactionTemplate transactionTemplate;
 
     @Autowired
     public PrePublishSuggestionService(CreatorTaskMapper creatorTaskMapper,
@@ -121,7 +124,8 @@ public class PrePublishSuggestionService {
                                        ObjectMapper objectMapper,
                                        PromptService promptService,
                                        PrePublishEvidenceCollector evidenceCollector,
-                                       PrePublishSuggestionAuditor suggestionAuditor) {
+                                       PrePublishSuggestionAuditor suggestionAuditor,
+                                       TransactionTemplate transactionTemplate) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorSuggestionMapper = creatorSuggestionMapper;
         this.creatorPreferenceService = creatorPreferenceService;
@@ -133,6 +137,7 @@ public class PrePublishSuggestionService {
         this.promptService = promptService;
         this.evidenceCollector = evidenceCollector;
         this.suggestionAuditor = suggestionAuditor;
+        this.transactionTemplate = transactionTemplate;
     }
 
     /**
@@ -145,9 +150,10 @@ public class PrePublishSuggestionService {
                                 CreatorContextService creatorContextService,
                                 LLMService llmService,
                                 ObjectMapper objectMapper,
-                                PromptService promptService) {
+                                PromptService promptService,
+                                TransactionTemplate transactionTemplate) {
         this(creatorTaskMapper, creatorSuggestionMapper, creatorPreferenceService, creatorContextService,
-                null, llmService, null, objectMapper, promptService, null, null);
+                null, llmService, null, objectMapper, promptService, null, null, transactionTemplate);
     }
 
     /**
@@ -164,7 +170,6 @@ public class PrePublishSuggestionService {
      * @param request 用户的分析要求
      * @return 结构化的发布前优化建议
      */
-    @Transactional
     public CreatorSuggestionResponse generateSuggestion(String taskId, PrePublishAnalyzeRequest request) {
         return generateSuggestion(taskId, request, null);
     }
@@ -172,12 +177,15 @@ public class PrePublishSuggestionService {
     /**
      * 使用独立的内部偏离提醒重新生成方案。
      * 该提醒不属于用户输入，必须放在系统提示词中，避免多 Agent 传递时被误当成用户的新需求。
+     *
+     * <p>
+     * 事务边界：候选在事务外生成，保存单独走短事务；保存前复核生成依据没有变。
      */
-    @Transactional
     public CreatorSuggestionResponse generateSuggestion(String taskId,
                                                         PrePublishAnalyzeRequest request,
                                                         String deviationReminder) {
-        return saveSuggestion(generateSuggestionCandidate(taskId, request, deviationReminder));
+        GeneratedSuggestion generated = generateCandidateInternal(taskId, request, deviationReminder);
+        return transactionTemplate.execute(status -> saveGeneratedSuggestion(generated, null));
     }
 
     /**
@@ -186,6 +194,18 @@ public class PrePublishSuggestionService {
     public PrePublishSuggestionCandidate generateSuggestionCandidate(String taskId,
                                                                      PrePublishAnalyzeRequest request,
                                                                      String deviationReminder) {
+        return generateCandidateInternal(taskId, request, deviationReminder).candidate();
+    }
+
+    /**
+     * 生成候选，并记录本次生成依据的输入指纹。
+     * <p>
+     * 为什么要记指纹：模型调用已经移出事务，推理期间用户可能改了任务材料或沉淀了新的历史偏好；
+     * 保存时必须确认依据没变，否则这份建议会被当成本期结论写进库。
+     */
+    private GeneratedSuggestion generateCandidateInternal(String taskId,
+                                                          PrePublishAnalyzeRequest request,
+                                                          String deviationReminder) {
         CreatorTaskRecord taskRecord = getTaskRecord(taskId);
         List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
         if (materials.isEmpty()) {
@@ -194,6 +214,7 @@ public class PrePublishSuggestionService {
 
         PrePublishAnalyzeRequest safeRequest = normalizeRequest(request);
         String preferenceContext = buildPreferencePromptContext(taskRecord, safeRequest);
+        String inputKey = buildSuggestionInputKey(materials, preferenceContext);
         List<PrePublishEvidenceRef> evidenceRefs = collectEvidence(taskRecord, materials, safeRequest, preferenceContext);
         String rawOutput;
         // 用 try-with-resources 打开用量上下文，确保 LLM 调用被 Langfuse 正确追踪
@@ -203,7 +224,52 @@ public class PrePublishSuggestionService {
         }
         CreatorSuggestionRecord suggestionRecord = buildSuggestionRecord(taskRecord.getTaskId(), rawOutput,
                 evidenceRefs, "DIRECT_LLM_EVIDENCE", "EVIDENCE_COLLECTED");
-        return new PrePublishSuggestionCandidate(suggestionRecord);
+        return new GeneratedSuggestion(new PrePublishSuggestionCandidate(suggestionRecord), safeRequest, inputKey);
+    }
+
+    /**
+     * 一次候选生成的结果：候选本身、请求快照和输入指纹。请求快照只用于保存前重算指纹。
+     */
+    private record GeneratedSuggestion(PrePublishSuggestionCandidate candidate,
+                                       PrePublishAnalyzeRequest safeRequest,
+                                       String inputKey) {
+    }
+
+    /**
+     * 在新短事务里保存候选，保存前复核材料与历史偏好没有变化。
+     */
+    private CreatorSuggestionResponse saveGeneratedSuggestion(GeneratedSuggestion generated, String sessionId) {
+        CreatorSuggestionRecord record = generated.candidate().record();
+        String currentKey = currentSuggestionInputKey(record.getTaskId(), generated.safeRequest());
+        if (!generated.inputKey().equals(currentKey)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "创作材料或历史偏好在生成期间发生变化，本次发布前建议已丢弃，请重新生成");
+        }
+        return doSaveSuggestion(generated.candidate(), sessionId);
+    }
+
+    /**
+     * 读一次当前材料与偏好上下文，算出输入指纹。生成前和保存前各调一次，两处口径必须一致，
+     * 所以都走 {@link #buildSuggestionInputKey(List, String)}。
+     */
+    private String currentSuggestionInputKey(String taskId, PrePublishAnalyzeRequest safeRequest) {
+        CreatorTaskRecord taskRecord = getTaskRecord(taskId);
+        List<CreatorMaterialRecord> materials = creatorTaskMapper.listMaterialsByTaskId(taskRecord.getTaskId());
+        return buildSuggestionInputKey(materials, buildPreferencePromptContext(taskRecord, safeRequest));
+    }
+
+    /**
+     * 材料与偏好上下文的输入指纹：材料正文和历史偏好都会影响建议结论，任一处变了都不算同一份依据。
+     */
+    private String buildSuggestionInputKey(List<CreatorMaterialRecord> materials, String preferenceContext) {
+        StringBuilder builder = new StringBuilder(preferenceContext == null ? "" : preferenceContext);
+        for (CreatorMaterialRecord material : materials) {
+            builder.append('\n')
+                    .append(material.getMaterialType())
+                    .append(':')
+                    .append(material.getContent());
+        }
+        return builder.toString();
     }
 
     /**
@@ -227,9 +293,13 @@ public class PrePublishSuggestionService {
      * @return 结构化的发布前优化建议
      * @throws ResponseStatusException Agent 未初始化、最终答案为空或无法解析为 JSON 时抛 500
      */
-    @Transactional
     public CreatorSuggestionResponse generateSuggestionByAgent(String taskId, PrePublishAnalyzeRequest request) {
-        return saveSuggestion(generateSuggestionCandidateByAgent(taskId, request));
+        PrePublishAnalyzeRequest safeRequest = normalizeRequest(request);
+        // Agent 路径可能多轮工具调用，同样必须在事务外跑；先固定输入指纹，保存时复核
+        String inputKey = currentSuggestionInputKey(taskId, safeRequest);
+        PrePublishSuggestionCandidate candidate = generateSuggestionCandidateByAgent(taskId, request);
+        return transactionTemplate.execute(status -> saveGeneratedSuggestion(
+                new GeneratedSuggestion(candidate, safeRequest, inputKey), null));
     }
 
     /**
@@ -269,6 +339,9 @@ public class PrePublishSuggestionService {
 
     /**
      * 候选通过工作流审查后再保存，并复用现有响应转换逻辑返回完整结果。
+     * <p>
+     * 工作流路径的输入复核由工作流自己负责（它会按会话和步骤状态判断能否继续），
+     * 这里只保证保存本身是一个短事务。
      */
     @Transactional
     public CreatorSuggestionResponse saveSuggestion(PrePublishSuggestionCandidate candidate) {
@@ -281,6 +354,14 @@ public class PrePublishSuggestionService {
     @Transactional
     public CreatorSuggestionResponse saveSuggestion(PrePublishSuggestionCandidate candidate,
                                                      String sessionId) {
+        return doSaveSuggestion(candidate, sessionId);
+    }
+
+    /**
+     * 保存本体：不再自带事务注解，由调用方决定事务边界（生成路径用事务模板，工作流路径用本类注解）。
+     */
+    private CreatorSuggestionResponse doSaveSuggestion(PrePublishSuggestionCandidate candidate,
+                                                       String sessionId) {
         CreatorSuggestionRecord record = candidate.record();
         record.setSessionId(TextUtil.trimToNull(sessionId));
         creatorSuggestionMapper.upsert(record);

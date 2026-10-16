@@ -11,6 +11,13 @@ public class ConversationMessageRecord {
 
     private Long id;
     private String sessionId;
+    /**
+     * 归属用户。
+     * <p>
+     * 表里本来只能靠 session_id 关联会话表才能知道消息属于谁，长期记忆按用户捞增量时每次都要 JOIN；
+     * 这里冗余一份，让增量查询直接走 (user_id, id) 索引（设计文档 C5）。
+     */
+    private String userId;
     private String role;
     private String content;
     private String toolName;
@@ -32,6 +39,14 @@ public class ConversationMessageRecord {
 
     public void setSessionId(String sessionId) {
         this.sessionId = sessionId;
+    }
+
+    public String getUserId() {
+        return userId;
+    }
+
+    public void setUserId(String userId) {
+        this.userId = userId;
     }
 
     public String getRole() {

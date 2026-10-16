@@ -1,6 +1,33 @@
 // 案例库（跨分区视频案例）前端类型，对应后端 /api/knowledge/reference-videos 系列接口。
 // 单独成文件而非塞进 creator.ts：案例库是跨创作任务的独立域，类型与创作任务无耦合。
 
+export type ReferenceAutoCollectionSettings = {
+  minIndex: number
+  maxImports: number
+  maxChecks: number
+  rids: number[]
+}
+
+export type ReferenceAutoCollectionState = {
+  runId: string | null
+  status: 'IDLE' | 'RUNNING' | 'STOPPING' | 'SUCCEEDED' | 'WARNING' | 'FAILED' | 'CANCELLED'
+  startedAt: string | null
+  finishedAt: string | null
+  message: string
+  settings: ReferenceAutoCollectionSettings
+  report: {
+    discovered?: number
+    checked?: number
+    eligible?: number
+    imported?: number
+    updated?: number
+    skipped?: number
+    failed?: number
+    warnings?: string[]
+    blocked?: string
+  } | null
+}
+
 // 「输入 BV → 后端调脚本采集 → 自动清洗导入」一键接口的入参。tier / category 可选。
 export type ReferenceVideoFetchImportPayload = {
   bvInput: string

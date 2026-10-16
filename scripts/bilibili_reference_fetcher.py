@@ -527,8 +527,10 @@ def build_video_item(
     options: FetchOptions,
     warnings: list[str],
     signer_state: dict[str, WbiSigner],
+    video_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    video_info = fetch_video_info(bvid, options.timeout)
+    video_info = fetch_video_info(bvid, options.timeout) if video_info is None else video_info
+    metadata_fetched_at = int(time.time())
     stat = video_info.get("stat") if isinstance(video_info.get("stat"), dict) else {}
     cover_url = normalize_cover_url(video_info.get("pic"))
     if video_info.get("pic") and cover_url is None:
@@ -545,6 +547,8 @@ def build_video_item(
         "tags": None,  # 标签需额外接口，案例检索（5.1c+）才用到，此处先留空，保持采集轻量
         "category": resolve_video_category(video_info, warnings),
         "publishTimeText": to_publish_text(video_info.get("pubdate")),
+        "publishedAtEpochSeconds": video_info.get("pubdate"),
+        "statsFetchedAtEpochSeconds": metadata_fetched_at,
         "stats": {
             "view": stat.get("view"),
             "like": stat.get("like"),

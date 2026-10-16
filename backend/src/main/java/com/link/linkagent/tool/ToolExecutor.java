@@ -126,7 +126,7 @@ public class ToolExecutor {
                     }
                 })
                 // 硬超时：超过配置秒数后 CompletableFuture 变为异常完成，join() 会抛出异常
-                .orTimeout(properties.timeoutSeconds(), TimeUnit.SECONDS)
+                .orTimeout(properties.timeoutSeconds(toolCall.name()), TimeUnit.SECONDS)
                 // join() 阻塞等待结果；若超时或被工具执行本身抛出异常，join() 会传播异常（CompletionException 包裹）
                 .join();
     }

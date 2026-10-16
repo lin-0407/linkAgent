@@ -111,6 +111,8 @@ agent:
     web-search:
       # 默认关闭；开启后先尝试 Bing RSS，失败时自动回退 DuckDuckGo HTML。
       enabled: ${WEB_SEARCH_ENABLED:false}
+      # 抓取页面和正文压缩属于搜索工具的一次执行，使用独立时限，避免正常请求被统一 10 秒提前截断。
+      timeout-seconds: ${WEB_SEARCH_TIMEOUT_SECONDS:60}
       bing-base-url: ${WEB_SEARCH_BING_BASE_URL:https://cn.bing.com}
       duckduckgo-base-url: ${WEB_SEARCH_DUCKDUCKGO_BASE_URL:https://html.duckduckgo.com}
       # 单页正文超过 2000 字时，合并为一次轻量模型调用压缩，失败后自动保留原文。
@@ -145,6 +147,47 @@ agent:
       # 触发压缩的 token 阈值（官方词表本地计量）。256k 占 1M 窗口的 25.6%，给输出（上限 384K）留足余量。
       trigger-token-threshold: ${SUMMARY_MEMORY_TRIGGER_TOKEN_THRESHOLD:256000}
       retained-message-count: ${SUMMARY_MEMORY_RETAINED_MESSAGE_COUNT:2}
+      # 压缩时抽取的事实点达到这个分数（1-100）才写入长期记忆；低于高分线的只留在摘要里，不单独占记忆条目。
+      fact-importance-threshold: ${SUMMARY_MEMORY_FACT_IMPORTANCE_THRESHOLD:80}
+    extract:
+      # 递减预算初值：期望每 10 轮触发一次 × 平均每轮重要性 20（1-100 口径）＝ 200，见设计文档 D17.3 / 9.3 的 V2 起步值。
+      # 预算与游标都存在 Redis，重启不丢；想更快看到触发效果就调小这个值。
+      budget-initial: ${LONG_TERM_MEMORY_BUDGET_INITIAL:200}
+      # 单批最多抽取多少条消息：首次使用或提取被卡住一段时间后增量会积累，这里封住单次调用体积。
+      batch-message-limit: ${LONG_TERM_MEMORY_BATCH_LIMIT:200}
+      # 提取消费者开关：关掉后队列任务会堆积但没人消费，只在排查「是不是消费者把库写坏了」时临时关闭。
+      worker-enabled: ${LONG_TERM_MEMORY_WORKER_ENABLED:true}
+      # 消费者空队列时的阻塞等待秒数：到点返回一次，让线程有机会响应关闭。
+      worker-poll-timeout-seconds: ${LONG_TERM_MEMORY_WORKER_POLL_TIMEOUT_SECONDS:1}
+      # 失败原地重试次数（设计文档 C8）：超过后丢弃任务但不动游标，下一轮触发时同一批会再试。
+      retry-max: ${LONG_TERM_MEMORY_RETRY_MAX:2}
+      # 阶段一一次最多产出几条候选（同一 memoryKey 只留最高分那条）。
+      max-candidates: ${LONG_TERM_MEMORY_MAX_CANDIDATES:5}
+      # 阶段二单轮最多写几条记忆（C14）；超过的动作被拒绝并记日志。
+      decision-max-writes: ${LONG_TERM_MEMORY_DECISION_MAX_WRITES:5}
+      # 阶段二最多携带多少条已有记忆做去重与冲突判断；步骤 8 起这个条数是「向量召回多少条」的上限，
+      # 不再是「取最近的 N 条」（设计文档 C11）。
+      existing-memory-limit: ${LONG_TERM_MEMORY_EXISTING_LIMIT:50}
+    # 读取路径的三维打分与向量化（设计文档 D 组，实施步骤 8）。
+    # 向量能力本身由 spring.ai.model.embedding 控制：默认 none 时这里只剩下「时效 + 重要」两维，
+    # 打开向量能力需要把 EMBEDDING_MODEL_TYPE 设为 openai，并配好 LLM_EMBEDDING_* 那组参数。
+    retrieval:
+      # 一次注入上下文的记忆条数 top-K。9.3 的 V3 起步值 10：K=10 约 230 token，成本不是瓶颈。
+      top-k: ${LONG_TERM_MEMORY_TOP_K:10}
+      # 时效性衰减率：每小时乘这个系数。设计文档 D11 要求按真实时间差算（源码是按记忆条数排名衰减，
+      # 在本项目几十到几百条的量级下几乎不衰减）；0.99 取自源码的 recency_decay。
+      recency-decay-per-hour: ${LONG_TERM_MEMORY_RECENCY_DECAY_PER_HOUR:0.99}
+      # 三维权重起步值：照抄 Generative Agents 源码里实际生效的 gw = [0.5, 3, 2]（D17.1）。
+      # 等权 [1, 1, 1] 是对照实验组，改这三个值即可对比（权重为 0 表示关掉该维）。
+      weight-recency: ${LONG_TERM_MEMORY_WEIGHT_RECENCY:0.5}
+      weight-relevance: ${LONG_TERM_MEMORY_WEIGHT_RELEVANCE:3}
+      weight-importance: ${LONG_TERM_MEMORY_WEIGHT_IMPORTANCE:2}
+      # 向量化超时：检索在请求线程上，超时只丢相关性维度，不让整轮回答卡住。
+      embedding-timeout-seconds: ${LONG_TERM_MEMORY_EMBEDDING_TIMEOUT_SECONDS:5}
+      # 单批向量化条数：Qwen 的 OpenAI 兼容模式单批硬上限是 10，超了整批 400。
+      embedding-batch-size: ${LONG_TERM_MEMORY_EMBEDDING_BATCH_SIZE:10}
+      # 单次读取最多补算多少条缺失向量（存量记忆、向量化失败、手工新建的记忆）；0 表示不补算。
+      embedding-backfill-limit: ${LONG_TERM_MEMORY_EMBEDDING_BACKFILL_LIMIT:50}
 
 # ========== DeepSeek Flash 思考模式 ==========
 # 只有模型名同时包含 deepseek 和 flash 时，后端才会发送 reasoning_effort / thinking 字段。
@@ -203,11 +246,11 @@ creator:
       poll-interval-ms: ${CREATOR_MEDIA_PROCESSING_POLL_INTERVAL_MS:2000}
       lease-duration: ${CREATOR_MEDIA_PROCESSING_LEASE_DURATION:2m}
       max-attempts: ${CREATOR_MEDIA_PROCESSING_MAX_ATTEMPTS:3}
-      pricing-version: ${CREATOR_MEDIA_PRICING_VERSION:2026-07-12-config-v1}
+      pricing-version: ${CREATOR_MEDIA_PRICING_VERSION:2026-10-11-plus-config-v2}
       flash-input-usd-per-million-tokens: ${CREATOR_MEDIA_FLASH_INPUT_USD_PER_MILLION_TOKENS:0.022}
       flash-output-usd-per-million-tokens: ${CREATOR_MEDIA_FLASH_OUTPUT_USD_PER_MILLION_TOKENS:0.215}
-      plus-input-usd-per-million-tokens: ${CREATOR_MEDIA_PLUS_INPUT_USD_PER_MILLION_TOKENS:0.42}
-      plus-output-usd-per-million-tokens: ${CREATOR_MEDIA_PLUS_OUTPUT_USD_PER_MILLION_TOKENS:1.25}
+      plus-input-usd-per-million-tokens: ${CREATOR_MEDIA_PLUS_INPUT_USD_PER_MILLION_TOKENS:0.144}
+      plus-output-usd-per-million-tokens: ${CREATOR_MEDIA_PLUS_OUTPUT_USD_PER_MILLION_TOKENS:1.434}
       asr-usd-per-second: ${CREATOR_MEDIA_ASR_USD_PER_SECOND:0.000035}
     preflight:
       poll-interval-ms: ${CREATOR_MEDIA_PREFLIGHT_POLL_INTERVAL_MS:2000}
@@ -217,7 +260,7 @@ creator:
       dash-scope-base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com}
       dash-scope-api-key: ${DASHSCOPE_API_KEY:}
       asr-model: ${CREATOR_MEDIA_ASR_MODEL:qwen3-asr-flash-filetrans}
-      video-model: ${CREATOR_MEDIA_VIDEO_MODEL:qwen3-vl-flash}
+      video-model: ${CREATOR_MEDIA_VIDEO_MODEL:qwen3-vl-plus}
       video-fps: ${CREATOR_MEDIA_VIDEO_FPS:0.2}
       connect-timeout: ${CREATOR_MEDIA_ASR_CONNECT_TIMEOUT:10s}
       read-timeout: ${CREATOR_MEDIA_ASR_READ_TIMEOUT:30s}
@@ -245,6 +288,11 @@ creator:
 # 与反馈 RAG 完全独立的开关，默认关闭：关闭时不连 Milvus、不调 Embedding，案例导入与列表照常工作（不依赖向量库）。
 # Milvus 连接复用上面的 MILVUS_* 同一套环境变量；只是集合名与维度不同，做到专用集合物理隔离。
 knowledge:
+  reference-maintenance:
+    # 只清理参考库，按东八区发布时间超过一年处理；外部索引失败保留ID重试，不恢复正文。
+    enabled: ${KNOWLEDGE_REFERENCE_MAINTENANCE_ENABLED:true}
+    initial-delay-ms: ${KNOWLEDGE_REFERENCE_MAINTENANCE_INITIAL_DELAY_MS:60000}
+    fixed-delay-ms: ${KNOWLEDGE_REFERENCE_MAINTENANCE_FIXED_DELAY_MS:21600000}
   quality:
     # 分区相对质量分需要足够同赛道样本；低于该数量时只保存单视频原始分，避免 60/0/100 的小样本跳变误导展示。
     min-reliable-sample-size: ${KNOWLEDGE_QUALITY_MIN_RELIABLE_SAMPLE_SIZE:5}

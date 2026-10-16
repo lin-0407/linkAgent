@@ -178,15 +178,15 @@ public class CreatorMediaProperties {
         /** 单个处理任务允许的最大尝试次数 */
         private int maxAttempts = 3;
         /** 成本估算价格配置版本，便于解释历史估算结果 */
-        private String pricingVersion = "2026-07-12-config-v1";
+        private String pricingVersion = "2026-10-11-plus-config-v2";
         /** Qwen3-VL-Flash 输入价格，单位为美元/百万 Token */
         private BigDecimal flashInputUsdPerMillionTokens = new BigDecimal("0.022");
         /** Qwen3-VL-Flash 输出价格，单位为美元/百万 Token */
         private BigDecimal flashOutputUsdPerMillionTokens = new BigDecimal("0.215");
         /** Qwen3-VL-Plus 输入价格，单位为美元/百万 Token；仅用于配置估算 */
-        private BigDecimal plusInputUsdPerMillionTokens = new BigDecimal("0.42");
+        private BigDecimal plusInputUsdPerMillionTokens = new BigDecimal("0.144");
         /** Qwen3-VL-Plus 输出价格，单位为美元/百万 Token；仅用于配置估算 */
-        private BigDecimal plusOutputUsdPerMillionTokens = new BigDecimal("1.25");
+        private BigDecimal plusOutputUsdPerMillionTokens = new BigDecimal("1.434");
         /** ASR 估算价格，单位为美元/秒；仅用于配置估算 */
         private BigDecimal asrUsdPerSecond = new BigDecimal("0.000035");
 
@@ -257,7 +257,7 @@ public class CreatorMediaProperties {
         /** 文件转写模型 */
         private String asrModel = "qwen3-asr-flash-filetrans";
         /** 单次全片粗审使用的视频理解模型 */
-        private String videoModel = "qwen3-vl-flash";
+        private String videoModel = "qwen3-vl-plus";
         /** 全片粗审抽帧频率，P0 按技术方案使用低成本 0.2 fps */
         private double videoFps = 0.2d;
         /** 重点片段使用的视频理解模型；只处理少量短片，不重复读取整片 */

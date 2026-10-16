@@ -8,6 +8,10 @@ import com.link.linkagent.knowledge.model.ReferenceVideoItemRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoScoringRow;
 import org.apache.ibatis.annotations.Insert;
+import org.apache.ibatis.annotations.Delete;
+import org.apache.ibatis.annotations.ConstructorArgs;
+import org.apache.ibatis.annotations.Arg;
+import com.link.linkagent.knowledge.model.ReferenceIndexCleanupRecord;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
@@ -53,7 +57,8 @@ public interface KnowledgeReferenceVideoMapper {
                 reply_count,
                 highlight_summary,
                 source,
-                publish_time_text
+                publish_time_text,
+                published_at, stats_fetched_at, video_index_score, video_index_version, collection_min_index
             )
             VALUES (
                 #{videoId},
@@ -72,7 +77,8 @@ public interface KnowledgeReferenceVideoMapper {
                 #{replyCount},
                 #{highlightSummary},
                 #{source},
-                #{publishTimeText}
+                #{publishTimeText},
+                #{publishedAt}, #{statsFetchedAt}, #{videoIndexScore}, #{videoIndexVersion}, #{collectionMinIndex}
             )
             """)
     int insertReferenceVideo(ReferenceVideoRecord record);
@@ -159,11 +165,13 @@ public interface KnowledgeReferenceVideoMapper {
                    v.quality_score_reliable,
                    v.source,
                    v.publish_time_text,
+                   v.published_at, v.stats_fetched_at, v.video_index_score, v.video_index_version, v.collection_min_index,
                    v.embedding_status,
                    v.create_time,
                    v.update_time
             FROM creator_reference_video v
             WHERE v.is_deleted = 0
+              AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND (#{category} IS NULL OR v.category = #{category})
               AND (#{tier} IS NULL OR v.tier = #{tier})
             ORDER BY v.id DESC
@@ -192,6 +200,11 @@ public interface KnowledgeReferenceVideoMapper {
             @Result(column = "quality_score_reliable", property = "qualityScoreReliable"),
             @Result(column = "source", property = "source"),
             @Result(column = "publish_time_text", property = "publishTimeText"),
+            @Result(column = "published_at", property = "publishedAt"),
+            @Result(column = "stats_fetched_at", property = "statsFetchedAt"),
+            @Result(column = "video_index_score", property = "videoIndexScore"),
+            @Result(column = "video_index_version", property = "videoIndexVersion"),
+            @Result(column = "collection_min_index", property = "collectionMinIndex"),
             @Result(column = "embedding_status", property = "embeddingStatus"),
             @Result(column = "create_time", property = "createTime"),
             @Result(column = "update_time", property = "updateTime")
@@ -208,6 +221,7 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT COUNT(*)
             FROM creator_reference_video
             WHERE is_deleted = 0
+              AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND (#{category} IS NULL OR category = #{category})
               AND (#{tier} IS NULL OR tier = #{tier})
             """)
@@ -222,6 +236,7 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT DISTINCT category
             FROM creator_reference_video
             WHERE is_deleted = 0
+              AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND category IS NOT NULL
               AND TRIM(category) <> ''
             ORDER BY category
@@ -239,10 +254,11 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT id, video_id, bv_id, cover_url, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
-                   source, publish_time_text,
+                   source, publish_time_text, published_at, stats_fetched_at, video_index_score, video_index_version, collection_min_index,
                    embedding_status, create_time, update_time
             FROM creator_reference_video
             WHERE is_deleted = 0
+              AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND video_id IN
               <foreach item='vid' collection='videoIds' open='(' separator=',' close=')'>
                   #{vid}
@@ -261,17 +277,18 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT id, video_id, bv_id, cover_url, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
-                   source, publish_time_text,
+                   source, publish_time_text, published_at, stats_fetched_at, video_index_score, video_index_version, collection_min_index,
                    embedding_status, create_time, update_time
             FROM creator_reference_video
             WHERE is_deleted = 0
+              AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND (#{category} IS NULL OR category = #{category})
               AND (#{tier} IS NULL OR tier = #{tier})
               AND video_id IN
               <foreach item='vid' collection='videoIds' open='(' separator=',' close=')'>
                   #{vid}
               </foreach>
-            ORDER BY quality_score DESC, raw_quality_score DESC, id DESC
+            ORDER BY video_index_score DESC, CASE WHEN quality_score_reliable = 1 THEN quality_score END DESC, raw_quality_score DESC, published_at DESC, id DESC
             LIMIT #{limit} OFFSET #{offset}
             </script>
             """)
@@ -285,7 +302,7 @@ public interface KnowledgeReferenceVideoMapper {
     /**
      * SQL 关键词兜底检索父表（5.2a）：RAG 关闭或向量库不可用时走这里。
      * keyword 为空则不加关键词条件（退化为「按质量信号取前 N」）；title/description/highlight_summary 任一命中即返回。
-     * 排序先看可靠的归一化质量分，再用单视频原始分兜底，避免小样本分区因 quality_score 为空完全失去排序信号。
+     * 相关候选先按固定视频指数排序，可靠分区相对分和原始分仅作后续排序，不把分区样本变化当成准入变化。
      * keywords 是从 query 中抽出来的核心词，避免整串 LIKE 因空格 / 标点 / 括号差异导致标题明明存在却搜不到。
      * 真正的关键词相关性打分留给 5.2d 原生 BM25；这里仍只是兜底召回，按质量信号排序。
      * 复用 listReferenceVideos 的 ReferenceVideoRecordMap，故 SELECT 列须与之保持一致。
@@ -295,10 +312,11 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT id, video_id, bv_id, cover_url, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
-                   source, publish_time_text,
+                   source, publish_time_text, published_at, stats_fetched_at, video_index_score, video_index_version, collection_min_index,
                    embedding_status, create_time, update_time
             FROM creator_reference_video
             WHERE is_deleted = 0
+              AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND (#{category} IS NULL OR category = #{category})
               AND (#{tier} IS NULL OR tier = #{tier})
               <choose>
@@ -319,7 +337,7 @@ public interface KnowledgeReferenceVideoMapper {
                        OR bv_id LIKE CONCAT('%', #{keyword}, '%'))
                   </otherwise>
               </choose>
-            ORDER BY quality_score DESC, raw_quality_score DESC, id DESC
+            ORDER BY video_index_score DESC, CASE WHEN quality_score_reliable = 1 THEN quality_score END DESC, raw_quality_score DESC, published_at DESC, id DESC
             LIMIT #{limit}
             </script>
             """)
@@ -336,7 +354,7 @@ public interface KnowledgeReferenceVideoMapper {
     @Select("""
             SELECT COUNT(*)
             FROM creator_reference_video
-            WHERE bv_id = #{bvId}
+            WHERE active_bv_id = #{bvId}
               AND is_deleted = 0
             """)
     long countByBvId(@Param("bvId") String bvId);
@@ -354,11 +372,12 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT id, video_id, bv_id, cover_url, tier, category, title, description, tags,
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
-                   source, publish_time_text,
+                   source, publish_time_text, published_at, stats_fetched_at, video_index_score, video_index_version, collection_min_index,
                    embedding_status, create_time, update_time
             FROM creator_reference_video
             WHERE video_id = #{videoId}
               AND is_deleted = 0
+              AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
             LIMIT 1
             """)
     @ResultMap("ReferenceVideoRecordMap")
@@ -409,6 +428,7 @@ public interface KnowledgeReferenceVideoMapper {
             LEFT JOIN creator_reference_video_item i
                    ON i.video_id = v.video_id AND i.is_deleted = 0
             WHERE v.is_deleted = 0
+              AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND v.category = #{category}
             GROUP BY v.id
             """)
@@ -474,11 +494,13 @@ public interface KnowledgeReferenceVideoMapper {
                    v.quality_score_reliable,
                    v.source,
                    v.publish_time_text,
+                   v.published_at, v.stats_fetched_at, v.video_index_score, v.video_index_version, v.collection_min_index,
                    v.embedding_status,
                    v.create_time,
                    v.update_time
             FROM creator_reference_video v
             WHERE v.is_deleted = 0
+              AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND v.embedding_status IN ('PENDING', 'FAILED')
             ORDER BY v.id DESC
             LIMIT #{limit}
@@ -523,6 +545,7 @@ public interface KnowledgeReferenceVideoMapper {
                    COUNT(1) AS count
             FROM creator_reference_video
             WHERE is_deleted = 0
+              AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
             GROUP BY embedding_status
             """)
     @Results(id = "ReferenceVideoEmbeddingStatusCountMap", value = {
@@ -562,6 +585,7 @@ public interface KnowledgeReferenceVideoMapper {
             FROM creator_reference_video_item i
             JOIN creator_reference_video v
                  ON v.video_id = i.video_id AND v.is_deleted = 0
+                 AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
             WHERE i.is_deleted = 0
               AND i.embedding_status IN ('PENDING', 'FAILED')
             ORDER BY i.id
@@ -595,6 +619,7 @@ public interface KnowledgeReferenceVideoMapper {
             FROM creator_reference_video_item i
             JOIN creator_reference_video v
                  ON v.video_id = i.video_id AND v.is_deleted = 0
+                 AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
             WHERE i.is_deleted = 0
             ORDER BY i.id
             LIMIT #{limit}
@@ -610,6 +635,7 @@ public interface KnowledgeReferenceVideoMapper {
             FROM creator_reference_video_item i
             JOIN creator_reference_video v
                  ON v.video_id = i.video_id AND v.is_deleted = 0
+                 AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
             WHERE i.is_deleted = 0
             """)
     long countItemsForHybrid();
@@ -651,6 +677,7 @@ public interface KnowledgeReferenceVideoMapper {
                    COUNT(1) AS count
             FROM creator_reference_video_item
             WHERE is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_reference_video p WHERE p.video_id = creator_reference_video_item.video_id AND p.is_deleted = 0 AND (p.published_at IS NULL OR p.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR)))
             GROUP BY embedding_status
             """)
     @ResultMap("ReferenceVideoEmbeddingStatusCountMap")
@@ -664,6 +691,7 @@ public interface KnowledgeReferenceVideoMapper {
             FROM creator_reference_video_item
             WHERE embedding_status = 'INDEXED'
               AND is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_reference_video p WHERE p.video_id = creator_reference_video_item.video_id AND p.is_deleted = 0 AND (p.published_at IS NULL OR p.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR)))
             """)
     LocalDateTime findLastItemEmbeddingUpdateTime();
 
@@ -678,6 +706,7 @@ public interface KnowledgeReferenceVideoMapper {
             SELECT item_id, video_id, content, sentiment, source_type
             FROM creator_reference_video_item
             WHERE is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_reference_video p WHERE p.video_id = creator_reference_video_item.video_id AND p.is_deleted = 0 AND (p.published_at IS NULL OR p.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR)))
               AND item_id IN
               <foreach item='id' collection='itemIds' open='(' separator=',' close=')'>
                   #{id}
@@ -724,11 +753,13 @@ public interface KnowledgeReferenceVideoMapper {
                    v.quality_score_reliable,
                    v.source,
                    v.publish_time_text,
+                   v.published_at, v.stats_fetched_at, v.video_index_score, v.video_index_version, v.collection_min_index,
                    v.embedding_status,
                    v.create_time,
                    v.update_time
             FROM creator_reference_video v
             WHERE v.is_deleted = 0
+              AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND (
                   NOT EXISTS (
                       SELECT 1
@@ -775,6 +806,7 @@ public interface KnowledgeReferenceVideoMapper {
             FROM creator_reference_video_item
             WHERE video_id = #{videoId}
               AND is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_reference_video p WHERE p.video_id = creator_reference_video_item.video_id AND p.is_deleted = 0 AND (p.published_at IS NULL OR p.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR)))
             ORDER BY id
             LIMIT #{limit}
             """)
@@ -805,6 +837,7 @@ public interface KnowledgeReferenceVideoMapper {
             FROM creator_reference_video_chunk
             WHERE video_id = #{videoId}
               AND is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_reference_video p WHERE p.video_id = creator_reference_video_chunk.video_id AND p.is_deleted = 0 AND (p.published_at IS NULL OR p.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR)))
             ORDER BY FIELD(chunk_type, 'TITLE_PACKAGE', 'CONTENT_POSITIONING', 'AUDIENCE_FEEDBACK_SUMMARY'), id
             """)
     @Results(id = "ReferenceVideoChunkRecordMap", value = {
@@ -829,6 +862,7 @@ public interface KnowledgeReferenceVideoMapper {
             FROM creator_reference_video_item
             WHERE video_id = #{videoId}
               AND is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_reference_video p WHERE p.video_id = creator_reference_video_item.video_id AND p.is_deleted = 0 AND (p.published_at IS NULL OR p.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR)))
             ORDER BY id
             LIMIT #{limit}
             """)
@@ -859,6 +893,7 @@ public interface KnowledgeReferenceVideoMapper {
                        ) AS row_num
                 FROM creator_reference_video_item i
                 WHERE i.is_deleted = 0
+                  AND EXISTS (SELECT 1 FROM creator_reference_video p WHERE p.video_id = i.video_id AND p.is_deleted = 0 AND (p.published_at IS NULL OR p.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR)))
                   AND i.video_id IN
                   <foreach item='vid' collection='videoIds' open='(' separator=',' close=')'>
                       #{vid}
@@ -901,6 +936,7 @@ public interface KnowledgeReferenceVideoMapper {
             FROM creator_reference_video_chunk c
             JOIN creator_reference_video v
                  ON v.video_id = c.video_id AND v.is_deleted = 0
+                 AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
             WHERE c.is_deleted = 0
               AND c.embedding_status IN ('PENDING', 'FAILED')
             ORDER BY c.id
@@ -955,6 +991,7 @@ public interface KnowledgeReferenceVideoMapper {
                    COUNT(1) AS count
             FROM creator_reference_video_chunk
             WHERE is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_reference_video p WHERE p.video_id = creator_reference_video_chunk.video_id AND p.is_deleted = 0 AND (p.published_at IS NULL OR p.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR)))
             GROUP BY embedding_status
             """)
     @ResultMap("ReferenceVideoEmbeddingStatusCountMap")
@@ -968,6 +1005,91 @@ public interface KnowledgeReferenceVideoMapper {
             FROM creator_reference_video_chunk
             WHERE embedding_status = 'INDEXED'
               AND is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_reference_video p WHERE p.video_id = creator_reference_video_chunk.video_id AND p.is_deleted = 0 AND (p.published_at IS NULL OR p.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR)))
             """)
     LocalDateTime findLastChunkEmbeddingUpdateTime();
+
+    @Select("""
+            SELECT * FROM creator_reference_video WHERE active_bv_id = #{bvId}
+            """)
+    @ResultMap("ReferenceVideoRecordMap")
+    Optional<ReferenceVideoRecord> findActiveByBvId(@Param("bvId") String bvId);
+
+    @Select("""
+            <script>
+            SELECT bv_id FROM creator_reference_video WHERE active_bv_id IN
+            <foreach collection='bvIds' item='bv' open='(' separator=',' close=')'>#{bv}</foreach>
+            </script>
+            """)
+    List<String> findExistingBvIds(@Param("bvIds") List<String> bvIds);
+
+    @Update("""
+            UPDATE creator_reference_video SET cover_url = COALESCE(#{record.coverUrl},cover_url),
+                view_count=#{record.viewCount}, like_count=#{record.likeCount}, coin_count=#{record.coinCount},
+                favorite_count=#{record.favoriteCount}, reply_count=#{record.replyCount}, danmaku_count=#{record.danmakuCount},
+                published_at=#{record.publishedAt}, stats_fetched_at=#{record.statsFetchedAt},
+                video_index_score=#{record.videoIndexScore}, video_index_version=#{record.videoIndexVersion}
+            WHERE video_id=#{videoId} AND is_deleted=0
+                AND (stats_fetched_at IS NULL OR stats_fetched_at < #{record.statsFetchedAt})
+            """)
+    int updateCollectedMetadata(@Param("videoId") String videoId, @Param("record") ReferenceVideoRecord record);
+
+    @Update("""
+            UPDATE creator_reference_video SET video_index_score=#{score}, video_index_version=#{version}, stats_fetched_at=#{fetched}
+            WHERE video_id=#{videoId} AND is_deleted=0
+            """)
+    int updateIndexStatistics(@Param("videoId") String videoId, @Param("score") BigDecimal score,
+            @Param("version") String version, @Param("fetched") LocalDateTime fetched);
+
+    @Select("""
+            SELECT * FROM creator_reference_video WHERE id > #{afterId}
+            AND (published_at IS NULL OR video_index_version IS NULL) ORDER BY id LIMIT #{limit}
+            """)
+    @ResultMap("ReferenceVideoRecordMap")
+    List<ReferenceVideoRecord> listMetadataBackfill(@Param("afterId") long afterId, @Param("limit") int limit);
+
+    @Update("""
+            UPDATE creator_reference_video SET published_at=COALESCE(published_at,#{published}),
+                video_index_score=COALESCE(video_index_score,#{score}),
+                video_index_version=CASE WHEN video_index_version IS NULL AND video_index_score IS NOT NULL THEN #{version} ELSE video_index_version END
+            WHERE video_id=#{videoId}
+            """)
+    int backfillCollectionMetadata(@Param("videoId") String videoId, @Param("published") LocalDateTime published,
+            @Param("score") BigDecimal score, @Param("version") String version);
+
+    @Select("""
+            SELECT * FROM creator_reference_video WHERE published_at < #{cutoff}
+            ORDER BY published_at,id LIMIT #{limit} FOR UPDATE SKIP LOCKED
+            """)
+    @ResultMap("ReferenceVideoRecordMap")
+    List<ReferenceVideoRecord> lockExpiredVideos(@Param("cutoff") LocalDateTime cutoff, @Param("limit") int limit);
+
+    @Select("SELECT COUNT(*) FROM creator_reference_video WHERE published_at < #{cutoff}")
+    long countExpiredVideos(@Param("cutoff") LocalDateTime cutoff);
+
+    @Select("SELECT item_id FROM creator_reference_video_item WHERE video_id=#{videoId}")
+    List<String> listAllItemIds(@Param("videoId") String videoId);
+    @Select("SELECT chunk_id FROM creator_reference_video_chunk WHERE video_id=#{videoId}")
+    List<String> listAllChunkIds(@Param("videoId") String videoId);
+    @Delete("DELETE FROM creator_reference_video_item WHERE video_id=#{videoId}")
+    int deleteReferenceItems(@Param("videoId") String videoId);
+    @Delete("DELETE FROM creator_reference_video_chunk WHERE video_id=#{videoId}")
+    int deleteReferenceChunks(@Param("videoId") String videoId);
+    @Delete("DELETE FROM creator_reference_video WHERE video_id=#{videoId} AND published_at < #{cutoff}")
+    int deleteExpiredVideo(@Param("videoId") String videoId, @Param("cutoff") LocalDateTime cutoff);
+
+    @Insert("""
+            INSERT INTO creator_reference_index_cleanup(video_id,item_ids,chunk_ids) VALUES(#{videoId},#{items},#{chunks})
+            ON DUPLICATE KEY UPDATE item_ids=VALUES(item_ids),chunk_ids=VALUES(chunk_ids)
+            """)
+    int enqueueIndexCleanup(@Param("videoId") String videoId, @Param("items") String items, @Param("chunks") String chunks);
+    @Select("SELECT video_id,item_ids,chunk_ids FROM creator_reference_index_cleanup ORDER BY create_time LIMIT #{limit}")
+    @ConstructorArgs({@Arg(column="video_id", javaType=String.class), @Arg(column="item_ids", javaType=String.class), @Arg(column="chunk_ids", javaType=String.class)})
+    List<ReferenceIndexCleanupRecord> listPendingIndexCleanup(@Param("limit") int limit);
+    @Delete("DELETE FROM creator_reference_index_cleanup WHERE video_id=#{videoId}")
+    int completeIndexCleanup(@Param("videoId") String videoId);
+    @Update("UPDATE creator_reference_index_cleanup SET attempts=attempts+1,last_error=#{error} WHERE video_id=#{videoId}")
+    int failIndexCleanup(@Param("videoId") String videoId, @Param("error") String error);
+    @Select("SELECT COUNT(*) FROM creator_reference_index_cleanup")
+    long countPendingIndexCleanup();
 }

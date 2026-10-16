@@ -6,7 +6,7 @@ import {
   getInteractiveTask,
   uploadContextDocuments,
 } from '@/api/creator'
-import { parseJsonArray } from '@/composables/creator/creatorWorkspaceUtils'
+import { getRecordText, parseJsonArray } from '@/composables/creator/creatorWorkspaceUtils'
 import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorStore, type InteractiveCreationPanel } from '@/stores/creatorStore'
 import type { InteractiveTask } from '@/types/creator'
@@ -548,7 +548,9 @@ function markIntentReady(summary: string) {
 }
 
 function parseTextList(value: string | null) {
-  return parseJsonArray(value).map((item) => typeof item === 'string' ? item : JSON.stringify(item))
+  // 标题建议现在是带 title 字段的对象，直接 stringify 会把整段 JSON 显示给用户；
+  // 与 PrePublishSuggestionPanel 保持一致，优先取 title，取不到再退回原样展示
+  return parseJsonArray(value).map((item) => typeof item === 'string' ? item : (getRecordText(item, 'title') || JSON.stringify(item)))
 }
 
 function clearMessages() {

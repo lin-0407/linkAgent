@@ -33,6 +33,11 @@ public class ReferenceVideoRecord {
     private boolean qualityScoreReliable;
     private String source;
     private String publishTimeText;
+    private LocalDateTime publishedAt;
+    private LocalDateTime statsFetchedAt;
+    private BigDecimal videoIndexScore;
+    private String videoIndexVersion;
+    private BigDecimal collectionMinIndex;
     /** 向量索引状态，5.1a 阶段恒为 DB 默认值 PENDING，向量化在 5.1c 才真正写状态。 */
     private String embeddingStatus;
     private LocalDateTime createTime;
@@ -237,4 +242,15 @@ public class ReferenceVideoRecord {
     public void setUpdateTime(LocalDateTime updateTime) {
         this.updateTime = updateTime;
     }
+
+    public LocalDateTime getPublishedAt() { return publishedAt; }
+    public void setPublishedAt(LocalDateTime value) { this.publishedAt = value; }
+    public LocalDateTime getStatsFetchedAt() { return statsFetchedAt; }
+    public void setStatsFetchedAt(LocalDateTime value) { this.statsFetchedAt = value; }
+    public BigDecimal getVideoIndexScore() { return videoIndexScore; }
+    public void setVideoIndexScore(BigDecimal value) { this.videoIndexScore = value; }
+    public String getVideoIndexVersion() { return videoIndexVersion; }
+    public void setVideoIndexVersion(String value) { this.videoIndexVersion = value; }
+    public BigDecimal getCollectionMinIndex() { return collectionMinIndex; }
+    public void setCollectionMinIndex(BigDecimal value) { this.collectionMinIndex = value; }
 }

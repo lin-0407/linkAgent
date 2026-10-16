@@ -291,6 +291,27 @@ public interface CreatorInteractiveMapper {
                            @Param("status") String status);
 
     /**
+     * 带状态条件的理解结果写入。
+     * <p>
+     * 模型调用已经移到事务外，推理期间用户可能补了资料（understanding_status 被改成 PENDING），
+     * 或者另有一次理解已经完成（状态不再是 UNDERSTANDING）。这里用状态条件卡住写入，
+     * 让"旧理解覆盖新状态"这种情况直接写不进去，由调用方按影响行数判断并报冲突。
+     */
+    @Update("""
+            UPDATE creator_interactive_session
+            SET understanding_summary = #{summary},
+                understanding_status = #{status},
+                update_time = CURRENT_TIMESTAMP
+            WHERE task_id = #{taskId}
+              AND understanding_status = #{expectedStatus}
+              AND is_deleted = 0
+            """)
+    int updateUnderstandingIfStatus(@Param("taskId") String taskId,
+                                    @Param("summary") String summary,
+                                    @Param("status") String status,
+                                    @Param("expectedStatus") String expectedStatus);
+
+    /**
      * 新流程首次完成对齐后打上专用状态，旧方向卡任务继续保持原状态以兼容读取。
      */
     @Update("""

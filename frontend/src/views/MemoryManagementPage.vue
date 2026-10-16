@@ -109,13 +109,14 @@ const { dialogRef: detailDialogRef, handleDialogKeydown: handleDetailKeydown } =
 
 // ── 删除确认 ──
 
-const deletingKey = ref<string | null>(null)
+// 用记忆 id 记录「正在删除哪一条」：memoryKey 已不是身份，同 key 可能有多条记忆
+const deletingId = ref<number | null>(null)
 const deleteError = ref('')
 const pendingDelete = ref<LongTermMemoryRecord | null>(null)
 
 async function requestDelete(memory: LongTermMemoryRecord) {
   deleteError.value = ''
-  if (detailTarget.value?.memoryKey === memory.memoryKey) {
+  if (detailTarget.value?.id === memory.id) {
     // 先关闭详情并回到原卡片，再打开确认框，避免两个模态层同时存在和争夺焦点。
     closeDetail()
     await nextTick()
@@ -124,7 +125,7 @@ async function requestDelete(memory: LongTermMemoryRecord) {
 }
 
 function cancelDelete() {
-  if (deletingKey.value) return
+  if (deletingId.value) return
   pendingDelete.value = null
   deleteError.value = ''
 }
@@ -138,7 +139,7 @@ const { dialogRef: deleteDialogRef, handleDialogKeydown: handleDeleteKeydown } =
 // ── 删除撤销 ──
 
 const recentlyDeleted = ref<LongTermMemoryRecord | null>(null)
-const restoringKey = ref<string | null>(null)
+const restoringId = ref<number | null>(null)
 const undoError = ref('')
 const undoToastRef = ref<HTMLElement | null>(null)
 const undoActionRef = ref<HTMLButtonElement | null>(null)
@@ -151,7 +152,7 @@ function clearUndoTimer() {
 }
 
 function dismissUndo() {
-  if (restoringKey.value) return
+  if (restoringId.value) return
   clearUndoTimer()
   recentlyDeleted.value = null
   undoError.value = ''
@@ -159,7 +160,7 @@ function dismissUndo() {
 
 function scheduleUndoDismissal() {
   clearUndoTimer()
-  if (!recentlyDeleted.value || undoError.value || restoringKey.value) return
+  if (!recentlyDeleted.value || undoError.value || restoringId.value) return
 
   const toast = undoToastRef.value
   // 用户正在读取或操作撤销提示时暂停计时，避免键盘和鼠标操作被自动关闭打断。
@@ -182,37 +183,36 @@ function offerUndo(memory: LongTermMemoryRecord) {
 
 async function undoDelete() {
   const memory = recentlyDeleted.value
-  if (!memory || restoringKey.value) return
+  if (!memory || restoringId.value) return
   clearUndoTimer()
-  restoringKey.value = memory.memoryKey
+  restoringId.value = memory.id
   undoError.value = ''
   try {
-    const restored = await restoreLongTermMemory(DEFAULT_USER_ID, memory.memoryKey)
+    const restored = await restoreLongTermMemory(DEFAULT_USER_ID, memory.id)
     // 使用后端返回的当前记录，避免把删除前快照覆盖到可能已更新的数据上。
     memories.value = [
       restored,
-      ...memories.value.filter((item) => item.memoryKey !== restored.memoryKey),
+      ...memories.value.filter((item) => item.id !== restored.id),
     ]
     recentlyDeleted.value = null
   } catch (err) {
     undoError.value = err instanceof Error ? err.message : String(err)
   } finally {
-    restoringKey.value = null
+    restoringId.value = null
   }
 }
 
 async function confirmDelete() {
   const memory = pendingDelete.value
-  const memoryKey = memory?.memoryKey
-  if (!memoryKey || deletingKey.value) return
-  deletingKey.value = memoryKey
+  if (!memory || deletingId.value) return
+  deletingId.value = memory.id
   deleteError.value = ''
   try {
-    await deleteLongTermMemory(DEFAULT_USER_ID, memoryKey)
+    await deleteLongTermMemory(DEFAULT_USER_ID, memory.id)
     // 从本地列表中移除，避免重新请求
-    memories.value = memories.value.filter((m) => m.memoryKey !== memoryKey)
+    memories.value = memories.value.filter((m) => m.id !== memory.id)
     // 如果正在查看被删除记忆的详情，关闭弹窗
-    if (detailTarget.value?.memoryKey === memoryKey) {
+    if (detailTarget.value?.id === memory.id) {
       closeDetail()
     }
     pendingDelete.value = null
@@ -220,7 +220,7 @@ async function confirmDelete() {
   } catch (err) {
     deleteError.value = err instanceof Error ? err.message : String(err)
   } finally {
-    deletingKey.value = null
+    deletingId.value = null
   }
 }
 
@@ -316,7 +316,7 @@ onBeforeUnmount(() => {
     <div v-else class="memory-grid">
       <article
         v-for="memory in filteredMemories"
-        :key="memory.memoryKey"
+        :key="memory.id"
         class="memory-card"
         role="button"
         tabindex="0"
@@ -338,7 +338,7 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="memory-card-delete"
-            :disabled="Boolean(deletingKey) || Boolean(recentlyDeleted)"
+            :disabled="Boolean(deletingId) || Boolean(recentlyDeleted)"
             :aria-label="`删除${readableKey(memory.memoryKey)}`"
             @click.stop="requestDelete(memory)"
           >
@@ -383,7 +383,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="creator-ghost-button"
-                :disabled="Boolean(deletingKey)"
+                :disabled="Boolean(deletingId)"
                 data-dialog-initial-focus
                 @click="cancelDelete"
               >
@@ -392,10 +392,10 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="creator-danger-action"
-                :disabled="Boolean(deletingKey)"
+                :disabled="Boolean(deletingId)"
                 @click="confirmDelete"
               >
-                {{ deletingKey ? '删除中…' : '确认删除' }}
+                {{ deletingId ? '删除中…' : '确认删除' }}
               </button>
             </div>
           </section>
@@ -432,16 +432,16 @@ onBeforeUnmount(() => {
               ref="undoActionRef"
               type="button"
               class="memory-undo-action"
-              :disabled="Boolean(restoringKey)"
+              :disabled="Boolean(restoringId)"
               @click="undoDelete"
             >
               <RotateCcw :size="16" :stroke-width="1.8" aria-hidden="true" />
-              {{ restoringKey ? '恢复中…' : undoError ? '重试' : '撤销' }}
+              {{ restoringId ? '恢复中…' : undoError ? '重试' : '撤销' }}
             </button>
             <button
               type="button"
               class="memory-undo-dismiss"
-              :disabled="Boolean(restoringKey)"
+              :disabled="Boolean(restoringId)"
               aria-label="关闭撤销提示"
               title="关闭撤销提示"
               @click="dismissUndo"
@@ -495,6 +495,10 @@ onBeforeUnmount(() => {
               <dt>内容</dt>
               <dd class="memory-detail-content">{{ detailTarget.content }}</dd>
 
+              <!-- 重要性来自压缩时抽取的高分事实点；0 表示尚未打分（逐轮抽取的旧记忆），不展示 -->
+              <dt v-if="detailTarget.importance">重要性</dt>
+              <dd v-if="detailTarget.importance">{{ detailTarget.importance }} / 100</dd>
+
               <dt v-if="detailTarget.sourceSessionId">来源会话</dt>
               <dd v-if="detailTarget.sourceSessionId">
                 <code>{{ detailTarget.sourceSessionId }}</code>
@@ -511,7 +515,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="creator-secondary-action"
-                :disabled="Boolean(deletingKey) || Boolean(recentlyDeleted)"
+                :disabled="Boolean(deletingId) || Boolean(recentlyDeleted)"
                 @click="requestDelete(detailTarget)"
               >
                 删除此记忆

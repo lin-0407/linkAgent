@@ -34,7 +34,12 @@ public record ReferenceVideoResponse(
         String publishTimeText,
         String embeddingStatus,
         LocalDateTime createTime,
-        LocalDateTime updateTime
+        LocalDateTime updateTime,
+        LocalDateTime publishedAt,
+        LocalDateTime statsFetchedAt,
+        BigDecimal videoIndexScore,
+        String videoIndexVersion,
+        BigDecimal collectionMinIndex
 ) {
 
     /**
@@ -66,7 +71,9 @@ public record ReferenceVideoResponse(
                 record.getPublishTimeText(),
                 record.getEmbeddingStatus(),
                 record.getCreateTime(),
-                record.getUpdateTime()
+                record.getUpdateTime(),
+                record.getPublishedAt(), record.getStatsFetchedAt(), record.getVideoIndexScore(),
+                record.getVideoIndexVersion(), record.getCollectionMinIndex()
         );
     }
 }

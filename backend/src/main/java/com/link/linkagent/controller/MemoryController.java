@@ -6,6 +6,8 @@ import com.link.linkagent.memory.LongTermMemory;
 import com.link.linkagent.memory.LongTermMemoryRecord;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.server.ResponseStatusException;
@@ -24,18 +26,17 @@ import java.util.List;
  * 记忆管理接口。
  * <p>
  * <b>架构定位：</b>
- * 当前阶段只暴露长期记忆的手动 CRUD 接口，用于验证 MySQL 存储链路
- * （写入 → 持久化 → 按用户查询 → 按 key 精确查询）。
- * 后续阶段会集成 Milvus 向量检索，实现语义相似记忆的自动召回。
+ * 暴露长期记忆的手动 CRUD 接口，支撑前端「我的记忆」管理页的浏览、搜索、删除与撤销删除。
+ * 自动写入由摘要压缩链路与长期记忆抽取协调器负责，这个控制器只处理用户手动操作。
  * <p>
- * <b>为什么先手动读写：</b>
- * 自动记忆提取（从 Agent 对话中由 LLM 判断哪些信息值得长期记住）依赖
- * 稳定的对话流程和工具链，在项目早期阶段，手动 API 更便于调试和验证存储层正确性。
+ * <b>记录身份：</b>
+ * 长期记忆的身份是数据库主键 {@code id}（设计文档 D13 / E1）。{@code memoryKey} 已降级为分类展示字段，
+ * 同一 key 下允许存在多条不同事实，因此按 key 访问的旧端点已移除——按 key 删除会删错行。
  * <p>
  * <b>路由前缀：</b>{@code /api/memory}
  * <p>
  * <b>方法级校验说明：</b>
- * 类级 {@code @Validated} 注解激活了方法参数的校验（@NotBlank/@Size），
+ * 类级 {@code @Validated} 注解激活了方法参数的校验（@NotBlank/@Size/@Positive），
  * 与请求体 DTO 中 {@code @Valid} 的职责不同：
  * <ul>
  *   <li>DTO 的 @Valid → 校验嵌套对象的字段</li>
@@ -44,11 +45,11 @@ import java.util.List;
  * <p>
  * <b>端点一览：</b>
  * <ul>
- *   <li>{@code POST /api/memory/long-term} — 保存长期记忆</li>
- *   <li>{@code GET  /api/memory/long-term/users/{userId}} — 列出用户的长期记忆</li>
- *   <li>{@code GET  /api/memory/long-term/users/{userId}/keys/{memoryKey}} — 按 key 精确查询</li>
- *   <li>{@code DELETE /api/memory/long-term/users/{userId}/keys/{memoryKey}} — 软删除长期记忆</li>
- *   <li>{@code POST /api/memory/long-term/users/{userId}/keys/{memoryKey}/restore} — 撤销软删除</li>
+ *   <li>{@code POST   /api/memory/long-term} — 新建一条长期记忆</li>
+ *   <li>{@code GET    /api/memory/long-term/users/{userId}} — 列出用户的长期记忆</li>
+ *   <li>{@code GET    /api/memory/long-term/users/{userId}/memories/{memoryId}} — 按 id 精确查询</li>
+ *   <li>{@code DELETE /api/memory/long-term/users/{userId}/memories/{memoryId}} — 用户主动删除（可撤销）</li>
+ *   <li>{@code POST   /api/memory/long-term/users/{userId}/memories/{memoryId}/restore} — 撤销删除</li>
  * </ul>
  *
  * @see LongTermMemory MySQL 长期记忆存储服务
@@ -65,7 +66,7 @@ public class MemoryController {
     }
 
     /**
-     * 保存一条长期记忆。
+     * 新建一条长期记忆。
      * <p>
      * <b>端点：</b>{@code POST /api/memory/long-term}
      * <p>
@@ -73,7 +74,7 @@ public class MemoryController {
      * <pre>{@code
      * {
      *   "userId": "user-123",            // 必填，最大 64 字符
-     *   "memoryKey": "preferred_style",  // 必填，最大 128 字符
+     *   "memoryKey": "preferred_style",  // 必填，最大 128 字符；只作分类标签
      *   "content": "用户偏好简洁风格...", // 必填，最大 2000 字符
      *   "sourceSessionId": "sess-456"    // 可选，记录来源会话
      * }
@@ -81,18 +82,16 @@ public class MemoryController {
      * <p>
      * <b>响应格式：</b>见 {@link LongTermMemoryResponse}，包含完整记忆记录（含数据库生成的 id 和时间戳）。
      * <p>
-     * <b>幂等性说明：</b>
-     * (userId, memoryKey) 是业务唯一键 —— 相同用户下重复保存同一 key 会覆盖旧内容
-     * （实现层用 INSERT ON DUPLICATE KEY UPDATE 或先删后插）。
+     * <b>写入语义：</b>每次调用新增一条记录，不会按 memoryKey 覆盖已有记忆。同 key 的取舍由自动写入路径的
+     * 决策逻辑负责，用户手动新建时按「想加就加」处理，避免手写内容被后写的内容悄悄顶掉。
      *
      * @param request 保存请求
-     * @return 保存后的完整记忆记录
+     * @return 新建后的完整记忆记录
      * @throws ResponseStatusException 404 如果保存后无法回读（理论上不应发生）
      */
     @PostMapping("/long-term")
     public LongTermMemoryResponse saveLongTermMemory(@Valid @RequestBody LongTermMemorySaveRequest request) {
-        longTermMemory.save(request.userId(), request.memoryKey(), request.content(), request.sourceSessionId());
-        return longTermMemory.findByKey(request.userId(), request.memoryKey())
+        return longTermMemory.save(request.userId(), request.memoryKey(), request.content(), request.sourceSessionId())
                 .map(this::toResponse)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "长期记忆不存在"));
     }
@@ -124,24 +123,18 @@ public class MemoryController {
     }
 
     /**
-     * 按 (userId, memoryKey) 精确查询一条长期记忆。
+     * 按记忆 id 精确查询一条长期记忆。
      * <p>
-     * <b>端点：</b>{@code GET /api/memory/long-term/users/{userId}/keys/{memoryKey}}
+     * <b>端点：</b>{@code GET /api/memory/long-term/users/{userId}/memories/{memoryId}}
      * <p>
-     * <b>路径参数：</b>
-     * <ul>
-     *   <li>{@code userId} — 用户唯一标识</li>
-     *   <li>{@code memoryKey} — 记忆键（如 "writing_style"、"content_preferences"）</li>
-     * </ul>
-     * <p>
-     * <b>用途：</b>按 key 精确读取特定类型的长期记忆，通常在 Agent 对话中按需加载上下文时使用。
+     * <b>用途：</b>管理页打开某条记忆详情时按身份读取。id 是数据库主键，同一条记忆内容更新后 id 不变。
      *
-     * @param userId    用户唯一标识
-     * @param memoryKey 记忆键
+     * @param userId   用户唯一标识
+     * @param memoryId 记忆 id
      * @return 对应的长期记忆记录
-     * @throws ResponseStatusException 404 如果指定 key 的记忆不存在
+     * @throws ResponseStatusException 404 如果该 id 的记忆不存在、已删除或不属于该用户
      */
-    @GetMapping("/long-term/users/{userId}/keys/{memoryKey}")
+    @GetMapping("/long-term/users/{userId}/memories/{memoryId}")
     public LongTermMemoryResponse getLongTermMemory(
             @PathVariable
             @NotBlank(message = "用户ID不能为空")
@@ -149,21 +142,21 @@ public class MemoryController {
             String userId,
 
             @PathVariable
-            @NotBlank(message = "记忆键不能为空")
-            @Size(max = 128, message = "记忆键长度不能超过128个字符")
-            String memoryKey) {
-        return longTermMemory.findByKey(userId, memoryKey)
+            @NotNull(message = "记忆ID不能为空")
+            @Positive(message = "记忆ID必须为正整数")
+            Long memoryId) {
+        return longTermMemory.findById(userId, memoryId)
                 .map(this::toResponse)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "长期记忆不存在"));
     }
 
     /**
-     * 删除一条长期记忆。
+     * 用户主动删除一条长期记忆。
      * <p>
      * 这里使用软删除而不是物理删除，是为了保留后续问题排查和记忆误抽取复盘的可能性；
-     * 查询端统一按 is_deleted=0 过滤，用户视角仍表现为已删除。
+     * 同时打上 deleted_by_user 标记，使它能被撤销恢复，与被新事实取代的失效记忆区分开（设计文档 D15）。
      */
-    @DeleteMapping("/long-term/users/{userId}/keys/{memoryKey}")
+    @DeleteMapping("/long-term/users/{userId}/memories/{memoryId}")
     public void deleteLongTermMemory(
             @PathVariable
             @NotBlank(message = "用户ID不能为空")
@@ -171,19 +164,19 @@ public class MemoryController {
             String userId,
 
             @PathVariable
-            @NotBlank(message = "记忆键不能为空")
-            @Size(max = 128, message = "记忆键长度不能超过128个字符")
-            String memoryKey) {
-        longTermMemory.delete(userId, memoryKey);
+            @NotNull(message = "记忆ID不能为空")
+            @Positive(message = "记忆ID必须为正整数")
+            Long memoryId) {
+        longTermMemory.delete(userId, memoryId);
     }
 
     /**
-     * 撤销一条长期记忆的软删除。
+     * 撤销一条长期记忆的删除。
      * <p>
      * 恢复端点只翻转删除标记，并返回数据库中的当前记录。这样不会像重新保存一样覆盖
-     * 原内容、来源会话或向量标识；重复调用时也会返回已经恢复的记录。
+     * 原内容、来源会话或向量标识；重复调用时也会返回已经恢复的记录（设计文档 D15）。
      */
-    @PostMapping("/long-term/users/{userId}/keys/{memoryKey}/restore")
+    @PostMapping("/long-term/users/{userId}/memories/{memoryId}/restore")
     public LongTermMemoryResponse restoreLongTermMemory(
             @PathVariable
             @NotBlank(message = "用户ID不能为空")
@@ -191,10 +184,10 @@ public class MemoryController {
             String userId,
 
             @PathVariable
-            @NotBlank(message = "记忆键不能为空")
-            @Size(max = 128, message = "记忆键长度不能超过128个字符")
-            String memoryKey) {
-        return longTermMemory.restore(userId, memoryKey)
+            @NotNull(message = "记忆ID不能为空")
+            @Positive(message = "记忆ID必须为正整数")
+            Long memoryId) {
+        return longTermMemory.restore(userId, memoryId)
                 .map(this::toResponse)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "长期记忆不存在"));
     }
@@ -209,6 +202,7 @@ public class MemoryController {
                 record.getUserId(),
                 record.getMemoryKey(),
                 record.getContent(),
+                record.getImportance(),
                 record.getSourceSessionId(),
                 record.getEmbeddingId(),
                 record.getCreateTime(),

@@ -38,10 +38,10 @@ public interface ConversationSessionMapper {
 
     @Insert("""
             INSERT INTO t_conversation_message (
-                session_id, role, content, tool_name, token_count, create_time
+                session_id, user_id, role, content, tool_name, token_count, create_time
             )
             VALUES (
-                #{sessionId}, #{role}, #{content}, #{toolName}, #{tokenCount}, #{createTime}
+                #{sessionId}, #{userId}, #{role}, #{content}, #{toolName}, #{tokenCount}, #{createTime}
             )
             """)
     @Options(useGeneratedKeys = true, keyProperty = "id")
@@ -66,6 +66,35 @@ public interface ConversationSessionMapper {
             ORDER BY create_time ASC, id ASC
             """)
     List<ConversationMessageRecord> listMessagesBySession(@Param("sessionId") String sessionId);
+
+    /**
+     * 按用户捞取长期记忆游标之后的增量消息，只取最新的一批（设计文档 C2 / C4 / 5.3）。
+     *
+     * <h3>为什么倒序取</h3>
+     * 游标为空（首次使用）时，正序 LIMIT 会把最老的几百条历史消息当成增量，把它们抽进长期记忆；
+     * 倒序取最近一批再让调用方翻正，语义就是「只抽最近的一段对话」，历史不补抽。
+     *
+     * <h3>为什么不 JOIN 会话表</h3>
+     * 消息表自带 user_id（设计文档 C5），增量查询直接命中 idx_user_id_id，省掉 JOIN 与去重；
+     * 顺带也不会再因为会话被删（s.is_deleted=1）而漏掉该会话里尚未抽取的消息。
+     *
+     * @param afterId 游标（已抽取到的最大消息 id），只返回 id 大于它的消息
+     * @param limit   单批最多取多少条
+     * @return 按 id 倒序（新的在前）的消息记录；调用方需要按时间顺序使用时自行翻正
+     */
+    @Select("""
+            SELECT id, session_id, user_id, role, content, tool_name, token_count, create_time, is_deleted
+            FROM t_conversation_message
+            WHERE user_id = #{userId}
+              AND id > #{afterId}
+              AND role IN ('user', 'assistant')
+              AND is_deleted = 0
+            ORDER BY id DESC
+            LIMIT #{limit}
+            """)
+    List<ConversationMessageRecord> listLatestMessagesAfterIdForUser(@Param("userId") String userId,
+                                                                     @Param("afterId") long afterId,
+                                                                     @Param("limit") int limit);
 
     /**
      * 查询会话最近一条摘要检查点。

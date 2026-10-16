@@ -247,7 +247,7 @@ public class KnowledgeReferenceTopicSearchService {
             log.info("主题优先检索中块/hybrid 均零命中，退回 SQL 质量分兜底。query={}", TextUtil.preview(query, 60, ""));
             return sqlFallback(query, category, tier, page, size);
         }
-        // 回查 MySQL 父表：按 quality_score 降序，而非 IN 列表的自然顺序。
+        // 回查有效父视频，再按固定视频指数及质量信号排序，不依赖 IN 列表的自然顺序。
         // 主题优先的核心差异——候选确定后，排序由质量分主导而非向量相似度。
         List<ReferenceVideoRecord> qualityRankedRecords = knowledgeReferenceVideoMapper
                 .listByVideoIdsOrderByQuality(candidateVideoIds, category, tier, 0, MAX_TOPIC_CANDIDATES);

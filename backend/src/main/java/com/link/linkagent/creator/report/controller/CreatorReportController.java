@@ -2,10 +2,13 @@ package com.link.linkagent.creator.report.controller;
 
 import com.link.linkagent.creator.report.model.CreatorReportAnalyzeRequest;
 import com.link.linkagent.creator.report.model.CreatorReportResponse;
+import com.link.linkagent.creator.report.model.CreatorReportHistoryPage;
 import com.link.linkagent.creator.report.service.CreatorReportService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Max;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -15,6 +18,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -51,6 +55,21 @@ public class CreatorReportController {
             @Size(max = 64, message = "任务ID长度不能超过64个字符")
             String taskId) {
         return creatorReportService.getReport(taskId);
+    }
+
+    @GetMapping("/history")
+    public CreatorReportHistoryPage listHistory(
+            @PathVariable @NotBlank @Size(max = 64) String taskId,
+            @RequestParam(defaultValue = "1") @Min(1) @Max(1000000) int page,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(100) int size) {
+        return creatorReportService.listHistory(taskId, page, size);
+    }
+
+    @GetMapping("/history/{historyId}")
+    public CreatorReportResponse getHistory(
+            @PathVariable @NotBlank @Size(max = 64) String taskId,
+            @PathVariable @NotBlank @Size(max = 64) String historyId) {
+        return creatorReportService.getHistory(taskId, historyId);
     }
 
     @GetMapping(value = "/markdown", produces = "text/markdown;charset=UTF-8")

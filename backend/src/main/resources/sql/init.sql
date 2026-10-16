@@ -38,13 +38,15 @@ CREATE TABLE IF NOT EXISTS t_conversation_message
 (
     id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     session_id  VARCHAR(64) NOT NULL COMMENT '关联 t_conversation_session.session_id',
+    user_id     VARCHAR(64) NOT NULL DEFAULT 'default' COMMENT '归属用户；冗余存一份是为了按用户捞取记忆增量时不必 JOIN 会话表（设计文档 C5）',
     role        VARCHAR(16) NOT NULL COMMENT '角色：user / assistant / system / tool / summary（摘要检查点，代表这里压缩过历史）',
     content     LONGTEXT    NOT NULL COMMENT '消息内容；role=summary 时是摘要正文',
     tool_name   VARCHAR(64)          DEFAULT NULL COMMENT '工具名称（role=tool 时有值）',
     token_count INT         NOT NULL DEFAULT 0 COMMENT '本条消息消耗的 token 数；role=summary 时记录本次压缩释放的 token 数',
     create_time DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     is_deleted  TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除',
-    KEY idx_session_id (session_id)
+    KEY idx_session_id (session_id),
+    KEY idx_user_id_id (user_id, id)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '消息表';
@@ -55,17 +57,21 @@ CREATE TABLE IF NOT EXISTS t_conversation_message
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS t_long_term_memory
 (
-    id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
-    user_id      VARCHAR(64)  NOT NULL COMMENT '用户标识',
-    memory_key   VARCHAR(128) NOT NULL COMMENT '记忆键（如 user.preference.language）',
-    content      TEXT         NOT NULL COMMENT '记忆内容',
-    source_session_id VARCHAR(64)   DEFAULT NULL COMMENT '来源会话',
-    embedding_id VARCHAR(128)       DEFAULT NULL COMMENT 'Milvus 向量 ID，用于相似度检索',
-    create_time  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-    update_time  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-    is_deleted   TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
-    KEY idx_user_id (user_id),
-    UNIQUE KEY uk_user_memory_key (user_id, memory_key)
+    id                 BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键，同时是记忆的对外身份：同一条记忆的内容变化沿用同一个 id（D13 / E1）',
+    user_id            VARCHAR(64)  NOT NULL COMMENT '用户标识',
+    memory_key         VARCHAR(128) NOT NULL COMMENT '记忆分类键（如 user.preference.example_language）；只用于展示分类，不再是唯一身份，同一 key 下可以有多条不同事实',
+    content            TEXT         NOT NULL COMMENT '记忆内容；压缩抽取的事实点在这里存「事实点 + 原文」，读取时原样拼回上下文',
+    importance         INT          NOT NULL DEFAULT 0 COMMENT '重要性分数（1-100），压缩时由模型打分；0=尚未打分（逐轮抽取的旧记忆）',
+    last_accessed_time DATETIME              DEFAULT NULL COMMENT '上次被检索取用的时间，检索排序的时效性维度用它；NULL=从未取用（D6 / E4，步骤 8 写入）',
+    embedding          TEXT                  DEFAULT NULL COMMENT '记忆内容向量，JSON 数组文本；单用户几十到几百条在内存里算余弦，不引入向量库（D4 / E3，步骤 8 写入）',
+    superseded_by      BIGINT UNSIGNED       DEFAULT NULL COMMENT '取代这条记忆的新记忆 id；有值表示被新事实取代，与用户主动删除区分（D15 / E2，步骤 7 写入）',
+    deleted_by_user    TINYINT      NOT NULL DEFAULT 0 COMMENT '是否被用户主动删除：1=管理页删除且可撤销恢复，0=非用户删除',
+    source_session_id  VARCHAR(64)           DEFAULT NULL COMMENT '来源会话',
+    embedding_id       VARCHAR(128)          DEFAULT NULL COMMENT 'Milvus 向量 ID；向量库方案已取消（改为内存余弦），该列仅为兼容旧数据保留，新写入不再使用',
+    create_time        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted         TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑失效：0=有效，1=已失效（被取代或被用户删除）；失效原因看 deleted_by_user 与 superseded_by',
+    KEY idx_user_id (user_id)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '长期记忆表';
@@ -478,6 +484,20 @@ CREATE TABLE IF NOT EXISTS creator_report
   DEFAULT CHARSET = utf8mb4
   COMMENT = '创作复盘报告表';
 
+-- 每次成功生成的复盘独立保存，前置材料变化只使最新报告失效，不删除历史。
+CREATE TABLE IF NOT EXISTS creator_report_history
+(
+    id                   BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    history_id           VARCHAR(64) NOT NULL COMMENT '历史标识，沿用本次报告UUID',
+    task_id              VARCHAR(64) NOT NULL COMMENT '所属创作任务',
+    feedback_report_id   VARCHAR(64) DEFAULT NULL COMMENT '本次采用的反馈报告，补存旧报告时来源未知',
+    competitor_report_id VARCHAR(64) DEFAULT NULL COMMENT '本次采用的竞品报告，未纳入时为空',
+    report_snapshot      JSON NOT NULL COMMENT '成功复盘的完整只读快照',
+    create_time          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '历史保存时间',
+    UNIQUE KEY uk_history_id (history_id),
+    KEY idx_task_history (task_id, create_time, id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '创作复盘历史';
+
 -- ------------------------------------------------------------
 -- 13.1 创作者长期偏好表
 --      保存每期复盘提炼出的创作偏好快照，让下一期发布前优化能够读取历史经验
@@ -710,8 +730,14 @@ CREATE TABLE IF NOT EXISTS creator_reference_video
     quality_score         DECIMAL(6, 2)            DEFAULT NULL COMMENT '分区归一化相对质量分（0–100）；同分区有效样本不足或原始分无差异时为空，避免少样本展示 60/0/100 误导用户',
     quality_sample_count  INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '本次分区归一化可参与打分的有效视频数；用于判断 quality_score 是否具备展示可信度',
     quality_score_reliable TINYINT        NOT NULL DEFAULT 0 COMMENT '质量分是否达到展示可信度：1=可展示相对质量分，0=仅保留原始分作内部排序或样本不足',
-    source                VARCHAR(64)     NOT NULL DEFAULT 'seed' COMMENT '数据来源：bilibili_rank_daily / weekly / monthly=榜单，manual_bv=手动指定 BV，seed=内置样例',
-    publish_time_text     VARCHAR(64)              DEFAULT NULL COMMENT '发布时间文本；仅作展示用、不做时间运算，故存文本而非 DATETIME',
+    source                VARCHAR(64)     NOT NULL DEFAULT 'seed' COMMENT '数据来源：bilibili_auto=指数筛选自动采集，bilibili_rank_daily / weekly / monthly=榜单，manual_bv=手动BV，seed=样例',
+    publish_time_text     VARCHAR(64)              DEFAULT NULL COMMENT '原始发布时间展示文本；时间运算使用规范published_at，历史未知不猜测',
+    published_at          DATETIME                 DEFAULT NULL COMMENT 'B站发布时间，统一东八区；半年准入与一年清理用此字段，未知时不猜测',
+    stats_fetched_at      DATETIME                 DEFAULT NULL COMMENT '六项公开统计的采集时间，防止旧重试覆盖更新统计',
+    video_index_score     DECIMAL(9,6)             DEFAULT NULL COMMENT '固定公开统计视频指数0到100；与分区相对质量分分开',
+    video_index_version   VARCHAR(64)              DEFAULT NULL COMMENT '视频指数公式版本，明确权重和曲线刻度',
+    collection_min_index  DECIMAL(9,6)             DEFAULT NULL COMMENT '首次自动采集使用的准入阈值；手动导入为空',
+    active_bv_id          VARCHAR(20) COLLATE utf8mb4_bin GENERATED ALWAYS AS (IF(is_deleted=0,bv_id,NULL)) STORED COMMENT '仅有效案例参与BV唯一约束，大小写敏感；历史逻辑删除不占用BV',
     -- 向量索引状态字段，完全沿用 creator_feedback_item 的范式：默认 PENDING 不依赖 Milvus，5.1a 阶段全部停留在 PENDING
     embedding_id          VARCHAR(128)             DEFAULT NULL COMMENT 'Milvus 文档 ID，默认复用 video_id，让向量文档与案例主表一一对应',
     embedding_status      VARCHAR(32)     NOT NULL DEFAULT 'PENDING' COMMENT '向量索引状态：PENDING=待索引，INDEXED=已索引，FAILED=失败，SKIPPED=跳过；默认 PENDING 不依赖 Milvus',
@@ -724,6 +750,9 @@ CREATE TABLE IF NOT EXISTS creator_reference_video
     -- 同赛道检索主路径：按分区 + 层级过滤（例如「知识区·科技」下的 BENCHMARK 案例）
     KEY idx_category_tier (category, tier),
     KEY idx_bv_id (bv_id),
+    UNIQUE KEY uk_active_bv_id (active_bv_id),
+    KEY idx_reference_published (published_at,id),
+    KEY idx_reference_category_index (is_deleted,category,tier,video_index_score),
     -- 索引重建按状态批量扫描待索引案例，单列索引支撑 WHERE embedding_status = 'PENDING'
     KEY idx_embedding_status (embedding_status)
 ) ENGINE = InnoDB
@@ -1064,7 +1093,7 @@ VALUES
     -- 解析器取不到 shouldRemember（parseBoolean 兜底为 false），导致长期记忆一条都写不进去。
     -- 这里回退到与解析器一致的文本；5 个 memoryKey 取值与 LongTermMemory.normalizeMemoryKey 的映射一一对应。
     ('long_term_memory.system', 'SYSTEM', '记忆-长期记忆',
-     '你是长期记忆抽取器，只判断本轮对话是否包含值得长期保存的用户事实或偏好。
+     '你是长期记忆抽取器，只判断给定的对话记录里是否包含值得长期保存的用户事实或偏好。
 
 只保存这些内容：
 - 用户长期偏好，例如喜欢 Java、希望回答简洁、偏好中文解释
@@ -1077,6 +1106,9 @@ VALUES
 - 普通闲聊、情绪表达、短期任务进展
 - 已经明显只对当前会话有用的信息
 
+一次最多输出 5 条，同一个 memoryKey 只保留最重要的一条；没有值得记的内容时输出空数组。
+对话里出现「昨天」「上周」这类相对时间时，按调用方给出的观察日期换算成绝对日期再写进 content，不要保留过几天就失效的说法。
+
 你必须只输出 JSON，不要输出 Markdown，不要解释。
 memoryKey 只能从下面 5 个值里选择：
 - user.preference.example_language：用户偏好的示例语言、编程语言
@@ -1085,19 +1117,97 @@ memoryKey 只能从下面 5 个值里选择：
 - project.profile.summary：项目定位、技术栈、长期目标
 - project.constraint.summary：项目固定约束、后续必须遵守的规则
 
+importance：这条记忆的重要性分数，1 到 100 的整数。80 分以上表示「丢了会明显影响后续协作」的稳定偏好、身份或项目约束；闲聊寒暄给 1-10 分；无法判断给 40 分。
+
 格式：
-{"shouldRemember":true,"memoryKey":"user.preference.example_language","content":"用户偏好..."}
+{"shouldRemember":true,"memories":[{"memoryKey":"user.preference.example_language","content":"用户偏好...","importance":85}]}
 或：
-{"shouldRemember":false,"memoryKey":"","content":""}
-', '长期记忆抽取器的系统提示词：判断本轮对话是否含值得长期保存的事实或偏好'),
+{"shouldRemember":false,"memories":[]}
+', '长期记忆抽取器的系统提示词：判断对话记录里是否含值得长期保存的事实或偏好，并给出 1-100 重要性分数'),
+    -- 抽取的输入从「单轮」改成「一批消息」：累加器攒批触发后一次喂多轮，代词与跨轮指代才有上下文可解（步骤 5 / D7）
     ('long_term_memory.user', 'USER', '记忆-长期记忆',
-     '用户消息：{userMessage}\n\nAgent 最终回答：{finalAnswer}\n\n请从以上对话中提取值得长期保留的记忆信息。',
-     '长期记忆抽取用户提示词：userMessage 为用户输入，finalAnswer 为 Agent 回答'),
+     '以下是最近的对话记录（可能包含多轮，按时间顺序）：\n{messages}\n\n观察日期：{observationDate}（相对时间按这一天换算成绝对日期）\n\n请提取值得长期保留的记忆信息，可以有多条；没有值得记的就返回空数组。',
+     '长期记忆抽取用户提示词：messages 为一批对话消息，observationDate 为观察日期（步骤 7 / C16）'),
+
+    -- 长期记忆写入决策（记忆重构步骤 7 / D8 / C12 阶段二）：候选事实 + 已有记忆 → ADD/UPDATE/DELETE/NONE。
+    -- 输出契约与 LongTermMemoryDecisionMaker.parseDecisions 一一对应：decisions 数组、action、id、memory、oldMemory、importance。
+    ('long_term_memory_decision.system', 'SYSTEM', '记忆-长期记忆',
+     '你是长期记忆写入决策器。你会看到本次抽出的候选事实，以及库里已有的记忆（带 id）。请为每条候选决定一个动作：
+
+- ADD：库里没有这条事实，新增一条记忆。
+- UPDATE：库里已有同一条事实、本次是它的更新版本，沿用原 id 更新，必须回带 oldMemory（库中原文）与新内容 memory。
+- DELETE：库里的这条事实已经不再成立，必须回带 id 与 oldMemory。
+- NONE：已有记忆已经覆盖这条候选，不需要新增或修改。
+
+规则：
+- id 只能来自给定的已有记忆列表，不得编造；oldMemory 必须取自列表中该 id 的 content（可以只截取其中一段）。
+- 同一个 id 在一轮里只给一个动作。
+- 不要为了「更完整」把已有记忆改写成更长的话，只有事实确实变化时才 UPDATE。
+- 互相矛盾且不能并存的两条事实，用 UPDATE 更新原记录，或者 DELETE 旧记录再加一条 ADD。
+- 只输出 JSON，不要输出 Markdown，不要解释。
+
+格式：
+{"decisions":[{"action":"ADD","id":0,"memory":"新事实内容","oldMemory":"","importance":85,"reason":"库里没有这条事实"},{"action":"UPDATE","id":27,"memory":"更新后的内容","oldMemory":"库中原文","importance":85,"reason":"同一事实的新版本"}]}',
+     '长期记忆写入决策系统提示词：对候选事实给出 ADD/UPDATE/DELETE/NONE，id 与 oldMemory 必须来自已有记忆列表'),
+    ('long_term_memory_decision.user', 'USER', '记忆-长期记忆',
+     '候选事实（JSON 数组）：\n{candidates}\n\n已有记忆（JSON 数组，id 是唯一可引用的身份）：\n{existingMemories}\n\n请为每条候选给出写入动作。',
+     '长期记忆写入决策用户提示词：candidates 为候选事实，existingMemories 为已有记忆（含 id 与原文）'),
+
+    -- 单轮重要性打分（记忆重构步骤 5 / C2 / Q3）：递减预算累加器每轮扣的就是这个分数
+    ('long_term_memory_importance.system', 'SYSTEM', '记忆-长期记忆',
+     '你是对话重要性评估器。给你一轮对话，判断「把这一轮内容丢掉会不会明显影响后续协作」，输出 1 到 100 的整数分。
+
+评分口径：
+- 80 到 100：稳定的用户偏好、身份信息、项目长期约束，丢了会明显影响后续协作
+- 40 到 79：有一定参考价值，但也能重新问出来
+- 1 到 39：寒暄、闲聊、一次性问题、临时报错
+
+把握不准时给 40 分。只输出 JSON：{"importance":85,"reason":"一句话说明打分理由"}，不要输出 Markdown 或解释。',
+     '长期记忆重要性打分系统提示词：给单轮对话打 1-100 分，供递减预算累加器扣减'),
+    ('long_term_memory_importance.user', 'USER', '记忆-长期记忆',
+     '用户消息：{userMessage}\n\nAgent 回答：{finalAnswer}\n\n请给这一轮对话打 1 到 100 的重要性分数。',
+     '长期记忆重要性打分用户提示词：userMessage 与 finalAnswer 构成一轮对话'),
 
     -- 对话摘要记忆（阶段 5.3）
     ('summary_memory.system', 'SYSTEM', '记忆-摘要记忆',
-     '你是 LinkAgent 的对话摘要助手。你的任务是把一段对话历史压缩为摘要，保留关键决策、用户偏好变更、事实结论和待跟进事项。摘要控制在 5000 字以内：这是压缩后原文不再保留的唯一载体，宁可多留信息，也不要为了简短丢掉关键数字、结论和用户原话。省略纯工具调用过程和重复确认。如果输入中带有"已有摘要"，必须把它包含的关键信息合并进新摘要，不能丢弃。输出纯文本，不要套 JSON 或 Markdown 代码块。',
+     '你是 LinkAgent 的对话摘要助手。你的任务是把一段对话历史压缩为摘要，保留关键决策、用户偏好变更、事实结论和待跟进事项。摘要控制在 5000 字以内：这是压缩后原文不再保留的唯一载体，宁可多留信息，也不要为了简短丢掉关键数字、结论和用户原话。省略纯工具调用过程和重复确认。如果输入中带有"已有摘要"，必须把它包含的关键信息合并进新摘要，不能丢弃。只输出摘要正文本身：不要写修改说明、生成过程，也不要回应复核意见。输出纯文本，不要套 JSON 或 Markdown 代码块。',
      '对话摘要记忆系统提示词：压缩对话历史保留关键信息'),
+
+    -- 摘要事实点抽取（记忆重构步骤 4 / B2 / D5）
+    ('summary_fact.system', 'SYSTEM', '记忆-摘要事实点',
+     '你是长期记忆事实点抽取器。输入是一段即将被压缩掉的对话历史，请抽取其中值得长期保留的用户事实，输出 JSON。每个事实点包含四个字段：
+memoryKey：事实分类键，只能从下面 5 个值里选择：
+- user.preference.example_language：偏好的编程语言、示例语言
+- user.preference.explanation_style：偏好的解释方式、回答风格
+- user.profile.summary：用户身份、学习方向、职业目标
+- project.profile.summary：项目定位、技术栈、长期目标
+- project.constraint.summary：项目固定约束、后续必须遵守的规则
+fact：一句话概括这条事实。
+original：支撑这条事实的用户原话，逐字摘录，不要改写；找不到明确原话时给空字符串。
+importance：1 到 100 的整数。80 分以上表示"丢了会明显影响后续协作"的稳定偏好、身份或项目约束；闲聊寒暄给 1-10 分；无法判断给 40 分。
+
+只抽用户事实与偏好。AI 的回答、工具调用过程、临时问题、一次性报错都不要抽。
+没有值得长期保留的事实时输出 {"facts":[]}。只输出 JSON，不要输出 Markdown 或解释。',
+     '摘要压缩时抽取长期记忆事实点的系统提示词：要求 memoryKey / fact / original / importance 四个字段'),
+    ('summary_fact.user', 'USER', '记忆-摘要事实点',
+     '待压缩的对话消息如下：\n{messages}\n\n请抽取其中值得长期保留的用户事实点。',
+     '摘要事实点抽取用户提示词：messages 为本次被压缩的消息文本'),
+    -- 摘要复核（记忆重构步骤 4 / B4）
+    ('summary_review.system', 'SYSTEM', '记忆-摘要复核',
+     '你是摘要复核器。输入包含「上一版摘要」「新摘要」和「本次被压缩的原始对话消息」，请核对新摘要是否忠实反映原文，输出 JSON。
+
+判断依据是前两部分合起来的全部内容：上一版摘要在上一轮已经通过复核，属于有依据的历史结论，新摘要合并上一版摘要的内容不算编造；只有在新摘要里出现「上一版摘要和本次原始对话消息都没有」的内容，才算编造。
+
+检查三件事：
+1. 漏抽：上一版摘要与本次原始对话消息里的关键决策、用户偏好变更、事实结论、待跟进事项，新摘要里是否缺失；
+2. 编造：新摘要里出现的内容，在上一版摘要或本次原始对话消息中是否有依据；
+3. 篡改：上一版摘要里的事实被改写成相反或不一致的结论。
+
+输出格式：passed 为 true 表示没有需要返工的问题；发现问题时 passed 为 false，missing 列出漏掉的信息，fabricated 列出没有依据的内容，每条一句话。没有问题时两个数组都返回空数组。只输出 JSON，不要输出 Markdown 或解释。',
+     '摘要复核系统提示词：以「上一版摘要 + 本次消息」为基准检查漏抽、编造与篡改'),
+    ('summary_review.user', 'USER', '记忆-摘要复核',
+     '上一版摘要（（无）表示这是第一次压缩，其内容已通过上一轮复核，不要判为编造）：\n{existingSummary}\n\n新摘要：\n{summary}\n\n本次被压缩的原始对话消息：\n{messages}\n\n请核对新摘要是否漏抽、编造或篡改。',
+     '摘要复核用户提示词：existingSummary 为上一版摘要，summary 为待复核摘要，messages 为被压缩的原始消息'),
 
     -- HyDE 假设文档生成（知识库 RAG）
     ('hyde.system', 'SYSTEM', '知识库-HyDE查询',
@@ -1119,10 +1229,10 @@ memoryKey 只能从下面 5 个值里选择：
 
     -- 反馈分析
     ('feedback_analyze.system', 'SYSTEM', '创作者-反馈分析',
-     '你是 B 站观众反馈分析专家。你的任务是分析视频的观众评论和弹幕数据，提炼出：1）观众整体情绪倾向（正面/负面/中性占比）；2）高频话题和关键词；3）关键建议和批评（按优先级排序）；4）内容改进方向。分析要基于真实数据样本，不要凭空推测。对于样本量不足的情况，要明确标注"样本有限，结论置信度较低"。请用中文完成分析，并严格遵循调用方提供的 JSON schema，不要输出 Markdown 或额外说明。',
+     '你是 B 站观众反馈分析专家。你的任务是分析视频的观众评论和弹幕数据，提炼出：1）观众整体情绪倾向（正面/负面/中性占比）；2）高频话题和关键词；3）关键建议和批评（按优先级排序）；4）内容改进方向。分析要基于真实数据样本，不要凭空推测。任务名称仅作管理标识，不是视频标题、主题或内容依据；泛化玩梗没有明确内容指向时，不得推断具体题材。对于样本量不足的情况，要明确标注"样本有限，结论置信度较低"。请用中文完成分析，并严格遵循调用方提供的 JSON schema，不要输出 Markdown 或额外说明。',
      '反馈分析系统提示词：分析观众评论和弹幕数据并产出报告'),
     ('feedback_analyze.user', 'USER', '创作者-反馈分析',
-     '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n分析重点：{analysisFocus}\n额外要求：{extraRequirement}\n补充上下文：{extraContext}\n\n评论样本：\n{commentSamples}\n\n弹幕样本：\n{danmakuSamples}',
+     '任务ID：{taskId}\n\n自定义指导：{customGuidance}\n分析重点：{analysisFocus}\n额外要求：{extraRequirement}\n补充上下文：{extraContext}\n\n评论样本：\n{commentSamples}\n\n弹幕样本：\n{danmakuSamples}',
      '反馈分析用户提示词：包含评论和弹幕样本数据'),
 
     -- 反馈追问
@@ -1143,10 +1253,10 @@ memoryKey 只能从下面 5 个值里选择：
 
     -- 创作复盘报告
     ('report.system', 'SYSTEM', '创作者-复盘报告',
-     '你是 B 站创作者发布后复盘分析专家。只根据已经发布的视频指标、观众反馈分析、竞品分析和历史发布后复盘生成报告；发布方案、制作蓝图和发布前任务素材都不是复盘依据，不要比较计划与实际完成情况。报告应覆盖：1）本期发布后表现和关键发现；2）观众明确认可的内容亮点；3）观众反馈暴露的改进空间；4）竞品对照下的优势与短板；5）下一期可执行行动清单。所有判断都要能回到已提供的发布后数据；数据不足时直接说明，不得补造播放表现、观众态度或创作过程。请用中文完成分析，并严格遵循调用方提供的 JSON schema，不要输出 Markdown 或额外说明。',
+     '你是 B 站创作者发布后复盘分析专家。只根据已经发布的视频指标、观众反馈分析、竞品分析和历史发布后复盘生成报告；发布方案、制作蓝图和发布前任务素材都不是复盘依据，不要比较计划与实际完成情况。报告应覆盖：1）本期发布后表现和关键发现；2）观众明确认可的内容亮点；3）观众反馈暴露的改进空间；4）有完整竞品分析时给出对照结论，缺失时明确标记未提供，不编造相对优势与短板；5）下一期可执行行动清单。所有判断都要能回到已提供的发布后数据；任务名称仅作管理标识，不是视频标题或主题，不得据此推断内容。正式标题、简介等原文缺失时明确无法评价。数据不足时直接说明，不得补造播放表现、观众态度或创作过程。请用中文完成分析，并严格遵循调用方提供的 JSON schema，不要输出 Markdown 或额外说明。',
      '复盘报告系统提示词：仅根据发布后视频表现、反馈和竞品结果生成复盘'),
     ('report.user', 'USER', '创作者-复盘报告',
-     '任务：{taskName}（ID: {taskId}）\n\n自定义指导：{customGuidance}\n复盘重点：{reviewFocus}\n额外要求：{extraRequirement}\n\n已发布视频指标：\n{videoMetrics}\n\n观众反馈分析：\n{feedbackResult}\n\n竞品分析结果：\n{competitorResult}\n\n历史发布后复盘：\n{crossPeriodContext}',
+     '任务ID：{taskId}\n\n自定义指导：{customGuidance}\n复盘重点：{reviewFocus}\n额外要求：{extraRequirement}\n\n已发布视频指标：\n{videoMetrics}\n\n观众反馈分析：\n{feedbackResult}\n\n竞品分析结果：\n{competitorResult}\n\n历史发布后复盘：\n{crossPeriodContext}',
      '复盘报告用户提示词：包含发布后视频指标、反馈、竞品结果和历史复盘')
 ON DUPLICATE KEY UPDATE
     content = IF(
@@ -1184,10 +1294,63 @@ ON DUPLICATE KEY UPDATE
             AND content LIKE '%摘要限定在 300 字以内%'
         )
         OR (
+            -- 摘要提示词：没有「不要写修改说明」说明还是旧版。2026-09-19 实测：返工时模型会把
+            -- 「已按某问题修正」写进摘要正文，复核判成编造，压缩永远过不了，必须补这一句。
+            prompt_key = 'summary_memory.system'
+            AND content NOT LIKE '%不要写修改说明%'
+        )
+        OR (
             -- 长期记忆抽取提示词：正文里没有 shouldRemember 就说明与解析器契约不符，必须覆盖。
             -- 这样写的好处是自带幂等：修好之后正文一定含 shouldRemember，后续再执行脚本不会反复覆盖。
             prompt_key = 'long_term_memory.system'
             AND content NOT LIKE '%shouldRemember%'
+        )
+        OR (
+            -- 事实点抽取提示词：没有 importance 就说明种子缺失或还是旧版，直接补齐。
+            prompt_key = 'summary_fact.system'
+            AND content NOT LIKE '%importance%'
+        )
+        OR (
+            -- 摘要复核提示词：没有「篡改」就说明还是只看单次消息的旧版（会把累积合并来的真实信息判成编造），必须覆盖。
+            prompt_key = 'summary_review.system'
+            AND content NOT LIKE '%篡改%'
+        )
+        OR (
+            -- 复核用户提示词：没有 {existingSummary} 占位符就说明还是旧版，必须覆盖。
+            prompt_key = 'summary_review.user'
+            AND content NOT LIKE '%{existingSummary}%'
+        )
+        OR (
+            -- 长期记忆系统提示词：还在说「本轮对话」说明是单轮版本，与步骤 5 的批量抽取输入不匹配。
+            -- 注意锚点用「给定的对话记录」整串：提示词正文里就是这四个字带「的」，少一个字会让它每次都命中、失去幂等。
+            prompt_key = 'long_term_memory.system'
+            AND content NOT LIKE '%给定的对话记录%'
+        )
+        OR (
+            -- 长期记忆用户提示词：没有 {messages} 说明还是单轮 userMessage/finalAnswer 版本，必须覆盖。
+            prompt_key = 'long_term_memory.user'
+            AND content NOT LIKE '%{messages}%'
+        )
+        OR (
+            -- 长期记忆系统提示词：没有 memories 数组说明还是单候选版本（步骤 7 改成一次多条），必须覆盖。
+            -- 锚点用 memories 而不是 memoryKey：单候选版本里也有 memoryKey，用它当锚点会每次命中、失去幂等。
+            prompt_key = 'long_term_memory.system'
+            AND content NOT LIKE '%memories%'
+        )
+        OR (
+            -- 长期记忆用户提示词：没有 {observationDate} 说明还没带观察日期，相对时间无法换算成绝对日期（C16）。
+            prompt_key = 'long_term_memory.user'
+            AND content NOT LIKE '%{observationDate}%'
+        )
+        OR (
+            -- 打分提示词：没有 80 到 100 这一档说明种子缺失或还是旧版。
+            prompt_key = 'long_term_memory_importance.system'
+            AND content NOT LIKE '%80 到 100%'
+        )
+        OR (
+            -- 打分用户提示词：没有 {userMessage} 占位符说明不是当前版本。
+            prompt_key = 'long_term_memory_importance.user'
+            AND content NOT LIKE '%{userMessage}%'
         ),
         VALUES(content),
         content
@@ -1770,7 +1933,7 @@ CREATE TABLE IF NOT EXISTS creator_timeline_evidence
     evidence_id         VARCHAR(64)   NOT NULL COMMENT '时间轴证据唯一标识（UUID）',
     review_id           VARCHAR(64)   NOT NULL COMMENT '关联发布前试映任务',
     version_id          VARCHAR(64)   NOT NULL COMMENT '关联成片版本',
-    source_type         VARCHAR(32)   NOT NULL COMMENT '来源：TRANSCRIPT、KEY_FRAME、BLACK、SILENCE、FREEZE、VOLUME、VIDEO_MODEL',
+    source_type         VARCHAR(32)   NOT NULL COMMENT '来源：AUDIO_TRACK、TRANSCRIPT、KEY_FRAME、BLACK、SILENCE、FREEZE、VOLUME、VIDEO_MODEL',
     start_ms            BIGINT        NOT NULL COMMENT '证据开始时间毫秒',
     end_ms              BIGINT        NOT NULL COMMENT '证据结束时间毫秒',
     content             TEXT          NOT NULL COMMENT '可保留的证据文本或结构化摘要',
@@ -2253,3 +2416,125 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_reference_video' AND COLUMN_NAME = 'cover_url');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 记忆重要性分数（记忆重构步骤 4 / E4 提前落地）：旧库补列后，压缩抽取的高分事实点才能带上分数，
+-- 步骤 8 的三维打分（重要性维度）也才有输入。0 表示旧记忆尚未打分，不会被误当成低分事实处理。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE t_long_term_memory ADD COLUMN importance INT NOT NULL DEFAULT 0 COMMENT ''重要性分数（1-100），压缩时由模型打分；0=尚未打分（逐轮抽取的旧记忆）'' AFTER content',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_long_term_memory' AND COLUMN_NAME = 'importance');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 消息表补 user_id（记忆重构步骤 6 / C5）：长期记忆按用户捞增量原来要 JOIN 会话表，补列后可以直接按
+-- (user_id, id) 走索引。列可空性交给 DEFAULT 'default' 兜底，是因为写入方 insertMessage 之外没有其它入口。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE t_conversation_message ADD COLUMN user_id VARCHAR(64) NOT NULL DEFAULT ''default'' COMMENT ''归属用户；冗余存一份是为了按用户捞取记忆增量时不必 JOIN 会话表（设计文档 C5）'' AFTER session_id',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_conversation_message' AND COLUMN_NAME = 'user_id');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 存量消息按会话归属回填：补列时只能给默认值，多用户场景下老库的归属要靠会话表纠正一次。
+-- 已回填的库再执行是空更新，不产生写入放大。
+UPDATE t_conversation_message m
+    JOIN t_conversation_session s ON s.session_id = m.session_id
+SET m.user_id = s.user_id
+WHERE m.user_id <> s.user_id;
+
+-- 支撑「按用户取 id 大于游标的消息」这条查询：前缀 user_id 定范围，后缀 id 定顺序，不需要回表排序。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE t_conversation_message ADD KEY idx_user_id_id (user_id, id)',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_conversation_message' AND INDEX_NAME = 'idx_user_id_id');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 长期记忆改以记录 id 为身份（记忆重构步骤 6 / D13 / E1）：删掉 (user_id, memory_key) 唯一键。
+-- 保留它的话，「用户喜欢简洁解释」和「用户要求详细展开」这类同 key 不同事实会被 INSERT ... ON DUPLICATE KEY
+-- 直接覆盖，没有决策过程。memory_key 从此降级为展示用的分类字段，是否合并交给步骤 7 的写入决策。
+SET @sql = (SELECT IF(COUNT(*) > 0,
+    'ALTER TABLE t_long_term_memory DROP INDEX uk_user_memory_key',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_long_term_memory' AND INDEX_NAME = 'uk_user_memory_key');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 三维打分的两个存储位（步骤 6 / D6 / D4）：本步只建列，写入方在步骤 8，避免把检索改造混进表结构调整。
+-- 补列顺序固定为 访问时间 → 向量 → 取代关系 → 删除来源，因为 AFTER 依赖前一列已经存在，乱序在旧库上会直接报错。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE t_long_term_memory ADD COLUMN last_accessed_time DATETIME DEFAULT NULL COMMENT ''上次被检索取用的时间，检索排序的时效性维度用它；NULL=从未取用（D6 / E4，步骤 8 写入）'' AFTER importance',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_long_term_memory' AND COLUMN_NAME = 'last_accessed_time');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE t_long_term_memory ADD COLUMN embedding TEXT DEFAULT NULL COMMENT ''记忆内容向量，JSON 数组文本；单用户几十到几百条在内存里算余弦，不引入向量库（D4 / E3，步骤 8 写入）'' AFTER last_accessed_time',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_long_term_memory' AND COLUMN_NAME = 'embedding');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 长期记忆生命周期字段（步骤 6 / D15 / E2）：is_deleted 继续当统一的「失效」过滤位，
+-- 这两个列只回答「为什么失效」，让被新事实取代的记录不会出现在管理页的可恢复列表里。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE t_long_term_memory ADD COLUMN superseded_by BIGINT UNSIGNED DEFAULT NULL COMMENT ''取代这条记忆的新记忆 id；有值表示被新事实取代，与用户主动删除区分（D15 / E2，步骤 7 写入）'' AFTER embedding',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_long_term_memory' AND COLUMN_NAME = 'superseded_by');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE t_long_term_memory ADD COLUMN deleted_by_user TINYINT NOT NULL DEFAULT 0 COMMENT ''是否被用户主动删除：1=管理页删除且可撤销恢复，0=非用户删除'' AFTER superseded_by',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_long_term_memory' AND COLUMN_NAME = 'deleted_by_user');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 自动参考视频采集：仅增加参考库字段，不改创作任务或复盘历史。
+SET @reference_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_reference_video' AND COLUMN_NAME='published_at')=0, 'ALTER TABLE creator_reference_video ADD COLUMN published_at DATETIME DEFAULT NULL COMMENT ''B站发布时间，统一东八区；未知时不猜测''', 'SELECT 1');
+PREPARE reference_stmt FROM @reference_ddl;
+EXECUTE reference_stmt;
+DEALLOCATE PREPARE reference_stmt;
+SET @reference_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_reference_video' AND COLUMN_NAME='stats_fetched_at')=0, 'ALTER TABLE creator_reference_video ADD COLUMN stats_fetched_at DATETIME DEFAULT NULL COMMENT ''六项公开统计的采集时间，防止旧重试覆盖更新统计''', 'SELECT 1');
+PREPARE reference_stmt FROM @reference_ddl;
+EXECUTE reference_stmt;
+DEALLOCATE PREPARE reference_stmt;
+SET @reference_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_reference_video' AND COLUMN_NAME='video_index_score')=0, 'ALTER TABLE creator_reference_video ADD COLUMN video_index_score DECIMAL(9,6) DEFAULT NULL COMMENT ''固定公开统计视频指数0到100，与相对质量分分开''', 'SELECT 1');
+PREPARE reference_stmt FROM @reference_ddl;
+EXECUTE reference_stmt;
+DEALLOCATE PREPARE reference_stmt;
+SET @reference_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_reference_video' AND COLUMN_NAME='video_index_version')=0, 'ALTER TABLE creator_reference_video ADD COLUMN video_index_version VARCHAR(64) DEFAULT NULL COMMENT ''视频指数公式版本''', 'SELECT 1');
+PREPARE reference_stmt FROM @reference_ddl;
+EXECUTE reference_stmt;
+DEALLOCATE PREPARE reference_stmt;
+SET @reference_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_reference_video' AND COLUMN_NAME='collection_min_index')=0, 'ALTER TABLE creator_reference_video ADD COLUMN collection_min_index DECIMAL(9,6) DEFAULT NULL COMMENT ''首次自动采集阈值，手动为空''', 'SELECT 1');
+PREPARE reference_stmt FROM @reference_ddl;
+EXECUTE reference_stmt;
+DEALLOCATE PREPARE reference_stmt;
+SET @reference_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_reference_video' AND COLUMN_NAME='active_bv_id')=0, 'ALTER TABLE creator_reference_video ADD COLUMN active_bv_id VARCHAR(20) COLLATE utf8mb4_bin GENERATED ALWAYS AS (IF(is_deleted=0,bv_id,NULL)) STORED COMMENT ''有效BV唯一键，历史逻辑删除不占用BV''', 'SELECT 1');
+PREPARE reference_stmt FROM @reference_ddl;
+EXECUTE reference_stmt;
+DEALLOCATE PREPARE reference_stmt;
+-- 旧库若已有同一有效BV的重复行，唯一键添加会明确失败；先核对重复引用，禁止自动删除旧案例。
+SET @reference_ddl = IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_reference_video' AND INDEX_NAME='uk_active_bv_id')=0, 'ALTER TABLE creator_reference_video ADD UNIQUE KEY uk_active_bv_id(active_bv_id)', 'SELECT 1');
+PREPARE reference_stmt FROM @reference_ddl;
+EXECUTE reference_stmt;
+DEALLOCATE PREPARE reference_stmt;
+SET @reference_ddl = IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_reference_video' AND INDEX_NAME='idx_reference_published')=0, 'ALTER TABLE creator_reference_video ADD KEY idx_reference_published(published_at,id)', 'SELECT 1');
+PREPARE reference_stmt FROM @reference_ddl;
+EXECUTE reference_stmt;
+DEALLOCATE PREPARE reference_stmt;
+SET @reference_ddl = IF((SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_reference_video' AND INDEX_NAME='idx_reference_category_index')=0, 'ALTER TABLE creator_reference_video ADD KEY idx_reference_category_index(is_deleted,category,tier,video_index_score)', 'SELECT 1');
+PREPARE reference_stmt FROM @reference_ddl;
+EXECUTE reference_stmt;
+DEALLOCATE PREPARE reference_stmt;
+CREATE TABLE IF NOT EXISTS creator_reference_index_cleanup (
+    video_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '已删除参考视频ID，不再保留正文',
+    item_ids LONGTEXT NOT NULL COMMENT '待删评论弹幕文档ID数组',
+    chunk_ids LONGTEXT NOT NULL COMMENT '待删主题块文档ID数组',
+    attempts INT NOT NULL DEFAULT 0 COMMENT '外部索引清理失败次数',
+    last_error VARCHAR(256) DEFAULT NULL COMMENT '最近清理错误类别，不存连接密钥',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '进入物理索引清理队列的时间'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='过期参考索引删除重试队列';

@@ -1,9 +1,14 @@
 package com.link.linkagent.knowledge.model;
 
 import jakarta.validation.Valid;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.NotNull;
 
 import java.util.List;
 
@@ -30,8 +35,14 @@ public record ReferenceVideoImportRequest(
 
         @NotEmpty(message = "导入的视频列表不能为空")
         @Valid
-        List<VideoItem> videos
+        @Size(max = 50, message = "单批导入最多50条，自动脚本逐视频提交")
+        List<@NotNull VideoItem> videos,
+
+        @DecimalMin("0") @DecimalMax("100") Double minVideoIndex
 ) {
+    public ReferenceVideoImportRequest(String source, String tier, String category, List<VideoItem> videos) {
+        this(source, tier, category, videos, null);
+    }
 
     /**
      * 单条视频案例，对应父表 creator_reference_video 的一行，外加待清洗的评论 / 弹幕原始全量。
@@ -67,20 +78,26 @@ public record ReferenceVideoImportRequest(
             // 真正的筛选交给导入时的清洗逻辑（空内容、噪声、重复、中性都会被丢弃）。
             List<Comment> comments,
 
-            List<Danmaku> danmaku
+            List<Danmaku> danmaku,
+            @PositiveOrZero @JsonDeserialize(using=ReferenceVideoIntegerDeserializer.class) Long publishedAtEpochSeconds,
+            @PositiveOrZero @JsonDeserialize(using=ReferenceVideoIntegerDeserializer.class) Long statsFetchedAtEpochSeconds
     ) {
+        public VideoItem(String bvId, String coverUrl, String title, String description, List<String> tags,
+                String category, String publishTimeText, VideoStats stats, List<Comment> comments, List<Danmaku> danmaku) {
+            this(bvId, coverUrl, title, description, tags, category, publishTimeText, stats, comments, danmaku, null, null);
+        }
     }
 
     /**
      * 视频热度指标，全部可空：离线脚本未取到时为空，质量打分（5.1c）会对缺失值做兜底，不在导入期强制要求。
      */
     public record VideoStats(
-            Long view,
-            Long like,
-            Long coin,
-            Long favorite,
-            Long danmaku,
-            Long reply
+            @PositiveOrZero @JsonDeserialize(using=ReferenceVideoIntegerDeserializer.class) Long view,
+            @PositiveOrZero @JsonDeserialize(using=ReferenceVideoIntegerDeserializer.class) Long like,
+            @PositiveOrZero @JsonDeserialize(using=ReferenceVideoIntegerDeserializer.class) Long coin,
+            @PositiveOrZero @JsonDeserialize(using=ReferenceVideoIntegerDeserializer.class) Long favorite,
+            @PositiveOrZero @JsonDeserialize(using=ReferenceVideoIntegerDeserializer.class) Long danmaku,
+            @PositiveOrZero @JsonDeserialize(using=ReferenceVideoIntegerDeserializer.class) Long reply
     ) {
     }
 

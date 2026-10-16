@@ -539,7 +539,7 @@ export type CreatorFeedbackReport = {
   updateTime: string
 }
 
-/** 发布后视频指标、反馈分析和竞品分析汇总后的唯一总体复盘。 */
+/** 发布后视频指标、反馈分析和可选竞品分析汇总后的最新总体复盘。 */
 export type CreatorReport = {
   id: number
   reportId: string
@@ -557,6 +557,20 @@ export type CreatorReport = {
   parseStatus: string
   createTime: string
   updateTime: string
+}
+
+export type CreatorReportHistorySummary = {
+  historyId: string
+  overallConclusion: string
+  hasCompetitor: boolean | null
+  createTime: string
+}
+
+export type CreatorReportHistoryPage = {
+  items: CreatorReportHistorySummary[]
+  total: number
+  page: number
+  size: number
 }
 
 export type CreatorFeedbackChatResult = {

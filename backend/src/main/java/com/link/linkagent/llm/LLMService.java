@@ -60,6 +60,12 @@ import java.util.stream.Collectors;
 public class LLMService {
 
     private static final String STRUCTURED_RESULT_FUNCTION = "return_structured_result";
+
+    /**
+     * 思考模式允许的唯一 tool_choice 取值。
+     * 指定具体函数（以及 required）都会被服务端以 400 拒绝，见 structuredResultToolChoice 的说明。
+     */
+    private static final String AUTO_TOOL_CHOICE = "auto";
     public static final String EXECUTE_TOOL_FUNCTION = "execute_tool";
 
     private static final Logger log = LoggerFactory.getLogger(LLMService.class);
@@ -340,6 +346,19 @@ public class LLMService {
     }
 
     /**
+     * 轻量场景的结构化调用：显式关闭思考并限制单次输出长度。
+     * <p>
+     * 2026-09-19 作者确认只对「长期记忆重要性打分」这类机械判断降级——它只需要一个 1-100 的整数，
+     * 思考跑飞会写出上万 token 又拖慢每轮对话；摘要生成、复核、事实点抽取保持思考，避免影响质量。
+     *
+     * @param maxTokens 单次输出上限；null 表示不限制
+     */
+    public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> type,
+                                boolean disableThinking, Integer maxTokens) {
+        return chatStructuredWithUsage(systemPrompt, userMessage, type, disableThinking, maxTokens).entity();
+    }
+
+    /**
      * 带用量统计的结构化对话。
      * <p>
      * strict 路径从被强制调用的结果函数读取参数；旧路径显式追加
@@ -353,16 +372,27 @@ public class LLMService {
      * @return 结构化实体和本次调用 usage
      */
     public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, String userMessage, Class<T> type) {
+        return chatStructuredWithUsage(systemPrompt, userMessage, type, false, null);
+    }
+
+    /**
+     * 带「关思考 / 输出上限」的结构化调用。
+     *
+     * @param disableThinking 本次调用是否显式关闭思考；只给打分这类轻量判断用
+     * @param maxTokens       单次输出上限；null 表示不限制
+     */
+    public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, String userMessage, Class<T> type,
+                                                               boolean disableThinking, Integer maxTokens) {
         validatePromptLength(systemPrompt, userMessage);
         if (isStrictFunctionCallingEnabled()) {
             try {
-                return chatStructuredStrictWithUsage(systemPrompt, userMessage, type);
+                return chatStructuredStrictWithUsage(systemPrompt, userMessage, type, disableThinking, maxTokens);
             } catch (RuntimeException strictException) {
                 // strict 目前依赖 DeepSeek Beta；端点异常或业务校验未通过时回旧链路，不能让结构化能力整体中断。
                 log.warn("严格结构化调用未获得有效结果，回退 json_object：{}", strictException.getMessage());
             }
         }
-        return chatStructuredLegacyWithUsage(systemPrompt, userMessage, type);
+        return chatStructuredLegacyWithUsage(systemPrompt, userMessage, type, disableThinking, maxTokens);
     }
 
     /**
@@ -372,7 +402,9 @@ public class LLMService {
      */
     private <T> StructuredCallResult<T> chatStructuredStrictWithUsage(String systemPrompt,
                                                                        String userMessage,
-                                                                       Class<T> type) {
+                                                                       Class<T> type,
+                                                                       boolean disableThinking,
+                                                                       Integer maxTokens) {
         BeanOutputConverter<T> converter = new BeanOutputConverter<>(type, objectMapper);
         Map<String, Object> schema = DeepSeekStrictJsonSchema.normalize(converter.getJsonSchemaMap(), objectMapper);
         OpenAiApi.FunctionTool.Function function = new OpenAiApi.FunctionTool.Function(
@@ -382,6 +414,9 @@ public class LLMService {
                 true
         );
         OpenAiApi.FunctionTool resultTool = new OpenAiApi.FunctionTool(function);
+        // 显式关思考的调用按「不思考」选请求形状：思考模式只接受 auto，关掉后指定函数可用且更稳
+        boolean thinkingEnabled = !disableThinking && strictFunctionCallingClient.isThinkingEnabled();
+        Object toolChoice = structuredResultToolChoice(thinkingEnabled);
         RuntimeException lastError = null;
 
         for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
@@ -392,8 +427,9 @@ public class LLMService {
                         systemPrompt,
                         List.of(new UserMessage(userMessage == null ? "" : userMessage)),
                         List.of(resultTool),
-                        namedToolChoice(STRUCTURED_RESULT_FUNCTION),
-                        false
+                        toolChoice,
+                        disableThinking,
+                        maxTokens
                 );
             } catch (RuntimeException providerException) {
                 long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
@@ -416,6 +452,16 @@ public class LLMService {
                         elapsedMs
                 );
             } catch (RuntimeException validationException) {
+                // auto 模式下模型偶尔会直接给正文而不是函数调用：正文能解析成目标 DTO 就直接接受，
+                // 省掉「再重试两次 + 最后回退旧链路」的额外调用；解析不了再走原来的重试与回退。
+                T textEntity = thinkingEnabled ? tryParseStructuredText(callResult, type) : null;
+                if (textEntity != null) {
+                    recordTextSuccess(callResult);
+                    log.info("严格结构化调用未返回函数调用，已按正文 JSON 接受：{}", type.getSimpleName());
+                    return new StructuredCallResult<>(textEntity,
+                            callResult.promptTokens(), callResult.completionTokens(),
+                            callResult.totalTokens(), elapsedMs);
+                }
                 recordTextFailure(callResult.modelName(), elapsedMs, validationException);
                 lastError = validationException;
                 log.warn("严格结构化输出第 {}/{} 次业务校验失败：{}",
@@ -428,9 +474,15 @@ public class LLMService {
     /** 保留原有 json_object 路径，作为非 DeepSeek Provider 和 Beta 端点异常时的可用性回退。 */
     private <T> StructuredCallResult<T> chatStructuredLegacyWithUsage(String systemPrompt,
                                                                        String userMessage,
-                                                                       Class<T> type) {
-        // 保留 DeepSeek Flash 思考参数，再叠加结构化输出要求，避免 options 覆盖掉思考字段。
-        OpenAiChatOptions options = defaultThinkingOptions();
+                                                                       Class<T> type,
+                                                                       boolean disableThinking,
+                                                                       Integer maxTokens) {
+        // 保留 DeepSeek Flash 思考参数，再叠加结构化输出要求，避免 options 覆盖掉思考字段；
+        // 打分这类轻量调用会要求关思考并限长，这里必须跟着走，否则回退链路又变成慢链路。
+        OpenAiChatOptions options = thinkingOptions(disableThinking);
+        if (maxTokens != null) {
+            options.setMaxTokens(maxTokens);
+        }
         options.setResponseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null));
         BeanOutputConverter<T> outputConverter = new BeanOutputConverter<>(type);
         String structuredUserMessage = appendStructuredFormat(userMessage, outputConverter.getFormat());
@@ -833,6 +885,37 @@ public class LLMService {
                 "type", "function",
                 "function", Map.of("name", functionName)
         );
+    }
+
+    /**
+     * 严格结构化调用使用的 tool_choice。
+     * <p>
+     * 思考模式只接受 {@code auto}：指定具体函数、以及 {@code required}，都会被服务端以
+     * {@code 400 Thinking mode does not support this tool_choice} 拒绝（2026-09-19 用真实接口逐组实测）。
+     * 这一路只挂一个结果函数（{@link #STRUCTURED_RESULT_FUNCTION}），auto 的实际效果就是模型用这个函数交结果；
+     * 非思考模式继续强制指定，行为与改造前完全一致。
+     *
+     * @param thinkingEnabled 本次 strict 调用是否开着思考
+     */
+    Object structuredResultToolChoice(boolean thinkingEnabled) {
+        return thinkingEnabled ? AUTO_TOOL_CHOICE : namedToolChoice(STRUCTURED_RESULT_FUNCTION);
+    }
+
+    /**
+     * auto 模式的正文兜底解析。
+     * <p>
+     * {@code auto} 不保证模型一定调用函数。拿不到函数调用时，正文如果是合法 JSON 就按旧链路的方式解析接受，
+     * 避免白跑三次重试；解析失败返回 null，让调用方继续原有的重试与回退逻辑。
+     */
+    private <T> T tryParseStructuredText(LlmCallResult callResult, Class<T> type) {
+        if (TextUtil.isBlank(callResult.content())) {
+            return null;
+        }
+        try {
+            return parseStructuredEntity(callResult.content(), type);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
     }
 
     /**

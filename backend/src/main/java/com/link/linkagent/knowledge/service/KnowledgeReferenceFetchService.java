@@ -37,7 +37,7 @@ import java.util.regex.Pattern;
  * <p>
  * <b>为什么不在后端用 Java 直连 B 站、而是 ProcessBuilder 调脚本</b>：
  * <ol>
- *   <li>项目约束禁止后端内置爬虫 / 后台采集，只允许「用户显式触发的单 BV 限量采集」</li>
+     *   <li>采集内核保留在脚本中，页面手动 BV 和用户主动启动的自动采集共用既有导入链路</li>
  *   <li>让 {@code scripts/bilibili_reference_fetcher.py} 当唯一抓取内核，榜单（cron）与单 BV（本服务）共用同一份采集逻辑，
  *       既守住合规边界，又能在前端一键完成</li>
  *   <li>Python 生态有成熟的 B 站 API 库（bilibili-api），用脚本比 Java 重新实现更高效、更易维护</li>
@@ -192,7 +192,7 @@ public class KnowledgeReferenceFetchService {
      * @return 包含采集脚本的项目根目录
      * @throws ResponseStatusException 如果任何路径都找不到采集脚本
      */
-    private Path resolveProjectRoot() {
+    Path resolveProjectRoot() {
         for (Path candidate : collectProjectRootCandidates()) {
             Path cursor = candidate;
             while (cursor != null) {

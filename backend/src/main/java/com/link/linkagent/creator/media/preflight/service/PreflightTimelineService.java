@@ -10,6 +10,8 @@ import com.link.linkagent.creator.media.preflight.model.TimelineEvidenceRecord;
 import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingAssetRecord;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingJobRecord;
+import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
+import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,21 +31,46 @@ public class PreflightTimelineService {
     private final PreflightReviewMapper preflightMapper;
     private final MediaProcessingMapper processingMapper;
     private final ObjectMapper objectMapper;
+    private final MediaUploadMapper uploadMapper;
 
     public PreflightTimelineService(PreflightReviewMapper preflightMapper,
                                     MediaProcessingMapper processingMapper,
-                                    ObjectMapper objectMapper) {
+                                    ObjectMapper objectMapper,
+                                    MediaUploadMapper uploadMapper) {
         this.preflightMapper = preflightMapper;
         this.processingMapper = processingMapper;
         this.objectMapper = objectMapper;
+        this.uploadMapper = uploadMapper;
     }
 
     @Transactional
     public int rebuild(PreflightReviewRecord review, PreflightStepRecord step) {
         preflightMapper.deleteEvidenceByStep(review.reviewId(), step.stepId());
-        int count = appendKeyFrames(review, step);
-        count += appendSignals(review, step);
+        // 读取试映绑定的确切版本，不能拿后来上传的原片音轨状态解释旧版本。
+        DraftVideoRecord draft = uploadMapper.findDraftVideoByVersion(review.taskId(), review.ownerId(), review.versionId())
+                .orElseThrow(() -> new IllegalStateException("试映对应的原片版本不存在"));
+        int count = appendAudioTrack(review, step, draft);
+        count += appendKeyFrames(review, step);
+        count += appendSignals(review, step, draft.durationMs());
         return count;
+    }
+
+    /** 代理视频主动去掉音轨，原片的探测事实必须单独进入模型可读的证据。 */
+    private int appendAudioTrack(PreflightReviewRecord review, PreflightStepRecord step, DraftVideoRecord draft) {
+        if (draft.durationMs() == null || draft.durationMs() <= 0) {
+            throw new IllegalStateException("原片缺少有效探测时长");
+        }
+        String content = draft.hasAudio() == null ? "FFprobe 未记录原片音轨状态，不能判断原片有无音轨。"
+                : draft.hasAudio() ? "FFprobe 已确认原片存在音轨（编码："
+                    + (draft.audioCodec() == null ? "未记录" : draft.audioCodec()) + "），不是无音轨视频。"
+                : "FFprobe 已确认原片没有音轨。";
+        content += "分析代理视频和复核短片主动去掉音轨，与原片音轨状态无关；没有转写文本不代表原片无声。";
+        var metadata = objectMapper.createObjectNode();
+        metadata.put("hasAudio", draft.hasAudio());
+        metadata.put("audioCodec", draft.audioCodec());
+        insert(review, step, "AUDIO_TRACK", 0L, draft.durationMs(), content,
+                null, null, false, metadata.toString());
+        return 1;
     }
 
     private int appendKeyFrames(PreflightReviewRecord review, PreflightStepRecord step) {
@@ -58,7 +85,7 @@ public class PreflightTimelineService {
         return count;
     }
 
-    private int appendSignals(PreflightReviewRecord review, PreflightStepRecord step) {
+    private int appendSignals(PreflightReviewRecord review, PreflightStepRecord step, long durationMs) {
         MediaProcessingJobRecord processing = processingMapper.findJob(
                         review.taskId(), review.ownerId(), review.versionId(), review.processingJobId())
                 .orElseThrow(() -> new IllegalStateException("媒体预处理任务不存在"));
@@ -69,14 +96,19 @@ public class PreflightTimelineService {
             count += appendRanges(review, step, root.path("silence"), "SILENCE", "检测到静音片段");
             count += appendRanges(review, step, root.path("freeze"), "FREEZE", "检测到画面冻结片段");
             if (root.path("meanVolumeDb").isNumber() || root.path("maxVolumeDb").isNumber()) {
-                String metadata = objectMapper.writeValueAsString(Map.of(
-                        "meanVolumeDb", root.path("meanVolumeDb").isNumber()
-                                ? root.path("meanVolumeDb").asDouble() : 0D,
-                        "maxVolumeDb", root.path("maxVolumeDb").isNumber()
-                                ? root.path("maxVolumeDb").asDouble() : 0D
-                ));
-                insert(review, step, "VOLUME", 0L, 0L, "音轨整体音量摘要",
-                        null, null, false, metadata);
+                // 模型提示词只读 content，数值不能仅藏在 metadata；未测得的值也不能伪装成 0 dB。
+                var metadata = objectMapper.createObjectNode();
+                metadata.set("meanVolumeDb", root.path("meanVolumeDb").isNumber()
+                        ? root.path("meanVolumeDb") : objectMapper.nullNode());
+                metadata.set("maxVolumeDb", root.path("maxVolumeDb").isNumber()
+                        ? root.path("maxVolumeDb") : objectMapper.nullNode());
+                String content = "原片音量检测：平均音量 "
+                        + (root.path("meanVolumeDb").isNumber() ? root.path("meanVolumeDb").asText() + " dB" : "未测得")
+                        + "，峰值音量 "
+                        + (root.path("maxVolumeDb").isNumber() ? root.path("maxVolumeDb").asText() + " dB" : "未测得")
+                        + "。音量检测不能判断声音是音乐、背景音还是人声。";
+                insert(review, step, "VOLUME", 0L, durationMs, content,
+                        null, null, false, metadata.toString());
                 count++;
             }
             return count;

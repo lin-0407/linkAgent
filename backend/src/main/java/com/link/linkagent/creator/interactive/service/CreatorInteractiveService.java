@@ -25,6 +25,7 @@ import com.link.linkagent.util.TextUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -92,6 +93,8 @@ public class CreatorInteractiveService {
     private final ObjectMapper objectMapper;
     /** 文档内容提取服务，通过 Apache Tika 从用户上传文档中提取纯文本 */
     private final DocumentExtractionService documentExtractionService;
+    /** 事务模板：理解/方向卡的模型调用必须放在事务外，落库再用这里的短事务包起来 */
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * 构造器注入全部依赖。所有字段在构造完成后即不可变，保证线程安全。
@@ -100,12 +103,14 @@ public class CreatorInteractiveService {
                                      CreatorTaskService creatorTaskService,
                                      LLMService llmService,
                                      ObjectMapper objectMapper,
-                                     DocumentExtractionService documentExtractionService) {
+                                     DocumentExtractionService documentExtractionService,
+                                     TransactionTemplate transactionTemplate) {
         this.creatorInteractiveMapper = creatorInteractiveMapper;
         this.creatorTaskService = creatorTaskService;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
         this.documentExtractionService = documentExtractionService;
+        this.transactionTemplate = transactionTemplate;
     }
 
     /**
@@ -247,34 +252,60 @@ public class CreatorInteractiveService {
      * <p>
      * 理解确认不可跳过 —— {@link #generateCreativeOptions} 会校验 understandingStatus 必须为 READY 或 CONFIRMED。
      *
+     * <p>
+     * <b>事务边界</b>：三段分开。先短事务提交 UNDERSTANDING 状态并立即对其它请求可见，
+     * 再在事务外调用模型，最后新短事务复核输入后写回结果。不能把模型调用包在事务里，
+     * 否则连接会被占满整个推理时间，且"生成中"状态要等推理结束才提交，防重复点击形同虚设。
+     *
      * @param taskId 交互任务 ID
      * @return 更新后的交互任务响应，包含 understandingSummary 和 understandingStatus=READY
      */
-    @Transactional
     public InteractiveTaskResponse triggerUnderstanding(String taskId) {
         InteractiveSessionRecord session = getSessionRecord(taskId);
+        String understandingPrompt = buildUnderstandingUserPrompt(session);
 
         // 更新状态为 UNDERSTANDING（生成中），防止用户重复点击提交导致并发 LLM 调用
-        creatorInteractiveMapper.updateUnderstanding(session.getTaskId(), null, "UNDERSTANDING");
+        transactionTemplate.executeWithoutResult(status -> creatorInteractiveMapper.updateUnderstanding(
+                session.getTaskId(), null, "UNDERSTANDING"));
 
         String summary;
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(session.getTaskId(), "AI理解确认")) {
             // 用 try-with-resources 包裹 LlmUsageContext，确保 LLM 调用结束后正确记录用量统计
-            summary = llmService.chat(
-                    buildUnderstandingSystemPrompt(),
-                    buildUnderstandingUserPrompt(session)
-            );
+            summary = llmService.chat(buildUnderstandingSystemPrompt(), understandingPrompt);
         } catch (RuntimeException exception) {
             // AI 理解失败时回退状态到 NONE，让用户可以重试；
             // 不保留 UNDERSTANDING 状态，否则会阻塞用户再次点击
-            creatorInteractiveMapper.updateUnderstanding(session.getTaskId(), null, "NONE");
+            transactionTemplate.executeWithoutResult(status -> creatorInteractiveMapper.updateUnderstanding(
+                    session.getTaskId(), null, "NONE"));
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
                     "AI 理解确认失败: " + exception.getMessage(), exception);
         }
 
         // 理解成功后写入摘要文本并标记 READY，供用户在前端查看和确认
-        creatorInteractiveMapper.updateUnderstanding(session.getTaskId(), summary, "READY");
+        transactionTemplate.executeWithoutResult(status ->
+                applyUnderstandingResult(session, understandingPrompt, summary));
         return getInteractiveTask(session.getTaskId());
+    }
+
+    /**
+     * 在新短事务里保存理解结果，保存前复核这轮生成依据是否还有效。
+     * <p>
+     * 复核两件事：一是提示词输入没变（用户改想法、加资料都会让提示词不同），
+     * 二是状态仍停在 UNDERSTANDING（用户补资料会被标记 PENDING）。任一条不满足就丢弃本次结果，
+     * 否则推理期间产生的旧理解会盖掉用户刚改过的想法。
+     */
+    private void applyUnderstandingResult(InteractiveSessionRecord session, String generatedPrompt, String summary) {
+        InteractiveSessionRecord current = getSessionRecord(session.getTaskId());
+        if (!generatedPrompt.equals(buildUnderstandingUserPrompt(current))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "创作想法或背景资料在理解期间发生变化，本次理解结果已丢弃，请重新确认");
+        }
+        int updated = creatorInteractiveMapper.updateUnderstandingIfStatus(
+                session.getTaskId(), summary, "READY", "UNDERSTANDING");
+        if (updated == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "AI 理解状态已变化，本次理解结果已丢弃，请重新确认");
+        }
     }
 
     /**
@@ -292,13 +323,12 @@ public class CreatorInteractiveService {
      *   <li>regenerateOptions 没有理解状态前置校验，会清空之前的选中记录后重新生成</li>
      * </ul>
      * <p>
-     * 事务边界：清理旧方向卡 + 插入新方向卡 + 更新会话状态在同一事务中完成。
+     * 事务边界：只把"标记理解已确认"和最后一次落库放在短事务里，推理本身在事务外执行。
      *
      * @param taskId          交互任务 ID
      * @param extraRequirement 用户可选的额外要求（如"多关注技术深度""偏入门向"），可为 null
      * @return 更新后的交互任务响应，包含新生成的 3 张方向卡
      */
-    @Transactional
     public InteractiveTaskResponse generateCreativeOptions(String taskId, String extraRequirement) {
         InteractiveSessionRecord session = getSessionRecord(taskId);
         String understandingStatus = session.getUnderstandingStatus() == null ? "NONE" : session.getUnderstandingStatus();
@@ -312,8 +342,8 @@ public class CreatorInteractiveService {
         // 用户查看了理解确认且触发了生成，说明认可 AI 理解 → 标记为 CONFIRMED
         // 与 "仅查看理解但不生成" 的场景区分开：CONFIRMED 表示理解已被用户认可
         if ("READY".equals(understandingStatus)) {
-            creatorInteractiveMapper.updateUnderstanding(session.getTaskId(),
-                    session.getUnderstandingSummary(), "CONFIRMED");
+            transactionTemplate.executeWithoutResult(status -> creatorInteractiveMapper.updateUnderstanding(
+                    session.getTaskId(), session.getUnderstandingSummary(), "CONFIRMED"));
         }
 
         generateAndStoreOptions(session, extraRequirement);
@@ -332,17 +362,21 @@ public class CreatorInteractiveService {
      * <p>
      * 适用场景：用户对当前 3 张方向卡都不满意，带上额外要求（如"不要太技术向""多从流量角度考虑"）重新生成。
      *
+     * <p>
+     * 事务边界：清空选中和"生成中"状态先短事务提交，推理在事务外，最后新短事务落库。
+     *
      * @param taskId  交互任务 ID
      * @param request 重新生成请求，可携带 extraRequirement 额外要求；可为 null（无额外要求的重新生成）
      * @return 更新后的交互任务响应，包含重新生成的 3 张方向卡
      */
-    @Transactional
     public InteractiveTaskResponse regenerateOptions(String taskId, CreativeOptionsRegenerateRequest request) {
         InteractiveSessionRecord session = getSessionRecord(taskId);
         String extraRequirement = request == null ? null : TextUtil.trimToNull(request.extraRequirement());
         // 清除上一轮所有选项的选中状态，因为用户明确表示对当前结果不满意
-        creatorInteractiveMapper.clearSelectedOptions(session.getSessionId());
-        creatorInteractiveMapper.updateSessionSelection(session.getSessionId(), "CREATIVE_GENERATING", null);
+        transactionTemplate.executeWithoutResult(status -> {
+            creatorInteractiveMapper.clearSelectedOptions(session.getSessionId());
+            creatorInteractiveMapper.updateSessionSelection(session.getSessionId(), "CREATIVE_GENERATING", null);
+        });
         generateAndStoreOptions(session, extraRequirement);
         return getInteractiveTask(session.getTaskId());
     }
@@ -430,7 +464,8 @@ public class CreatorInteractiveService {
      * </ul>
      * 无论哪种路径都会写入 3 张方向卡（正常或兜底），保证前端始终有内容可展示。
      * <p>
-     * 事务边界：先删旧卡再插新卡，确保同一会话只有最新一轮的方向卡。
+     * 事务边界：推理在事务外，落库放在独立短事务里并在写入前复核输入。
+     * 生成期间用户改了想法或补了资料时，这一轮方向卡不能覆盖新状态，直接丢弃并报冲突。
      *
      * @param session          当前交互会话记录
      * @param extraRequirement 用户额外要求，拼入 LLM Prompt 供 AI 参考
@@ -439,8 +474,10 @@ public class CreatorInteractiveService {
         String rawOutput = "";
         List<CreativeIdeaOptionRecord> options;
         String parseStatus = "PARSED";
+        // 生成前先固定本轮输入：提交后用它复核数据库里的输入有没有被改过
+        String creativePrompt = buildCreativeUserPrompt(session, extraRequirement);
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(session.getTaskId(), "AI创意方案")) {
-            rawOutput = llmService.chat(buildCreativeSystemPrompt(), buildCreativeUserPrompt(session, extraRequirement));
+            rawOutput = llmService.chat(buildCreativeSystemPrompt(), creativePrompt);
             options = parseOptions(session, rawOutput);
         } catch (RuntimeException exception) {
             // LLM 调用异常或 JSON 解析异常的统一兜底处理：
@@ -450,13 +487,35 @@ public class CreatorInteractiveService {
             options = buildFallbackOptions(session);
         }
 
+        List<CreativeIdeaOptionRecord> generatedOptions = options;
+        String generatedRawOutput = rawOutput;
+        String generatedParseStatus = parseStatus;
+        transactionTemplate.executeWithoutResult(status -> storeCreativeOptions(
+                session, extraRequirement, creativePrompt, generatedOptions, generatedRawOutput, generatedParseStatus));
+    }
+
+    /**
+     * 在新短事务里落库方向卡，写之前确认本轮生成依据仍然有效。
+     */
+    private void storeCreativeOptions(InteractiveSessionRecord session,
+                                      String extraRequirement,
+                                      String generatedPrompt,
+                                      List<CreativeIdeaOptionRecord> options,
+                                      String rawOutput,
+                                      String parseStatus) {
+        InteractiveSessionRecord current = getSessionRecord(session.getTaskId());
+        if (!generatedPrompt.equals(buildCreativeUserPrompt(current, extraRequirement))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "创作想法或背景资料在生成期间发生变化，本次方向卡已丢弃，请重新生成");
+        }
+
         // 先删除旧的再插入新的，保证原子性 —— 用户看到的是完整的一轮方向卡，不是新旧混合
-        creatorInteractiveMapper.deleteOptionsBySessionId(session.getSessionId());
+        creatorInteractiveMapper.deleteOptionsBySessionId(current.getSessionId());
         for (CreativeIdeaOptionRecord option : options) {
             creatorInteractiveMapper.insertOption(option);
         }
         creatorInteractiveMapper.updateSessionGenerationResult(
-                session.getSessionId(),
+                current.getSessionId(),
                 "CREATIVE_OPTIONS_READY",
                 rawOutput,
                 parseStatus

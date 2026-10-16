@@ -483,13 +483,14 @@ public interface PreflightReviewMapper {
 
     @Update("""
             UPDATE creator_preflight_issue
-            SET description = #{description}, severity = #{severity}, confidence = #{confidence},
+            SET title = #{title}, description = #{description}, severity = #{severity}, confidence = #{confidence},
                 suggested_action = #{suggestedAction}, evidence_refs = #{evidenceRefs},
                 source_types = #{sourceTypes}, update_time = CURRENT_TIMESTAMP
             WHERE review_id = #{reviewId} AND issue_id = #{issueId} AND is_deleted = 0
             """)
     int updateIssueAfterSegmentReview(@Param("reviewId") String reviewId,
                                       @Param("issueId") String issueId,
+                                      @Param("title") String title,
                                       @Param("description") String description,
                                       @Param("severity") String severity,
                                       @Param("confidence") BigDecimal confidence,

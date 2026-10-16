@@ -217,6 +217,7 @@ export type PreflightReview = {
     evidenceId: string
     sourceType:
       | 'TRANSCRIPT'
+      | 'AUDIO_TRACK'
       | 'KEY_FRAME'
       | 'BLACK'
       | 'SILENCE'

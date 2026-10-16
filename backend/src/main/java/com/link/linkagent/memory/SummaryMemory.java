@@ -29,10 +29,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *       见 {@code AgentExecutor#buildConversationContext}（设计文档 A2 / A3）。</li>
  *   <li><b>累积式摘要</b>：压缩时必须把已有摘要一起喂给模型并要求合并，否则第二次压缩会丢掉
  *       第一次压缩留下的信息——压缩后原文不再保留，摘要就是那批消息的唯一载体（设计文档 A5 / D4）。</li>
- *   <li><b>先摘要后裁剪</b>：只有摘要成功返回，调用方才会裁剪短期记忆；
- *       摘要失败时宁可保留原文继续超阈值，也不能出现「原文已删、摘要没有」的空档。</li>
- *   <li><b>内存级存储</b>：摘要仍在 {@code ConcurrentHashMap} 中（不落库），服务重启即丢失。
- *       持久化属于设计文档 B5，本切片不处理。</li>
+ *   <li><b>先复核再裁剪</b>：摘要必须通过复核（B4）调用方才会裁剪短期记忆；
+ *       生成或复核失败时宁可保留原文继续超阈值，也不能出现「原文已删、摘要没有」的空档。</li>
+ *   <li><b>持久化（B5）</b>：摘要以 {@code role='summary'} 的检查点消息写进会话历史，
+ *       重启后仍能读到；内存 {@code ConcurrentHashMap} 只在查库失败时兜底。</li>
+ *   <li><b>调用超时</b>：摘要生成本身也走 {@link MemoryCallTimeout} 的 5 分钟兜底，
+ *       provider 卡住时不会让请求线程无限等待。</li>
  * </ul>
  */
 @Component
@@ -41,7 +43,7 @@ public class SummaryMemory {
     private static final Logger log = LoggerFactory.getLogger(SummaryMemory.class);
 
     /**
-     * 摘要记忆配置：开关、触发 token 阈值、压缩后保留消息条数。
+     * 摘要记忆配置：开关、触发 token 阈值、压缩后保留消息条数、事实点高分线。
      */
     private final SummaryMemoryProperties properties;
 
@@ -65,6 +67,12 @@ public class SummaryMemory {
      */
     private final ConversationSessionMapper conversationSessionMapper;
 
+    /**
+     * 摘要复核器（设计文档 B4）。
+     * 单测构造器不注入时为 null，此时跳过复核——复核依赖模型调用，最小构造路径不引入这个依赖。
+     */
+    private final SummaryReviewer summaryReviewer;
+
     /** 摘要检查点在会话消息表里的角色值，与 mapper 的查询条件保持一致。 */
     public static final String SUMMARY_MESSAGE_ROLE = "summary";
 
@@ -83,11 +91,13 @@ public class SummaryMemory {
     public SummaryMemory(SummaryMemoryProperties properties,
                          ChatModel memorySummaryModel,
                          PromptService promptService,
+                         SummaryReviewer summaryReviewer,
                          RuntimeSettingService runtimeSettingService,
                          ConversationSessionMapper conversationSessionMapper) {
         this.properties = properties;
         this.memorySummaryModel = memorySummaryModel;
         this.promptService = promptService;
+        this.summaryReviewer = summaryReviewer;
         this.runtimeSettingService = runtimeSettingService;
         this.conversationSessionMapper = conversationSessionMapper;
     }
@@ -100,8 +110,9 @@ public class SummaryMemory {
         this.properties = properties;
         this.memorySummaryModel = memorySummaryModel;
         this.promptService = promptService;
+        // 单测构造器不接复核器与数据库：摘要在内存里生效，复核与持久化路径由生产构造器覆盖。
+        this.summaryReviewer = null;
         this.runtimeSettingService = null;
-        // 单测构造器不接数据库：摘要在内存里生效，持久化路径由生产构造器覆盖。
         this.conversationSessionMapper = null;
     }
 
@@ -132,40 +143,87 @@ public class SummaryMemory {
     }
 
     /**
-     * 对给定消息生成（或刷新）摘要，返回新摘要文本。
+     * 对给定消息生成摘要、复核并保存，返回最终摘要文本。
      *
      * <h3>为什么方法名不体现「是否触发」</h3>
-     * 触发判断已经上移到 {@code AgentExecutor}（按 token 计量）：本方法只要被调用就一定会发起一次
-     * 模型调用，不再承担「判断是否触发」的职责。
+     * 触发判断已经上移到 {@code AgentExecutor}（按 token 计量）：本方法只要被调用就一定会发起模型调用，
+     * 不再承担「判断是否触发」的职责。
      *
      * <h3>累积合并</h3>
      * 提示词里会带上已有摘要并要求一并合并进新摘要。压缩后原文不再保留，
      * 不合并就会让更早的历史在第二次压缩时彻底消失。
      *
+     * <h3>复核与重生成（设计文档 B4）</h3>
+     * 生成后先复核：不通过就带着复核给出的问题重新生成一次，仍不通过返回 null，
+     * 由调用方保留原文（宁可不压缩，也不接受一份漏抽或编造的摘要）。
+     * 摘要只有通过复核才会写进缓存/检查点，被否掉的版本不会覆盖已有摘要。
+     *
      * @param sessionId 会话标识
      * @param messages  本次要压缩掉的消息（按时间顺序）
-     * @return 新摘要文本；功能关闭、消息为空或模型调用失败时返回 null（调用方据此决定不裁剪）
+     * @return 通过复核的新摘要文本；功能关闭、消息为空、生成或复核失败时返回 null（调用方据此决定不裁剪）
      */
     public String summarize(String sessionId, List<MemoryMessage> messages) {
         if (!isSummaryMemoryEnabled() || messages == null || messages.isEmpty()) {
             return null;
         }
+        // 上一版摘要只在这里读一次：摘要生成和复核必须用同一份基准，否则核对的是两个不同的事实集合。
+        String existingSummary = getSummary(sessionId);
+        String summary = generate(sessionId, existingSummary, messages, List.of());
+        if (TextUtil.isBlank(summary)) {
+            return null;
+        }
+        SummaryReviewResult review = reviewSummary(summary, existingSummary, messages);
+        if (review.passed()) {
+            saveSummary(sessionId, summary);
+            return summary;
+        }
+        log.warn("摘要复核未通过，带问题重新生成一次，sessionId={}, 问题={}", sessionId, review.issues());
+        String regenerated = generate(sessionId, existingSummary, messages, review.issues());
+        if (TextUtil.isBlank(regenerated)) {
+            return null;
+        }
+        SummaryReviewResult secondReview = reviewSummary(regenerated, existingSummary, messages);
+        if (!secondReview.passed()) {
+            log.warn("摘要复核第二次仍未通过，本轮不裁剪原文，sessionId={}, 问题={}", sessionId, secondReview.issues());
+            return null;
+        }
+        saveSummary(sessionId, regenerated);
+        return regenerated;
+    }
+
+    /**
+     * 单次摘要生成（不落库、不覆盖已有摘要）。
+     * 复核不通过时这个方法会被调用第二次，因此必须把「生成」与「保存」分开——
+     * 先把被否掉的版本写进缓存或检查点，会让下一轮上下文带上一份没通过的摘要。
+     *
+     * @param existingSummary 上一版已通过复核的摘要；为空表示首次压缩
+     * @param reviewIssues    上一次复核发现的问题；为空表示首次生成
+     */
+    private String generate(String sessionId, String existingSummary, List<MemoryMessage> messages,
+                            List<String> reviewIssues) {
         try {
-            String generated = memorySummaryModel.call(buildPrompt(sessionId, messages));
+            String generated = MemoryCallTimeout.call("摘要生成",
+                    () -> memorySummaryModel.call(buildPrompt(existingSummary, messages, reviewIssues)));
             if (TextUtil.isBlank(generated)) {
                 // 模型返回空摘要时不能覆盖已有摘要，也不能让调用方去裁剪原文。
                 log.warn("摘要模型返回空内容，本轮不压缩，sessionId={}", sessionId);
                 return null;
             }
-            String summary = generated.trim();
-            saveSummary(sessionId, summary);
-            return summary;
+            return generated.trim();
         } catch (Exception exception) {
             // 摘要失败不向上抛异常——Agent 主流程不应因摘要失败而中断对话。
             // 最坏情况：上下文偏大，但仍在上限保护范围内。
             log.error("摘要记忆压缩失败，sessionId={}, error={}", sessionId, exception.getMessage());
             return null;
         }
+    }
+
+    /** 复核摘要；最小构造路径没有复核器时按通过处理，保持单测路径与改造前一致。 */
+    private SummaryReviewResult reviewSummary(String summary, String existingSummary, List<MemoryMessage> messages) {
+        if (summaryReviewer == null) {
+            return SummaryReviewResult.pass();
+        }
+        return summaryReviewer.review(summary, existingSummary, messages);
     }
 
     /**
@@ -182,21 +240,32 @@ public class SummaryMemory {
      * AI: ...
      * </pre>
      */
-    private String buildPrompt(String sessionId, List<MemoryMessage> messages) {
+    private String buildPrompt(String existingSummary, List<MemoryMessage> messages, List<String> reviewIssues) {
         StringBuilder prompt = new StringBuilder(promptService.get("summary_memory.system")).append("\n\n");
-        // 走 getSummary 而不是直接读内存 Map：摘要可能来自数据库（重启后），漏掉它会让第二次压缩丢掉第一次的摘要。
-        String existingSummary = getSummary(sessionId);
+        // 已有摘要由调用方一次性读出（可能来自数据库），这里不再重复查询，保证生成与复核用的是同一份基准。
         if (TextUtil.hasText(existingSummary)) {
             prompt.append("已有摘要（必须合并进新摘要，不能丢弃其中的信息）：\n")
                     .append(existingSummary)
                     .append("\n\n");
         }
-        return prompt.append("当前对话消息如下：\n")
+        prompt.append("当前对话消息如下：\n")
                 .append(messages.stream()
-                        .map(message -> message.role() + ": " + message.content())
+                        .map(message -> MemoryObservationContext.prefix(message) + message.role() + ": " + message.content())
                         .reduce((left, right) -> left + "\n" + right)
-                        .orElse(""))
-                .toString();
+                        .orElse(""));
+        if (reviewIssues != null && !reviewIssues.isEmpty()) {
+            // 复核问题放在消息之后：模型先看到待压缩原文，再看返工要求，比反过来更不容易漏改。
+            prompt.append("\n\n上一次生成的摘要存在以下问题，请重新生成并修正：\n");
+            for (String issue : reviewIssues) {
+                prompt.append("- ").append(issue).append("\n");
+            }
+            // 2026-09-19 联调实测（作者日志）：只说「按问题修正」时，模型会把「本次已修正 XX 问题」这类
+            // 说明写进摘要正文，复核下一轮把它判成编造（原文里没有这段话），于是压缩永远过不了。
+            // 返工要求必须同时限定输出内容：只要摘要正文本身。
+            prompt.append("\n只输出修正后的摘要正文本身：不要解释你改了什么，"
+                    + "不要写「修正说明」「已按某问题调整」这类关于生成过程的句子。\n");
+        }
+        return prompt.toString();
     }
 
     /**
@@ -217,12 +286,13 @@ public class SummaryMemory {
      * 只是不再进入模型上下文。{@code token_count} 记录本次压缩释放的 token 数，供前端说明「释放了多少」。
      *
      * @param sessionId              会话标识
+     * @param userId                 用户标识，落库到消息表的 user_id（设计文档 C5）
      * @param summary                摘要正文
      * @param compressedMessageCount 本次被压缩掉的消息条数
      * @param tokensBefore           压缩前的上下文 token 数
      * @param tokensAfter            压缩后的上下文 token 数
      */
-    public void recordCompactionCheckpoint(String sessionId, String summary, int compressedMessageCount,
+    public void recordCompactionCheckpoint(String sessionId, String userId, String summary, int compressedMessageCount,
                                            int tokensBefore, int tokensAfter) {
         if (TextUtil.isBlank(summary)) {
             return;
@@ -235,6 +305,7 @@ public class SummaryMemory {
         try {
             ConversationMessageRecord record = new ConversationMessageRecord();
             record.setSessionId(sessionId);
+            record.setUserId(userId);
             record.setRole(SUMMARY_MESSAGE_ROLE);
             record.setContent(normalized);
             record.setTokenCount(Math.max(0, tokensBefore - tokensAfter));
@@ -256,11 +327,24 @@ public class SummaryMemory {
         return Math.max(0, properties.retainedMessageCount());
     }
 
+    /** 评测会话清理时同步释放内存摘要，避免只删消息表后仍能读到旧摘要。 */
+    public void forgetSession(String sessionId) {
+        sessionSummaries.remove(sessionId);
+    }
+
     /**
      * 获取触发压缩的 token 阈值。Math.max(1, n) 防止配置误配 0 时变成「每轮都压缩」。
      */
     public int getTokenThreshold() {
         return Math.max(1, properties.triggerTokenThreshold());
+    }
+
+    /**
+     * 获取事实点重要性高分线（1-100，设计文档 B3）。
+     * 由 {@code AgentExecutor} 在压缩完成后用它决定哪些事实点写入长期记忆。
+     */
+    public int getFactImportanceThreshold() {
+        return properties.factImportanceThreshold();
     }
 
     /**

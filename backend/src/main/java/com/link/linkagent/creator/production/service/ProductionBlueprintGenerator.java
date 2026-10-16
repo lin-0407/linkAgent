@@ -84,8 +84,9 @@ public class ProductionBlueprintGenerator {
     }
 
     private void validate(ProductionBlueprintOutput output) {
-        if (output == null || output.steps() == null || output.steps().isEmpty() || output.steps().size() > 12) {
-            throw new IllegalStateException("AI 制作蓝图步骤数量必须在1到12步之间");
+        // 不设步数上限：上限会逼模型把真实制作过程压成泛泛的几步，只保证至少有一步
+        if (output == null || output.steps() == null || output.steps().isEmpty()) {
+            throw new IllegalStateException("AI 制作蓝图至少需要一个步骤");
         }
         for (ProductionBlueprintStepOutput step : output.steps()) {
             if (step == null || blank(step.stepName()) || blank(step.objective()) || blank(step.phase())) {
