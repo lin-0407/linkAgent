@@ -43,16 +43,21 @@ public class TurnImportanceScorer {
     static final long TIMEOUT_SECONDS = 30;
 
     /**
-     * 打分调用显式关闭思考（作者 2026-09-19 确认）。
-     * <p>
-     * 打分只是一次分类判断：给一轮对话打一个 1-100 的整数。开着思考时实测每次 4~9 秒、几百到上千输出 token，
-     * 偶尔还会绕很久；关掉思考后响应快、结果更稳定。作者同时确认只对打分降级——
-     * 摘要生成、复核、事实点抽取这些影响内容的调用保持思考，避免影响效果。
+     * 作者 2026-10-17 改为辅助调用统一使用 low：不能继续显式关闭思考，强度由调用场景选择。
+     * 保留超时和输出上限，避免每轮的重要性判断长时间拖住回答收尾。
      */
-    static final boolean DISABLE_THINKING = true;
+    static final boolean DISABLE_THINKING = false;
 
-    /** 打分调用的输出上限：一个整数分加一句理由，512 token 足够，顺便封住思考跑飞的风险。 */
-    static final int MAX_OUTPUT_TOKENS = 512;
+    /**
+     * 打分调用的输出上限。
+     * <p>
+     * 2026-10-17 把打分从「关闭思考」改成 low 之后，思考内容同样占用 completion 预算：
+     * 512 太小，实测 2256 次打分请求里有 697 次在 3~5 秒后拿不到结果函数调用或 JSON
+     * （思考把 512 用完，正文为空），最终全部回退成兜底 40 分。40 分不是真实分数，
+     * 会打乱递减预算和提取时机，所以这里必须给思考留出余量。
+     * 4096 只提高上限，不强制生成长度；正常打分仍是一两百 token。
+     */
+    static final int MAX_OUTPUT_TOKENS = 4096;
 
     private static final int MIN_IMPORTANCE = 1;
     private static final int MAX_IMPORTANCE = 100;

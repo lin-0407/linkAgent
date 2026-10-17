@@ -1465,6 +1465,24 @@ public class AgentExecutor {
     }
 
     /**
+     * 记忆冲突时的使用规则：长期记忆是提炼摘要，可能过期或把助手建议误记成用户事实，
+     * 最近会话才是用户当前说法。规则统一追加到执行器系统提示词末尾，避免只修一条执行路径。
+     */
+    private static final String MEMORY_CONFLICT_RULES = """
+            记忆使用规则：
+            - 上下文里的 Long-term memory（长期记忆）是从历史对话提炼的摘要，可能过期，也可能把助手的建议误记成用户事实；Recent conversation（最近会话）才是用户当前的说法。
+            - Recent conversation 里用户明确更正过的事实，优先于更早的说法；更正出现在后面时，即使只有一句话也优先。
+            - Recent conversation 里用户说得含糊（“好像”“不确定”），而 Long-term memory 是确定值时，以长期记忆为准。
+            - 助手在历史里的建议和数字不算用户事实，除非用户明确确认过。
+            - 两条 Long-term memory 冲突时，以内容日期更晚的为准；无法比较时不要把两者强行合并。
+            - 回答前同时检查 Long-term memory、Conversation summary（摘要）和 Recent conversation，不要只看其中一处就断言信息不可用。
+            """;
+
+    private static String appendMemoryConflictRules(String systemPrompt) {
+        return systemPrompt + "\n\n" + MEMORY_CONFLICT_RULES;
+    }
+
+    /**
      * 构建文本路 ReAct 的系统提示词（含 Thought/Action/Action Input/Final Answer 格式约定）。
      * <p>
      * 工具描述通过 {@link AgentToolPromptFormatter#format} 统一格式化；提示词模板从 promptService
@@ -1475,7 +1493,7 @@ public class AgentExecutor {
      */
     private String buildSystemPrompt(Collection<Tool> tools) {
         String toolDescriptions = AgentToolPromptFormatter.format(tools);
-        return promptService.render("agent_executor.system", Map.of("toolList", toolDescriptions));
+        return appendMemoryConflictRules(promptService.render("agent_executor.system", Map.of("toolList", toolDescriptions)));
     }
 
     /**
@@ -1490,13 +1508,13 @@ public class AgentExecutor {
      */
     private String buildStructuredSystemPrompt(Collection<Tool> tools) {
         String toolDescriptions = AgentToolPromptFormatter.format(tools);
-        return promptService.render("agent_executor_structured.system", Map.of("toolList", toolDescriptions));
+        return appendMemoryConflictRules(promptService.render("agent_executor_structured.system", Map.of("toolList", toolDescriptions)));
     }
 
     /** 原生 Function Calling 不再要求模型输出 ReActStep，只保留工具使用边界和最终回答要求。 */
     private String buildToolCallingSystemPrompt(Collection<Tool> tools) {
         String toolDescriptions = AgentToolPromptFormatter.format(tools);
-        return promptService.render("agent_executor_tool_calling.system", Map.of("toolList", toolDescriptions));
+        return appendMemoryConflictRules(promptService.render("agent_executor_tool_calling.system", Map.of("toolList", toolDescriptions)));
     }
 
     // ═══════════════════════════════════════════════════════════════

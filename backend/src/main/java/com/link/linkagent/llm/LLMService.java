@@ -378,7 +378,7 @@ public class LLMService {
     /**
      * 带「关思考 / 输出上限」的结构化调用。
      *
-     * @param disableThinking 本次调用是否显式关闭思考；只给打分这类轻量判断用
+     * @param disableThinking 本次调用是否显式关闭思考；开启后的强度由调用场景与运行期设置决定
      * @param maxTokens       单次输出上限；null 表示不限制
      */
     public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, String userMessage, Class<T> type,
@@ -478,7 +478,7 @@ public class LLMService {
                                                                        boolean disableThinking,
                                                                        Integer maxTokens) {
         // 保留 DeepSeek Flash 思考参数，再叠加结构化输出要求，避免 options 覆盖掉思考字段；
-        // 打分这类轻量调用会要求关思考并限长，这里必须跟着走，否则回退链路又变成慢链路。
+        // 显式关闭和输出上限必须在回退链路同样生效；记忆打分的 low 则沿用场景强度。
         OpenAiChatOptions options = thinkingOptions(disableThinking);
         if (maxTokens != null) {
             options.setMaxTokens(maxTokens);

@@ -100,7 +100,7 @@ public class StrictFunctionCallingClient {
         if (disableThinking) {
             // Spring AI 1.1.4 不会把 AssistantMessage 中的 reasoning_content 写回下一轮请求，
             // 多轮工具调用若继续开启思考会违反 DeepSeek 协议，因此该场景显式关闭；
-            // 打分调用也走这里：作者 2026-09-19 确认只对打分降级，其它记忆链路保持思考不影响质量。
+            // 是否关闭与强度分开处理：记忆打分现在开启 low，不再经过这里的关闭分支。
             options.setExtraBody(Map.of("thinking", Map.of("type", "disabled")));
             options.setReasoningEffort(null);
         }

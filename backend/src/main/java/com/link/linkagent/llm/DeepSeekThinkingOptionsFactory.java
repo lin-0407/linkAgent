@@ -1,6 +1,7 @@
 package com.link.linkagent.llm;
 
 import com.link.linkagent.settings.service.RuntimeSettingService;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.util.TextUtil;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.ai.chat.client.ChatClient;
@@ -119,6 +120,19 @@ public class DeepSeekThinkingOptionsFactory {
     }
 
     private String reasoningEffort() {
+        LlmUsageContext context = LlmUsageContext.current();
+        if (context != null) {
+            // 只有评测的最终答题需要最高强度；记忆维护和批改使用 low，异步任务沿用已有场景传递。
+            switch (context.scene() == null ? "" : context.scene()) {
+                case "评测回答":
+                    return "max";
+                case "评测裁判", "长期记忆抽取", "长期记忆写入决策", "长期记忆重要性打分",
+                        "摘要生成", "摘要复核", "摘要事实点抽取":
+                    return "low";
+                default:
+                    break;
+            }
+        }
         String value = runtimeSettingService == null
                 ? properties.resolvedReasoningEffort()
                 : runtimeSettingService.getDeepSeekReasoningEffort();
