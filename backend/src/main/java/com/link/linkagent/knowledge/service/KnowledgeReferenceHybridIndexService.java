@@ -209,8 +209,8 @@ public class KnowledgeReferenceHybridIndexService {
         if (!stats.isEmpty()) {
             builder.append("数据：").append(stats).append('\n');
         }
-        if (video.isQualityScoreReliable() && video.getQualityScore() != null) {
-            builder.append("质量分：").append(video.getQualityScore());
+        if (video.getQualityScore() != null) {
+            builder.append("分区互动分：").append(video.getQualityScore()).append("（仅同分区比较）");
         }
         return TextUtil.abbreviateWithSuffix(builder.toString().trim(), DOC_TEXT_MAX_CHARS, "...");
     }

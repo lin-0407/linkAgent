@@ -237,12 +237,12 @@ public class KnowledgeReferenceIndexService {
     /**
      * 把一条案例组装成 Milvus 向量文档。
      * <p>
-     * text 是供语义检索的「案例卡片」（标题+分区+层级+标签+简介+亮点+数据+质量分），
+     * text 是供语义检索的案例卡片，评分同时说明仅用于同分区比较，避免模型把它当成全站质量结论。
      * metadata 存供 5.2 检索过滤/回查的业务字段。
-     * 可靠的质量分仅在 isQualityScoreReliable 时才写入——不可靠分不放进向量元数据，避免检索侧基于小样本分做过滤。
+     * 公开统计不完整时不写评分，分区案例数量少不会阻止基础分进入索引。
      */
     private Document toDocument(ReferenceVideoRecord video) {
-        // metadata 只放非空值，避免 Milvus 元数据出现 null；这些字段为 5.2 的分区/层级/质量分过滤打底
+        // 元数据只放有效统计，同时保留分区范围，避免调用方将修正分用于跨分区比较。
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("videoId", video.getVideoId());
         putIfNotNull(metadata, "bvId", video.getBvId());
@@ -251,11 +251,12 @@ public class KnowledgeReferenceIndexService {
         metadata.put("source", video.getSource());
         metadata.put("qualityScoreReliable", video.isQualityScoreReliable());
         metadata.put("qualitySampleCount", video.getQualitySampleCount());
+        metadata.put("scoreScope", "SAME_CATEGORY");
         if (video.getRawQualityScore() != null) {
             metadata.put("rawQualityScore", video.getRawQualityScore().doubleValue());
         }
-        if (video.isQualityScoreReliable() && video.getQualityScore() != null) {
-            // 转 double 入元数据：避免 BigDecimal 在 JSON 元数据序列化上的歧义；不可靠分不写入，避免向量侧误用少样本相对分。
+        if (video.getQualityScore() != null) {
+            // 转成 double 避免不同向量存储对 BigDecimal 的序列化行为不同。
             metadata.put("qualityScore", video.getQualityScore().doubleValue());
         }
         putIfNotNull(metadata, "viewCount", video.getViewCount());
@@ -273,11 +274,11 @@ public class KnowledgeReferenceIndexService {
     /**
      * 拼装案例卡片文本（Embedding 输入）。
      * <p>
-     * 结构：标题 → 分区 → 案例层级 → 标签 → 简介 → 亮点摘要 → 热度数据 → 质量分。
+     * 结构：标题 → 分区 → 案例层级 → 标签 → 简介 → 亮点摘要 → 热度数据 → 分区互动分。
      * 使用中文标签（「标题：」「分区：」「案例层级：」等），是因为 Embedding 模型能识别
      * 「标签：干货」与查询「干货视频」之间的语义关联，而不只是匹配原文片段。
      * <p>
-     * 只写入可靠的质量分：少样本的不可靠分会放 NULL，防止检索把「只有 3 条评论的 100 分视频」排在前面。
+     * 分区互动分不代表内容真实质量，写明比较范围让案例分析沿用相同口径。
      */
     private String buildDocumentText(ReferenceVideoRecord video) {
         StringBuilder builder = new StringBuilder();
@@ -299,8 +300,8 @@ public class KnowledgeReferenceIndexService {
         if (!stats.isEmpty()) {
             builder.append("数据：").append(stats).append('\n');
         }
-        if (video.isQualityScoreReliable() && video.getQualityScore() != null) {
-            builder.append("质量分：").append(video.getQualityScore());
+        if (video.getQualityScore() != null) {
+            builder.append("分区互动分：").append(video.getQualityScore()).append("（仅同分区比较）");
         }
         return TextUtil.abbreviateWithSuffix(builder.toString().trim(), DOC_TEXT_MAX_CHARS, "...");
     }

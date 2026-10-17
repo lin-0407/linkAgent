@@ -119,13 +119,23 @@ public class MultiAgentOrchestrator {
      */
     public AgentRunResult run(String conversationContext, String userMessage) {
         WorkerPlan workerPlan = multiAgentPlanner.plan(conversationContext, userMessage, workers);
+        return execute(workerPlan,conversationContext,userMessage,true);
+    }
+
+    /** 业务已有结构化合成步骤，只返回独立分析，避免再合成一次增加费用和转述失真。 */
+    public AgentRunResult analyze(WorkerPlan workerPlan, String conversationContext, String userMessage) {
+        return execute(workerPlan,conversationContext,userMessage,false);
+    }
+
+    private AgentRunResult execute(WorkerPlan workerPlan,String conversationContext,String userMessage,boolean synthesize) {
         List<AgentWorkerTrace> workerTraces = executeWorkerPlan(workerPlan, conversationContext, userMessage);
         AgentPlanTrace planTrace = toPlanTrace(workerPlan, workerTraces);
-        String finalAnswer = answerSynthesizer.synthesizeMultiAgentResult(
+        String finalAnswer = synthesize ? answerSynthesizer.synthesizeMultiAgentResult(
                 conversationContext,
                 userMessage,
                 workerTraces
-        );
+        ) : workerTraces.stream().map(trace -> "【"+trace.subTask()+"】\n"
+                +TextUtil.trimToDefault(trace.summary(),trace.errorMessage())).collect(java.util.stream.Collectors.joining("\n\n"));
         return AgentRunResult.multiAgent(finalAnswer, resolveStopReason(workerTraces), toAgentSteps(workerTraces),
                 planTrace, workerTraces);
     }
@@ -233,9 +243,16 @@ public class MultiAgentOrchestrator {
                         .map(call -> withUpstreamResults(call, traceById))
                         .toList();
                 // 步骤4：并发提交所有就绪 WorkerCall，每个都用 exceptionally 保护防止崩溃
+                var assistantContext = com.link.linkagent.assistant.AssistantInvocationContext.current();
+                var usageContext = com.link.linkagent.llm.usage.LlmUsageContext.current();
                 List<CompletableFuture<AgentWorkerTrace>> futures = dispatchCalls.stream()
                         .map(call -> CompletableFuture.supplyAsync(
-                                        () -> executeReadyCall(call, conversationContext, userMessage),
+                                        () -> {
+                                            try (var scope = com.link.linkagent.assistant.AssistantInvocationContext.open(assistantContext);
+                                                 var usage = com.link.linkagent.llm.usage.LlmUsageContext.restore(usageContext)) {
+                                                return executeReadyCall(call, conversationContext, userMessage);
+                                            }
+                                        },
                                         executorService
                                 )
                                 .exceptionally(exception -> failedTrace(call, rootMessage(exception))))

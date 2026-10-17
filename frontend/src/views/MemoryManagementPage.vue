@@ -19,6 +19,8 @@ import {
 } from '@/api/memory'
 import { formatDate } from '@/composables/creator/creatorWorkspaceUtils'
 import { useModalDialog } from '@/composables/useModalDialog'
+import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
+useAssistantBusinessRefresh(['memory.'], () => loadMemories())
 import type { LongTermMemoryRecord } from '@/types/memory'
 
 // ── 数据加载 ──
@@ -83,6 +85,8 @@ const KEY_LABEL_MAP: Record<string, string> = {
   'user.profile.summary': '用户画像摘要',
   'project.profile.summary': '项目画像摘要',
   'project.constraint.summary': '项目约束摘要',
+  'user.event': '个人事件',
+  'project.event': '项目事件',
 }
 
 function readableKey(memoryKey: string): string {

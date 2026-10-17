@@ -161,7 +161,7 @@ agent:
       worker-poll-timeout-seconds: ${LONG_TERM_MEMORY_WORKER_POLL_TIMEOUT_SECONDS:1}
       # 失败原地重试次数（设计文档 C8）：超过后丢弃任务但不动游标，下一轮触发时同一批会再试。
       retry-max: ${LONG_TERM_MEMORY_RETRY_MAX:2}
-      # 阶段一一次最多产出几条候选（同一 memoryKey 只留最高分那条）。
+      # 阶段一一次最多产出几条候选（画像同类留最高分，事件同类可并存）。
       max-candidates: ${LONG_TERM_MEMORY_MAX_CANDIDATES:5}
       # 阶段二单轮最多写几条记忆（C14）；超过的动作被拒绝并记日志。
       decision-max-writes: ${LONG_TERM_MEMORY_DECISION_MAX_WRITES:5}
@@ -294,8 +294,8 @@ knowledge:
     initial-delay-ms: ${KNOWLEDGE_REFERENCE_MAINTENANCE_INITIAL_DELAY_MS:60000}
     fixed-delay-ms: ${KNOWLEDGE_REFERENCE_MAINTENANCE_FIXED_DELAY_MS:21600000}
   quality:
-    # 分区相对质量分需要足够同赛道样本；低于该数量时只保存单视频原始分，避免 60/0/100 的小样本跳变误导展示。
-    min-reliable-sample-size: ${KNOWLEDGE_QUALITY_MIN_RELIABLE_SAMPLE_SIZE:5}
+    # 保留脚本基础分，同分区五项互动率最多修正此分值，单条案例也可直接展示基础分。
+    max-category-adjustment: ${KNOWLEDGE_QUALITY_MAX_CATEGORY_ADJUSTMENT:5}
   rag:
     enabled: ${KNOWLEDGE_RAG_ENABLED:false}
     collection-name: ${KNOWLEDGE_RAG_COLLECTION_NAME:creator_reference_video}

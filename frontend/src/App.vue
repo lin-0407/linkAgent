@@ -284,9 +284,9 @@ watch(
     <RouterView v-slot="{ Component }">
       <component :is="Component" :developer-mode="developerMode" />
     </RouterView>
-    <!-- 首页保持产品入口的视觉聚焦，诊断状态和悬浮 Agent 只在实际功能页出现。 -->
+    <!-- 创作台也需要任务查询和操作确认，因此实际功能页统一提供平台助手入口。 -->
     <AgentFloatingWindow
-      v-if="!isCreatorRoute && !isHomeRoute && !isUsageLogRoute"
+      v-if="!isHomeRoute"
       :developer-mode="developerMode"
     />
     <SystemStatusBar v-if="!isHomeRoute && !isUsageLogRoute" />

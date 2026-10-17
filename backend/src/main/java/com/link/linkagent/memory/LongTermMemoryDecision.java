@@ -12,11 +12,12 @@ package com.link.linkagent.memory;
  * </ul>
  *
  * @param action     动作，取值 ADD / UPDATE / DELETE / NONE
- * @param id         已存在的记忆 id；ADD 与 NONE 不用
+ * @param id         已存在的记忆 id；ADD 不用，NONE 引用据以判断已经覆盖的记录
  * @param memory     新内容；ADD / UPDATE 必填
  * @param oldMemory  模型认为要被替换的原文，用于校验它不是在编造 id（设计文档 D14）
  * @param importance 新内容的重要性分数（1-100），空表示按默认值处理
  * @param reason     模型给的一句话理由，只进日志
+ * @param candidateId 本轮候选编号，用于关联原始事实，避免改写后无法核对分类与日期
  */
 public record LongTermMemoryDecision(
         String action,
@@ -24,7 +25,8 @@ public record LongTermMemoryDecision(
         String memory,
         String oldMemory,
         Integer importance,
-        String reason
+        String reason,
+        Integer candidateId
 ) {
 
     public static final String ACTION_ADD = "ADD";

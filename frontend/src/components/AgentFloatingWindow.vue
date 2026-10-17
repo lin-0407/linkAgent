@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { useCreatorStore } from '@/stores/creatorStore'
+import CreatorAssistantPanel from '@/components/CreatorAssistantPanel.vue'
 import { MessageCircle, X } from '@lucide/vue'
 import ChatComposer from '@/components/ChatComposer.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
@@ -8,6 +11,7 @@ import {
   chunkTypeLabel,
   formatKnowledgeCount,
   knowledgeQualityScoreLabel,
+  knowledgeCategoryRankLabel,
   knowledgeTierLabel,
   sentimentLabel,
   sourceTypeLabel,
@@ -61,11 +65,18 @@ const props = withDefaults(
 )
 
 const promptExamples = [
-  '这个标题哪里弱？',
-  '观众可能会误解什么？',
-  '下一期选题怎么延展？',
+  '帮我创建一期视频任务',
+  '检查这期任务，列出下一步计划',
+  '帮我分析反馈并生成复盘',
 ]
-const capabilityTags = ['标题建议', '观众误解', '下一期选题']
+const capabilityTags = ['平台操作', '连续执行', '确认后执行']
+const route = useRoute()
+const creatorStore = useCreatorStore()
+const assistantTaskId = computed(() => {
+  if (route.path === '/creator') return creatorStore.activeInteractiveTaskId || creatorStore.selectedTaskId || undefined
+  if (route.path === '/video-analysis') return creatorStore.selectedTaskId || undefined
+  return undefined
+})
 const executionModeOptions: Array<{
   value: AgentExecutionMode
   label: string
@@ -92,11 +103,17 @@ const isDragging = ref(false)
 const isResizing = ref(false)
 const knowledgeContext = ref<ReferenceVideoAnalysisContext | null>(null)
 const knowledgeContextQuery = ref('')
+watch(() => [route.path, assistantTaskId.value], () => {
+  if (route.path !== '/knowledge') {
+    knowledgeContext.value = null
+    knowledgeContextQuery.value = ''
+  }
+})
 const windowRect = ref<WindowRect>({
   left: 0,
   top: 0,
-  width: 980,
-  height: 780,
+  width: 560,
+  height: 680,
 })
 
 let dragState: DragState | null = null
@@ -133,7 +150,8 @@ const {
   sessionsError,
   startNewSession,
   warningMessage,
-} = useAgentChat()
+} = useAgentChat(() => ({ page: route.path, taskId: assistantTaskId.value,
+  step: route.path === '/creator' ? creatorStore.activeStep : undefined }))
 
 const floatingWindowStyle = computed(() => ({
   left: `${windowRect.value.left}px`,
@@ -154,7 +172,7 @@ const floatingWindowSubtitle = computed(() => {
   if (isLoading.value) {
     return 'AI 正在整理建议'
   }
-  return props.developerMode ? activeSessionLabel.value : '围绕当前视频追问'
+  return props.developerMode ? activeSessionLabel.value : '读懂当前工作，确认计划后连续执行'
 })
 
 /**
@@ -265,7 +283,7 @@ function buildKnowledgeContextMessage(userMessage: string) {
     '',
     '【已选视频】',
     `标题：${video.title}`,
-    `BV：${video.bvId || '无'}；分区：${video.category || '未标注'}；层级：${knowledgeTierLabel(video.tier) || '未标注'}；质量分：${formatKnowledgeQuality(video)}`,
+    `BV：${video.bvId || '无'}；分区：${video.category || '未标注'}；层级：${knowledgeTierLabel(video.tier) || '未标注'}；分区互动分：${formatKnowledgeQuality(video)}（仅同分区可比）；${knowledgeCategoryRankLabel(video) || '暂无区内排名'}`,
     `数据：播放 ${formatReferenceCount(video.viewCount)}，点赞 ${formatReferenceCount(video.likeCount)}，投币 ${formatReferenceCount(video.coinCount)}，收藏 ${formatReferenceCount(video.favoriteCount)}，弹幕 ${formatReferenceCount(video.danmakuCount)}，评论 ${formatReferenceCount(video.replyCount)}`,
     `摘要：${clipText(video.highlightSummary || video.description || '暂无摘要', 520)}`,
     '',
@@ -278,13 +296,7 @@ function buildKnowledgeContextMessage(userMessage: string) {
 }
 
 function formatKnowledgeQuality(video: ReferenceVideo) {
-  if (video.qualityScoreReliable && video.qualityScore !== null) {
-    return String(video.qualityScore)
-  }
-  if (video.rawQualityScore !== null) {
-    return `样本不足（同分区有效样本 ${video.qualitySampleCount} 条）`
-  }
-  return '无'
+  return typeof video.qualityScore === 'number' ? video.qualityScore.toFixed(2) : '统计待更新'
 }
 
 function startDrag(event: PointerEvent) {
@@ -415,8 +427,8 @@ function stopResize(event?: PointerEvent) {
 
 function placeWindowAtDefaultPosition() {
   const maxSize = getViewportBoundedSize()
-  const width = clampNumber(980, minWindowWidth, maxSize.width)
-  const height = clampNumber(780, minWindowHeight, maxSize.height)
+  const width = clampNumber(560, minWindowWidth, maxSize.width)
+  const height = clampNumber(680, minWindowHeight, maxSize.height)
   windowRect.value = constrainRect({
     left: window.innerWidth - width - 28,
     top: window.innerHeight - height - 28,
@@ -600,8 +612,8 @@ function clipText(value: string, maxLength: number) {
       v-if="!isOpen"
       type="button"
       class="agent-floating-launcher"
-      aria-label="打开问问 AI 浮窗"
-      title="问问 AI"
+      aria-label="打开创作助手"
+      title="创作助手"
       @click="openFloatingWindow"
     >
       <MessageCircle :size="21" :stroke-width="1.8" aria-hidden="true" />
@@ -612,13 +624,13 @@ function clipText(value: string, maxLength: number) {
       class="agent-floating-window"
       :class="{ minimized: isMinimized, dragging: isDragging, resizing: isResizing }"
       :style="floatingWindowStyle"
-      aria-label="问问 AI 浮窗"
+      aria-label="创作助手浮窗"
     >
       <header class="agent-floating-head" @pointerdown="startDrag">
         <div class="agent-floating-title">
           <span class="agent-floating-status" :class="{ running: isLoading }"></span>
           <div>
-            <strong>问问 AI</strong>
+            <strong>创作助手</strong>
             <small>{{ floatingWindowSubtitle }}</small>
           </div>
         </div>
@@ -634,7 +646,7 @@ function clipText(value: string, maxLength: number) {
           >
             {{ isMinimized ? '展开' : '收起' }}
           </button>
-          <button type="button" title="关闭浮窗" aria-label="关闭问问 AI" @click.stop="closeFloatingWindow">
+          <button type="button" title="关闭浮窗" aria-label="关闭创作助手" @click.stop="closeFloatingWindow">
             <X :size="16" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </div>
@@ -654,8 +666,8 @@ function clipText(value: string, maxLength: number) {
               :class="{ active: item.sessionId === sessionId }"
               @click="openAgentSession(item)"
             >
-              <strong>{{ shortSessionId(item.sessionId) }}</strong>
-              <span>{{ formatSessionPreview(item.preview) }}</span>
+              <strong>{{ props.developerMode ? shortSessionId(item.sessionId) : formatSessionPreview(item.preview) }}</strong>
+              <span v-if="props.developerMode">{{ formatSessionPreview(item.preview) }}</span>
               <small>{{ item.messageCount }} 条消息</small>
             </button>
             <p v-if="sessions.length === 0" class="agent-floating-session-empty">还没有保存的会话</p>
@@ -666,6 +678,11 @@ function clipText(value: string, maxLength: number) {
             @close="sessionsError = ''"
           />
         </section>
+
+        <CreatorAssistantPanel
+          :task-id="assistantTaskId" :page="route.path" :generating="isStreaming"
+          :step-count="streamingSteps.length" @ask="usePromptExample"
+        />
 
         <section v-if="knowledgeContext" class="agent-floating-context-panel" aria-label="已加载的视频上下文">
           <div class="agent-floating-context-head">
@@ -699,7 +716,7 @@ function clipText(value: string, maxLength: number) {
 
         <div ref="messageListRef" class="message-list agent-floating-message-list">
           <div v-if="messages.length === 0" class="agent-floating-empty">
-            <p>可以问：这个标题哪里弱？观众可能会误解什么？下一期选题怎么延展？</p>
+            <p>描述你想完成的工作。我会查询当前状态、补问缺少的信息，并展示待确认的具体计划。</p>
             <div class="agent-floating-tags">
               <span v-for="tag in capabilityTags" :key="tag">{{ tag }}</span>
             </div>
@@ -726,7 +743,7 @@ function clipText(value: string, maxLength: number) {
           <div v-if="isStreaming" class="agent-streaming-block" aria-label="AI 正在生成回复">
             <!-- 实时显示的 ReAct 步骤 -->
             <div
-              v-for="(step, index) in streamingSteps"
+              v-for="(step, index) in (props.developerMode ? streamingSteps : [])"
               :key="index"
               class="agent-streaming-step"
             >
@@ -827,6 +844,7 @@ function clipText(value: string, maxLength: number) {
 
         <ChatComposer
           ref="composerRef"
+          placeholder="描述你想完成的工作，我会先列出具体计划…"
           v-model="inputMessage"
           :can-send="canSend"
           :is-loading="isLoading"

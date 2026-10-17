@@ -2,6 +2,8 @@ package com.link.linkagent.creator.report.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService;
+import com.link.linkagent.assistant.CreatorBusinessAgentService;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.competitor.mapper.CreatorCompetitorMapper;
@@ -110,6 +112,12 @@ public class CreatorReportService {
     private final TransactionTemplate transactionTemplate;
     /** 只读已核验 BV 的正式公开资料，入口与保存前复核使用同一快照读法。 */
     private final CreatorPublishedVideoContextService publishedVideoContextService;
+    private CreatorBusinessAgentService businessAgent;
+
+    @Autowired
+    public void setBusinessAgent(CreatorBusinessAgentService businessAgent) {
+        this.businessAgent=businessAgent;
+    }
     public CreatorReportService(CreatorTaskMapper creatorTaskMapper,
                                 CreatorFeedbackMapper creatorFeedbackMapper,
                                 CreatorCompetitorMapper creatorCompetitorMapper,
@@ -178,9 +186,11 @@ public class CreatorReportService {
         CreatorReportAnalysisOutput analysisOutput;
         // 用 try-with-resources 打开用量上下文，确保 LLM 调用被 Langfuse 正确追踪
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskRecord.getTaskId(), "创作复盘报告")) {
+            // 分工分析不改变保存前复核的原始提示词；各 Worker 的观点必须重新对照发布后事实。
+            String analysisContext=businessAgent==null ? "" : businessAgent.review(taskRecord.getTaskId(),reportPrompt);
             analysisOutput = llmService.chatStructured(
                     buildSystemPrompt(),
-                    reportPrompt,
+                    reportPrompt+analysisContext,
                     CreatorReportAnalysisOutput.class
             );
         }

@@ -2,6 +2,8 @@ package com.link.linkagent.memory;
 
 import java.time.LocalDate;
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 
 /**
  * 回放历史时携带观察日期，避免把旧对话里的“昨天”按执行评测当天解释。
@@ -16,14 +18,43 @@ public final class MemoryObservationContext {
     public record Location(String sessionId, String date) {
     }
 
-    public record Snapshot(Map<Long, Location> locations, LocalDate observationDate, PendingCalls pendingCalls) {
+    public record Snapshot(Map<Long, Location> locations, LocalDate observationDate, PendingCalls pendingCalls, Trace trace) {
         public Snapshot {
             locations = Map.copyOf(locations);
         }
 
         public Snapshot(Map<Long, Location> locations, LocalDate observationDate) {
-            this(locations, observationDate, new PendingCalls());
+            this(locations, observationDate, new PendingCalls(), null);
         }
+
+        public Snapshot(Map<Long, Location> locations, LocalDate observationDate, PendingCalls pendingCalls) {
+            this(locations, observationDate, pendingCalls, null);
+        }
+    }
+
+    /** 仅隔离评测显式开启阶段记录，用于确定事实在提取还是写入时丢失，普通生产请求不收集原文。 */
+    public static final class Trace {
+        private final List<Map<String, Object>> entries = new ArrayList<>();
+
+        public synchronized void add(String stage, Object data) {
+            entries.add(Map.of("stage", stage, "data", data));
+        }
+
+        public synchronized List<Map<String, Object>> snapshot() {
+            return List.copyOf(entries);
+        }
+    }
+
+    public static void trace(String stage, Object data) {
+        Snapshot snapshot = CURRENT.get();
+        if (snapshot != null && snapshot.trace() != null) {
+            snapshot.trace().add(stage, data);
+        }
+    }
+
+    public static boolean isTracing() {
+        Snapshot snapshot = CURRENT.get();
+        return snapshot != null && snapshot.trace() != null;
     }
 
     /** Future 被取消不等于供应商 HTTP 已退出，评测收尾须等待实际工作线程结束。 */

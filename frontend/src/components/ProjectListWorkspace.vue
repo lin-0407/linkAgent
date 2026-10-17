@@ -5,9 +5,11 @@ import { useRouter } from 'vue-router'
 import { listCreatorTasks } from '@/api/creator'
 import type { CreatorTaskSummary } from '@/types/creator'
 import { useCreatorStore } from '@/stores/creatorStore'
+import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 
 const router = useRouter()
 const creatorStore = useCreatorStore()
+useAssistantBusinessRefresh(['tasks.', 'creative.', 'workflow.', 'review.', 'feedback.', 'bilibili.'], () => loadTasks())
 
 const taskStatusOptions: Array<{
   value: 'ALL' | CreatorTaskSummary['status']

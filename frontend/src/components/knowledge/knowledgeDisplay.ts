@@ -53,25 +53,26 @@ export function sourceTypeLabel(sourceType: string) {
   return sourceType === 'DANMAKU' ? '弹幕' : '评论'
 }
 
-// 原始质量分只用于低样本排序，可靠性不足时不能把它伪装成可比较的相对质量分。
+// 页面只解释实际评分与比较范围，案例数量少不会影响脚本基础分的展示。
 export function knowledgeQualityScoreLabel(video: ReferenceVideo) {
-  if (video.qualityScoreReliable && video.qualityScore !== null) {
-    return `质量分 ${video.qualityScore}`
+  if (typeof video.qualityScore === 'number' && Number.isFinite(video.qualityScore)) {
+    return `分区互动分 ${video.qualityScore.toFixed(2)}`
   }
-  if (video.rawQualityScore !== null) {
-    return '质量样本不足'
-  }
-  return ''
+  return '统计待更新'
 }
 
 export function knowledgeQualityScoreTitle(video: ReferenceVideo) {
-  if (video.qualityScoreReliable && video.qualityScore !== null) {
-    return `同分区有效样本 ${video.qualitySampleCount} 条`
+  const base = video.videoIndexScore ?? video.rawQualityScore
+  if (typeof video.qualityScore === 'number' && typeof base === 'number') {
+    const correction = video.qualityScore - base
+    return `脚本分 ${base.toFixed(2)}；分区互动修正 ${correction >= 0 ? '+' : ''}${correction.toFixed(2)}。仅用于同分区比较。`
   }
-  if (video.rawQualityScore !== null) {
-    return `同分区有效样本 ${video.qualitySampleCount} 条，暂不展示相对质量分`
-  }
-  return ''
+  return '六项公开统计不完整，请在详情中刷新视频数据。'
+}
+
+export function knowledgeCategoryRankLabel(video: ReferenceVideo) {
+  if (video.categoryRank == null || video.qualitySampleCount <= 0) return ''
+  return `区内第 ${video.categoryRank}/${video.qualitySampleCount} 名`
 }
 
 export function formatKnowledgeCount(value: number | null) {

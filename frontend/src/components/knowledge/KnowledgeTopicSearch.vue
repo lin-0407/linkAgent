@@ -9,6 +9,7 @@ import {
   knowledgeEmbeddingLabel,
   knowledgeQualityScoreLabel,
   knowledgeQualityScoreTitle,
+  knowledgeCategoryRankLabel,
   knowledgeTierLabel,
   sentimentLabel,
   sourceTypeLabel,
@@ -215,6 +216,7 @@ function refreshSearchCards() {
             <b>{{ knowledgeTierLabel(hit.tier) }}</b>
             <b v-if="hit.category">{{ hit.category }}</b>
             <b v-if="knowledgeQualityScoreLabel(hit)" :title="knowledgeQualityScoreTitle(hit)">{{ knowledgeQualityScoreLabel(hit) }}</b>
+            <b v-if="knowledgeCategoryRankLabel(hit)" title="整个案例库内的同分区排名">{{ knowledgeCategoryRankLabel(hit) }}</b>
             <b v-if="developerMode">{{ knowledgeEmbeddingLabel(hit.embeddingStatus) }}</b>
           </span>
           <small>

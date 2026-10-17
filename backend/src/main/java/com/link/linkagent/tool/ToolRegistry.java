@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,7 +34,7 @@ import java.util.Map;
  *   <li><b>稳定排序</b>：工具按名称字母序排序后存入 {@link LinkedHashMap}，保证工具列表在系统提示词、
  *       日志和测试中的顺序完全一致。这对可复现性是关键——LLM 对提示词中的列表顺序敏感，
  *       稳定的排序能让同一输入在多次运行中产出更一致的决策。</li>
- *   <li><b>只读暴露</b>：{@link #getAllTools()} 返回 {@link Collections#unmodifiableCollection}，
+ *   <li><b>只读暴露</b>：{@link #getAllTools()} 返回本轮可见工具的不可修改列表，
  *       防止外部代码在运行时注入或移除工具，保持注册中心在启动后不可变。</li>
  * </ul>
  */
@@ -136,7 +135,9 @@ public class ToolRegistry {
      * @return 工具实例；找不到返回 null
      */
     public Tool getTool(String name) {
-        return toolMap.get(name);
+        Tool tool=toolMap.get(name);
+        return tool!=null && tool.isAvailable()
+                && com.link.linkagent.assistant.AssistantInvocationContext.isToolVisible(name) ? tool : null;
     }
 
     /**
@@ -149,7 +150,8 @@ public class ToolRegistry {
      * @return 所有工具实例的不可变只读集合（按名称字母序排列）
      */
     public Collection<Tool> getAllTools() {
-        return Collections.unmodifiableCollection(toolMap.values());
+        return toolMap.values().stream().filter(tool -> tool.isAvailable()
+                && com.link.linkagent.assistant.AssistantInvocationContext.isToolVisible(resolveToolName(tool))).toList();
     }
 
     /**

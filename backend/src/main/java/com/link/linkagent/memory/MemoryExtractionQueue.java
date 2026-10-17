@@ -7,6 +7,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -79,5 +81,41 @@ public class MemoryExtractionQueue {
             log.warn("长期记忆任务出队失败，本轮跳过，error={}", exception.getMessage());
             return Optional.empty();
         }
+    }
+
+    /** 调用方与后台消费者共用协调器锁，只取当前身份在历史边界内的任务，不消费其他身份的数据。 */
+    public List<MemoryExtractionTask> takePendingForUser(String userId, long throughMessageId) {
+        List<MemoryExtractionTask> tasks = new ArrayList<>();
+        List<String> payloads = redisTemplate.opsForList().range(QUEUE_KEY, 0, -1);
+        if (payloads == null) {
+            return tasks;
+        }
+        List<String> selectedPayloads = new ArrayList<>();
+        List<MemoryExtractionTask> selectedTasks = new ArrayList<>();
+        for (String payload : payloads) {
+            try {
+                MemoryExtractionTask task = objectMapper.readValue(payload, MemoryExtractionTask.class);
+                if (!userId.equals(task.userId()) || (task.hasMessageRange() && task.toMessageId() > throughMessageId)) {
+                    continue;
+                }
+                selectedPayloads.add(payload);
+                selectedTasks.add(task);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+                throw new IllegalStateException("无法确认排队任务归属，新会话暂不读取长期记忆", exception);
+            }
+        }
+        try {
+            for (int index = 0; index < selectedPayloads.size(); index++) {
+                Long removed = redisTemplate.opsForList().remove(QUEUE_KEY, 1, selectedPayloads.get(index));
+                if (removed != null && removed > 0) {
+                    tasks.add(selectedTasks.get(index));
+                }
+            }
+        } catch (RuntimeException exception) {
+            // 批量取任务中途失败时，把已经取出的任务放回，避免读取前的同步处理丢失排队事实。
+            tasks.forEach(this::enqueue);
+            throw exception;
+        }
+        return tasks;
     }
 }

@@ -153,7 +153,7 @@ public class KnowledgeReferenceVideoService {
             if (existing.isPresent()) {
                 if (automatic && knowledgeReferenceVideoMapper.updateCollectedMetadata(existing.get().getVideoId(), record) == 1) {
                     updated++;
-                    if (existing.get().getCategory() != null) categories.add(existing.get().getCategory());
+                    categories.add(existing.get().getCategory());
                 } else skipped++;
                 continue;
             }
@@ -163,7 +163,7 @@ public class KnowledgeReferenceVideoService {
             for (var item : video.items()) knowledgeReferenceVideoMapper.insertReferenceVideoItem(item);
             for (var chunk : video.chunks()) knowledgeReferenceVideoMapper.insertReferenceVideoChunk(chunk);
             imported++;
-            if (record.getCategory() != null) categories.add(record.getCategory());
+            categories.add(record.getCategory());
         }
         knowledgeQualityScoringService.recomputeCategories(categories);
         return new ReferenceVideoImportResponse(request.videos().size(), imported, skipped, source, tier, updated);
@@ -203,9 +203,7 @@ public class KnowledgeReferenceVideoService {
                 ReferenceVideoCollectionPolicy.storedScore(ReferenceVideoCollectionPolicy.score(stats)),
                 ReferenceVideoCollectionPolicy.VERSION, LocalDateTime.now(ReferenceVideoCollectionPolicy.ZONE));
         String category = TextUtil.trimToNull(current.getCategory());
-        if (category != null) {
-            knowledgeQualityScoringService.recomputeCategories(Set.of(category));
-        }
+        knowledgeQualityScoringService.recomputeCategories(java.util.Collections.singleton(category));
         return knowledgeReferenceVideoMapper.findByVideoId(videoId)
                 .map(this::toResponse)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "案例不存在"));

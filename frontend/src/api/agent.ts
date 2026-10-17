@@ -5,6 +5,7 @@ import type {
   SessionMessageItem,
 } from '@/types/agent'
 import type { AgentStep } from '@/types/agent'
+import type { AssistantChatContext } from './assistant'
 import { get, post } from './http'
 
 /** SSE 排查日志统一前缀，浏览器控制台可按 [agent-sse] 过滤 */
@@ -43,12 +44,14 @@ export function sendAgentMessage(
   message: string,
   executionMode: AgentExecutionMode,
   userId?: string,
+  context?: AssistantChatContext,
 ) {
   return post<AgentChatResponse>('/agent/chat', {
     sessionId: sessionId || undefined,
     message,
     executionMode,
     userId: userId || undefined,
+    context,
   })
 }
 
@@ -115,6 +118,7 @@ export function sendAgentMessageStream(
   executionMode: AgentExecutionMode,
   handlers: AgentStreamHandlers,
   userId?: string,
+  context?: AssistantChatContext,
 ): () => void {
   const abortController = new AbortController()
   const baseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -130,6 +134,7 @@ export function sendAgentMessageStream(
           message,
           executionMode,
           userId: userId || undefined,
+          context,
         }),
         signal: abortController.signal,
       })
@@ -169,6 +174,7 @@ export function sendAgentMessageStream(
       // 后端会先发 session 事件，正常应在一秒内到达；迟迟没有任何事件说明连接虽然建了但流不通
       // （例如反向代理缓冲了响应）。这里只提醒不主动断开，避免误伤本来就慢的推理。
       const silenceTimer = window.setTimeout(() => {
+        if (abortController.signal.aborted) return
         const silenceMessage = `SSE 连接已建立，但 ${FIRST_EVENT_WARN_TIMEOUT_MILLIS / 1000} 秒内没有收到任何事件，请检查后端日志和代理是否缓冲了流式响应`
         warnSse(silenceMessage)
         handlers.onWarning?.(silenceMessage)
@@ -192,6 +198,7 @@ export function sendAgentMessageStream(
           buffer = parts.pop() ?? ''
 
           for (const part of parts) {
+            if (abortController.signal.aborted) return
             const event = parseSseEvent(part, warnSse)
             if (!event) continue
 
@@ -232,7 +239,7 @@ export function sendAgentMessageStream(
 
         // 后端 runStreaming 无论成功失败都会以 done 收尾；没收到就说明流被截断了。
         // 这里必须给出结论，否则界面会一直停在"正在生成"，作者根本不知道发生了什么。
-        if (!sawDone) {
+        if (!sawDone && !abortController.signal.aborted) {
           const received = `已收到 ${receivedBytes} 字节、识别 ${parsedEventCount} 个事件`
           const detail = parsedEventCount === 0 && receivedBytes > 0
             ? `${received}，整条流没有解析出任何事件。报文开头：${clipRaw(rawSample, RAW_SAMPLE_MAX_LENGTH)}`
@@ -246,7 +253,7 @@ export function sendAgentMessageStream(
         window.clearTimeout(silenceTimer)
       }
     } catch (error) {
-      if ((error as Error).name === 'AbortError') {
+      if (abortController.signal.aborted || (error as Error).name === 'AbortError') {
         return // 用户主动中断，不是错误
       }
       const failureMessage = (error as Error).message || 'SSE 连接失败'
@@ -360,8 +367,9 @@ function parseSseEvent(
   }
 }
 
-export function loadAgentSessions() {
-  return get<SessionListItem[]>('/agent/sessions')
+export function loadAgentSessions(context?: AssistantChatContext) {
+  return get<SessionListItem[]>('/agent/sessions', context
+    ? { params: { assistant: true, taskId: context.taskId } } : undefined)
 }
 
 export function loadAgentSessionMessages(sessionId: string) {

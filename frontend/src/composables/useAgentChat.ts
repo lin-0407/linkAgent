@@ -5,6 +5,7 @@ import {
   sendAgentMessageStream,
 } from '@/api/agent'
 import type { AgentExecutionMode, AgentStep, ChatMessage, SessionListItem } from '@/types/agent'
+import type { AssistantChatContext } from '@/api/assistant'
 
 const selectedSessionKey = 'link-agent-session-id'
 
@@ -18,7 +19,9 @@ type SendMessageOptions = {
   displayMessage?: string
 }
 
-export function useAgentChat() {
+export function useAgentChat(contextProvider?: () => AssistantChatContext) {
+  const storageKey = () => contextProvider
+    ? `link-agent-assistant-session:${contextProvider().taskId || 'global'}` : selectedSessionKey
   const inputMessage = ref('')
   const sessionId = ref('')
   const sessions = ref<SessionListItem[]>([])
@@ -65,6 +68,20 @@ export function useAgentChat() {
 
   loadPersistedSession()
   void loadSessions()
+
+  if (contextProvider) {
+    watch(() => contextProvider().taskId, () => {
+      // 任务切换先中止旧响应，再恢复新任务自己的会话，避免旧消息和状态串到新任务。
+      stopStreaming()
+      sessionId.value = ''
+      messages.value = []
+      inputMessage.value = ''
+      errorMessage.value = ''
+      warningMessage.value = ''
+      loadPersistedSession()
+      void loadSessions()
+    })
+  }
 
   watch(
     () => messages.value.length,
@@ -212,6 +229,8 @@ export function useAgentChat() {
             resolve()
           },
         },
+        undefined,
+        contextProvider?.(),
       )
     })
   }
@@ -269,7 +288,9 @@ export function useAgentChat() {
     isSessionsLoading.value = true
     sessionsError.value = ''
     try {
-      sessions.value = await loadAgentSessions()
+      const taskSnapshot = contextProvider?.().taskId
+      const result = await loadAgentSessions(contextProvider?.())
+      if (taskSnapshot === contextProvider?.().taskId) sessions.value = result
     } catch (error) {
       sessions.value = []
       sessionsError.value = error instanceof Error ? error.message : 'Failed to load sessions'
@@ -294,6 +315,7 @@ export function useAgentChat() {
   async function loadSessionMessages(targetSessionId: string) {
     try {
       const data = await loadAgentSessionMessages(targetSessionId)
+      if (sessionId.value !== targetSessionId) return
       messages.value = data.map((item, index) => ({
         id: Date.now() + index,
         role: normalizeRole(item.role),
@@ -326,15 +348,15 @@ export function useAgentChat() {
   }
 
   function persistSessionId(value: string) {
-    localStorage.setItem(selectedSessionKey, value)
+    localStorage.setItem(storageKey(), value)
   }
 
   function clearPersistedSession() {
-    localStorage.removeItem(selectedSessionKey)
+    localStorage.removeItem(storageKey())
   }
 
   function loadPersistedSession() {
-    const saved = localStorage.getItem(selectedSessionKey)
+    const saved = localStorage.getItem(storageKey())
     if (saved) {
       sessionId.value = saved
       void loadSessionMessages(saved)

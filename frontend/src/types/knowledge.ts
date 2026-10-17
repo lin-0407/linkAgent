@@ -63,11 +63,13 @@ export type ReferenceVideo = {
   danmakuCount: number | null
   replyCount: number | null
   highlightSummary: string | null
-  // rawQualityScore 是后端用于小样本兜底排序的单视频原始分，不直接当成 0-100 展示。
+  // 沿用既有字段：原始分为脚本基础指数，最终分为同分区互动率有限修正后的互动分。
   rawQualityScore: number | null
   qualityScore: number | null
   qualitySampleCount: number
   qualityScoreReliable: boolean
+  categoryRank: number | null
+  videoIndexScore: number | null
   source: string
   publishTimeText: string | null
   embeddingStatus: string | null

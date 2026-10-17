@@ -719,22 +719,22 @@ CREATE TABLE IF NOT EXISTS creator_reference_video
     title                 VARCHAR(255)             DEFAULT NULL COMMENT '视频标题，案例卡片的语义主体之一；导入接口负责校验必填，DB 层保持宽松以容纳 seed / 手动录入',
     description           LONGTEXT                 DEFAULT NULL COMMENT '视频简介原文，案例卡片的语义主体之一',
     tags                  VARCHAR(512)             DEFAULT NULL COMMENT '标签 JSON 数组（如 ["AI","教程"]），用于主题匹配和检索过滤',
-    view_count            BIGINT UNSIGNED          DEFAULT NULL COMMENT '播放量，质量打分的分母；缺失或为 0 时不打分（raw_quality_score 和 quality_score 置空）',
+    view_count            BIGINT UNSIGNED          DEFAULT NULL COMMENT '播放量，分区互动率的分母；真实零播放保留零分基础指数，缺失统计不打分',
     like_count            BIGINT UNSIGNED          DEFAULT NULL COMMENT '点赞量，质量打分互动率分子之一；离线脚本未取到时为空',
     coin_count            BIGINT UNSIGNED          DEFAULT NULL COMMENT '投币量，质量信号最强、打分权重最高；缺失为空',
     favorite_count        BIGINT UNSIGNED          DEFAULT NULL COMMENT '收藏量，质量打分互动率分子之一；缺失为空',
     danmaku_count         BIGINT UNSIGNED          DEFAULT NULL COMMENT '弹幕量，质量打分互动率分子之一；缺失为空',
     reply_count           BIGINT UNSIGNED          DEFAULT NULL COMMENT '评论量，质量打分互动率分子之一；缺失为空',
     highlight_summary     LONGTEXT                 DEFAULT NULL COMMENT '清洗后优质评论 / 弹幕的亮点摘要，由小模型汇总，作为案例卡片语义主体之一（5.1c 生成，5.1a 为空）',
-    raw_quality_score     DECIMAL(12, 6)           DEFAULT NULL COMMENT '单视频独立原始质量分，由互动率和情绪因子直接计算；不依赖同分区其它视频，用于小样本兜底排序',
-    quality_score         DECIMAL(6, 2)            DEFAULT NULL COMMENT '分区归一化相对质量分（0–100）；同分区有效样本不足或原始分无差异时为空，避免少样本展示 60/0/100 误导用户',
-    quality_sample_count  INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '本次分区归一化可参与打分的有效视频数；用于判断 quality_score 是否具备展示可信度',
-    quality_score_reliable TINYINT        NOT NULL DEFAULT 0 COMMENT '质量分是否达到展示可信度：1=可展示相对质量分，0=仅保留原始分作内部排序或样本不足',
+    raw_quality_score     DECIMAL(12, 6)           DEFAULT NULL COMMENT '单视频脚本基础指数，复用六项公开统计固定公式，缺失统计为空',
+    quality_score         DECIMAL(6, 2)            DEFAULT NULL COMMENT '分区互动分0到100，脚本基础指数加同分区五项互动率有限修正，默认最多加减5分',
+    quality_sample_count  INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '库内同分区可计算分数的有效视频数，用作排名总数；不作为展示门槛',
+    quality_score_reliable TINYINT        NOT NULL DEFAULT 0 COMMENT '兼容字段，仅表示公开统计完整且分数可计算，不代表置信度',
     source                VARCHAR(64)     NOT NULL DEFAULT 'seed' COMMENT '数据来源：bilibili_auto=指数筛选自动采集，bilibili_rank_daily / weekly / monthly=榜单，manual_bv=手动BV，seed=样例',
     publish_time_text     VARCHAR(64)              DEFAULT NULL COMMENT '原始发布时间展示文本；时间运算使用规范published_at，历史未知不猜测',
     published_at          DATETIME                 DEFAULT NULL COMMENT 'B站发布时间，统一东八区；半年准入与一年清理用此字段，未知时不猜测',
     stats_fetched_at      DATETIME                 DEFAULT NULL COMMENT '六项公开统计的采集时间，防止旧重试覆盖更新统计',
-    video_index_score     DECIMAL(9,6)             DEFAULT NULL COMMENT '固定公开统计视频指数0到100；与分区相对质量分分开',
+    video_index_score     DECIMAL(9,6)             DEFAULT NULL COMMENT '固定公开统计视频指数0到100，作为采集准入和分区互动分的基础指数',
     video_index_version   VARCHAR(64)              DEFAULT NULL COMMENT '视频指数公式版本，明确权重和曲线刻度',
     collection_min_index  DECIMAL(9,6)             DEFAULT NULL COMMENT '首次自动采集使用的准入阈值；手动导入为空',
     active_bv_id          VARCHAR(20) COLLATE utf8mb4_bin GENERATED ALWAYS AS (IF(is_deleted=0,bv_id,NULL)) STORED COMMENT '仅有效案例参与BV唯一约束，大小写敏感；历史逻辑删除不占用BV',
@@ -1091,42 +1091,49 @@ VALUES
     -- 字段名必须与 LongTermMemoryExtractor 的解析契约一致：shouldRemember / memoryKey / content。
     -- 历史问题：9e7188d 把这条换成了 {memory, importance, topic, confidence} 版本，模型按新字段输出后
     -- 解析器取不到 shouldRemember（parseBoolean 兜底为 false），导致长期记忆一条都写不进去。
-    -- 这里回退到与解析器一致的文本；5 个 memoryKey 取值与 LongTermMemory.normalizeMemoryKey 的映射一一对应。
+    -- 这里回退到与解析器一致的文本；事件使用独立分类键，允许同类不同事件并存。
     ('long_term_memory.system', 'SYSTEM', '记忆-长期记忆',
-     '你是长期记忆抽取器，只判断给定的对话记录里是否包含值得长期保存的用户事实或偏好。
+     '你是长期记忆抽取器，判断给定的对话记录里有哪些值得以后跨会话回忆的真实信息。
 
 只保存这些内容：
 - 用户长期偏好，例如喜欢 Java、希望回答简洁、偏好中文解释
 - 用户稳定身份，例如 Java 后端学习者、正在做作品集项目
 - 项目长期信息，例如项目技术栈、长期目标、固定约束
 - 用户明确要求后续持续遵守的规则
+- 值得以后回忆的个人或项目事件：用户亲身经历、项目真实发生的关键节点，或能回答「何时、哪个先发生、后来怎样」的具体事件。例如首次保养后车辆 GPS 故障，或 2 月自行车与汽车维护的先后。事件是长期记忆，不要求它持续有效
+- 事件的关联安排：用户已经明确给出对象与时间、并与该经历直接相关的重要会议、预约或发布安排，可以保留，必须标注「计划/待进行」。用户已确定安排这个事实不等于活动已经发生；不能因为活动尚未发生就丢掉已确认的时间。笼统愿望与助手建议不属于已确认安排
 
 不保存这些内容：
-- 临时问题、一次性报错、天气时间、工具结果
+- 临时问题、普通一次性报错、天气时间、工具结果；只有构成用户或项目经历中值得回忆的事件，才可记录其结果，不能把排障步骤逐条存入记忆
 - 普通闲聊、情绪表达、短期任务进展
 - 已经明显只对当前会话有用的信息
+- 助手猜测、建议或计划中尚未发生的事，不得当成已发生事件
 
-一次最多输出 5 条，同一个 memoryKey 只保留最重要的一条；没有值得记的内容时输出空数组。
-对话里出现「昨天」「上周」这类相对时间时，按调用方给出的观察日期换算成绝对日期再写进 content，不要保留过几天就失效的说法。
+一次最多输出 5 条。稳定画像同一个 memoryKey 只保留最重要的一条；不同事件即使同类也分别输出，重复提到同一事件才合并。没有值得记的内容时输出空数组。
+稳定画像与具体事件分别保留，不要只把经历概括为性格或兴趣而丢掉对象、日期、结果和关联安排。同一事件的重要日期与状态应随事件一并记录，避免只有笼统画像却无法回忆具体经历。
+每条事件用一句话写清对象、发生了什么、结果；日期和先后顺序只有对话明确给出或能由带日期的消息可靠推出时才写。观察日期只是提取日期，不能据此给过去的事件补日期。信息不足时保留原文可确认的月份或相对顺序，不臆造年份、具体日期和先后。
+消息的发生时间不等于消息里所说事件的发生时间。原文明确的开始、完成、故障等节点日期分别保留，优先于消息日期；不能用「当时正在做某事」的时间替代该事项的明确开始日期，也不能因后续笼统提及而省略已有的具体日期。
 
 你必须只输出 JSON，不要输出 Markdown，不要解释。
-memoryKey 只能从下面 5 个值里选择：
+memoryKey 只能从下面 7 个值里选择：
 - user.preference.example_language：用户偏好的示例语言、编程语言
 - user.preference.explanation_style：用户偏好的解释方式、回答风格
 - user.profile.summary：用户身份、学习方向、职业目标
 - project.profile.summary：项目定位、技术栈、长期目标
 - project.constraint.summary：项目固定约束、后续必须遵守的规则
+- user.event：用户个人经历中的具体事件，包括车辆、设备、生活等个人事项
+- project.event：项目实际发生的关键事件，包括发布、故障、修复、决策结果等
 
-importance：这条记忆的重要性分数，1 到 100 的整数。80 分以上表示「丢了会明显影响后续协作」的稳定偏好、身份或项目约束；闲聊寒暄给 1-10 分；无法判断给 40 分。
+importance：这条记忆的重要性分数，1 到 100 的整数。80 分以上表示丢了会明显影响后续协作或具体经历回忆的偏好、身份、约束或事件；闲聊寒暄给 1-10 分；无法判断给 40 分。
 
 格式：
 {"shouldRemember":true,"memories":[{"memoryKey":"user.preference.example_language","content":"用户偏好...","importance":85}]}
 或：
 {"shouldRemember":false,"memories":[]}
-', '长期记忆抽取器的系统提示词：判断对话记录里是否含值得长期保存的事实或偏好，并给出 1-100 重要性分数'),
+', '长期记忆抽取器的系统提示词：保存稳定画像与值得回忆的真实事件，并给出 1-100 重要性分数'),
     -- 抽取的输入从「单轮」改成「一批消息」：累加器攒批触发后一次喂多轮，代词与跨轮指代才有上下文可解（步骤 5 / D7）
     ('long_term_memory.user', 'USER', '记忆-长期记忆',
-     '以下是最近的对话记录（可能包含多轮，按时间顺序）：\n{messages}\n\n观察日期：{observationDate}（相对时间按这一天换算成绝对日期）\n\n请提取值得长期保留的记忆信息，可以有多条；没有值得记的就返回空数组。',
+     '以下是最近的对话记录（可能包含多轮，按时间顺序）：\n{messages}\n\n提取执行日期：{observationDate}（不是历史事件的发生日期）\n\n请提取值得长期保留的画像和具体事件；没有值得记的就返回空数组。',
      '长期记忆抽取用户提示词：messages 为一批对话消息，observationDate 为观察日期（步骤 7 / C16）'),
 
     -- 长期记忆写入决策（记忆重构步骤 7 / D8 / C12 阶段二）：候选事实 + 已有记忆 → ADD/UPDATE/DELETE/NONE。
@@ -1141,13 +1148,16 @@ importance：这条记忆的重要性分数，1 到 100 的整数。80 分以上
 
 规则：
 - id 只能来自给定的已有记忆列表，不得编造；oldMemory 必须取自列表中该 id 的 content（可以只截取其中一段）。
+- 每个动作必须回带对应候选的 candidateId；候选编号只能来自输入。NONE 还必须回带据以判断已经覆盖的已有记忆 id，便于核对候选中的具体日期是否确实已经保存。
 - 同一个 id 在一轮里只给一个动作。
 - 不要为了「更完整」把已有记忆改写成更长的话，只有事实确实变化时才 UPDATE。
 - 互相矛盾且不能并存的两条事实，用 UPDATE 更新原记录，或者 DELETE 旧记录再加一条 ADD。
+- 事件按对象与发生的事判断是否相同；同一类下的不同事件分别 ADD。后来出现新事件，不代表旧事件未发生，不要仅因它较新就 UPDATE 或 DELETE 旧事件。
+- ADD 的 memory 必须逐字复制对应候选的 content，不改写、不拼接其他事实；UPDATE 合并同一事件时，保留原文有依据的对象、结果、状态和日期。后续笼统描述不能覆盖事件的明确时间，也不能把开始日期改成提及它的消息日期。
 - 只输出 JSON，不要输出 Markdown，不要解释。
 
 格式：
-{"decisions":[{"action":"ADD","id":0,"memory":"新事实内容","oldMemory":"","importance":85,"reason":"库里没有这条事实"},{"action":"UPDATE","id":27,"memory":"更新后的内容","oldMemory":"库中原文","importance":85,"reason":"同一事实的新版本"}]}',
+{"decisions":[{"action":"ADD","candidateId":1,"id":0,"memory":"新事实内容","oldMemory":"","importance":85,"reason":"库里没有这条事实"},{"action":"UPDATE","candidateId":2,"id":27,"memory":"更新后的内容","oldMemory":"库中原文","importance":85,"reason":"同一事实的新版本"}]}',
      '长期记忆写入决策系统提示词：对候选事实给出 ADD/UPDATE/DELETE/NONE，id 与 oldMemory 必须来自已有记忆列表'),
     ('long_term_memory_decision.user', 'USER', '记忆-长期记忆',
      '候选事实（JSON 数组）：\n{candidates}\n\n已有记忆（JSON 数组，id 是唯一可引用的身份）：\n{existingMemories}\n\n请为每条候选给出写入动作。',
@@ -1158,7 +1168,7 @@ importance：这条记忆的重要性分数，1 到 100 的整数。80 分以上
      '你是对话重要性评估器。给你一轮对话，判断「把这一轮内容丢掉会不会明显影响后续协作」，输出 1 到 100 的整数分。
 
 评分口径：
-- 80 到 100：稳定的用户偏好、身份信息、项目长期约束，丢了会明显影响后续协作
+- 80 到 100：稳定的用户偏好、身份信息、项目长期约束，或值得跨会话回忆的个人/项目事件及其已确认的重要安排；丢了会明显影响后续协作或经历回忆。要识别咨询中夹带的具体经历与确定日期，不能只因用户在问通用建议就把整轮判为一次性问题
 - 40 到 79：有一定参考价值，但也能重新问出来
 - 1 到 39：寒暄、闲聊、一次性问题、临时报错
 
@@ -1176,17 +1186,20 @@ importance：这条记忆的重要性分数，1 到 100 的整数。80 分以上
     -- 摘要事实点抽取（记忆重构步骤 4 / B2 / D5）
     ('summary_fact.system', 'SYSTEM', '记忆-摘要事实点',
      '你是长期记忆事实点抽取器。输入是一段即将被压缩掉的对话历史，请抽取其中值得长期保留的用户事实，输出 JSON。每个事实点包含四个字段：
-memoryKey：事实分类键，只能从下面 5 个值里选择：
+memoryKey：事实分类键，只能从下面 7 个值里选择：
 - user.preference.example_language：偏好的编程语言、示例语言
 - user.preference.explanation_style：偏好的解释方式、回答风格
 - user.profile.summary：用户身份、学习方向、职业目标
 - project.profile.summary：项目定位、技术栈、长期目标
 - project.constraint.summary：项目固定约束、后续必须遵守的规则
+- user.event：值得以后回忆的个人经历事件
+- project.event：项目真实发生的关键事件
 fact：一句话概括这条事实。
 original：支撑这条事实的用户原话，逐字摘录，不要改写；找不到明确原话时给空字符串。
-importance：1 到 100 的整数。80 分以上表示"丢了会明显影响后续协作"的稳定偏好、身份或项目约束；闲聊寒暄给 1-10 分；无法判断给 40 分。
+importance：1 到 100 的整数。80 分以上表示丢了会明显影响后续协作或经历回忆的稳定画像、约束或具体事件；闲聊寒暄给 1-10 分；无法判断给 40 分。
 
-只抽用户事实与偏好。AI 的回答、工具调用过程、临时问题、一次性报错都不要抽。
+只抽用户明确说过的事实、偏好与真实发生且值得以后回忆的事件。个人车辆首次保养后 GPS 故障、某月两次维护的先后属于可回忆事件；普通一次性排障细节、短期进度、AI 的回答和工具过程不要抽。事件记录对象、发生的事及结果；日期和先后只在原文明确或可由带日期的消息可靠推出时写，不能用提取日期替代事件日期，也不能编造年份或顺序。
+事件的关联安排若由用户明确给出具体对象与日期，且属于重要会议、预约或发布等，可保留并标注「计划/待进行」；只记录已确认安排，不把尚未发生的活动写成已经发生，不保存笼统愿望或助手建议。
 没有值得长期保留的事实时输出 {"facts":[]}。只输出 JSON，不要输出 Markdown 或解释。',
      '摘要压缩时抽取长期记忆事实点的系统提示词：要求 memoryKey / fact / original / importance 四个字段'),
     ('summary_fact.user', 'USER', '记忆-摘要事实点',
@@ -1304,6 +1317,31 @@ ON DUPLICATE KEY UPDATE
             -- 这样写的好处是自带幂等：修好之后正文一定含 shouldRemember，后续再执行脚本不会反复覆盖。
             prompt_key = 'long_term_memory.system'
             AND content NOT LIKE '%shouldRemember%'
+        )
+        OR (
+            -- 事件分类与日期规则必须一起升级，避免中间版本仍把消息时间当作事件开始时间。
+            prompt_key = 'long_term_memory.system'
+            AND (content NOT LIKE '%user.event%' OR content NOT LIKE '%事件的关联安排%' OR content NOT LIKE '%消息的发生时间不等于%')
+        )
+        OR (
+            -- 事件写入规则与阶段一配套：旧决策提示词可能把后发生的事件覆盖到前一条。
+            prompt_key = 'long_term_memory_decision.system'
+            AND (content NOT LIKE '%同一类下的不同事件%' OR content NOT LIKE '%事件的明确时间%' OR content NOT LIKE '%candidateId%')
+        )
+        OR (
+            -- 原用户模板把提取日期误当事件日期，需要在存量库同步纠正。
+            prompt_key = 'long_term_memory.user'
+            AND content NOT LIKE '%不是历史事件的发生日期%'
+        )
+        OR (
+            -- 压缩路径也会推进长期记忆游标，事实点提示词须保留事件类别。
+            prompt_key = 'summary_fact.system'
+            AND (content NOT LIKE '%user.event%' OR content NOT LIKE '%事件的关联安排%')
+        )
+        OR (
+            -- 单轮重要性打分决定何时触发提取，不能继续把所有一次性经历一律判低分。
+            prompt_key = 'long_term_memory_importance.system'
+            AND content NOT LIKE '%已确认的重要安排%'
         )
         OR (
             -- 事实点抽取提示词：没有 importance 就说明种子缺失或还是旧版，直接补齐。
@@ -2291,23 +2329,23 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_draft_video' AND COLUMN_NAME = 'current_review_id');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- 参考视频质量分可信度字段：这里仅补齐旧库缺失列，避免 db-init 每次执行时清空已有质量分数据
+-- 保留既有评分字段以兼容旧库，分区互动分由后端启动时按当前公式重算。
 SET @sql = (SELECT IF(COUNT(*) = 0,
-    'ALTER TABLE creator_reference_video ADD COLUMN raw_quality_score DECIMAL(12, 6) DEFAULT NULL COMMENT ''单视频独立原始质量分，由互动率和情绪因子直接计算；不依赖同分区其它视频，用于小样本兜底排序'' AFTER highlight_summary',
+    'ALTER TABLE creator_reference_video ADD COLUMN raw_quality_score DECIMAL(12, 6) DEFAULT NULL COMMENT ''单视频脚本基础指数，缺失统计为空'' AFTER highlight_summary',
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_reference_video' AND COLUMN_NAME = 'raw_quality_score');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @sql = (SELECT IF(COUNT(*) = 0,
-    'ALTER TABLE creator_reference_video ADD COLUMN quality_sample_count INT UNSIGNED NOT NULL DEFAULT 0 COMMENT ''本次分区归一化可参与打分的有效视频数；用于判断 quality_score 是否具备展示可信度'' AFTER quality_score',
+    'ALTER TABLE creator_reference_video ADD COLUMN quality_sample_count INT UNSIGNED NOT NULL DEFAULT 0 COMMENT ''库内同分区可计算分数的有效视频数，不作为展示门槛'' AFTER quality_score',
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_reference_video' AND COLUMN_NAME = 'quality_sample_count');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @sql = (SELECT IF(COUNT(*) = 0,
-    'ALTER TABLE creator_reference_video ADD COLUMN quality_score_reliable TINYINT NOT NULL DEFAULT 0 COMMENT ''质量分是否达到展示可信度：1=可展示相对质量分，0=仅保留原始分作内部排序或样本不足'' AFTER quality_sample_count',
+    'ALTER TABLE creator_reference_video ADD COLUMN quality_score_reliable TINYINT NOT NULL DEFAULT 0 COMMENT ''兼容字段，仅表示统计完整可计算，不代表置信度'' AFTER quality_sample_count',
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'creator_reference_video' AND COLUMN_NAME = 'quality_score_reliable');
@@ -2538,3 +2576,46 @@ CREATE TABLE IF NOT EXISTS creator_reference_index_cleanup (
     last_error VARCHAR(256) DEFAULT NULL COMMENT '最近清理错误类别，不存连接密钥',
     create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '进入物理索引清理队列的时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='过期参考索引删除重试队列';
+
+-- 助手只能创建待确认提议，条件抢占保证重复确认不会重复调用收费模型。
+CREATE TABLE IF NOT EXISTS creator_assistant_action (
+    proposal_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '操作提议标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '固定的创作任务标识',
+    task_name VARCHAR(255) NOT NULL COMMENT '提议时展示的任务名称',
+    action_type VARCHAR(40) NOT NULL COMMENT '白名单业务动作',
+    guidance TEXT NOT NULL COMMENT '本次用户分析要求',
+    description TEXT NOT NULL COMMENT '待确认的具体影响与费用说明',
+    source_fingerprint CHAR(64) NOT NULL COMMENT '用户确认前的来源指纹',
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT '待确认、执行中、成功或失败',
+    result_message VARCHAR(500) DEFAULT NULL COMMENT '业务执行结果说明',
+    create_time DATETIME(6) NOT NULL COMMENT '提议创建时间',
+    expires_at DATETIME(6) NOT NULL COMMENT '确认到期时间',
+    KEY idx_assistant_action_task (task_id,create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台助手操作确认记录';
+
+-- 业务取证不写聊天记忆，单独保留计划与分工轨迹供创作者回看。
+CREATE TABLE IF NOT EXISTS creator_agent_execution (
+    run_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '本次业务取证标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '关联创作任务',
+    scene VARCHAR(64) NOT NULL COMMENT '业务场景名称',
+    execution_mode VARCHAR(32) NOT NULL COMMENT '实际使用的执行模式',
+    status VARCHAR(20) NOT NULL COMMENT '执行中、成功或失败',
+    trace_json MEDIUMTEXT DEFAULT NULL COMMENT '包含计划步骤与分工结果的执行轨迹',
+    error_message VARCHAR(500) DEFAULT NULL COMMENT '执行限制或失败原因',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '取证开始时间',
+    KEY idx_creator_agent_task (task_id,create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业务Agent取证轨迹';
+
+-- 计划定义确认后固定，逐步结果单独检查点；不保存用户在专用输入框提交的密钥或原始文件。
+CREATE TABLE IF NOT EXISTS creator_assistant_plan (
+    plan_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '助手执行计划标识',
+    task_id VARCHAR(64) DEFAULT NULL COMMENT '起始任务，允许从无任务状态创建',
+    title VARCHAR(160) NOT NULL COMMENT '用户可读的整体目标',
+    status VARCHAR(24) NOT NULL COMMENT '待确认、执行、等输入、等后台任务或终态',
+    definition_json MEDIUMTEXT NOT NULL COMMENT '固定操作、参数和前序结果引用，不含密钥',
+    state_json MEDIUMTEXT NOT NULL COMMENT '逐步检查点、脱敏结果和失败原因',
+    revision INT NOT NULL DEFAULT 0 COMMENT '并发抢占版本号',
+    digest CHAR(64) NOT NULL COMMENT '用户确认的计划定义摘要',
+    create_time DATETIME(6) NOT NULL COMMENT '创建时间',
+    KEY idx_assistant_plan_status (status,create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台助手连续操作计划';

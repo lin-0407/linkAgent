@@ -20,6 +20,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.LinkedHashSet;
+import java.util.HashSet;
+import java.util.regex.Pattern;
 
 /**
  * 长期记忆写入决策器（设计文档 D8 / C12 阶段二 / D14）。
@@ -40,6 +44,13 @@ import java.util.Optional;
  */
 @Component
 public class LongTermMemoryDecisionMaker {
+
+    // 只核对正文明确给出的月日，不把消息时间或提取日期补成事件日期。
+    private static final Pattern NUMERIC_DATE = Pattern.compile("(?<!\\d)(?:(\\d{4})\\s*(?:年|[-/])\\s*)?(\\d{1,2})\\s*(?:月|[-/])\\s*(\\d{1,2})(?:\\s*[日号])?(?!\\d)");
+    private static final List<String> MONTH_NAMES = List.of("january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december");
+    private static final Pattern ENGLISH_DATE = Pattern.compile("(?i)\\b(" + String.join("|", MONTH_NAMES) + ")\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b");
+    private static final Pattern CONTEXT_DATE_PREFIX = Pattern.compile("(?i)(?:截至|截止|早于|晚于|\\bbefore|\\bafter|\\bprior\\s+to|\\bas\\s+of)\\s*$");
+    private static final Pattern CONTEXT_DATE_SUFFIX = Pattern.compile("(?i)^\\s*(?:[（(][^）)]{0,12}[）)]\\s*)?(?:之前|之后|以前|以后|前后|[前后](?=$|\\s|[，,。.;；）)])|or\\s+earlier|or\\s+later)");
 
     private static final Logger log = LoggerFactory.getLogger(LongTermMemoryDecisionMaker.class);
 
@@ -109,7 +120,10 @@ public class LongTermMemoryDecisionMaker {
                 userId, candidateQueryTexts(candidates), existingMemoryLimit);
         if (existingMemories.isEmpty()) {
             // 库里一条都没有时没有「冲突判断」可做，直接全部新增：省掉一次模型调用，结论也不会不同。
-            return applyAdds(userId, sessionId, candidates, WriteOutcome.builder());
+            WriteOutcome outcome = applyAdds(userId, sessionId, candidates, WriteOutcome.builder());
+            requireDatedWritesNotRejected(candidates, outcome);
+            MemoryObservationContext.trace("direct_add", Map.of("candidates", candidates, "outcome", outcome));
+            return outcome;
         }
         Map<Long, LongTermMemoryRecord> existingById = new LinkedHashMap<>();
         for (LongTermMemoryRecord record : existingMemories) {
@@ -118,8 +132,15 @@ public class LongTermMemoryDecisionMaker {
             }
         }
         String response = callModel(candidates, existingMemories);
-        List<LongTermMemoryDecision> decisions = parseDecisions(response);
-        return applyDecisions(userId, sessionId, candidates, existingById, decisions);
+        List<LongTermMemoryDecision> decisions = protectEventDates(candidates, existingById, parseDecisions(response));
+        WriteOutcome outcome = applyDecisions(userId, sessionId, candidates, existingById, decisions);
+        if (MemoryObservationContext.isTracing()) {
+            // 排查日期只需要已有记忆正文与身份，不把向量数组重复塞进每一条阶段记录。
+            MemoryObservationContext.trace("decision", Map.of("candidates", candidates, "existing", renderExistingMemories(existingMemories),
+                    "response", response, "decisions", decisions, "outcome", outcome));
+        }
+        requireDatedWritesNotRejected(candidates, outcome);
+        return outcome;
     }
 
     // ────────────────────────── 模型调用与解析 ──────────────────────────
@@ -164,8 +185,10 @@ public class LongTermMemoryDecisionMaker {
     /** 候选事实渲染成模型输入：只给判断需要的字段，避免把内部结构透出去。 */
     private String renderCandidates(List<LongTermMemoryCandidate> candidates) {
         ArrayNode array = objectMapper.createArrayNode();
+        int candidateId = 1;
         for (LongTermMemoryCandidate candidate : candidates) {
             ObjectNode node = array.addObject();
+            node.put("candidateId", candidateId++);
             node.put("memoryKey", TextUtil.trimToDefault(candidate.memoryKey(), ""));
             node.put("content", TextUtil.trimToDefault(candidate.content(), ""));
             node.put("importance", candidate.importance() == null ? DEFAULT_IMPORTANCE : candidate.importance());
@@ -208,7 +231,8 @@ public class LongTermMemoryDecisionMaker {
                     LlmJsonUtil.text(node, "memory"),
                     LlmJsonUtil.text(node, "oldMemory"),
                     node.hasNonNull("importance") ? node.get("importance").asInt() : null,
-                    LlmJsonUtil.text(node, "reason")));
+                    LlmJsonUtil.text(node, "reason"),
+                    node.hasNonNull("candidateId") ? node.get("candidateId").asInt() : null));
         }
         return decisions;
     }
@@ -265,11 +289,12 @@ public class LongTermMemoryDecisionMaker {
             int importance = decision.importance() == null
                     ? candidateImportance.getOrDefault(content, DEFAULT_IMPORTANCE)
                     : normalizeImportance(decision.importance());
-            Optional<LongTermMemoryRecord> saved = longTermMemory.save(userId, decisionCandidateKey(candidates, content),
+            Optional<LongTermMemoryRecord> saved = longTermMemory.save(userId, decisionCandidateKey(candidates, content, decision.candidateId()),
                     content, sessionId, importance);
             if (saved.isEmpty()) {
                 // 写入成功但回读不到：不影响本轮其它动作，下一轮决策会把它当已有记忆看。
                 log.warn("长期记忆新增后回读失败，userId={}, content={}", userId, TextUtil.preview(content, 40, ""));
+                rejected = countRejection(outcome, rejected);
                 continue;
             }
             writes++;
@@ -318,9 +343,12 @@ public class LongTermMemoryDecisionMaker {
         Map<String, LongTermMemoryCandidate> deduped = new LinkedHashMap<>();
         for (LongTermMemoryCandidate candidate : candidates) {
             String key = TextUtil.trimToDefault(candidate.memoryKey(), "").toLowerCase();
-            LongTermMemoryCandidate existing = deduped.get(key);
+            // 空库直写也要保留同类的不同事件，否则阶段一抽出的多件事会在落库前再次丢失。
+            String identity = LongTermMemoryExtractor.isEventKey(key)
+                    ? key + ":" + TextUtil.trimToDefault(candidate.content(), "") : key;
+            LongTermMemoryCandidate existing = deduped.get(identity);
             if (existing == null || importanceOf(candidate) > importanceOf(existing)) {
-                deduped.put(key, candidate);
+                deduped.put(identity, candidate);
             }
         }
         int writes = 0;
@@ -339,6 +367,8 @@ public class LongTermMemoryDecisionMaker {
             if (saved.isPresent()) {
                 writes++;
                 outcome.added(outcome.added() + 1);
+            } else {
+                outcome.rejected(outcome.rejected() + 1);
             }
         }
         log.info("长期记忆写入决策完成（库里暂无已有记忆，直接新增），userId={}, 候选 {} 条, 新增 {}",
@@ -391,12 +421,15 @@ public class LongTermMemoryDecisionMaker {
     }
 
     /**
-     * 新增时把候选的分类键还原出来：决策只给内容，分类键仍在候选里，按内容反查。
+     * 新增时优先按候选编号恢复分类键，避免模型改写正文后丢失事件分类。
      * <p>
-     * 模型若把 ADD 的内容改写过（不是逐字抄候选），这里匹配不上，会落到兜底分类。
+     * 旧提示词未回带编号时仍按正文匹配；正文也对不上时才落到兜底分类。
      * 记忆本身不会丢（内容照写），但分类标签可能不准，所以打 warn 留痕，便于之后按日志核对。
      */
-    private String decisionCandidateKey(List<LongTermMemoryCandidate> candidates, String content) {
+    private String decisionCandidateKey(List<LongTermMemoryCandidate> candidates, String content, Integer candidateId) {
+        if (candidateId != null && candidateId > 0 && candidateId <= candidates.size()) {
+            return candidates.get(candidateId - 1).memoryKey();
+        }
         for (LongTermMemoryCandidate candidate : candidates) {
             if (TextUtil.trimToDefault(candidate.content(), "").equals(content)) {
                 return TextUtil.trimToDefault(candidate.memoryKey(), "");
@@ -405,6 +438,107 @@ public class LongTermMemoryDecisionMaker {
         log.warn("新增记忆的内容与候选不完全一致，分类键回退到 user.profile.summary，content={}",
                 TextUtil.preview(content, 40, ""));
         return "user.profile.summary";
+    }
+
+    /** 模型的 NONE 或泛化改写不能静默抹掉明确日期；保留阶段一候选原文，不猜测新时间。 */
+    private List<LongTermMemoryDecision> protectEventDates(List<LongTermMemoryCandidate> candidates,
+                                                          Map<Long, LongTermMemoryRecord> existing,
+                                                          List<LongTermMemoryDecision> decisions) {
+        List<LongTermMemoryDecision> protectedDecisions = new ArrayList<>();
+        Set<LongTermMemoryCandidate> referenced = new HashSet<>();
+        for (LongTermMemoryDecision decision : decisions) {
+            LongTermMemoryCandidate candidate = null;
+            if (decision.candidateId() != null) {
+                if (decision.candidateId() < 1 || decision.candidateId() > candidates.size()) {
+                    throw new IllegalStateException("写入决策引用了不存在的候选编号");
+                }
+                candidate = candidates.get(decision.candidateId() - 1);
+            } else {
+                for (LongTermMemoryCandidate item : candidates) {
+                    if (TextUtil.trimToDefault(item.content(), "").equals(TextUtil.trimToDefault(decision.memory(), ""))) candidate = item;
+                }
+                if (candidate == null && candidates.size() == 1) candidate = candidates.get(0);
+            }
+            LongTermMemoryRecord target = existing.get(decision.id());
+            if (candidate != null && !decision.isDelete()) referenced.add(candidate);
+            boolean event = candidate != null && (LongTermMemoryExtractor.isEventKey(candidate.memoryKey())
+                    || (target != null && LongTermMemoryExtractor.isEventKey(target.getMemoryKey())));
+            if (event) {
+                Set<EventDate> required = explicitDates(candidate.content());
+                Set<EventDate> stored = explicitDates(target == null ? "" : target.getContent());
+                Set<EventDate> written = explicitDates(decision.memory());
+                boolean losesDate = decision.isNoop() && !required.isEmpty() && !covers(required, stored);
+                losesDate |= (decision.isAdd() || decision.isUpdate()) && !covers(required, written);
+                losesDate |= decision.isUpdate() && required.isEmpty() && !covers(stored, written);
+                if (losesDate && !alreadyStored(existing, candidate)) {
+                    protectedDecisions.add(preserveCandidate(candidates, candidate));
+                    continue;
+                }
+            }
+            protectedDecisions.add(decision);
+        }
+        for (LongTermMemoryCandidate candidate : candidates) {
+            if (!referenced.contains(candidate) && LongTermMemoryExtractor.isEventKey(candidate.memoryKey())
+                    && !explicitDates(candidate.content()).isEmpty()
+                    && !alreadyStored(existing, candidate)) {
+                // 未关联的日期事件不能随着整批游标推进而永久丢失。
+                protectedDecisions.add(preserveCandidate(candidates, candidate));
+            }
+        }
+        return protectedDecisions;
+    }
+
+    private boolean candidateContentEquals(LongTermMemoryRecord record, LongTermMemoryCandidate candidate) {
+        return TextUtil.trimToDefault(record.getContent(), "").equals(TextUtil.trimToDefault(candidate.content(), ""));
+    }
+
+    private boolean alreadyStored(Map<Long, LongTermMemoryRecord> existing, LongTermMemoryCandidate candidate) {
+        return existing.values().stream().anyMatch(record -> candidateContentEquals(record, candidate));
+    }
+
+    private LongTermMemoryDecision preserveCandidate(List<LongTermMemoryCandidate> candidates, LongTermMemoryCandidate candidate) {
+        return new LongTermMemoryDecision("ADD", 0L, candidate.content(), "", candidate.importance(),
+                "代码保留未被已有记忆覆盖的明确日期，避免被泛化或跳过", candidates.indexOf(candidate) + 1);
+    }
+
+    private record EventDate(Integer year, int month, int day) { }
+
+    private Set<EventDate> explicitDates(String text) {
+        Set<EventDate> result = new LinkedHashSet<>();
+        String value = TextUtil.trimToDefault(text, "");
+        var numeric = NUMERIC_DATE.matcher(value);
+        while (numeric.find()) {
+            int month = Integer.parseInt(numeric.group(2)), day = Integer.parseInt(numeric.group(3));
+            if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && !isContextDate(value, numeric.start(), numeric.end())) {
+                result.add(new EventDate(numeric.group(1) == null ? null : Integer.valueOf(numeric.group(1)), month, day));
+            }
+        }
+        var english = ENGLISH_DATE.matcher(value);
+        while (english.find()) {
+            int day = Integer.parseInt(english.group(2));
+            if (day >= 1 && day <= 31 && !isContextDate(value, english.start(), english.end())) result.add(new EventDate(english.group(3) == null ? null : Integer.valueOf(english.group(3)),
+                    MONTH_NAMES.indexOf(english.group(1).toLowerCase(java.util.Locale.ROOT)) + 1, day));
+        }
+        return result;
+    }
+
+    private boolean isContextDate(String text, int start, int end) {
+        // “截至某日”与“某日之前”不是事件发生日期，不能强行把笼统重述新增成另一条事件。
+        return CONTEXT_DATE_PREFIX.matcher(text.substring(Math.max(0, start - 32), start)).find()
+                || CONTEXT_DATE_SUFFIX.matcher(text.substring(end, Math.min(text.length(), end + 32))).find();
+    }
+
+    private boolean covers(Set<EventDate> required, Set<EventDate> available) {
+        return required.stream().allMatch(date -> available.stream().anyMatch(old -> date.month() == old.month()
+                && date.day() == old.day() && (date.year() == null || date.year().equals(old.year()))));
+    }
+
+    private void requireDatedWritesNotRejected(List<LongTermMemoryCandidate> candidates, WriteOutcome outcome) {
+        if (outcome.rejected() > 0 && candidates.stream().anyMatch(candidate -> LongTermMemoryExtractor.isEventKey(candidate.memoryKey())
+                && !explicitDates(candidate.content()).isEmpty())) {
+            // 写入上限或校验拒绝也不能让日期事实随游标被跳过；已完成的写入在重试时按已有记忆去重。
+            throw new IllegalStateException("包含明确日期的事件写入未完成，游标必须保留以便重试");
+        }
     }
 
     private int normalizeImportance(int importance) {

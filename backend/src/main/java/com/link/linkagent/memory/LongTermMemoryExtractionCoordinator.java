@@ -10,8 +10,8 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 长期记忆提取协调器 —— 决定「这一轮要不要提取、提取哪一批、游标推到哪」，并负责消费队列任务
@@ -43,7 +43,7 @@ public class LongTermMemoryExtractionCoordinator {
     /**
      * 单批最多抽取多少条消息。
      * 首次使用时游标为空、或提取被卡住一段时间后，增量可能积累很多；
-     * 这个上限保证单次抽取调用不会无限变大，剩下的消息留给下一次触发（游标只推到本批最后一条）。
+     * 这个上限保证单次抽取调用不会无限变大，范围任务继续分批处理，游标每批只推到实际处理的末条。
      */
     static final int DEFAULT_BATCH_MESSAGE_LIMIT = 200;
 
@@ -59,6 +59,9 @@ public class LongTermMemoryExtractionCoordinator {
     private final MemoryExtractionQueue queue;
     private final int batchMessageLimit;
     private final int retryMax;
+
+    // 同一实例只有一个后台消费者；读取前补提取必须与它串行，公平锁避免空队列轮询反复抢占读取线程。
+    private final ReentrantLock processingLock = new ReentrantLock(true);
 
     @Autowired
     public LongTermMemoryExtractionCoordinator(LongTermMemoryExtractor extractor,
@@ -171,13 +174,86 @@ public class LongTermMemoryExtractionCoordinator {
 
     /** 评测必须区分成功与失败；生产消费者仍保留原来的记录日志并继续消费的行为。 */
     public boolean processTaskWithResult(MemoryExtractionTask task) {
+        processingLock.lock();
+        try {
+            return processTaskLocked(task);
+        } finally {
+            processingLock.unlock();
+        }
+    }
+
+    /** 出队也纳入同一把锁，避免任务已出队但尚未开始时，新会话误以为旧任务全部完成。 */
+    public void consumeQueuedTask(MemoryExtractionQueue source, int timeoutSeconds) {
+        processingLock.lock();
+        try {
+            source.poll(timeoutSeconds).ifPresent(this::processTask);
+        } finally {
+            processingLock.unlock();
+        }
+    }
+
+    /** 新会话首次读取前补完已落库的旧历史；不依赖旧会话最后一次回答或预算恰好归零。 */
+    public void completeHistoryBeforeFirstRead(String userId, String sessionId) {
+        if (extractor == null || conversationSessionMapper == null || accumulator == null) {
+            return;
+        }
+        processingLock.lock();
+        try {
+            long through = conversationSessionMapper.findHistoryBoundaryForNewSession(userId, sessionId);
+            if (through <= 0) {
+                return;
+            }
+            if (queue != null) {
+                List<MemoryExtractionTask> pendingTasks = queue.takePendingForUser(userId, through);
+                for (int index = 0; index < pendingTasks.size(); index++) {
+                    MemoryExtractionTask pending = pendingTasks.get(index);
+                    if (!processTaskWithResult(pending)) {
+                        // 压缩事实可能已推进游标，失败任务必须留在队列中，不能只依赖原文再抽。
+                        for (MemoryExtractionTask remaining : pendingTasks.subList(index, pendingTasks.size())) {
+                            queue.enqueue(remaining);
+                        }
+                        throw new IllegalStateException("旧会话记忆写入失败，请重试后再读取新会话");
+                    }
+                }
+            }
+            long cursor = accumulator.getCursor(userId);
+            while (cursor < through) {
+                MemoryExtractionTask task = MemoryExtractionTask.forMessageRange(userId, sessionId, cursor, through,
+                        OffsetDateTime.now().toString());
+                if (!processTaskWithResult(task)) {
+                    throw new IllegalStateException("旧会话记忆提取失败，请重试后再读取新会话");
+                }
+                long next = accumulator.getCursor(userId);
+                if (next <= cursor || next > through) {
+                    throw new IllegalStateException("旧会话记忆游标没有按历史边界推进，暂不生成缺失记忆的回答");
+                }
+                cursor = next;
+            }
+        } finally {
+            processingLock.unlock();
+        }
+    }
+
+    private boolean processTaskLocked(MemoryExtractionTask task) {
         if (task == null || task.userId() == null) {
             return false;
         }
         for (int attempt = 0; attempt <= retryMax; attempt++) {
             try {
-                handleTask(task);
-                return true;
+                while (true) {
+                    long before = task.hasMessageRange() ? accumulator.getCursor(task.userId()) : 0;
+                    handleTask(task);
+                    if (!task.hasMessageRange()) {
+                        return true;
+                    }
+                    long after = accumulator.getCursor(task.userId());
+                    if (after >= task.toMessageId()) {
+                        return true;
+                    }
+                    if (after <= before) {
+                        throw new IllegalStateException("长期记忆游标未推进，不能把未完成的消息范围标记为成功");
+                    }
+                }
             } catch (Exception exception) {
                 log.warn("长期记忆任务处理失败（第 {} 次尝试），userId={}, 消息范围={}-{}, error={}",
                         attempt + 1, task.userId(), task.fromMessageId(), task.toMessageId(), exception.getMessage());
@@ -201,10 +277,14 @@ public class LongTermMemoryExtractionCoordinator {
             lastMessageId = null;
         } else if (task.hasMessageRange()) {
             long cursor = accumulator.getCursor(task.userId());
-            List<ConversationMessageRecord> records = listIncrementMessages(task.userId(), cursor);
+            if (cursor >= task.toMessageId()) {
+                // 补提取后旧队列任务仍可能被消费，不能再次写入或重置后来积攒的预算。
+                return;
+            }
+            List<ConversationMessageRecord> records = listIncrementMessages(task.userId(), cursor, task.toMessageId());
             if (records.isEmpty()) {
-                // 没有增量：这批预算对应的消息已经通过压缩路径处理过，重置预算等下一轮。
-                resetBudgetQuietly(task.userId(), "无增量消息");
+                // 范围内只剩已删除消息时同样完成边界；查询失败会抛异常，不能冒充空批次。
+                finishRangeTask(task.userId(), task.toMessageId());
                 log.info("长期记忆任务没有增量消息，预算已重置，userId={}, cursor={}", task.userId(), cursor);
                 return;
             }
@@ -287,6 +367,16 @@ public class LongTermMemoryExtractionCoordinator {
      * @return 短期记忆裁剪时的游标边界；null 表示没有可用的游标信息，裁剪退回「只按条数保留」
      */
     public Long advanceAfterCompaction(String userId, List<MemoryMessage> messages) {
+        processingLock.lock();
+        try {
+            // 只串行化长期记忆游标写入，避免它与范围提取互相覆盖，不改变压缩或裁剪规则。
+            return advanceAfterCompactionLocked(userId, messages);
+        } finally {
+            processingLock.unlock();
+        }
+    }
+
+    private Long advanceAfterCompactionLocked(String userId, List<MemoryMessage> messages) {
         if (accumulator == null || messages == null || messages.isEmpty()) {
             return null;
         }
@@ -351,18 +441,15 @@ public class LongTermMemoryExtractionCoordinator {
     }
 
     /**
-     * 读取游标之后的增量消息，并翻正成时间顺序。
-     * <p>游标只推到本批最后一条：取到的消息数少于实际增量时（超过单批上限），剩下的下一轮继续。
+     * 从游标之后最早的增量消息开始读，避免推进游标时跳过旧消息。
+     * <p>游标只推到本批最后一条；超过单批上限时，由范围任务继续处理下一批。
      */
-    private List<ConversationMessageRecord> listIncrementMessages(String userId, long cursor) {
+    private List<ConversationMessageRecord> listIncrementMessages(String userId, long cursor, long through) {
         if (conversationSessionMapper == null) {
             return List.of();
         }
         try {
-            List<ConversationMessageRecord> records = new ArrayList<>(
-                    conversationSessionMapper.listLatestMessagesAfterIdForUser(userId, cursor, batchMessageLimit));
-            Collections.reverse(records);
-            return records;
+            return conversationSessionMapper.listMessagesInRangeForUser(userId, cursor, through, batchMessageLimit);
         } catch (Exception exception) {
             // 查库失败按异常抛出，让 processTask 走重试：静默返回空列表会被当成「没有增量」而重置预算。
             throw new IllegalStateException("按游标查询增量消息失败：" + exception.getMessage(), exception);

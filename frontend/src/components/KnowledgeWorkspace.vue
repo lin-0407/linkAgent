@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
+useAssistantBusinessRefresh(['references.', 'collection.', 'maintenance.'], () => loadList())
 import { ChevronDown, Plus } from '@lucide/vue'
 import {
   fetchImportReferenceVideo,

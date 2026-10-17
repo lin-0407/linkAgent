@@ -2,6 +2,11 @@ package com.link.linkagent.controller;
 
 import com.link.linkagent.dto.AgentChatRequest;
 import com.link.linkagent.dto.AgentChatResponse;
+import com.link.linkagent.assistant.AssistantInvocationContext;
+import com.link.linkagent.assistant.PlatformAssistantContextService;
+import com.link.linkagent.core.AgentExecutionMode;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.RequestParam;
 import com.link.linkagent.dto.SessionListItem;
 import com.link.linkagent.dto.SessionMessageItem;
 import com.link.linkagent.core.AgentExecutor;
@@ -55,12 +60,21 @@ public class AgentController {
     private final ShortTermMemory shortTermMemory;
     /** 会话消息表：摘要检查点持久化在这里，历史接口要把最近一条摘要补在短期记忆之前。 */
     private final ConversationSessionMapper conversationSessionMapper;
+    private final PlatformAssistantContextService assistantContext;
 
+    @Autowired
     public AgentController(AgentExecutor agentExecutor, ShortTermMemory shortTermMemory,
-                           ConversationSessionMapper conversationSessionMapper) {
+                           ConversationSessionMapper conversationSessionMapper,
+                           PlatformAssistantContextService assistantContext) {
         this.agentExecutor = agentExecutor;
         this.shortTermMemory = shortTermMemory;
         this.conversationSessionMapper = conversationSessionMapper;
+        this.assistantContext = assistantContext;
+    }
+
+    public AgentController(AgentExecutor agentExecutor, ShortTermMemory shortTermMemory,
+                           ConversationSessionMapper conversationSessionMapper) {
+        this(agentExecutor,shortTermMemory,conversationSessionMapper,null);
     }
 
     /**
@@ -100,7 +114,14 @@ public class AgentController {
      */
     @PostMapping("/chat")
     public AgentChatResponse chat(@Valid @RequestBody AgentChatRequest request) {
-        return agentExecutor.run(request.sessionId(), request.userId(), request.message(), request.executionMode());
+        if (request.context()==null) {
+            return agentExecutor.run(request.sessionId(),request.userId(),request.message(),request.executionMode());
+        }
+        String context=assistantContext.prompt(request.context());
+        try (var scope=AssistantInvocationContext.open(new AssistantInvocationContext.State(request.context().taskId(),true))) {
+            return agentExecutor.run(assistantContext.sessionId(request.sessionId(),request.context().taskId()),
+                    request.userId(),request.message(),assistantMode(request),context);
+        }
     }
 
     /**
@@ -132,15 +153,19 @@ public class AgentController {
      */
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatStream(@Valid @RequestBody AgentChatRequest request) {
+        String context=request.context()==null ? "" : assistantContext.prompt(request.context());
+        String sessionId=request.context()==null ? request.sessionId()
+                : assistantContext.sessionId(request.sessionId(),request.context().taskId());
         // 5 分钟超时：覆盖大多数 ReAct 推理场景（通常 30s-2min），也保护前端不无限等待
         SseEmitter emitter = new SseEmitter(300_000L);
         // 异步执行 Agent 推理：让 Controller 立即返回 emitter 建立 SSE 连接，
         // Agent 推理在独立线程中逐步推送事件；不阻塞 HTTP 响应发送
         CompletableFuture.runAsync(() -> {
-            try {
+            try (var scope=AssistantInvocationContext.open(request.context()==null ? null
+                    : new AssistantInvocationContext.State(request.context().taskId(),true))) {
                 agentExecutor.runStreaming(
-                        request.sessionId(), request.userId(), request.message(),
-                        request.executionMode(), emitter);
+                        sessionId, request.userId(), request.message(),
+                        assistantMode(request), emitter,context);
             } catch (Throwable error) {
                 // 为什么必须兜住 Throwable：runStreaming 只处理 Exception，NoClassDefFoundError、
                 // UnsatisfiedLinkError 这类 Error 会直接逃出异步任务，而 CompletableFuture 会把它们吞掉——
@@ -175,10 +200,18 @@ public class AgentController {
      * @return 会话摘要列表
      */
     @GetMapping("/sessions")
-    public List<SessionListItem> sessions() {
+    public List<SessionListItem> sessions(@RequestParam(required=false) String taskId,
+                                         @RequestParam(defaultValue="false") boolean assistant) {
         return shortTermMemory.listSessions().stream()
+                .filter(item -> !assistant || item.sessionId().startsWith(assistantContext.sessionPrefix(taskId)))
                 .map(item -> new SessionListItem(item.sessionId(), item.preview(), item.messageCount()))
                 .toList();
+    }
+
+    private AgentExecutionMode assistantMode(AgentChatRequest request) {
+        // 普通使用问题不因提到“评论”“方案”就启动重编排，业务入口自己选择所需执行模式。
+        return request.context()!=null && AgentExecutionMode.normalize(request.executionMode())==AgentExecutionMode.AUTO
+                ? AgentExecutionMode.REACT : request.executionMode();
     }
 
     /**

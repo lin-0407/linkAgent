@@ -6,8 +6,8 @@ import java.time.LocalDateTime;
 /**
  * 案例库列表项响应。
  * tags 直接返回存储时的 JSON 字符串、由前端解析，沿用项目里竞品报告等 JSON 字段的既有约定，避免后端额外反序列化。
- * highlightSummary 与质量分相关字段在 5.1a 恒为空 / 默认值，分别等 5.1b、5.1c 写入。
- * rawQualityScore 是单视频独立原始分；qualityScore 是同分区相对分，只有 qualityScoreReliable=true 时才适合展示。
+ * 保留既有评分字段名以兼容调用方：rawQualityScore 为脚本基础分，qualityScore 为分区互动分。
+ * qualityScoreReliable 仅表示统计完整可计算；categoryRank 为整个有效分区内的并列名次。
  */
 public record ReferenceVideoResponse(
         Long id,
@@ -39,7 +39,8 @@ public record ReferenceVideoResponse(
         LocalDateTime statsFetchedAt,
         BigDecimal videoIndexScore,
         String videoIndexVersion,
-        BigDecimal collectionMinIndex
+        BigDecimal collectionMinIndex,
+        Integer categoryRank
 ) {
 
     /**
@@ -73,7 +74,7 @@ public record ReferenceVideoResponse(
                 record.getCreateTime(),
                 record.getUpdateTime(),
                 record.getPublishedAt(), record.getStatsFetchedAt(), record.getVideoIndexScore(),
-                record.getVideoIndexVersion(), record.getCollectionMinIndex()
+                record.getVideoIndexVersion(), record.getCollectionMinIndex(), record.getCategoryRank()
         );
     }
 }

@@ -9,6 +9,7 @@ import {
   knowledgeEmbeddingLabel,
   knowledgeQualityScoreLabel,
   knowledgeQualityScoreTitle,
+  knowledgeCategoryRankLabel,
   knowledgeTierLabel,
 } from './knowledgeDisplay'
 
@@ -260,6 +261,7 @@ function goToPage(targetPage: number | null) {
           <div class="knowledge-card-chips">
             <b v-if="item.category">{{ item.category }}</b>
             <b v-if="knowledgeQualityScoreLabel(item)" :title="knowledgeQualityScoreTitle(item)">{{ knowledgeQualityScoreLabel(item) }}</b>
+            <b v-if="knowledgeCategoryRankLabel(item)" title="整个案例库内的同分区排名；同分并列，不受当前页和筛选影响">{{ knowledgeCategoryRankLabel(item) }}</b>
             <b v-if="developerMode">{{ knowledgeEmbeddingLabel(item.embeddingStatus) }}</b>
           </div>
           <button
@@ -376,7 +378,9 @@ function goToPage(targetPage: number | null) {
             <dl class="knowledge-detail-meta">
               <div><dt>案例层级</dt><dd>{{ knowledgeTierLabel(detailTarget.tier) }}</dd></div>
               <div><dt>分区</dt><dd>{{ detailTarget.category || '未设置' }}</dd></div>
-              <div><dt>质量评估</dt><dd>{{ knowledgeQualityScoreLabel(detailTarget) || '暂无评分' }}</dd></div>
+              <div><dt>分区互动分</dt><dd :title="knowledgeQualityScoreTitle(detailTarget)">{{ detailTarget.qualityScore?.toFixed(2) ?? '统计待更新' }}</dd></div>
+              <div><dt>脚本分</dt><dd>{{ detailTarget.videoIndexScore?.toFixed(2) ?? '统计待更新' }}</dd></div>
+              <div><dt>库内同分区排名</dt><dd>{{ knowledgeCategoryRankLabel(detailTarget) || '—' }}</dd></div>
               <div v-if="developerMode"><dt>索引状态</dt><dd>{{ knowledgeEmbeddingLabel(detailTarget.embeddingStatus) }}</dd></div>
             </dl>
 

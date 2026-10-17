@@ -1397,7 +1397,7 @@ public class CreatorWorkflowService {
      * <p>
      * 使用 try-with-resources 自动管理 {@link LlmUsageContext.UsageScope}，
      * 确保无论成功/失败/异常，本步骤的 Token 消耗都会被正确归入工作流用量统计。
-     * agentMode=true 走 Agent 推理路径（结构化的多步 ReAct），
+     * agentMode=true 先走 Plan 只读取证，再生成结构化候选，保证业务审查仍使用原格式，
      * agentMode=false 走直连 LLM 路径（一次 chat 调用返回建议 JSON）。
      */
     private PrePublishSuggestionCandidate generateSuggestionInWorkflowStep(CreatorWorkflowSessionRecord sessionRecord,

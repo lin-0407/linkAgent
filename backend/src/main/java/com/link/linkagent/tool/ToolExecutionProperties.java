@@ -35,7 +35,8 @@ public class ToolExecutionProperties {
 
     public long timeoutSeconds(String toolName) {
         // 搜索还要抓取多个页面并压缩正文，统一的 10 秒会在正常执行完成前返回超时。
-        return "web_search".equals(toolName) ? Math.max(timeoutSeconds(), webSearchTimeoutSeconds) : timeoutSeconds();
+        return "web_search".equals(toolName) || "platform_query".equals(toolName)
+                ? Math.max(timeoutSeconds(), webSearchTimeoutSeconds) : timeoutSeconds();
     }
 
     public int maxRetries() {

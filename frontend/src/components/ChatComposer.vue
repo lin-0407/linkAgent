@@ -3,11 +3,12 @@ import { nextTick, ref } from 'vue'
 
 const inputMessage = defineModel<string>({ required: true })
 
-defineProps<{
+withDefaults(defineProps<{
   canSend: boolean
   isLoading: boolean
   isStreaming?: boolean
-}>()
+  placeholder?: string
+}>(), { placeholder: '输入一个能暴露推理过程的问题，例如：帮我拆解这个功能的实现步骤...' })
 
 const emit = defineEmits<{
   sendMessage: []
@@ -45,7 +46,7 @@ defineExpose({
         ref="inputRef"
         v-model="inputMessage"
         rows="3"
-        placeholder="输入一个能暴露推理过程的问题，例如：帮我拆解这个功能的实现步骤..."
+        :placeholder="placeholder"
         @keydown.enter.exact.prevent="$emit('sendMessage')"
         @input="adjustInputHeight"
       />

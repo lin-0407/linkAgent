@@ -6,7 +6,7 @@ import java.time.LocalDateTime;
 /**
  * 跨分区视频案例主表（creator_reference_video）的数据库记录对象。
  * 用普通 POJO 而非 record，是因为 MyBatis @Results 通过 setter 回填字段，record 的不可变特性不适合做映射载体。
- * 阶段 5.1a 只负责把案例落库，质量分相关字段与亮点摘要（highlight_summary）留空，分别在 5.1c、5.1b 补写。
+ * 分区互动分由统计计算回写，库内分区排名在查询时计算，避免分页和筛选改变排名范围。
  */
 public class ReferenceVideoRecord {
 
@@ -31,6 +31,7 @@ public class ReferenceVideoRecord {
     private BigDecimal qualityScore;
     private int qualitySampleCount;
     private boolean qualityScoreReliable;
+    private Integer categoryRank;
     private String source;
     private String publishTimeText;
     private LocalDateTime publishedAt;
@@ -202,6 +203,10 @@ public class ReferenceVideoRecord {
     public void setQualityScoreReliable(boolean qualityScoreReliable) {
         this.qualityScoreReliable = qualityScoreReliable;
     }
+
+    public Integer getCategoryRank() { return categoryRank; }
+
+    public void setCategoryRank(Integer categoryRank) { this.categoryRank = categoryRank; }
 
     public String getSource() {
         return source;

@@ -10,9 +10,13 @@ import SettingsSectionConnectivity from '@/components/settings/SettingsSectionCo
 import SettingsSectionLlmConfig from '@/components/settings/SettingsSectionLlmConfig.vue'
 import SettingsSectionPrompts from '@/components/settings/SettingsSectionPrompts.vue'
 import { useModalDialog } from '@/composables/useModalDialog'
+import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 
 const open = defineModel<boolean>('open', { default: false })
 const developerMode = defineModel<boolean>('developerMode', { default: false })
+useAssistantBusinessRefresh(['settings.', 'models.'], () => {
+  if (open.value && !savingKey.value) return loadSettings()
+})
 
 const settings = ref<SettingsStatus | null>(null)
 const loading = ref(false)

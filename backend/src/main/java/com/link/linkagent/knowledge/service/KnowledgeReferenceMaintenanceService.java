@@ -73,7 +73,7 @@ public class KnowledgeReferenceMaintenanceService {
                 mapper.deleteReferenceItems(video.getVideoId());
                 mapper.deleteReferenceChunks(video.getVideoId());
                 mapper.deleteExpiredVideo(video.getVideoId(), cutoff);
-                if (video.getCategory() != null) categories.add(video.getCategory());
+                categories.add(video.getCategory());
             }
             scoring.recomputeCategories(categories);
             return videos.size();

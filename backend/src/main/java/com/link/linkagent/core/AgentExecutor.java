@@ -269,6 +269,13 @@ public class AgentExecutor {
      */
 
     public AgentChatResponse run(String sessionId, String userId, String userMessage, AgentExecutionMode requestedMode) {
+        return run(sessionId,userId,userMessage,requestedMode,"");
+    }
+
+    /** 每轮平台快照只参与推理，持久化仍使用用户原话，避免把瞬时状态写成长期记忆。 */
+    public AgentChatResponse run(String sessionId, String userId, String userMessage,
+                                 AgentExecutionMode requestedMode, String requestContext) {
+        requestContext=TextUtil.trimToDefault(requestContext, "");
         String resolvedSessionId = resolveSessionId(sessionId);
         String resolvedUserId = resolveUserId(userId);
         AgentPersistenceContext persistenceContext = startAgentTrace(resolvedSessionId, resolvedUserId, userMessage);
@@ -279,6 +286,7 @@ public class AgentExecutor {
                     buildConversationContext(resolvedSessionId, resolvedUserId, userMessage).text());
 
             AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
+            if (selectedMode != AgentExecutionMode.REACT) conversation.insert(0,requestContext + "\n");
             AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
             if (plannedResult != null) {
                 if (TextUtil.hasText(plannedResult.finalAnswer())) {
@@ -292,11 +300,13 @@ public class AgentExecutor {
             // 每步通过 chatStructured 产出受 JSON Schema 约束的 ReActStep，省去正则解析，降低格式错误率。
             // 开关由 RuntimeSettingService 控制，方便生产环境出现结构化输出异常时快速切回文本路兜底。
             if (isStructuredKernelEnabled()) {
-                String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
+                String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools())
+                        + (requestContext.isEmpty() ? "" : "\n\n"+requestContext);
                 List<AgentStep> structuredSteps = new ArrayList<>();
                 String structuredAnswer;
                 if (llmService.isStrictFunctionCallingEnabled()) {
-                    String toolCallingSystemPrompt = buildToolCallingSystemPrompt(toolRegistry.getAllTools());
+                    String toolCallingSystemPrompt = buildToolCallingSystemPrompt(toolRegistry.getAllTools())
+                        + (requestContext.isEmpty() ? "" : "\n\n"+requestContext);
                     structuredAnswer = runStrictToolCallingLoop(
                             toolCallingSystemPrompt,
                             structuredSystemPrompt,
@@ -322,7 +332,8 @@ public class AgentExecutor {
             // === 文本路径（原 ReAct 文本解析循环，逻辑保持不变） ===
             // 走"自由文本 LLM 输出 → 正则提取 Thought/Action/Final Answer"的传统 ReAct 路径。
             // 兜底保障：即使结构化内核关闭或异常，核心 Agent 循环仍可正常工作。
-            String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
+            String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools())
+                        + (requestContext.isEmpty() ? "" : "\n\n"+requestContext);
             String finalAnswer = null;
             int iteration = 0;
             List<AgentStep> steps = new ArrayList<>();
@@ -729,6 +740,10 @@ public class AgentExecutor {
      */
     private ContextAssembly buildConversationContext(String sessionId, String userId, String userMessage) {
         List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(sessionId);
+        if (recentMessages.isEmpty()) {
+            // 首次读取必须先等旧历史写入完成，否则预算尾部中的真实事件会在新会话里不可见。
+            longTermMemoryExtractionCoordinator.completeHistoryBeforeFirstRead(userId, sessionId);
+        }
         // 长期记忆一轮只检索一次：压缩分支要用同一批记忆重拼上下文，检索两次会多一次向量化调用，
         // 也会把入选记忆的访问时间写两遍（设计文档 D6 的写回只应在真正取用时发生一次）。
         List<LongTermMemoryRecord> longTermMemories = longTermMemory.retrieveForContext(userId, userMessage);
@@ -1539,6 +1554,13 @@ public class AgentExecutor {
      */
     public void runStreaming(String sessionId, String userId, String userMessage,
                              AgentExecutionMode requestedMode, SseEmitter emitter) {
+        runStreaming(sessionId,userId,userMessage,requestedMode,emitter,"");
+    }
+
+    /** 流式与普通请求共享同一份本轮上下文，页面事实不写入聊天历史。 */
+    public void runStreaming(String sessionId, String userId, String userMessage,
+                             AgentExecutionMode requestedMode, SseEmitter emitter, String requestContext) {
+        requestContext=TextUtil.trimToDefault(requestContext, "");
         AgentPersistenceContext persistenceContext = null;
         // 客户端断开 / 点「停止生成」时置位：这一轮不算完成，跳过摘要与长期记忆提取（设计文档 C9 / D10）。
         AtomicBoolean cancelled = new AtomicBoolean(false);
@@ -1566,6 +1588,7 @@ public class AgentExecutor {
 
             // 路由到正确的执行模式
             AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
+            if (selectedMode != AgentExecutionMode.REACT) conversation.insert(0,requestContext + "\n");
             AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
             if (plannedResult != null) {
                 if (TextUtil.hasText(plannedResult.finalAnswer())) {
@@ -1585,8 +1608,10 @@ public class AgentExecutor {
             // === 结构化内核路径（阶段 5.4+） ===
             // 走结构化 schema 约束的 JSON ReAct，每步通过 chatStructured 产出 ReActStep
             if (isStructuredKernelEnabled()) {
-                String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools());
-                String toolCallingSystemPrompt = buildToolCallingSystemPrompt(toolRegistry.getAllTools());
+                String structuredSystemPrompt = buildStructuredSystemPrompt(toolRegistry.getAllTools())
+                        + (requestContext.isEmpty() ? "" : "\n\n"+requestContext);
+                String toolCallingSystemPrompt = buildToolCallingSystemPrompt(toolRegistry.getAllTools())
+                        + (requestContext.isEmpty() ? "" : "\n\n"+requestContext);
                 // 对话链路优先走真流式工具循环：正文由模型边生成边推给前端。
                 // 注意这里刻意不使用严格 Function Calling —— strict 只服务结构化输出
                 // （LLMService.chatStructuredWithUsage 那条链），对话要的是流式增量。
@@ -1614,7 +1639,8 @@ public class AgentExecutor {
                 }
             } else {
                 // === 文本路径（原 ReAct 文本解析循环） ===
-                String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools());
+                String systemPrompt = buildSystemPrompt(toolRegistry.getAllTools())
+                        + (requestContext.isEmpty() ? "" : "\n\n"+requestContext);
                 String textAnswer = runTextLoopStreaming(systemPrompt, conversation, userMessage, emitter, persistenceContext);
                 if (textAnswer != null) {
                     persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, textAnswer, persistenceContext.totalTokens,

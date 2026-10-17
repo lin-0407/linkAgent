@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.core.AgentExecutor;
+import com.link.linkagent.core.AgentExecutionMode;
+import com.link.linkagent.assistant.CreatorAgentTraceService;
 import com.link.linkagent.creator.context.service.CreatorContextService;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
 import com.link.linkagent.creator.profile.service.CreatorProfileService;
@@ -112,6 +114,12 @@ public class PrePublishSuggestionService {
     private final PrePublishSuggestionAuditor suggestionAuditor;
     /** 事务模板：候选在事务外生成，保存单独走短事务，避免模型调用期间占着数据库连接 */
     private final TransactionTemplate transactionTemplate;
+    private CreatorAgentTraceService agentTraces;
+
+    @Autowired
+    public void setAgentTraces(CreatorAgentTraceService agentTraces) {
+        this.agentTraces=agentTraces;
+    }
 
     @Autowired
     public PrePublishSuggestionService(CreatorTaskMapper creatorTaskMapper,
@@ -273,25 +281,8 @@ public class PrePublishSuggestionService {
     }
 
     /**
-     * 通过 ReAct Agent 自主取证生成发布前优化建议（Agent 路径）。
-     *
-     * <p>与单次 LLM 调用路径的核心区别：
-     * <ul>
-     *   <li>Agent 可调用注册过的工具（如 knowledge_search 检索 B 站同类型案例），
-     *       先取证再生成建议，输出更接地气。</li>
-     *   <li>Agent 内部走完整 ReAct 循环，可能多轮推理 + 工具调用，Token 消耗更高。</li>
-     *   <li>Agent 输出必须是合法 JSON（结构化内核走 schema 约束），因此额外校验
-     *       最终答案不为空且解析状态为 PARSED，否则抛错让调用方感知。</li>
-     * </ul>
-     *
-     * <p>为什么 Agent 输出必须能解析为结构化 JSON：Agent 路径的提示词中已明确约定
-     * JSON schema，如果输出仍无法解析，说明 LLM 严重偏离指令——此时返回 RAW_ONLY
-     * 对调用方的价值有限（前端不知道如何渲染无序文本），直接报错更清晰。
-     *
-     * @param taskId  创作任务 ID
-     * @param request 用户的分析要求
-     * @return 结构化的发布前优化建议
-     * @throws ResponseStatusException Agent 未初始化、最终答案为空或无法解析为 JSON 时抛 500
+     * 先用 Plan 执行只读取证，再按业务格式生成候选，避免工具观察与结构化保存相互干扰。
+     * 候选仍须经过工作流审查和用户确认，模型调用不放入保存事务。
      */
     public CreatorSuggestionResponse generateSuggestionByAgent(String taskId, PrePublishAnalyzeRequest request) {
         PrePublishAnalyzeRequest safeRequest = normalizeRequest(request);
@@ -319,18 +310,37 @@ public class PrePublishSuggestionService {
         if (agentExecutor == null) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化 Agent 未初始化");
         }
-        AgentChatResponse agentResponse = agentExecutor.runTask(
-                buildAgentTaskPrompt(taskRecord, materials, safeRequest, preferenceContext, evidenceRefs));
-        if (TextUtil.hasText(agentResponse.stopReason()) && !TextUtil.hasText(agentResponse.finalAnswer())) {
+        String evidenceTask="""
+                为这期视频的发布方案制定取证计划并执行。先核对任务材料与当前约束，再按需要检索同类案例。
+                仅使用只读查询工具；证据不足就说明缺失，不把创作设想当成事实，不创建或执行操作提议。
+                最终只汇总实际取得的依据、来源与限制，不生成发布方案 JSON，不替用户确认方案。
+                当前任务ID：%s
+                %s
+                """.formatted(taskRecord.getTaskId(),
+                buildAgentTaskPrompt(taskRecord,materials,safeRequest,preferenceContext,evidenceRefs));
+        java.util.function.Supplier<AgentChatResponse> evidenceWork=() ->
+                agentExecutor.runTask(evidenceTask,AgentExecutionMode.PLAN_EXECUTE);
+        AgentChatResponse agentResponse;
+        try (var scope=com.link.linkagent.assistant.AssistantInvocationContext.open(
+                new com.link.linkagent.assistant.AssistantInvocationContext.State(taskRecord.getTaskId(),false))) {
+            agentResponse=agentTraces==null ? evidenceWork.get() : agentTraces.capture(taskRecord.getTaskId(),
+                    "发布前方案取证","PLAN_EXECUTE",evidenceWork);
+        }
+        if (TextUtil.hasText(agentResponse.stopReason())) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化 Agent 未能生成最终答案：" + agentResponse.stopReason());
         }
-        String rawOutput = TextUtil.trimToNull(agentResponse.finalAnswer());
-        if (rawOutput == null) {
+        String evidenceSummary = TextUtil.trimToNull(agentResponse.finalAnswer());
+        if (evidenceSummary == null) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化 Agent 返回为空");
         }
 
+        // 取证回答与业务 JSON 的职责分开，避免规划合成器的普通文本破坏现有结构化保存与审查。
+        String rawOutput=llmService.chat(buildSystemPrompt(null),
+                buildUserPrompt(taskRecord,materials,safeRequest,preferenceContext,evidenceRefs)
+                +"\n\n【Plan 实际取证结果，仅作辅助；不得补造证据编号】\n"+evidenceSummary);
+
         CreatorSuggestionRecord suggestionRecord = buildSuggestionRecord(taskRecord.getTaskId(), rawOutput,
-                evidenceRefs, "AGENT_RAG_EVIDENCE", "EVIDENCE_COLLECTED");
+                evidenceRefs, "PLAN_EXECUTE_EVIDENCE", "EVIDENCE_COLLECTED");
         if (!"PARSED".equals(suggestionRecord.getParseStatus())) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "发布前优化 Agent 输出无法解析为结构化 JSON");
         }
@@ -644,35 +654,12 @@ public class PrePublishSuggestionService {
                 用户主动提供的任务材料：
                 %s
 
-                你的目标：
-                - 用户原话和已确认限制是最高依据，不要替用户改变主题、受众、立场或边界。
-                - 先判断当前内容真正要解决的问题和核心卖点，再给标题、简介、标签、风险点和修改动作；不要套通用运营模板。
-                - 可以调用 knowledge_search 补充案例，但最终结论优先引用“已收集的可引用证据”；工具不可用或检索失败时直接降级，不要假装查到结果。
-                - 参考案例只说明可借鉴之处，不照搬标题或话术。标题建议和 HIGH 优先级修改动作尽量填写 evidenceIds。
-                - 字段内容保持短、自然、能直接修改使用；不要写 AI 套话、报告腔或 P0/P1/1a 式表达。
-                - 最终回答必须是一个 JSON 对象，不使用 Markdown 代码块，不输出 JSON 之外的解释。若 Agent 内核要求 finalAnswer，请把完整 JSON 作为 finalAnswer 字符串。
-                - 证据不足时写入 missingInfo，不得编造 B 站算法、推荐机制、发布时间效果、播放增长或竞品数据。
-
-                JSON 字段固定如下：
-                {
-                  "contentSummary": "100字以内的内容摘要",
-                  "creatorDilemma": "本期创作者最可能纠结或最容易做错的表达问题，必须具体到当前材料",
-                  "audienceProfile": "目标观众判断",
-                  "audienceHook": "观众为什么愿意点进来、继续看或收藏评论的核心钩子",
-                  "contentPositioning": "本期内容在同类 B 站内容中的表达定位和差异化方向，不得编造具体竞品数据",
-                  "sellingPoints": ["核心卖点1", "核心卖点2", "核心卖点3"],
-                  "riskPoints": ["可能的表达风险或内容短板"],
-                  "titleSuggestions": [
-                    {"title": "标题1", "viewerPsychology": "对应的观众心理", "clickReason": "为什么会点", "trustRisk": "可能损伤信任的点", "bestScenario": "最适合的使用场景", "reason": "推荐理由", "risk": "风险提醒", "evidenceIds": ["E1"], "confidence": "HIGH/MEDIUM/LOW", "assumption": "成立前提"}
-                  ],
-                  "descriptionSuggestion": "简介建议",
-                  "actionableRevisionPlan": [
-                    {"priority": "HIGH/MEDIUM/LOW", "target": "标题/开头/简介/标签/结构", "problem": "当前具体问题", "action": "可以直接执行的修改动作", "expectedEffect": "这个动作解决的观众或创作者问题", "evidenceIds": ["E1"], "confidence": "HIGH/MEDIUM/LOW"}
-                  ],
-                  "tagSuggestions": ["标签1", "标签2", "标签3", "标签4", "标签5"],
-                  "partitionSuggestion": "建议分区",
-                  "missingInfo": ["会影响判断但当前缺失的信息"]
-                }
+                取证目标：
+                - 对照用户原话核对主题、受众、限制与材料缺口，不替用户改目标。
+                - 使用 creator_task_context 核对当前任务资料，按需用 knowledge_search 获取同类案例。
+                - 逐步记录实际查到的来源和限制；工具失败必须如实说明。
+                - 仅汇总依据与缺失，不生成发布方案或 JSON，不创建操作提议。
+                - 不得编造 B 站算法、播放增长、竞品数据或不存在的证据编号。
                 """.formatted(
                 taskRecord.getTaskId(),
                 taskRecord.getTaskName(),

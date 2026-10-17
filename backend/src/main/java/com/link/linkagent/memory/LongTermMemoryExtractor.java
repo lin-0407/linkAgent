@@ -31,7 +31,7 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li><b>一次多条候选</b>：单条契约会让同一批里的其它事实随游标一次性推过而永久错过
  *       （作者 2026-09-19 上手测试发现），因此阶段一改成输出 {@code memories} 数组，
- *       同一 memoryKey 只留最高分，最多 {@code agent.memory.extract.max-candidates} 条。</li>
+ *       画像类同一 memoryKey 只留最高分；不同事件可同类并存，最多 {@code agent.memory.extract.max-candidates} 条。</li>
  *   <li><b>保守 JSON 协议</b>：要求 LLM 返回带 {@code shouldRemember / memories} 的 JSON，
  *       用正则逐条解析而非整体反序列化——LLM 输出常夹带解释文本，正则比反序列化更宽容。</li>
  *   <li><b>失败不吞</b>：调用失败或输出不符合契约时返回 {@link LongTermMemoryExtractionResult#failed()}，
@@ -145,7 +145,12 @@ public class LongTermMemoryExtractor {
                 response = MemoryCallTimeout.call("长期记忆抽取",
                         () -> llmService.chat(systemPrompt, userPrompt));
             }
-            return parseResult(response);
+            LongTermMemoryExtractionResult result = parseResult(response);
+            if (MemoryObservationContext.isTracing()) {
+                MemoryObservationContext.trace("extraction", Map.of("messages", formatMessages(messages),
+                        "response", response, "succeeded", result.succeeded(), "candidates", result.candidates()));
+            }
+            return result;
         } catch (Exception exception) {
             // 抽取失败静默处理：长期记忆是增强功能，不影响 Agent 主流程；但游标必须保持不动，下轮重试。
             log.warn("长期记忆抽取失败，游标保持不动，error={}", exception.getMessage());
@@ -189,7 +194,7 @@ public class LongTermMemoryExtractor {
             parsed.add(new LongTermMemoryCandidate(true, memoryKey, content,
                     normalizeImportance(parseString(slice, IMPORTANCE_PATTERN))));
         }
-        List<LongTermMemoryCandidate> candidates = dedupeByKey(parsed);
+        List<LongTermMemoryCandidate> candidates = dedupeCandidates(parsed);
         if (candidates.isEmpty()) {
             log.warn("长期记忆输出不完整：shouldRemember=true 但没有任何可用的 memoryKey/content，按失败处理等下轮重抽");
             return LongTermMemoryExtractionResult.failed();
@@ -208,21 +213,26 @@ public class LongTermMemoryExtractor {
     }
 
     /**
-     * 同一分类键只保留重要性最高的那条（作者 2026-09-19 确认的口径）。
+     * 画像类同一分类键只保留最高分；事件按内容去重，避免同类的不同经历被覆盖。
      * <p>
      * 这里用「小写去空格后的原始键」去重，不把 LongTermMemory 的完整归一化映射外提：
-     * 提示词已经把 key 限定在 5 个固定取值，重复出现的通常就是同一个字符串。
+     * 提示词已经把 key 限定在 7 个固定取值，重复出现的通常就是同一个字符串。
      */
-    private List<LongTermMemoryCandidate> dedupeByKey(List<LongTermMemoryCandidate> candidates) {
+    private List<LongTermMemoryCandidate> dedupeCandidates(List<LongTermMemoryCandidate> candidates) {
         Map<String, LongTermMemoryCandidate> byKey = new LinkedHashMap<>();
         for (LongTermMemoryCandidate candidate : candidates) {
             String key = candidate.memoryKey().trim().toLowerCase();
-            LongTermMemoryCandidate existing = byKey.get(key);
+            String identity = isEventKey(key) ? key + ":" + candidate.content().trim() : key;
+            LongTermMemoryCandidate existing = byKey.get(identity);
             if (existing == null || importanceOf(candidate) > importanceOf(existing)) {
-                byKey.put(key, candidate);
+                byKey.put(identity, candidate);
             }
         }
         return byKey.values().stream().limit(maxCandidates).toList();
+    }
+
+    static boolean isEventKey(String key) {
+        return "user.event".equals(key) || "project.event".equals(key);
     }
 
     private int importanceOf(LongTermMemoryCandidate candidate) {

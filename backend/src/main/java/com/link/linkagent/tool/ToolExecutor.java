@@ -118,10 +118,12 @@ public class ToolExecutor {
     private String executeOnce(Tool tool, ToolCall toolCall) {
         // 在主线程捕获用量上下文——异步线程需要显式恢复
         LlmUsageContext usageContext = LlmUsageContext.current();
+        var assistantContext = com.link.linkagent.assistant.AssistantInvocationContext.current();
         return CompletableFuture
                 .supplyAsync(() -> {
                     // 工具执行会切到公共线程池，必须显式恢复用量上下文，否则工具内部模型调用无法归属到工作流步骤。
-                    try (LlmUsageContext.UsageScope ignored = LlmUsageContext.restore(usageContext)) {
+                    try (LlmUsageContext.UsageScope ignored = LlmUsageContext.restore(usageContext);
+                         var taskScope = com.link.linkagent.assistant.AssistantInvocationContext.open(assistantContext)) {
                         return tool.execute(toolCall.arguments());
                     }
                 })

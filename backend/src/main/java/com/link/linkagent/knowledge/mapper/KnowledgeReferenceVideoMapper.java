@@ -34,6 +34,18 @@ import java.util.Optional;
 @Mapper
 public interface KnowledgeReferenceVideoMapper {
 
+    // 排名先覆盖整个有效案例库，分页、层级和关键词条件在外层应用，避免搜索结果冒充库内名次。
+    String RANKED_VIDEOS = """
+            (SELECT base.*,
+                    CASE WHEN base.quality_score IS NOT NULL AND base.category IS NOT NULL
+                                   AND LENGTH(TRIM(base.category)) > 0
+                         THEN RANK() OVER (PARTITION BY base.category ORDER BY base.quality_score DESC)
+                    END AS category_rank
+             FROM creator_reference_video base
+             WHERE base.is_deleted = 0
+               AND (base.published_at IS NULL OR base.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))) v
+            """;
+
     /**
      * 插入一条视频案例。
      * 故意不写入质量分相关字段 / highlight_summary / embedding_*：前两者分别由 5.1c、5.1b 计算，后者用 DDL 默认值，
@@ -140,7 +152,7 @@ public interface KnowledgeReferenceVideoMapper {
 
     /**
      * 分页查询案例列表，支持按分区、层级可选过滤。
-     * 按 id 倒序让最近导入的案例排在前面，便于导入后立即在列表确认结果。
+     * 选定分区时按互动分排序；全部分区仍按最近入库展示，避免跨分区比较互动分。
      */
     @Select("""
             SELECT v.id,
@@ -168,13 +180,15 @@ public interface KnowledgeReferenceVideoMapper {
                    v.published_at, v.stats_fetched_at, v.video_index_score, v.video_index_version, v.collection_min_index,
                    v.embedding_status,
                    v.create_time,
-                   v.update_time
-            FROM creator_reference_video v
+                    v.update_time,
+                    v.category_rank
+             FROM
+             """ + RANKED_VIDEOS + """
             WHERE v.is_deleted = 0
               AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND (#{category} IS NULL OR v.category = #{category})
               AND (#{tier} IS NULL OR v.tier = #{tier})
-            ORDER BY v.id DESC
+             ORDER BY CASE WHEN #{category} IS NOT NULL THEN v.quality_score END DESC, v.id DESC
             LIMIT #{limit} OFFSET #{offset}
             """)
     @Results(id = "ReferenceVideoRecordMap", value = {
@@ -198,6 +212,7 @@ public interface KnowledgeReferenceVideoMapper {
             @Result(column = "quality_score", property = "qualityScore"),
             @Result(column = "quality_sample_count", property = "qualitySampleCount"),
             @Result(column = "quality_score_reliable", property = "qualityScoreReliable"),
+            @Result(column = "category_rank", property = "categoryRank"),
             @Result(column = "source", property = "source"),
             @Result(column = "publish_time_text", property = "publishTimeText"),
             @Result(column = "published_at", property = "publishedAt"),
@@ -230,15 +245,13 @@ public interface KnowledgeReferenceVideoMapper {
 
     /**
      * 查询需要参与质量分重算的分区。
-     * 空分区没有同赛道基准，按设计不参与分区相对分；这里过滤掉，避免重算时反复扫描无意义分组。
+     * 空分区也需要回填脚本基础分，但不会参与同分区互动修正或排名。
      */
     @Select("""
-            SELECT DISTINCT category
+             SELECT DISTINCT NULLIF(TRIM(category), '') AS category
             FROM creator_reference_video
             WHERE is_deleted = 0
               AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
-              AND category IS NOT NULL
-              AND TRIM(category) <> ''
             ORDER BY category
             """)
     List<String> listScoringCategories();
@@ -255,8 +268,9 @@ public interface KnowledgeReferenceVideoMapper {
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
                    source, publish_time_text, published_at, stats_fetched_at, video_index_score, video_index_version, collection_min_index,
-                   embedding_status, create_time, update_time
-            FROM creator_reference_video
+                    embedding_status, create_time, update_time, category_rank
+             FROM
+             """ + RANKED_VIDEOS + """
             WHERE is_deleted = 0
               AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND video_id IN
@@ -269,8 +283,7 @@ public interface KnowledgeReferenceVideoMapper {
     List<ReferenceVideoRecord> listByVideoIds(@Param("videoIds") List<String> videoIds);
 
     /**
-     * 对主题中块召回得到的视频候选按质量信号取候选池。
-     * RAG 在这里只负责“找到相关主题的视频集合”，可靠相对分和原始分先兜住基础排序；rerank 开启时服务层再结合评论弹幕精排。
+     * 选定分区后按互动分取候选池；未指定分区时使用固定脚本指数，避免横向比较分区修正分。
      */
     @Select("""
             <script>
@@ -278,8 +291,9 @@ public interface KnowledgeReferenceVideoMapper {
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
                    source, publish_time_text, published_at, stats_fetched_at, video_index_score, video_index_version, collection_min_index,
-                   embedding_status, create_time, update_time
-            FROM creator_reference_video
+                    embedding_status, create_time, update_time, category_rank
+             FROM
+             """ + RANKED_VIDEOS + """
             WHERE is_deleted = 0
               AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND (#{category} IS NULL OR category = #{category})
@@ -288,7 +302,7 @@ public interface KnowledgeReferenceVideoMapper {
               <foreach item='vid' collection='videoIds' open='(' separator=',' close=')'>
                   #{vid}
               </foreach>
-            ORDER BY video_index_score DESC, CASE WHEN quality_score_reliable = 1 THEN quality_score END DESC, raw_quality_score DESC, published_at DESC, id DESC
+             ORDER BY CASE WHEN #{category} IS NOT NULL THEN quality_score END DESC, video_index_score DESC, published_at DESC, id DESC
             LIMIT #{limit} OFFSET #{offset}
             </script>
             """)
@@ -302,7 +316,7 @@ public interface KnowledgeReferenceVideoMapper {
     /**
      * SQL 关键词兜底检索父表（5.2a）：RAG 关闭或向量库不可用时走这里。
      * keyword 为空则不加关键词条件（退化为「按质量信号取前 N」）；title/description/highlight_summary 任一命中即返回。
-     * 相关候选先按固定视频指数排序，可靠分区相对分和原始分仅作后续排序，不把分区样本变化当成准入变化。
+     * 选定分区后优先比较互动分，跨分区查询使用固定指数，保持分区分数相互独立。
      * keywords 是从 query 中抽出来的核心词，避免整串 LIKE 因空格 / 标点 / 括号差异导致标题明明存在却搜不到。
      * 真正的关键词相关性打分留给 5.2d 原生 BM25；这里仍只是兜底召回，按质量信号排序。
      * 复用 listReferenceVideos 的 ReferenceVideoRecordMap，故 SELECT 列须与之保持一致。
@@ -313,8 +327,9 @@ public interface KnowledgeReferenceVideoMapper {
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
                    source, publish_time_text, published_at, stats_fetched_at, video_index_score, video_index_version, collection_min_index,
-                   embedding_status, create_time, update_time
-            FROM creator_reference_video
+                    embedding_status, create_time, update_time, category_rank
+             FROM
+             """ + RANKED_VIDEOS + """
             WHERE is_deleted = 0
               AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND (#{category} IS NULL OR category = #{category})
@@ -337,7 +352,7 @@ public interface KnowledgeReferenceVideoMapper {
                        OR bv_id LIKE CONCAT('%', #{keyword}, '%'))
                   </otherwise>
               </choose>
-            ORDER BY video_index_score DESC, CASE WHEN quality_score_reliable = 1 THEN quality_score END DESC, raw_quality_score DESC, published_at DESC, id DESC
+             ORDER BY CASE WHEN #{category} IS NOT NULL THEN quality_score END DESC, video_index_score DESC, published_at DESC, id DESC
             LIMIT #{limit}
             </script>
             """)
@@ -373,8 +388,9 @@ public interface KnowledgeReferenceVideoMapper {
                    view_count, like_count, coin_count, favorite_count, danmaku_count, reply_count,
                    highlight_summary, raw_quality_score, quality_score, quality_sample_count, quality_score_reliable,
                    source, publish_time_text, published_at, stats_fetched_at, video_index_score, video_index_version, collection_min_index,
-                   embedding_status, create_time, update_time
-            FROM creator_reference_video
+                    embedding_status, create_time, update_time, category_rank
+             FROM
+             """ + RANKED_VIDEOS + """
             WHERE video_id = #{videoId}
               AND is_deleted = 0
               AND (published_at IS NULL OR published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
@@ -409,10 +425,7 @@ public interface KnowledgeReferenceVideoMapper {
                              @Param("replyCount") Long replyCount);
 
     /**
-     * 取出某分区下全部未删除视频的打分输入：父表 6 项热度 + 子表正/负向条数（5.1c 质量打分）。
-     * 用一个 LEFT JOIN + 条件 SUM 一次查齐，避免「先查视频再逐条查子表」的 N+1；
-     * 子表无记录时 SUM(CASE...) 自然得 0（非 null）。GROUP BY 主键 v.id：id 是主键，
-     * 其余 v.* 列对它函数依赖，从而在 ONLY_FULL_GROUP_BY 下也能直接 SELECT。
+     * 基准只取整个分区的六项公开统计，避免正文清洗、情绪分类或当前页大小改变互动分。
      */
     @Select("""
             SELECT v.video_id       AS video_id,
@@ -421,16 +434,12 @@ public interface KnowledgeReferenceVideoMapper {
                    v.coin_count     AS coin_count,
                    v.favorite_count AS favorite_count,
                    v.danmaku_count  AS danmaku_count,
-                   v.reply_count    AS reply_count,
-                   SUM(CASE WHEN i.sentiment = 'POSITIVE' THEN 1 ELSE 0 END) AS pos_count,
-                   SUM(CASE WHEN i.sentiment = 'NEGATIVE' THEN 1 ELSE 0 END) AS neg_count
+                    v.reply_count    AS reply_count
             FROM creator_reference_video v
-            LEFT JOIN creator_reference_video_item i
-                   ON i.video_id = v.video_id AND i.is_deleted = 0
             WHERE v.is_deleted = 0
               AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
-              AND v.category = #{category}
-            GROUP BY v.id
+               AND (v.category = #{category}
+                    OR (#{category} IS NULL AND (v.category IS NULL OR TRIM(v.category) = '')))
             """)
     @Results(id = "ReferenceVideoScoringRowMap", value = {
             @Result(column = "video_id", property = "videoId"),
@@ -439,20 +448,25 @@ public interface KnowledgeReferenceVideoMapper {
             @Result(column = "coin_count", property = "coinCount"),
             @Result(column = "favorite_count", property = "favoriteCount"),
             @Result(column = "danmaku_count", property = "danmakuCount"),
-            @Result(column = "reply_count", property = "replyCount"),
-            @Result(column = "pos_count", property = "posCount"),
-            @Result(column = "neg_count", property = "negCount")
+            @Result(column = "reply_count", property = "replyCount")
     })
     List<ReferenceVideoScoringRow> listScoringRowsByCategory(@Param("category") String category);
 
     /**
-     * 回写单个视频的质量分结果（5.1c）。
-     * rawQualityScore 是单视频独立结果；qualityScore 是同分区相对结果，样本不足时允许为 null。
+     * 基础指数和分区互动分保持同一份统计口径；分数改变时让既有父索引重新生成评分文案。
      * 两个 DECIMAL 参数都显式声明 jdbcType，避免 null 值让 MyBatis 无法推断 JDBC 类型。
      */
     @Update("""
             UPDATE creator_reference_video
-            SET raw_quality_score = #{rawQualityScore,jdbcType=DECIMAL},
+             SET embedding_status = CASE
+                     WHEN NOT (quality_score <=> #{qualityScore,jdbcType=DECIMAL})
+                       OR NOT (raw_quality_score <=> #{rawQualityScore,jdbcType=DECIMAL})
+                       OR quality_sample_count != #{qualitySampleCount}
+                     THEN 'PENDING' ELSE embedding_status END,
+                 video_index_score = #{rawQualityScore,jdbcType=DECIMAL},
+                 video_index_version = CASE WHEN #{rawQualityScore,jdbcType=DECIMAL} IS NOT NULL
+                                            THEN 'public-stat-saturation-v1' ELSE NULL END,
+                 raw_quality_score = #{rawQualityScore,jdbcType=DECIMAL},
                 quality_score = #{qualityScore,jdbcType=DECIMAL},
                 quality_sample_count = #{qualitySampleCount},
                 quality_score_reliable = #{qualityScoreReliable}

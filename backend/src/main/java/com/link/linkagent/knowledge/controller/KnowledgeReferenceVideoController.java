@@ -113,7 +113,7 @@ public class KnowledgeReferenceVideoController {
     }
 
     /**
-     * 重算全部分区质量分。
+     * 重算全部分区互动分，沿用原有路径以兼容已有维护入口。
      * 表结构或公式口径调整后，用这个维护入口刷新历史数据，避免旧 quality_score 继续影响排序。
      */
     @PostMapping("/quality/recompute")

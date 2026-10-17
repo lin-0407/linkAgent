@@ -65,6 +65,7 @@ import type {
 } from '@/types/creator'
 import type { DraftVideo, MediaProcessingJob, PreflightReviewStatus } from '@/types/media'
 import { useCreatorStore } from '@/stores/creatorStore'
+import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 import { useCreatorEvaluation, type CreatorEvaluationResultDraft } from '@/composables/creator/useCreatorEvaluation'
 import { useCreatorUsage } from '@/composables/creator/useCreatorUsage'
 import { useCreatorContext } from '@/composables/creator/useCreatorContext'
@@ -75,8 +76,9 @@ import { useCreatorFeedback } from '@/composables/creator/useCreatorFeedback'
 type CreatorWorkStep = 'prePublish' | 'production' | 'preflight' | 'feedback' | 'report'
 type CreatorStepKey = 'task' | CreatorWorkStep
 type TaskSelectionOptions = {
-  requestedStep?: 'preflight'
+  requestedStep?: 'preflight' | 'feedback' | 'report'
   consumeEntryQuery?: boolean
+  reload?: boolean
 }
 type ContextTermOption = {
   value: CreatorContextTermType
@@ -255,6 +257,23 @@ const hasConfirmedPrePublish = computed(() => {
 })
 // activeStep / restoredTaskId 从 Pinia creatorStore 读取，替代原来的 localStorage + persistWorkspaceState 模式
 const creatorStore = useCreatorStore()
+useAssistantBusinessRefresh(['tasks.', 'creative.', 'workflow.', 'blueprint.', 'media.', 'processing.', 'screening.', 'feedback.', 'review.', 'competitor.', 'bilibili.'], async changes => {
+  if (isLayoutPreviewMode) return
+  const current = selectedTask.value?.taskId || activeInteractiveTaskId.value
+  const deleted = changes.some(change => change.operation === 'tasks.deleteTask' && change.taskId === current)
+  if (deleted) {
+    creatorStore.setActiveInteractiveTaskId(null)
+    creatorStore.setSelectedTaskId(null)
+    restoredTaskId.value = ''
+    resetSelectedWorkspace()
+  }
+  await taskModule.refreshTasks()
+  // 后台结果可以刷新，尚未发送的创作输入和本地上传不能被自动重载覆盖。
+  if (!deleted && current && changes.some(change => change.taskId === current)
+    && !hasUnsavedCurrentTaskInput.value && !hasPendingInteractiveUpload.value) {
+    await selectTask(current, { reload: true })
+  }
+})
 const { activeStep, restoredTaskId, activeInteractiveTaskId } = storeToRefs(creatorStore)
 // 恢复期间使用稳定骨架隔离旧任务控件，避免异步状态陆续返回时暴露错误步骤或危险操作。
 const isRestoringTask = ref(
@@ -713,6 +732,7 @@ async function refreshTasks() {
     await selectTask(entryRequest.taskId, {
       requestedStep: entryRequest.step,
       consumeEntryQuery: true,
+      reload: entryRequest.reload,
     })
     return
   }
@@ -1032,7 +1052,7 @@ async function confirmDeleteTask() {
 }
 
 async function selectTask(taskId: string, options: TaskSelectionOptions = {}) {
-  if (activeInteractiveTaskId.value === taskId && !hasPendingInteractiveUpload.value) {
+  if (activeInteractiveTaskId.value === taskId && !hasPendingInteractiveUpload.value && !options.reload) {
     closeTaskManager()
     await finishSkippedTaskSelection(options)
     return
@@ -1044,7 +1064,7 @@ async function selectTask(taskId: string, options: TaskSelectionOptions = {}) {
       return
     }
   }
-  if (selectedTaskId.value === taskId && !hasUnsavedCurrentTaskInput.value) {
+  if (selectedTaskId.value === taskId && !hasUnsavedCurrentTaskInput.value && !options.reload) {
     if (options.requestedStep) navigateToRequestedTaskStep(options.requestedStep)
     closeTaskManager()
     await finishSkippedTaskSelection(options)
@@ -1138,9 +1158,13 @@ async function finishSkippedTaskSelection(options: TaskSelectionOptions) {
   }
 }
 
-function navigateToRequestedTaskStep(step: 'preflight') {
+function navigateToRequestedTaskStep(step: 'preflight' | 'feedback' | 'report') {
   if (canNavigateCreatorStep(step)) {
     navigateCreatorStep(step)
+    return
+  }
+  if (step !== 'preflight') {
+    errorMessage.value = step === 'feedback' ? '请先完成成片试映，再查看观众反馈。' : '请先完成反馈分析，再查看总体复盘。'
     return
   }
   if (!hasSkippedPlanning.value && !hasConfirmedPrePublish.value) {
@@ -1850,14 +1874,25 @@ function resolveCreatorEntryRequest() {
   if (!taskId) return null
   return {
     taskId,
-    step: routeQueryText(route.query.step) === 'preflight' ? 'preflight' as const : undefined,
+    reload: Boolean(routeQueryText(route.query.reload)),
+    step: (['preflight', 'feedback', 'report'].includes(routeQueryText(route.query.step))
+      ? routeQueryText(route.query.step) : undefined) as TaskSelectionOptions['requestedStep'],
   }
 }
+
+watch(() => [route.query.taskId, route.query.step, route.query.reload], () => {
+  const entry = resolveCreatorEntryRequest()
+  if (!entry || isLayoutPreviewMode) return
+  // 助手保存结果后，即使已经在同一任务页面，也要重读报告，避免只换页签仍展示旧数据。
+  void selectTask(entry.taskId, { requestedStep: entry.step, consumeEntryQuery: true,
+    reload: entry.reload || entry.step === 'feedback' || entry.step === 'report' })
+})
 
 async function clearCreatorEntryQuery() {
   const query = { ...route.query }
   delete query.taskId
   delete query.step
+  delete query.reload
   await router.replace({ query })
 }
 

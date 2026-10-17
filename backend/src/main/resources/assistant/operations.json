@@ -1,0 +1,1098 @@
+[
+  {
+    "id": "memory.saveLongTermMemory",
+    "group": "长期记忆",
+    "label": "保存长期记忆",
+    "controller": "com.link.linkagent.controller.MemoryController",
+    "method": "saveLongTermMemory",
+    "access": "WRITE"
+  },
+  {
+    "id": "memory.listLongTermMemories",
+    "group": "长期记忆",
+    "label": "列出长期记忆",
+    "controller": "com.link.linkagent.controller.MemoryController",
+    "method": "listLongTermMemories",
+    "access": "READ"
+  },
+  {
+    "id": "memory.getLongTermMemory",
+    "group": "长期记忆",
+    "label": "读取一条记忆",
+    "controller": "com.link.linkagent.controller.MemoryController",
+    "method": "getLongTermMemory",
+    "access": "READ"
+  },
+  {
+    "id": "memory.deleteLongTermMemory",
+    "group": "长期记忆",
+    "label": "删除长期记忆",
+    "controller": "com.link.linkagent.controller.MemoryController",
+    "method": "deleteLongTermMemory",
+    "access": "WRITE"
+  },
+  {
+    "id": "memory.restoreLongTermMemory",
+    "group": "长期记忆",
+    "label": "恢复长期记忆",
+    "controller": "com.link.linkagent.controller.MemoryController",
+    "method": "restoreLongTermMemory",
+    "access": "WRITE"
+  },
+  {
+    "id": "autofill.autofillField",
+    "group": "辅助填写",
+    "label": "生成辅助填写内容",
+    "controller": "com.link.linkagent.creator.autofill.controller.TaskAutofillController",
+    "method": "autofillField",
+    "access": "WRITE"
+  },
+  {
+    "id": "bilibili.bindAccount",
+    "group": "B站账号与BV绑定",
+    "label": "绑定B站公开账号",
+    "controller": "com.link.linkagent.creator.bilibili.controller.CreatorBilibiliController",
+    "method": "bindAccount",
+    "access": "WRITE"
+  },
+  {
+    "id": "bilibili.getAccount",
+    "group": "B站账号与BV绑定",
+    "label": "读取绑定账号",
+    "controller": "com.link.linkagent.creator.bilibili.controller.CreatorBilibiliController",
+    "method": "getAccount",
+    "access": "READ"
+  },
+  {
+    "id": "bilibili.syncVideos",
+    "group": "B站账号与BV绑定",
+    "label": "同步公开投稿",
+    "controller": "com.link.linkagent.creator.bilibili.controller.CreatorBilibiliController",
+    "method": "syncVideos",
+    "access": "WRITE"
+  },
+  {
+    "id": "bilibili.getLinkedVideos",
+    "group": "B站账号与BV绑定",
+    "label": "列出公开投稿",
+    "controller": "com.link.linkagent.creator.bilibili.controller.CreatorBilibiliController",
+    "method": "getLinkedVideos",
+    "access": "READ"
+  },
+  {
+    "id": "bilibili.bindBvToTask",
+    "group": "B站账号与BV绑定",
+    "label": "绑定已发布视频BV",
+    "controller": "com.link.linkagent.creator.bilibili.controller.CreatorBilibiliController",
+    "method": "bindBvToTask",
+    "access": "WRITE"
+  },
+  {
+    "id": "bilibili.getPostPublishReadiness",
+    "group": "B站账号与BV绑定",
+    "label": "检查发布后门禁",
+    "controller": "com.link.linkagent.creator.bilibili.controller.CreatorBilibiliController",
+    "method": "getPostPublishReadiness",
+    "access": "READ"
+  },
+  {
+    "id": "bilibili.getTaskBinding",
+    "group": "B站账号与BV绑定",
+    "label": "读取任务BV绑定",
+    "controller": "com.link.linkagent.creator.bilibili.controller.CreatorBilibiliController",
+    "method": "getTaskBinding",
+    "access": "READ"
+  },
+  {
+    "id": "competitor.saveCompetitorVideo",
+    "group": "竞品分析",
+    "label": "保存竞品材料",
+    "controller": "com.link.linkagent.creator.competitor.controller.CreatorCompetitorController",
+    "method": "saveCompetitorVideo",
+    "access": "WRITE"
+  },
+  {
+    "id": "competitor.getCompetitorVideo",
+    "group": "竞品分析",
+    "label": "读取竞品材料",
+    "controller": "com.link.linkagent.creator.competitor.controller.CreatorCompetitorController",
+    "method": "getCompetitorVideo",
+    "access": "READ"
+  },
+  {
+    "id": "competitor.analyze",
+    "group": "竞品分析",
+    "label": "竞品分析：生成分析",
+    "controller": "com.link.linkagent.creator.competitor.controller.CreatorCompetitorController",
+    "method": "analyze",
+    "access": "WRITE"
+  },
+  {
+    "id": "competitor.analyzeByReferenceVideo",
+    "group": "竞品分析",
+    "label": "按案例生成竞品分析",
+    "controller": "com.link.linkagent.creator.competitor.controller.CreatorCompetitorController",
+    "method": "analyzeByReferenceVideo",
+    "access": "WRITE"
+  },
+  {
+    "id": "competitor.getReport",
+    "group": "竞品分析",
+    "label": "读取分析报告",
+    "controller": "com.link.linkagent.creator.competitor.controller.CreatorCompetitorController",
+    "method": "getReport",
+    "access": "READ"
+  },
+  {
+    "id": "context.saveTerm",
+    "group": "创作者语境",
+    "label": "保存创作语境",
+    "controller": "com.link.linkagent.creator.context.controller.CreatorContextController",
+    "method": "saveTerm",
+    "access": "WRITE"
+  },
+  {
+    "id": "context.listTerms",
+    "group": "创作者语境",
+    "label": "列出创作语境",
+    "controller": "com.link.linkagent.creator.context.controller.CreatorContextController",
+    "method": "listTerms",
+    "access": "READ"
+  },
+  {
+    "id": "context.buildBundle",
+    "group": "创作者语境",
+    "label": "读取创作语境组合",
+    "controller": "com.link.linkagent.creator.context.controller.CreatorContextController",
+    "method": "buildBundle",
+    "access": "READ"
+  },
+  {
+    "id": "context.disableTerm",
+    "group": "创作者语境",
+    "label": "停用创作语境",
+    "controller": "com.link.linkagent.creator.context.controller.CreatorContextController",
+    "method": "disableTerm",
+    "access": "WRITE"
+  },
+  {
+    "id": "context.recordFeedback",
+    "group": "创作者语境",
+    "label": "记录语境采纳反馈",
+    "controller": "com.link.linkagent.creator.context.controller.CreatorContextController",
+    "method": "recordFeedback",
+    "access": "WRITE"
+  },
+  {
+    "id": "evaluation.createCase",
+    "group": "评测用例",
+    "label": "创建评测用例",
+    "controller": "com.link.linkagent.creator.evaluation.controller.CreatorEvaluationController",
+    "method": "createCase",
+    "access": "WRITE"
+  },
+  {
+    "id": "evaluation.listCases",
+    "group": "评测用例",
+    "label": "列出评测用例",
+    "controller": "com.link.linkagent.creator.evaluation.controller.CreatorEvaluationController",
+    "method": "listCases",
+    "access": "READ"
+  },
+  {
+    "id": "evaluation.getCase",
+    "group": "评测用例",
+    "label": "读取评测用例",
+    "controller": "com.link.linkagent.creator.evaluation.controller.CreatorEvaluationController",
+    "method": "getCase",
+    "access": "READ"
+  },
+  {
+    "id": "evaluation.recordResult",
+    "group": "评测用例",
+    "label": "记录评测结果",
+    "controller": "com.link.linkagent.creator.evaluation.controller.CreatorEvaluationController",
+    "method": "recordResult",
+    "access": "WRITE"
+  },
+  {
+    "id": "evaluation.listResults",
+    "group": "评测用例",
+    "label": "读取评测结果",
+    "controller": "com.link.linkagent.creator.evaluation.controller.CreatorEvaluationController",
+    "method": "listResults",
+    "access": "READ"
+  },
+  {
+    "id": "evaluation.comparePromptVersions",
+    "group": "评测用例",
+    "label": "对比提示词版本",
+    "controller": "com.link.linkagent.creator.evaluation.controller.CreatorEvaluationController",
+    "method": "comparePromptVersions",
+    "access": "READ"
+  },
+  {
+    "id": "feedback.saveFeedback",
+    "group": "观众反馈",
+    "label": "保存观众反馈",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "saveFeedback",
+    "access": "WRITE"
+  },
+  {
+    "id": "feedback.getFeedback",
+    "group": "观众反馈",
+    "label": "读取反馈原始材料",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "getFeedback",
+    "access": "READ"
+  },
+  {
+    "id": "feedback.analyze",
+    "group": "观众反馈",
+    "label": "观众反馈：生成分析",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "analyze",
+    "access": "WRITE"
+  },
+  {
+    "id": "feedback.getReport",
+    "group": "观众反馈",
+    "label": "读取分析报告",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "getReport",
+    "access": "READ"
+  },
+  {
+    "id": "feedback.importFeedback",
+    "group": "观众反馈",
+    "label": "导入反馈文件",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "importFeedback",
+    "access": "WRITE"
+  },
+  {
+    "id": "feedback.fetchFeedback",
+    "group": "观众反馈",
+    "label": "采集已发布视频反馈",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "fetchFeedback",
+    "access": "WRITE"
+  },
+  {
+    "id": "feedback.getDashboard",
+    "group": "观众反馈",
+    "label": "读取反馈看板",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "getDashboard",
+    "access": "READ"
+  },
+  {
+    "id": "feedback.chat",
+    "group": "观众反馈",
+    "label": "追问反馈报告",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "chat",
+    "access": "WRITE"
+  },
+  {
+    "id": "feedback.rebuildEvidenceIndex",
+    "group": "观众反馈",
+    "label": "重建反馈证据索引",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "rebuildEvidenceIndex",
+    "access": "WRITE"
+  },
+  {
+    "id": "feedback.getEvidenceIndexStatus",
+    "group": "观众反馈",
+    "label": "读取反馈索引状态",
+    "controller": "com.link.linkagent.creator.feedback.controller.CreatorFeedbackController",
+    "method": "getEvidenceIndexStatus",
+    "access": "READ"
+  },
+  {
+    "id": "creative.createInteractiveTask",
+    "group": "想法与发布方案",
+    "label": "根据想法创建任务",
+    "controller": "com.link.linkagent.creator.interactive.controller.CreatorInteractiveController",
+    "method": "createInteractiveTask",
+    "access": "WRITE"
+  },
+  {
+    "id": "creative.getInteractiveTask",
+    "group": "想法与发布方案",
+    "label": "读取创作想法与方案状态",
+    "controller": "com.link.linkagent.creator.interactive.controller.CreatorInteractiveController",
+    "method": "getInteractiveTask",
+    "access": "READ"
+  },
+  {
+    "id": "creative.uploadContextDocuments",
+    "group": "想法与发布方案",
+    "label": "上传背景资料",
+    "controller": "com.link.linkagent.creator.interactive.controller.CreatorInteractiveController",
+    "method": "uploadContextDocuments",
+    "access": "WRITE"
+  },
+  {
+    "id": "creative.triggerUnderstanding",
+    "group": "想法与发布方案",
+    "label": "理解创作想法",
+    "controller": "com.link.linkagent.creator.interactive.controller.CreatorInteractiveController",
+    "method": "triggerUnderstanding",
+    "access": "WRITE"
+  },
+  {
+    "id": "creative.generateCreativeOptions",
+    "group": "想法与发布方案",
+    "label": "生成发布方案",
+    "controller": "com.link.linkagent.creator.interactive.controller.CreatorInteractiveController",
+    "method": "generateCreativeOptions",
+    "access": "WRITE"
+  },
+  {
+    "id": "creative.regenerateOptions",
+    "group": "想法与发布方案",
+    "label": "重新生成发布方案",
+    "controller": "com.link.linkagent.creator.interactive.controller.CreatorInteractiveController",
+    "method": "regenerateOptions",
+    "access": "WRITE"
+  },
+  {
+    "id": "creative.confirmOption",
+    "group": "想法与发布方案",
+    "label": "确认选中的发布方案",
+    "controller": "com.link.linkagent.creator.interactive.controller.CreatorInteractiveController",
+    "method": "confirmOption",
+    "access": "WRITE"
+  },
+  {
+    "id": "mediaStatus.getStatus",
+    "group": "媒体功能状态",
+    "label": "读取媒体功能状态",
+    "controller": "com.link.linkagent.creator.media.config.CreatorMediaStatusController",
+    "method": "getStatus",
+    "access": "READ"
+  },
+  {
+    "id": "mediaFiles.deleteMedia",
+    "group": "媒体删除",
+    "label": "删除原片与派生媒体",
+    "controller": "com.link.linkagent.creator.media.management.controller.DraftVideoMediaController",
+    "method": "deleteMedia",
+    "access": "WRITE"
+  },
+  {
+    "id": "screeningIssues.updateIssue",
+    "group": "试映问题与修改任务",
+    "label": "确认或暂不采纳试映问题",
+    "controller": "com.link.linkagent.creator.media.preflight.controller.PreflightReportController",
+    "method": "updateIssue",
+    "access": "WRITE"
+  },
+  {
+    "id": "screeningIssues.listEditTasks",
+    "group": "试映问题与修改任务",
+    "label": "读取修改任务",
+    "controller": "com.link.linkagent.creator.media.preflight.controller.PreflightReportController",
+    "method": "listEditTasks",
+    "access": "READ"
+  },
+  {
+    "id": "screeningIssues.updateEditTask",
+    "group": "试映问题与修改任务",
+    "label": "更新修改任务",
+    "controller": "com.link.linkagent.creator.media.preflight.controller.PreflightReportController",
+    "method": "updateEditTask",
+    "access": "WRITE"
+  },
+  {
+    "id": "screening.create",
+    "group": "成片试映",
+    "label": "启动成片试映",
+    "controller": "com.link.linkagent.creator.media.preflight.controller.PreflightReviewController",
+    "method": "create",
+    "access": "WRITE"
+  },
+  {
+    "id": "screening.getCurrent",
+    "group": "成片试映",
+    "label": "读取当前结果",
+    "controller": "com.link.linkagent.creator.media.preflight.controller.PreflightReviewController",
+    "method": "getCurrent",
+    "access": "READ"
+  },
+  {
+    "id": "screening.get",
+    "group": "成片试映",
+    "label": "读取指定试映",
+    "controller": "com.link.linkagent.creator.media.preflight.controller.PreflightReviewController",
+    "method": "get",
+    "access": "READ"
+  },
+  {
+    "id": "screening.cancel",
+    "group": "成片试映",
+    "label": "取消试映",
+    "controller": "com.link.linkagent.creator.media.preflight.controller.PreflightReviewController",
+    "method": "cancel",
+    "access": "WRITE"
+  },
+  {
+    "id": "screening.retry",
+    "group": "成片试映",
+    "label": "重试试映",
+    "controller": "com.link.linkagent.creator.media.preflight.controller.PreflightReviewController",
+    "method": "retry",
+    "access": "WRITE"
+  },
+  {
+    "id": "screening.completeScreening",
+    "group": "成片试映",
+    "label": "补全观众试映",
+    "controller": "com.link.linkagent.creator.media.preflight.controller.PreflightReviewController",
+    "method": "completeScreening",
+    "access": "WRITE"
+  },
+  {
+    "id": "media.getCurrentDraftVideo",
+    "group": "成片与媒体探测",
+    "label": "读取当前成片",
+    "controller": "com.link.linkagent.creator.media.probe.controller.DraftVideoProbeController",
+    "method": "getCurrentDraftVideo",
+    "access": "READ"
+  },
+  {
+    "id": "media.getDraftVideo",
+    "group": "成片与媒体探测",
+    "label": "读取成片版本",
+    "controller": "com.link.linkagent.creator.media.probe.controller.DraftVideoProbeController",
+    "method": "getDraftVideo",
+    "access": "READ"
+  },
+  {
+    "id": "media.probeDraftVideo",
+    "group": "成片与媒体探测",
+    "label": "探测成片信息",
+    "controller": "com.link.linkagent.creator.media.probe.controller.DraftVideoProbeController",
+    "method": "probeDraftVideo",
+    "access": "WRITE"
+  },
+  {
+    "id": "processing.estimate",
+    "group": "媒体预处理",
+    "label": "估算媒体处理费用",
+    "controller": "com.link.linkagent.creator.media.processing.controller.MediaProcessingController",
+    "method": "estimate",
+    "access": "READ"
+  },
+  {
+    "id": "processing.createJob",
+    "group": "媒体预处理",
+    "label": "启动媒体预处理",
+    "controller": "com.link.linkagent.creator.media.processing.controller.MediaProcessingController",
+    "method": "createJob",
+    "access": "WRITE"
+  },
+  {
+    "id": "processing.getCurrentJob",
+    "group": "媒体预处理",
+    "label": "读取媒体处理进度",
+    "controller": "com.link.linkagent.creator.media.processing.controller.MediaProcessingController",
+    "method": "getCurrentJob",
+    "access": "READ"
+  },
+  {
+    "id": "processing.retryJob",
+    "group": "媒体预处理",
+    "label": "重试媒体处理",
+    "controller": "com.link.linkagent.creator.media.processing.controller.MediaProcessingController",
+    "method": "retryJob",
+    "access": "WRITE"
+  },
+  {
+    "id": "uploads.getUpload",
+    "group": "成片上传状态",
+    "label": "读取上传会话",
+    "controller": "com.link.linkagent.creator.media.upload.controller.MediaUploadController",
+    "method": "getUpload",
+    "access": "READ"
+  },
+  {
+    "id": "uploads.getCurrentUpload",
+    "group": "成片上传状态",
+    "label": "读取当前上传",
+    "controller": "com.link.linkagent.creator.media.upload.controller.MediaUploadController",
+    "method": "getCurrentUpload",
+    "access": "READ"
+  },
+  {
+    "id": "uploads.abortUpload",
+    "group": "成片上传状态",
+    "label": "取消成片上传",
+    "controller": "com.link.linkagent.creator.media.upload.controller.MediaUploadController",
+    "method": "abortUpload",
+    "access": "WRITE"
+  },
+  {
+    "id": "preferences.listPreferences",
+    "group": "创作偏好",
+    "label": "读取创作偏好",
+    "controller": "com.link.linkagent.creator.preference.controller.CreatorPreferenceController",
+    "method": "listPreferences",
+    "access": "READ"
+  },
+  {
+    "id": "blueprint.getCurrent",
+    "group": "制作蓝图",
+    "label": "读取当前结果",
+    "controller": "com.link.linkagent.creator.production.controller.ProductionPlanController",
+    "method": "getCurrent",
+    "access": "READ"
+  },
+  {
+    "id": "blueprint.create",
+    "group": "制作蓝图",
+    "label": "生成制作蓝图",
+    "controller": "com.link.linkagent.creator.production.controller.ProductionPlanController",
+    "method": "create",
+    "access": "WRITE"
+  },
+  {
+    "id": "blueprint.updateStep",
+    "group": "制作蓝图",
+    "label": "更新制作步骤",
+    "controller": "com.link.linkagent.creator.production.controller.ProductionPlanController",
+    "method": "updateStep",
+    "access": "WRITE"
+  },
+  {
+    "id": "profile.getProfile",
+    "group": "创作者画像",
+    "label": "读取创作者画像",
+    "controller": "com.link.linkagent.creator.profile.controller.CreatorProfileController",
+    "method": "getProfile",
+    "access": "READ"
+  },
+  {
+    "id": "profile.recordFeedbackEvent",
+    "group": "创作者画像",
+    "label": "记录偏好反馈",
+    "controller": "com.link.linkagent.creator.profile.controller.CreatorProfileController",
+    "method": "recordFeedbackEvent",
+    "access": "WRITE"
+  },
+  {
+    "id": "profile.refreshProfile",
+    "group": "创作者画像",
+    "label": "刷新创作者画像",
+    "controller": "com.link.linkagent.creator.profile.controller.CreatorProfileController",
+    "method": "refreshProfile",
+    "access": "WRITE"
+  },
+  {
+    "id": "review.analyze",
+    "group": "总体复盘",
+    "label": "总体复盘：生成分析",
+    "controller": "com.link.linkagent.creator.report.controller.CreatorReportController",
+    "method": "analyze",
+    "access": "WRITE"
+  },
+  {
+    "id": "review.getReport",
+    "group": "总体复盘",
+    "label": "读取分析报告",
+    "controller": "com.link.linkagent.creator.report.controller.CreatorReportController",
+    "method": "getReport",
+    "access": "READ"
+  },
+  {
+    "id": "review.listHistory",
+    "group": "总体复盘",
+    "label": "读取复盘历史",
+    "controller": "com.link.linkagent.creator.report.controller.CreatorReportController",
+    "method": "listHistory",
+    "access": "READ"
+  },
+  {
+    "id": "review.getHistory",
+    "group": "总体复盘",
+    "label": "读取指定历史复盘",
+    "controller": "com.link.linkagent.creator.report.controller.CreatorReportController",
+    "method": "getHistory",
+    "access": "READ"
+  },
+  {
+    "id": "review.exportMarkdown",
+    "group": "总体复盘",
+    "label": "导出复盘正文",
+    "controller": "com.link.linkagent.creator.report.controller.CreatorReportController",
+    "method": "exportMarkdown",
+    "access": "READ"
+  },
+  {
+    "id": "suggestion.getSuggestion",
+    "group": "发布方案查询",
+    "label": "读取发布方案",
+    "controller": "com.link.linkagent.creator.suggestion.controller.PrePublishSuggestionController",
+    "method": "getSuggestion",
+    "access": "READ"
+  },
+  {
+    "id": "taskSettings.getSettings",
+    "group": "任务偏好设置",
+    "label": "读取任务设置",
+    "controller": "com.link.linkagent.creator.task.controller.CreatorPrePublishSettingsController",
+    "method": "getSettings",
+    "access": "READ"
+  },
+  {
+    "id": "taskSettings.saveSettings",
+    "group": "任务偏好设置",
+    "label": "保存任务设置",
+    "controller": "com.link.linkagent.creator.task.controller.CreatorPrePublishSettingsController",
+    "method": "saveSettings",
+    "access": "WRITE"
+  },
+  {
+    "id": "tasks.createTask",
+    "group": "创作任务",
+    "label": "创建有稿件材料的任务",
+    "controller": "com.link.linkagent.creator.task.controller.CreatorTaskController",
+    "method": "createTask",
+    "access": "WRITE"
+  },
+  {
+    "id": "tasks.updateTask",
+    "group": "创作任务",
+    "label": "修改任务与稿件",
+    "controller": "com.link.linkagent.creator.task.controller.CreatorTaskController",
+    "method": "updateTask",
+    "access": "WRITE"
+  },
+  {
+    "id": "tasks.skipToPreflight",
+    "group": "创作任务",
+    "label": "已有成片，跳过方案进入试映",
+    "controller": "com.link.linkagent.creator.task.controller.CreatorTaskController",
+    "method": "skipToPreflight",
+    "access": "WRITE"
+  },
+  {
+    "id": "tasks.deleteTask",
+    "group": "创作任务",
+    "label": "删除任务",
+    "controller": "com.link.linkagent.creator.task.controller.CreatorTaskController",
+    "method": "deleteTask",
+    "access": "WRITE"
+  },
+  {
+    "id": "tasks.importMaterial",
+    "group": "创作任务",
+    "label": "导入稿件文件",
+    "controller": "com.link.linkagent.creator.task.controller.CreatorTaskController",
+    "method": "importMaterial",
+    "access": "WRITE"
+  },
+  {
+    "id": "tasks.listTasks",
+    "group": "创作任务",
+    "label": "列出任务",
+    "controller": "com.link.linkagent.creator.task.controller.CreatorTaskController",
+    "method": "listTasks",
+    "access": "READ"
+  },
+  {
+    "id": "tasks.getTask",
+    "group": "创作任务",
+    "label": "读取任务",
+    "controller": "com.link.linkagent.creator.task.controller.CreatorTaskController",
+    "method": "getTask",
+    "access": "READ"
+  },
+  {
+    "id": "workflow.startPrePublishWorkflow",
+    "group": "发布前沟通与方案",
+    "label": "创建或恢复发布前沟通",
+    "controller": "com.link.linkagent.creator.workflow.controller.CreatorWorkflowController",
+    "method": "startPrePublishWorkflow",
+    "access": "WRITE"
+  },
+  {
+    "id": "workflow.listMessages",
+    "group": "发布前沟通与方案",
+    "label": "读取沟通记录",
+    "controller": "com.link.linkagent.creator.workflow.controller.CreatorWorkflowController",
+    "method": "listMessages",
+    "access": "READ"
+  },
+  {
+    "id": "workflow.listSteps",
+    "group": "发布前沟通与方案",
+    "label": "读取执行步骤",
+    "controller": "com.link.linkagent.creator.workflow.controller.CreatorWorkflowController",
+    "method": "listSteps",
+    "access": "READ"
+  },
+  {
+    "id": "workflow.getWorkflowUsage",
+    "group": "发布前沟通与方案",
+    "label": "读取工作流用量",
+    "controller": "com.link.linkagent.creator.workflow.controller.CreatorWorkflowController",
+    "method": "getWorkflowUsage",
+    "access": "READ"
+  },
+  {
+    "id": "workflow.sendMessage",
+    "group": "发布前沟通与方案",
+    "label": "发送创作要求",
+    "controller": "com.link.linkagent.creator.workflow.controller.CreatorWorkflowController",
+    "method": "sendMessage",
+    "access": "WRITE"
+  },
+  {
+    "id": "workflow.alignPrePublishIntent",
+    "group": "发布前沟通与方案",
+    "label": "对齐创作要求",
+    "controller": "com.link.linkagent.creator.workflow.controller.CreatorWorkflowController",
+    "method": "alignPrePublishIntent",
+    "access": "WRITE"
+  },
+  {
+    "id": "workflow.analyzePrePublishWorkflow",
+    "group": "发布前沟通与方案",
+    "label": "生成发布前方案",
+    "controller": "com.link.linkagent.creator.workflow.controller.CreatorWorkflowController",
+    "method": "analyzePrePublishWorkflow",
+    "access": "WRITE"
+  },
+  {
+    "id": "workflow.generatePrePublishManuscriptDraft",
+    "group": "发布前沟通与方案",
+    "label": "生成文稿草稿",
+    "controller": "com.link.linkagent.creator.workflow.controller.CreatorWorkflowController",
+    "method": "generatePrePublishManuscriptDraft",
+    "access": "WRITE"
+  },
+  {
+    "id": "workflow.confirmPrePublishSuggestion",
+    "group": "发布前沟通与方案",
+    "label": "确认发布前方案",
+    "controller": "com.link.linkagent.creator.workflow.controller.CreatorWorkflowController",
+    "method": "confirmPrePublishSuggestion",
+    "access": "WRITE"
+  },
+  {
+    "id": "collection.status",
+    "group": "案例自动采集",
+    "label": "读取状态",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceAutoCollectionController",
+    "method": "status",
+    "access": "READ"
+  },
+  {
+    "id": "collection.start",
+    "group": "案例自动采集",
+    "label": "启动自动采集",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceAutoCollectionController",
+    "method": "start",
+    "access": "WRITE"
+  },
+  {
+    "id": "collection.stop",
+    "group": "案例自动采集",
+    "label": "停止自动采集",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceAutoCollectionController",
+    "method": "stop",
+    "access": "WRITE"
+  },
+  {
+    "id": "maintenance.status",
+    "group": "案例库维护",
+    "label": "读取状态",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceMaintenanceController",
+    "method": "status",
+    "access": "READ"
+  },
+  {
+    "id": "maintenance.backfill",
+    "group": "案例库维护",
+    "label": "回补参考视频资料",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceMaintenanceController",
+    "method": "backfill",
+    "access": "WRITE"
+  },
+  {
+    "id": "maintenance.purge",
+    "group": "案例库维护",
+    "label": "清理过期案例",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceMaintenanceController",
+    "method": "purge",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.importReferenceVideos",
+    "group": "参考案例库",
+    "label": "导入参考案例",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "importReferenceVideos",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.fetchAndImportReferenceVideo",
+    "group": "参考案例库",
+    "label": "采集并导入参考视频",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "fetchAndImportReferenceVideo",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.refreshReferenceVideoPublicMetadata",
+    "group": "参考案例库",
+    "label": "刷新案例公开数据",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "refreshReferenceVideoPublicMetadata",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.recomputeReferenceVideoQuality",
+    "group": "参考案例库",
+    "label": "重算案例指数",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "recomputeReferenceVideoQuality",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.searchReferenceVideos",
+    "group": "参考案例库",
+    "label": "检索案例",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "searchReferenceVideos",
+    "access": "READ"
+  },
+  {
+    "id": "references.topicSearchReferenceVideos",
+    "group": "参考案例库",
+    "label": "按主题检索案例",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "topicSearchReferenceVideos",
+    "access": "READ"
+  },
+  {
+    "id": "references.referenceVideoAnalysisContext",
+    "group": "参考案例库",
+    "label": "读取案例证据",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "referenceVideoAnalysisContext",
+    "access": "READ"
+  },
+  {
+    "id": "references.listReferenceVideos",
+    "group": "参考案例库",
+    "label": "浏览案例库",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "listReferenceVideos",
+    "access": "READ"
+  },
+  {
+    "id": "references.rebuildReferenceVideoIndex",
+    "group": "参考案例库",
+    "label": "重建案例向量索引",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "rebuildReferenceVideoIndex",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.referenceVideoIndexStatus",
+    "group": "参考案例库",
+    "label": "读取案例向量索引状态",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "referenceVideoIndexStatus",
+    "access": "READ"
+  },
+  {
+    "id": "references.rebuildReferenceVideoChunkIndex",
+    "group": "参考案例库",
+    "label": "重建案例主题块索引",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "rebuildReferenceVideoChunkIndex",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.referenceVideoChunkIndexStatus",
+    "group": "参考案例库",
+    "label": "读取案例主题块索引状态",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "referenceVideoChunkIndexStatus",
+    "access": "READ"
+  },
+  {
+    "id": "references.rebuildReferenceVideoItemIndex",
+    "group": "参考案例库",
+    "label": "重建案例评论弹幕索引",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "rebuildReferenceVideoItemIndex",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.referenceVideoItemIndexStatus",
+    "group": "参考案例库",
+    "label": "读取案例评论弹幕索引状态",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "referenceVideoItemIndexStatus",
+    "access": "READ"
+  },
+  {
+    "id": "references.rebuildReferenceVideoHybridIndex",
+    "group": "参考案例库",
+    "label": "重建案例混合检索索引",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "rebuildReferenceVideoHybridIndex",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.referenceVideoHybridIndexStatus",
+    "group": "参考案例库",
+    "label": "读取案例混合索引状态",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "referenceVideoHybridIndexStatus",
+    "access": "READ"
+  },
+  {
+    "id": "references.rebuildReferenceVideoItemHybridIndex",
+    "group": "参考案例库",
+    "label": "重建案例评论混合索引",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "rebuildReferenceVideoItemHybridIndex",
+    "access": "WRITE"
+  },
+  {
+    "id": "references.referenceVideoItemHybridIndexStatus",
+    "group": "参考案例库",
+    "label": "读取案例评论混合索引状态",
+    "controller": "com.link.linkagent.knowledge.controller.KnowledgeReferenceVideoController",
+    "method": "referenceVideoItemHybridIndexStatus",
+    "access": "READ"
+  },
+  {
+    "id": "models.listConfigs",
+    "group": "模型与密钥配置",
+    "label": "读取脱敏模型配置",
+    "controller": "com.link.linkagent.llm.config.controller.UserLlmConfigController",
+    "method": "listConfigs",
+    "access": "READ"
+  },
+  {
+    "id": "models.saveConfig",
+    "group": "模型与密钥配置",
+    "label": "保存模型与密钥配置",
+    "controller": "com.link.linkagent.llm.config.controller.UserLlmConfigController",
+    "method": "saveConfig",
+    "access": "WRITE"
+  },
+  {
+    "id": "models.deleteConfig",
+    "group": "模型与密钥配置",
+    "label": "删除模型配置",
+    "controller": "com.link.linkagent.llm.config.controller.UserLlmConfigController",
+    "method": "deleteConfig",
+    "access": "WRITE"
+  },
+  {
+    "id": "models.testConnectivity",
+    "group": "模型与密钥配置",
+    "label": "测试模型连通性",
+    "controller": "com.link.linkagent.llm.config.controller.UserLlmConfigController",
+    "method": "testConnectivity",
+    "access": "WRITE"
+  },
+  {
+    "id": "usage.summarizeTask",
+    "group": "模型使用记录",
+    "label": "读取任务用量汇总",
+    "controller": "com.link.linkagent.llm.usage.LlmApiUsageController",
+    "method": "summarizeTask",
+    "access": "READ"
+  },
+  {
+    "id": "usage.listTaskCalls",
+    "group": "模型使用记录",
+    "label": "读取任务调用记录",
+    "controller": "com.link.linkagent.llm.usage.LlmApiUsageController",
+    "method": "listTaskCalls",
+    "access": "READ"
+  },
+  {
+    "id": "usage.listCalls",
+    "group": "模型使用记录",
+    "label": "读取全局调用记录",
+    "controller": "com.link.linkagent.llm.usage.LlmApiUsageController",
+    "method": "listCalls",
+    "access": "READ"
+  },
+  {
+    "id": "prompts.listPromptTemplates",
+    "group": "提示词模板",
+    "label": "列出提示词",
+    "controller": "com.link.linkagent.prompt.controller.PromptTemplateController",
+    "method": "listPromptTemplates",
+    "access": "READ"
+  },
+  {
+    "id": "prompts.getPromptTemplate",
+    "group": "提示词模板",
+    "label": "读取提示词",
+    "controller": "com.link.linkagent.prompt.controller.PromptTemplateController",
+    "method": "getPromptTemplate",
+    "access": "READ"
+  },
+  {
+    "id": "prompts.updatePromptTemplate",
+    "group": "提示词模板",
+    "label": "修改提示词",
+    "controller": "com.link.linkagent.prompt.controller.PromptTemplateController",
+    "method": "updatePromptTemplate",
+    "access": "WRITE"
+  },
+  {
+    "id": "settings.status",
+    "group": "平台设置",
+    "label": "读取状态",
+    "controller": "com.link.linkagent.settings.SettingsController",
+    "method": "status",
+    "access": "READ"
+  },
+  {
+    "id": "settings.updateToggle",
+    "group": "平台设置",
+    "label": "修改平台功能开关",
+    "controller": "com.link.linkagent.settings.SettingsController",
+    "method": "updateToggle",
+    "access": "WRITE"
+  },
+  {
+    "id": "settings.updateValue",
+    "group": "平台设置",
+    "label": "修改平台配置值",
+    "controller": "com.link.linkagent.settings.SettingsController",
+    "method": "updateValue",
+    "access": "WRITE"
+  },
+  {
+    "id": "settings.checkConnectivity",
+    "group": "平台设置",
+    "label": "检查依赖连通性",
+    "controller": "com.link.linkagent.settings.SettingsController",
+    "method": "checkConnectivity",
+    "access": "WRITE"
+  },
+  {
+    "id": "media.uploadVideo",
+    "group": "成片上传",
+    "label": "选择本地MP4并上传成片",
+    "controller": "",
+    "method": "",
+    "access": "WRITE"
+  }
+]

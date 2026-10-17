@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 import { CircleCheck, CircleX } from '@lucide/vue'
 import {
   deleteLlmConfig,
@@ -21,6 +22,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   toggleSection: []
 }>()
+useAssistantBusinessRefresh(['models.'], () => {
+  if (props.loadOnOpen && !editingLlmConfig.value && !llmConfigSaving.value) return loadLlmConfigs()
+})
 
 const llmConfigs = ref<UserLlmConfigRecord[]>([])
 const llmConfigLoading = ref(false)

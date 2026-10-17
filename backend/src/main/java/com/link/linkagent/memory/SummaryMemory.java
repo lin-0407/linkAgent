@@ -1,11 +1,14 @@
 package com.link.linkagent.memory;
 
 import com.link.linkagent.memory.model.ConversationMessageRecord;
+import com.link.linkagent.llm.DeepSeekThinkingOptionsFactory;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -53,6 +56,8 @@ public class SummaryMemory {
      */
     private final ChatModel memorySummaryModel;
 
+    private final DeepSeekThinkingOptionsFactory thinkingOptionsFactory;
+
     private final PromptService promptService;
 
     /**
@@ -93,13 +98,23 @@ public class SummaryMemory {
                          PromptService promptService,
                          SummaryReviewer summaryReviewer,
                          RuntimeSettingService runtimeSettingService,
-                         ConversationSessionMapper conversationSessionMapper) {
+                         ConversationSessionMapper conversationSessionMapper,
+                         DeepSeekThinkingOptionsFactory thinkingOptionsFactory) {
         this.properties = properties;
         this.memorySummaryModel = memorySummaryModel;
         this.promptService = promptService;
         this.summaryReviewer = summaryReviewer;
         this.runtimeSettingService = runtimeSettingService;
         this.conversationSessionMapper = conversationSessionMapper;
+        this.thinkingOptionsFactory = thinkingOptionsFactory;
+    }
+
+    /** 现有单测手动构造时不依赖思考配置，生产由上面的构造器显式注入。 */
+    public SummaryMemory(SummaryMemoryProperties properties, ChatModel memorySummaryModel, PromptService promptService,
+                         SummaryReviewer summaryReviewer, RuntimeSettingService runtimeSettingService,
+                         ConversationSessionMapper conversationSessionMapper) {
+        this(properties, memorySummaryModel, promptService, summaryReviewer, runtimeSettingService,
+                conversationSessionMapper, null);
     }
 
     /**
@@ -109,6 +124,7 @@ public class SummaryMemory {
     public SummaryMemory(SummaryMemoryProperties properties, ChatModel memorySummaryModel, PromptService promptService) {
         this.properties = properties;
         this.memorySummaryModel = memorySummaryModel;
+        this.thinkingOptionsFactory = null;
         this.promptService = promptService;
         // 单测构造器不接复核器与数据库：摘要在内存里生效，复核与持久化路径由生产构造器覆盖。
         this.summaryReviewer = null;
@@ -203,7 +219,17 @@ public class SummaryMemory {
                             List<String> reviewIssues) {
         try {
             String generated = MemoryCallTimeout.call("摘要生成",
-                    () -> memorySummaryModel.call(buildPrompt(existingSummary, messages, reviewIssues)));
+                    () -> {
+                        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.scene("摘要生成")) {
+                            String prompt = buildPrompt(existingSummary, messages, reviewIssues);
+                            if (thinkingOptionsFactory == null) {
+                                return memorySummaryModel.call(prompt);
+                            }
+                            // 摘要直接使用 ChatModel，必须逐次传入 low，不能遗漏这条绕过 LLMService 的调用。
+                            return memorySummaryModel.call(new Prompt(prompt, thinkingOptionsFactory.optionsForDefaultModel()))
+                                    .getResult().getOutput().getText();
+                        }
+                    });
             if (TextUtil.isBlank(generated)) {
                 // 模型返回空摘要时不能覆盖已有摘要，也不能让调用方去裁剪原文。
                 log.warn("摘要模型返回空内容，本轮不压缩，sessionId={}", sessionId);

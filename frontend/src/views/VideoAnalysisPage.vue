@@ -13,6 +13,11 @@ import BilibiliAccountPanel from '@/components/creator/BilibiliAccountPanel.vue'
 import BvBindingPanel from '@/components/creator/BvBindingPanel.vue'
 import LinkedVideoGrid from '@/components/creator/LinkedVideoGrid.vue'
 import { useCreatorStore } from '@/stores/creatorStore'
+import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
+useAssistantBusinessRefresh(['tasks.', 'bilibili.', 'feedback.', 'review.', 'screening.'], async () => {
+  await loadTasks()
+  await videoGrid.value?.refresh()
+})
 import type {
   BilibiliAccount,
   BilibiliVideo,
@@ -42,6 +47,8 @@ let readinessRequestGeneration = 0
 onMounted(loadTasks)
 
 watch(selectedBindTaskId, () => {
+  // 全局助手与页面的绑定目标保持一致，不能继续读取上一个创作任务。
+  creatorStore.setSelectedTaskId(selectedBindTaskId.value || null)
   void loadReadiness()
 })
 

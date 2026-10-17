@@ -12,4 +12,7 @@ public interface Tool {
     String getDescription();
 
     String execute(String input);
+
+    /** 按本轮任务提供工具，避免没有任务时让模型尝试业务操作。 */
+    default boolean isAvailable() { return true; }
 }

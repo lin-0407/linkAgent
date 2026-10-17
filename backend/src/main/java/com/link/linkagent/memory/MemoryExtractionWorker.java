@@ -103,7 +103,7 @@ public class MemoryExtractionWorker {
      */
     boolean pollAndProcessOnce() {
         try {
-            queue.poll(pollTimeoutSeconds).ifPresent(coordinator::processTask);
+            coordinator.consumeQueuedTask(queue, pollTimeoutSeconds);
             return true;
         } catch (Exception exception) {
             log.error("长期记忆消费循环出现异常，继续下一轮", exception);

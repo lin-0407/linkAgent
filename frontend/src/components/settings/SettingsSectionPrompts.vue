@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 import { listPromptTemplates, updatePromptContent } from '@/api/prompts'
 import type { PromptTemplate } from '@/types/prompts'
 
@@ -11,6 +12,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   toggleSection: []
 }>()
+useAssistantBusinessRefresh(['prompts.'], () => {
+  if (props.loadOnOpen && !expandedPromptKey.value && !promptSavingKey.value) return loadPrompts()
+})
 
 const promptTemplates = ref<PromptTemplate[]>([])
 const promptLoading = ref(false)

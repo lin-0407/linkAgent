@@ -96,6 +96,35 @@ public interface ConversationSessionMapper {
                                                                      @Param("afterId") long afterId,
                                                                      @Param("limit") int limit);
 
+    /** 新会话尚无对话消息时固定旧历史终点，避免把用户后来追加的消息卷进本次等待。 */
+    @Select("""
+            SELECT COALESCE(MAX(m.id), 0)
+            FROM t_conversation_message m
+            WHERE m.user_id = #{userId} AND m.session_id != #{sessionId}
+              AND m.role = 'assistant' AND m.is_deleted = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM t_conversation_message current_message
+                  WHERE current_message.user_id = #{userId}
+                    AND current_message.session_id = #{sessionId}
+                    AND current_message.role IN ('user', 'assistant')
+                    AND current_message.is_deleted = 0
+              )
+            """)
+    long findHistoryBoundaryForNewSession(@Param("userId") String userId, @Param("sessionId") String sessionId);
+
+    /** 从游标之后最早的消息开始处理，才能在推进游标时保证前面的消息没有被 LIMIT 跳过。 */
+    @Select("""
+            SELECT id, session_id, user_id, role, content, tool_name, token_count, create_time, is_deleted
+            FROM t_conversation_message
+            WHERE user_id = #{userId} AND id > #{afterId} AND id <= #{throughId}
+              AND role IN ('user', 'assistant') AND is_deleted = 0
+            ORDER BY id ASC LIMIT #{limit}
+            """)
+    List<ConversationMessageRecord> listMessagesInRangeForUser(@Param("userId") String userId,
+                                                              @Param("afterId") long afterId,
+                                                              @Param("throughId") long throughId,
+                                                              @Param("limit") int limit);
+
     /**
      * 查询会话最近一条摘要检查点。
      * <p>
