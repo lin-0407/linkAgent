@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 460" role="img" aria-labelledby="architecture-title architecture-desc" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" id="architecture-root">
+  <title id="architecture-title">系统架构</title>
+  <desc id="architecture-desc">Vue 前端通过 REST 与 SSE 连接 Spring Boot 后端；创作工作流、Agent 编排与媒体试映共享 MySQL、Redis、私有对象存储和外部模型服务。</desc>
+  <rect width="1000" height="460" fill="#f7f8fa"/>
+
+  <defs>
+      <style>#architecture-root { color: #18212b; font-family: 'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif; }
+      #architecture-root .wrap { overflow-x: auto; }</style>
+    <marker id="architecture-architecture-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4b5a6b"/></marker>
+    <marker id="architecture-architecture-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#066785"/></marker>
+    <marker id="architecture-architecture-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#008ac5"/></marker>
+    <marker id="architecture-architecture-arrow-sm" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#4b5a6b"/></marker>
+  </defs>
+<rect width="1000" height="460" fill="#f7f8fa"/>
+<text x="24" y="22" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" letter-spacing="0.16em">LINKAGENT / SYSTEM OVERVIEW</text>
+<rect x="170" y="44" width="560" height="228" rx="8" fill="#18212b" opacity="0.02"/>
+<rect x="170" y="44" width="560" height="228" rx="8" fill="none" stroke="#18212b" stroke-opacity="0.1" stroke-width="0.8"/>
+<rect x="184" y="38" width="64" height="12" rx="2" fill="#f7f8fa"/>
+<text x="216" y="48" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" letter-spacing="0.14em" text-anchor="middle">BACKEND</text>
+<line x1="140" y1="102" x2="300" y2="102" stroke="#008ac5" stroke-width="1.2" marker-end="url(#architecture-architecture-arrow-link)"/>
+<line x1="300" y1="118" x2="140" y2="118" stroke="#008ac5" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#architecture-architecture-arrow-link)"/>
+<rect x="196.0" y="86.0" width="48" height="12" rx="2" fill="#f7f8fa"/><text x="220" y="96" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="500" text-anchor="middle" letter-spacing="0.02em">REST</text>
+<rect x="201.0" y="122.0" width="38" height="12" rx="2" fill="#f7f8fa"/><text x="220" y="132" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="500" text-anchor="middle" letter-spacing="0.02em">SSE</text>
+<path d="M 350,134 V 152 Q 350,160 342,160 H 279 Q 271,160 271,168 V 180" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#architecture-architecture-arrow)"/>
+<path d="M 450,134 V 152 Q 450,160 442,160 H 449 Q 441,160 441,168 V 180" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#architecture-architecture-arrow)"/>
+<path d="M 550,134 V 152 Q 550,160 558,160 H 603 Q 611,160 611,168 V 180" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#architecture-architecture-arrow)"/>
+<path d="M 271,244 V 268 H 163 Q 155,268 155,276 V 300" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#architecture-architecture-arrow)"/>
+<path d="M 441,244 V 268 H 383 Q 375,268 375,276 V 300" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#architecture-architecture-arrow)"/>
+<path d="M 611,244 V 268 H 603 Q 595,268 595,276 V 300" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#architecture-architecture-arrow)"/>
+<path d="M 560,102 H 872 Q 880,102 880,110 V 176" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#architecture-architecture-arrow)"/>
+<rect x="671.0" y="86.0" width="98" height="12" rx="2" fill="#f7f8fa"/><text x="720" y="96" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="500" text-anchor="middle" letter-spacing="0.02em">LLM CALLS</text>
+<rect x="30" y="70" width="110" height="64" rx="6" fill="#f2f5f7" stroke="#667085" stroke-width="1"/>
+    <text x="85.0" y="99.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">Vue 3 前端</text>
+    <text x="85.0" y="116.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">UI · SSE</text>
+<rect x="300" y="70" width="260" height="64" rx="6" fill="#eaf6fa" stroke="#066785" stroke-width="1.2"/>
+    <text x="430.0" y="99.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">后端 API 层</text>
+    <text x="430.0" y="116.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">Spring Boot · REST</text>
+<rect x="196" y="180" width="150" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="204" y="188" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="217" y="197" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">WF</text>
+    <text x="271.0" y="209.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">创作工作流</text>
+    <text x="271.0" y="226.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">workflow</text>
+<rect x="366" y="180" width="150" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="374" y="188" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="387" y="197" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">AG</text>
+    <text x="441.0" y="209.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">Agent 编排</text>
+    <text x="441.0" y="226.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">ReAct · tools</text>
+<rect x="536" y="180" width="150" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="544" y="188" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="557" y="197" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">MD</text>
+    <text x="611.0" y="209.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">媒体与试映</text>
+    <text x="611.0" y="226.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">FFmpeg · ASR</text>
+<rect x="80" y="300" width="150" height="58" rx="6" fill="#eef1f4" stroke="#4b5a6b" stroke-width="1"/>
+    <rect x="88" y="308" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="101" y="317" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">DB</text>
+    <text x="155.0" y="326.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">MySQL</text>
+    <text x="155.0" y="343.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">tasks · prompts</text>
+<rect x="300" y="300" width="150" height="58" rx="6" fill="#eef1f4" stroke="#4b5a6b" stroke-width="1"/>
+    <rect x="308" y="308" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="321" y="317" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">KV</text>
+    <text x="375.0" y="326.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">Redis</text>
+    <text x="375.0" y="343.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">session · queue</text>
+<rect x="540" y="300" width="110" height="58" rx="6" fill="#eef1f4" stroke="#4b5a6b" stroke-width="1"/>
+    <rect x="548" y="308" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="561" y="317" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">S3</text>
+    <text x="595.0" y="326.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">私有 OSS</text>
+    <text x="595.0" y="343.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">MP4 · media</text>
+<rect x="800" y="176" width="160" height="64" rx="6" fill="#f2f5f7" stroke="#8a97a6" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="880.0" y="205.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">模型服务</text>
+    <text x="880.0" y="222.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">DeepSeek · DashScope</text>
+<line x1="24" y1="396" x2="976" y2="396" stroke="#e1e5ea" stroke-width="0.8"/>
+<text x="24" y="418" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" letter-spacing="0.12em">LEGEND</text>
+<rect x="96" y="410" width="18" height="12" rx="2" fill="#f2f5f7" stroke="#667085"/>
+<text x="120" y="420" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8">入口</text>
+<rect x="212" y="410" width="18" height="12" rx="2" fill="#ffffff" stroke="#18212b"/>
+<text x="236" y="420" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8">后端模块</text>
+<rect x="328" y="410" width="18" height="12" rx="2" fill="#eef1f4" stroke="#4b5a6b"/>
+<text x="352" y="420" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8">数据存储</text>
+<rect x="444" y="410" width="18" height="12" rx="2" fill="#f2f5f7" stroke="#8a97a6" stroke-dasharray="4,3"/>
+<text x="468" y="420" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8">外部服务</text>
+<text x="568" y="420" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8">→ 模型/服务调用</text>
+  </svg>

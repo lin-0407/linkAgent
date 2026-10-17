@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1064 284" role="img" aria-labelledby="creator-workflow-title creator-workflow-desc" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" id="creator-workflow-root">
+  <title id="creator-workflow-title">创作流水线</title>
+  <desc id="creator-workflow-desc">从选题材料到复盘沉淀的创作流水线，人工确认是发布方案生成与制作之间的唯一门禁。</desc>
+  <rect width="1064" height="284" fill="#f7f8fa"/>
+
+  <defs>
+      <style>#creator-workflow-root { color: #18212b; font-family: 'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif; }
+      #creator-workflow-root .wrap { overflow-x: auto; }</style>
+    <marker id="creator-workflow-creator-workflow-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4b5a6b"/></marker>
+    <marker id="creator-workflow-creator-workflow-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#066785"/></marker>
+    <marker id="creator-workflow-creator-workflow-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#008ac5"/></marker>
+    <marker id="creator-workflow-creator-workflow-arrow-sm" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto"><polygon points="0 0, 6 2.5, 0 5" fill="#4b5a6b"/></marker>
+  </defs>
+<rect width="1064" height="284" fill="#f7f8fa"/>
+<line x1="0" y1="36" x2="1064" y2="36" stroke="#18212b" stroke-opacity="0.12" stroke-width="0.8"/>
+<rect x="140" y="116" width="924" height="80" fill="#18212b" opacity="0.018"/>
+<line x1="0" y1="116" x2="1064" y2="116" stroke="#18212b" stroke-opacity="0.12" stroke-width="0.8"/>
+<line x1="0" y1="196" x2="1064" y2="196" stroke="#18212b" stroke-opacity="0.12" stroke-width="0.8"/>
+<line x1="140" y1="36" x2="140" y2="196" stroke="#18212b" stroke-opacity="0.2" stroke-width="1"/>
+<text x="24" y="22" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" letter-spacing="0.16em">LINKAGENT / CREATOR PIPELINE</text>
+<rect x="188" y="8" width="20" height="16" rx="8" fill="#18212b" fill-opacity="0.12"/>
+<text x="198" y="19" fill="#18212b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="600" text-anchor="middle">01</text>
+<text x="198" y="32" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" font-weight="500" text-anchor="middle" letter-spacing="0.1em">IDEA</text>
+<rect x="300" y="8" width="20" height="16" rx="8" fill="#18212b" fill-opacity="0.12"/>
+<text x="310" y="19" fill="#18212b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="600" text-anchor="middle">02</text>
+<text x="310" y="32" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" font-weight="500" text-anchor="middle" letter-spacing="0.1em">ALIGN</text>
+<rect x="412" y="8" width="20" height="16" rx="8" fill="#18212b" fill-opacity="0.12"/>
+<text x="422" y="19" fill="#18212b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="600" text-anchor="middle">03</text>
+<text x="422" y="32" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" font-weight="500" text-anchor="middle" letter-spacing="0.1em">PLAN</text>
+<rect x="524" y="8" width="20" height="16" rx="8" fill="#066785" fill-opacity="1"/>
+<text x="534" y="19" fill="#ffffff" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="600" text-anchor="middle">04</text>
+<text x="534" y="32" fill="#066785" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" font-weight="500" text-anchor="middle" letter-spacing="0.1em">CONFIRM</text>
+<rect x="636" y="8" width="20" height="16" rx="8" fill="#18212b" fill-opacity="0.12"/>
+<text x="646" y="19" fill="#18212b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="600" text-anchor="middle">05</text>
+<text x="646" y="32" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" font-weight="500" text-anchor="middle" letter-spacing="0.1em">BLUEPRINT</text>
+<rect x="748" y="8" width="20" height="16" rx="8" fill="#18212b" fill-opacity="0.12"/>
+<text x="758" y="19" fill="#18212b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="600" text-anchor="middle">06</text>
+<text x="758" y="32" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" font-weight="500" text-anchor="middle" letter-spacing="0.1em">PREFLIGHT</text>
+<rect x="860" y="8" width="20" height="16" rx="8" fill="#18212b" fill-opacity="0.12"/>
+<text x="870" y="19" fill="#18212b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="600" text-anchor="middle">07</text>
+<text x="870" y="32" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" font-weight="500" text-anchor="middle" letter-spacing="0.1em">PUBLISH</text>
+<rect x="972" y="8" width="20" height="16" rx="8" fill="#18212b" fill-opacity="0.12"/>
+<text x="982" y="19" fill="#18212b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" font-weight="600" text-anchor="middle">08</text>
+<text x="982" y="32" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" font-weight="500" text-anchor="middle" letter-spacing="0.1em">REVIEW</text>
+<text x="70.0" y="72.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" text-anchor="middle" letter-spacing="0.08em">CREATOR</text>
+<text x="70.0" y="85.0" fill="#667085" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="11" text-anchor="middle">创作者</text>
+<text x="70.0" y="152.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8" text-anchor="middle" letter-spacing="0.08em">LINKAGENT</text>
+<text x="70.0" y="165.0" fill="#667085" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="11" text-anchor="middle">AI 助手</text>
+<path d="M 198.0,108.0 V 108.0 Q 198.0,116.0 206.0,116.0 H 302.0 Q 310.0,116.0 310.0,124.0 V 124.0" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#creator-workflow-creator-workflow-arrow)"/>
+<line x1="360.0" y1="156.0" x2="372.0" y2="156.0" stroke="#4b5a6b" stroke-width="1" marker-end="url(#creator-workflow-creator-workflow-arrow)"/>
+<path d="M 422.0,124.0 V 124.0 Q 422.0,116.0 430.0,116.0 H 526.0 Q 534.0,116.0 534.0,108.0 V 108.0" fill="none" stroke="#066785" stroke-width="1.2" marker-end="url(#creator-workflow-creator-workflow-arrow-accent)"/>
+<path d="M 534.0,108.0 V 108.0 Q 534.0,116.0 542.0,116.0 H 638.0 Q 646.0,116.0 646.0,124.0 V 124.0" fill="none" stroke="#066785" stroke-width="1.2" marker-end="url(#creator-workflow-creator-workflow-arrow-accent)"/>
+<line x1="696.0" y1="156.0" x2="708.0" y2="156.0" stroke="#4b5a6b" stroke-width="1" marker-end="url(#creator-workflow-creator-workflow-arrow)"/>
+<path d="M 758.0,124.0 V 124.0 Q 758.0,116.0 766.0,116.0 H 862.0 Q 870.0,116.0 870.0,108.0 V 108.0" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#creator-workflow-creator-workflow-arrow)"/>
+<path d="M 870.0,108.0 V 108.0 Q 870.0,116.0 878.0,116.0 H 974.0 Q 982.0,116.0 982.0,124.0 V 124.0" fill="none" stroke="#4b5a6b" stroke-width="1" marker-end="url(#creator-workflow-creator-workflow-arrow)"/>
+<text x="1036" y="226" fill="#667085" font-family="'Instrument Serif','Noto Serif SC','Songti SC',serif" font-style="italic" font-size="14" text-anchor="end">复盘写回偏好与经验，服务下一期</text>
+<text x="144" y="212" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="7" letter-spacing="0.12em">FLOW</text>
+<line x1="192" y1="209" x2="236" y2="209" stroke="#4b5a6b" stroke-width="1" marker-end="url(#creator-workflow-creator-workflow-arrow)"/>
+<text x="244" y="212" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8">NORMAL STEP</text>
+<line x1="372" y1="209" x2="416" y2="209" stroke="#066785" stroke-width="1.2" marker-end="url(#creator-workflow-creator-workflow-arrow-accent)"/>
+<text x="424" y="212" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="8">HUMAN CONFIRM GATE</text>
+    <rect x="148" y="44.0" width="100" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="156" y="52.0" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="169" y="61.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">YOU</text>
+    <text x="198.0" y="73.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">选题材料</text>
+    <text x="198.0" y="90.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">materials</text>
+    <rect x="260" y="124.0" width="100" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="268" y="132.0" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="281" y="141.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">AGT</text>
+    <text x="310.0" y="153.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">意图对齐</text>
+    <text x="310.0" y="170.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">intent sync</text>
+    <rect x="372" y="124.0" width="100" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="380" y="132.0" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="393" y="141.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">AGT</text>
+    <text x="422.0" y="153.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">发布方案</text>
+    <text x="422.0" y="170.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">publish plan</text>
+    <rect x="484" y="44.0" width="100" height="64" rx="6" fill="#eaf6fa" stroke="#066785" stroke-width="1.2"/>
+    <rect x="492" y="52.0" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="505" y="61.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">YOU</text>
+    <text x="534.0" y="73.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">方案确认</text>
+    <text x="534.0" y="90.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">human gate</text>
+    <rect x="596" y="124.0" width="100" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="604" y="132.0" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="617" y="141.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">AGT</text>
+    <text x="646.0" y="153.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">制作蓝图</text>
+    <text x="646.0" y="170.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">production</text>
+    <rect x="708" y="124.0" width="100" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="716" y="132.0" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="729" y="141.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">AGT</text>
+    <text x="758.0" y="153.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">成片试映</text>
+    <text x="758.0" y="170.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">preflight</text>
+    <rect x="820" y="44.0" width="100" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="828" y="52.0" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="841" y="61.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">YOU</text>
+    <text x="870.0" y="73.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">发布绑定</text>
+    <text x="870.0" y="90.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">BV binding</text>
+    <rect x="932" y="124.0" width="100" height="64" rx="6" fill="#ffffff" stroke="#18212b" stroke-width="1"/>
+    <rect x="940" y="132.0" width="26" height="12" rx="2" fill="#18212b" opacity="0.08"/>
+    <text x="953" y="141.0" fill="#4b5a6b" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="6.5" font-weight="600" text-anchor="middle" letter-spacing="0.08em">AGT</text>
+    <text x="982.0" y="153.0" fill="#18212b" font-family="'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle">反馈复盘</text>
+    <text x="982.0" y="170.0" fill="#667085" font-family="'Geist Mono','Cascadia Code','SFMono-Regular',Consolas,monospace" font-size="9" text-anchor="middle" letter-spacing="0.02em">review</text>
+  </svg>
