@@ -13,6 +13,9 @@ import com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextS
 import com.link.linkagent.creator.bilibili.model.BilibiliVideoRecord;
 import com.link.linkagent.creator.creation.mapper.CreationWorkspaceMapper;
 import com.link.linkagent.creator.creation.mapper.CreationRuntimeMapper;
+import com.link.linkagent.creator.creation.mapper.GeneratedDraftMapper;
+import com.link.linkagent.creator.creation.service.GeneratedDraftPersistenceService;
+import com.link.linkagent.creator.creation.model.*;
 import com.link.linkagent.creator.creation.service.CreationRuntimeService;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Run;
 import com.link.linkagent.creator.media.processing.service.MediaProcessingService;
@@ -109,6 +112,8 @@ class MediaVersionPersistenceIntegrationTest {
     static CreationWorkspacePersistenceService selections;
     static CreationRuntimeMapper runtimeMapper;
     static CreationRuntimeService runtime;
+    static GeneratedDraftPersistenceService generated;
+    static GeneratedDraftMapper generatedMapper;
 
     @BeforeAll
     static void setup() throws Exception {
@@ -127,6 +132,7 @@ class MediaVersionPersistenceIntegrationTest {
         configuration.addMapper(CreatorTaskMapper.class);
         configuration.addMapper(CreationWorkspaceMapper.class);
         configuration.addMapper(CreationRuntimeMapper.class);
+        configuration.addMapper(GeneratedDraftMapper.class);
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setConfiguration(configuration);
@@ -155,6 +161,10 @@ class MediaVersionPersistenceIntegrationTest {
         var runtimeProxy = new ProxyFactory(new CreationRuntimeService(mapper, runtimeMapper, workspaceMapper, new ObjectMapper()));
         runtimeProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         runtime = (CreationRuntimeService) runtimeProxy.getProxy();
+        generatedMapper = session.getMapper(GeneratedDraftMapper.class);
+        var generatedProxy = new ProxyFactory(new GeneratedDraftPersistenceService(mapper, runtimeMapper, generatedMapper, new ObjectMapper()));
+        generatedProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+        generated = (GeneratedDraftPersistenceService) generatedProxy.getProxy();
         var selectionProxy = new ProxyFactory(new CreationWorkspacePersistenceService(mapper, workspaceMapper, readyGate));
         selectionProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         selections = (CreationWorkspacePersistenceService) selectionProxy.getProxy();
@@ -1248,6 +1258,261 @@ class MediaVersionPersistenceIntegrationTest {
         assertThat(response.bvid()).isEqualTo(bvid);
         assertThat(response.publishedVersionId()).isEqualTo(version.versionId());
         assertThat(response.bindingStatus()).isEqualTo("UID_MISMATCH");
+    }
+
+    @Test void generatedDraftRegistersIndependentlyAndDoesNotCompleteTheRun() {
+        String task = task(); var old = readyVideo(task, "before-generated");
+        var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        var attempt = prepareGenerated(lease, "attempt-one");
+        assertThat(mapper.findDraftVideo(task, "default").orElseThrow().versionId()).isEqualTo(old.versionId());
+        assertThat(count("creator_draft_video", task)).isEqualTo(1);
+        var value = generated.register(lease, attempt.attemptId());
+        assertThat(value.status()).isEqualTo("UPLOADED");
+        assertThat(value.durationMs()).isNull();
+        assertThat(value.versionNo()).isEqualTo(2);
+        assertThat(mapper.findDraftVideo(task, "default").orElseThrow().versionId()).isEqualTo(value.versionId());
+        assertThat(mapper.findDraftVideoByVersion(task, "default", old.versionId()).orElseThrow().status()).isEqualTo("READY_FOR_REVIEW");
+        var context = mapper.findVersionContext(task, "default", value.versionId()).orElseThrow();
+        assertThat(context.planningSkipped()).isFalse();
+        assertThat(context.snapshotJson()).contains("SYSTEM_RENDER", lease.runId(), "原始素材");
+        assertThat(runtimeMapper.run(task, "default", lease.runId()).orElseThrow().stage()).isEqualTo("ARTIFACT_READY");
+        assertThat(runtimeMapper.run(task, "default", lease.runId()).orElseThrow().status()).isEqualTo("RUNNING");
+        assertThatThrownBy(() -> runtime.complete(task, "default", lease.runId(), lease.worker(), lease.generation(), "{\"done\":true}"))
+                .hasMessageContaining("完整试映");
+        assertThat(mapper.listGeneratedObjectKeys(task, "default", value.versionId())).hasSize(8);
+        long revision = revision(task);
+        assertThat(generated.register(lease, attempt.attemptId()).versionId()).isEqualTo(value.versionId());
+        assertThat(revision(task)).isEqualTo(revision);
+        assertThat(count("creator_draft_video", task)).isEqualTo(2);
+    }
+
+    @Test void fullRunRequiresRealConfirmationEvenIfPlanningWasSkipped() {
+        String task = task(); runtime.initialize(task, "default", "budget", -1, cny("20"));
+        String input = "{\"publishingSessionId\":\"missing\",\"publishingResultId\":\"missing\",\"productionPlanId\":\"missing\",\"baseVersionId\":null,\"storyboardId\":\"board\",\"renderContentHash\":\"" + "c".repeat(64) + "\"}";
+        long before = revision(task);
+        assertThatThrownBy(() -> runtime.startProduction(task, "default", "full", before, input, cny("0"))).hasMessageContaining("真实发布确认");
+        assertThat(count("creator_creation_approval", task)).isZero();
+        assertThat(count("creator_creation_run", task)).isZero();
+        assertThat(revision(task)).isEqualTo(before);
+    }
+
+    @Test void fullRunAuthorizationIsAtomicIdempotentAndCannotBeUsedForPreparation() {
+        String task = task(); String input = fullInput(task, "c".repeat(64));
+        runtime.initialize(task, "default", "budget", revision(task), cny("20")); long before = revision(task);
+        var run = runtime.startProduction(task, "default", "full", before, input, cny("0"));
+        assertThat(runtime.startProduction(task, "default", "full", before, input, cny("0")).runId()).isEqualTo(run.runId());
+        assertThatThrownBy(() -> runtime.startProduction(task, "default", "full", before, input, cny("1"))).hasMessageContaining("内容不同");
+        runtime.cancel(task, "default", run.runId());
+        assertThatThrownBy(() -> runtime.start(task, "default", "TEXT", "wrong-kind", revision(task), run.approvalId(), input)).hasMessageContaining("不一致");
+        assertThatThrownBy(() -> runtime.start(task, "default", "FULL", "reuse-plan", revision(task), run.approvalId(), input)).hasMessageContaining("专属计划");
+    }
+
+    @Test void generatedDraftCannotSkipUnfinishedOrEmptyBlueprintSteps() {
+        String task = task(); var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        prepareGenerated(lease, "attempt-one");
+        jdbc.update("UPDATE creator_production_step SET status='PENDING' WHERE task_id=?", task);
+        assertThatThrownBy(() -> generated.register(lease, "attempt-one")).hasMessageContaining("尚未完成");
+        assertThat(count("creator_draft_video", task)).isZero();
+        jdbc.update("DELETE FROM creator_production_step WHERE task_id=?", task);
+        assertThatThrownBy(() -> generated.register(lease, "attempt-one")).hasMessageContaining("尚未完成");
+        assertThat(mapper.findMediaWorkspace(task, "default").orElseThrow().nextVersionNo()).isEqualTo(1);
+    }
+
+    @Test void generatedDraftCannotUseChangedContentOrStoryboard() {
+        String task = task(); var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        assertThatThrownBy(() -> generated.prepare(lease, "attempt", "a".repeat(64), "b".repeat(64), "board", "bucket", generatedFiles()))
+                .hasMessageContaining("授权不一致");
+        assertThatThrownBy(() -> generated.prepare(lease, "attempt", "a".repeat(64), "c".repeat(64), "other", "bucket", generatedFiles()))
+                .hasMessageContaining("授权不一致");
+        assertThat(count("creator_creation_render_attempt", task)).isZero();
+    }
+
+    @Test void generatedAttemptReplayRejectsChangedManifestOrGeneration() {
+        String task = task(); var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        var first = prepareGenerated(lease, "attempt");
+        assertThat(prepareGenerated(lease, "attempt").versionId()).isEqualTo(first.versionId());
+        assertThatThrownBy(() -> generated.prepare(lease, "attempt", "b".repeat(64), "c".repeat(64), "board", "bucket", generatedFiles())).hasMessageContaining("同一尝试");
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,-1,NOW(6)) WHERE run_id=?", lease.runId());
+        var claimed = runtime.claim(task, "default", lease.runId(), "replacement", 600).orElseThrow();
+        var replacement = new GeneratedDraftLease(task, "default", lease.runId(), "replacement", claimed.leaseGeneration());
+        assertThatThrownBy(() -> generated.register(lease, "attempt")).hasMessageContaining("失效");
+        assertThatThrownBy(() -> prepareGenerated(replacement, "attempt")).hasMessageContaining("代数");
+        var next = prepareGenerated(replacement, "attempt-two");
+        assertThat(generated.register(replacement, next.attemptId()).versionId()).isEqualTo(next.versionId());
+        assertThatThrownBy(() -> generated.register(replacement, first.attemptId())).hasMessageContaining("代数");
+        assertThat(count("creator_draft_video", task)).isEqualTo(1);
+    }
+
+    @Test void cancelledOrRevokedProductionCannotRegisterUploadedObjects() {
+        String task = task(); var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        prepareGenerated(lease, "attempt"); runtime.cancel(task, "default", lease.runId());
+        assertThatThrownBy(() -> generated.register(lease, "attempt")).hasMessageContaining("取消");
+        assertThat(mapper.findDraftVideo(task, "default")).isEmpty();
+        String second = task(); var secondLease = fullLease(second, fullInput(second, "c".repeat(64)));
+        prepareGenerated(secondLease, "attempt");
+        var run = runtimeMapper.run(second, "default", secondLease.runId()).orElseThrow();
+        runtime.revokeApproval(second, "default", run.approvalId());
+        assertThatThrownBy(() -> generated.register(secondLease, "attempt")).hasMessageContaining("失效");
+        assertThat(count("creator_draft_video", second)).isZero();
+    }
+
+    @Test void changedCurrentVersionDuringUploadCannotBeOverwritten() {
+        String task = task(); var old = readyVideo(task, "before-generated");
+        var lease = fullLease(task, fullInput(task, "c".repeat(64))); prepareGenerated(lease, "attempt");
+        jdbc.update("UPDATE creator_creation_workspace SET current_video_version_id=NULL WHERE task_id=?", task);
+        assertThatThrownBy(() -> generated.register(lease, "attempt")).hasMessageContaining("基准成片");
+        assertThat(count("creator_draft_video", task)).isEqualTo(1);
+        assertThat(mapper.findDraftVideoByVersion(task, "default", old.versionId())).isPresent();
+    }
+
+    @Test void systemRenderedContextDoesNotInheritTaskPlanningSkip() {
+        String task = task(); var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        jdbc.update("UPDATE creator_task SET planning_skipped=1 WHERE task_id=?", task);
+        var attempt = prepareGenerated(lease, "attempt"); var draft = generated.register(lease, attempt.attemptId());
+        assertThat(mapper.findVersionContext(task, "default", draft.versionId()).orElseThrow().planningSkipped()).isFalse();
+    }
+
+    @Test void generatedMediaDeletionIncludesEveryRegisteredArtifact() {
+        String task = task(); var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        prepareGenerated(lease, "attempt"); var draft = generated.register(lease, "attempt");
+        runtime.cancel(task, "default", lease.runId()); runtime.acknowledgeCancellation(task, "default", lease.runId(), lease.worker(), lease.generation());
+        var storage = mockStorage(); new MediaDeletionService(mapper, processing, reviews, storage).deleteMedia("default", task, draft.versionId());
+        verify(storage, times(8)).deleteObject(eq("bucket"), anyString());
+        assertThat(mapper.findDraftVideoByVersion(task, "default", draft.versionId()).orElseThrow().mediaDeletedAt()).isNotNull();
+        assertThat(mapper.findVersionContext(task, "default", draft.versionId())).isPresent();
+    }
+
+    @Test void failedContextInsertRollsBackVersionNumberAndPointer() {
+        String task = task(); var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        var attempt = prepareGenerated(lease, "attempt");
+        jdbc.update("INSERT INTO creator_video_version_context (version_id,task_id,owner_id,snapshot_json) VALUES (?,?,'default','{}')", attempt.versionId(), task);
+        assertThatThrownBy(() -> generated.register(lease, "attempt")).isInstanceOf(DataIntegrityViolationException.class);
+        assertThat(count("creator_draft_video", task)).isZero();
+        assertThat(mapper.findMediaWorkspace(task, "default").orElseThrow().nextVersionNo()).isEqualTo(1);
+        assertThat(mapper.findDraftVideo(task, "default")).isEmpty();
+        assertThat(generatedMapper.attempt(task, "default", lease.runId(), "attempt").orElseThrow().status()).isEqualTo("UPLOADING");
+    }
+
+    @Test void registeredOutputRestoresAcrossLeaseTakeoverWithoutReselecting() {
+        String task = task(); var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        var attempt = prepareGenerated(lease, "attempt"); var draft = generated.register(lease, "attempt");
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,-1,NOW(6)) WHERE run_id=?", lease.runId());
+        var next = runtime.claim(task, "default", lease.runId(), "replacement", 600).orElseThrow();
+        var replacement = new GeneratedDraftLease(task, "default", lease.runId(), "replacement", next.leaseGeneration());
+        long before = revision(task);
+        assertThat(generated.restoreRegistered(replacement, attempt.attemptId(), attempt.inputHash()).orElseThrow().versionId()).isEqualTo(draft.versionId());
+        assertThat(revision(task)).isEqualTo(before);
+        assertThatThrownBy(() -> generated.restoreRegistered(replacement, "other", attempt.inputHash())).hasMessageContaining("其他尝试");
+    }
+
+    @Test void concurrentGeneratedRegistrationCreatesExactlyOneVersion() throws Exception {
+        String task = task(); var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        prepareGenerated(lease, "attempt"); var go = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(() -> { go.await(); return generated.register(lease, "attempt").versionId(); });
+            var second = pool.submit(() -> { go.await(); return generated.register(lease, "attempt").versionId(); });
+            go.countDown(); assertThat(first.get(15, TimeUnit.SECONDS)).isEqualTo(second.get(15, TimeUnit.SECONDS));
+        }
+        assertThat(count("creator_draft_video", task)).isEqualTo(1);
+    }
+
+    @Test
+    @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named="LINKAGENT_GENERATED_NATIVE", matches="true")
+    void realRenderedVideoSurvivesPrivateStorageRegistrationProbeAndDeletion(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
+        var json = new ObjectMapper();
+        java.nio.file.Path source = java.nio.file.Path.of(System.getenv("LINKAGENT_RENDERER_SAMPLE_ROOT"));
+        var document = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(source.resolve("input.json").toFile());
+        var content = document.deepCopy(); content.remove(List.of("runId", "attemptId", "inputHash"));
+        var sorted = json.copy().enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+        String contentHash = nativeSha(sorted.writeValueAsBytes(json.convertValue(content, Map.class)));
+        String task = task();
+        var input = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(fullInput(task, contentHash));
+        input.put("storyboardId", document.path("storyboardId").asText());
+        var lease = fullLease(task, json.writeValueAsString(input));
+        String attemptId = "actual-storage-attempt";
+        java.nio.file.Path attempt = java.nio.file.Files.createDirectories(root.resolve(lease.runId()).resolve(attemptId));
+        for (var asset : document.path("assets")) {
+            String name = asset.path("path").asText(); java.nio.file.Path target = attempt.resolve(name).normalize();
+            assertThat(target.startsWith(attempt)).isTrue();
+            java.nio.file.Files.createDirectories(target.getParent()); java.nio.file.Files.copy(source.resolve(name), target);
+        }
+        document.put("runId", lease.runId()).put("attemptId", attemptId); document.remove("inputHash");
+        String inputHash = nativeSha(sorted.writeValueAsBytes(json.convertValue(document, Map.class)));
+        document.put("inputHash", inputHash); java.nio.file.Path inputFile = attempt.resolve("input.json"); json.writeValue(inputFile.toFile(), document);
+        var rendererProperties = new com.link.linkagent.creator.creation.render.FixedProjectRendererProperties();
+        rendererProperties.setEnabled(true); rendererProperties.setPythonPath("python"); rendererProperties.setModuleRoot("/opt/renderer");
+        rendererProperties.setWorkRoot(root.toString()); rendererProperties.setTimeout(Duration.ofSeconds(120));
+        var renderer = new com.link.linkagent.creator.creation.render.FixedProjectRenderService(rendererProperties, json);
+        var request = new com.link.linkagent.creator.creation.render.FixedProjectRenderService.Request(inputFile, lease.runId(), attemptId,
+                document.path("storyboardId").asText(), inputHash);
+        renderer.render(request, () -> false);
+        try (var store = new GenericContainer<>("rustfs/rustfs:latest").withEnv("RUSTFS_ACCESS_KEY", "isolated-generated")
+                .withEnv("RUSTFS_SECRET_KEY", "isolated-generated-secret").withCommand("rustfs", "/data")
+                .withCreateContainerCmdModifier(cmd -> cmd.withUser("0")).withExposedPorts(9000)
+                .withLabels(Map.of("linkagent.scope", "creation-s3b")).waitingFor(Wait.forListeningPort().withStartupTimeout(Duration.ofMinutes(2)))) {
+            store.start(); String endpoint = "http://" + store.getHost() + ":" + store.getMappedPort(9000);
+            var properties = new ObjectStorageProperties(); properties.setInternalEndpoint(endpoint); properties.setBrowserEndpoint(endpoint);
+            properties.setProviderEndpoint(endpoint); properties.setAccessKey("isolated-generated"); properties.setSecretKey("isolated-generated-secret");
+            properties.setRegion("us-east-1"); properties.setBucket("generated-video-test"); properties.setPathStyleAccess(true);
+            var config = new com.link.linkagent.creator.media.config.ObjectStorageConfiguration();
+            var s3Config = config.mediaS3Configuration(properties); var credentials = config.mediaS3CredentialsProvider(properties);
+            try (var client = config.mediaS3Client(properties, s3Config, credentials);
+                 var presigner = config.mediaS3Presigner(properties, s3Config, credentials)) {
+                client.createBucket(b -> b.bucket(properties.getBucket()));
+                var storage = new com.link.linkagent.creator.media.storage.S3ObjectStorageService(client, presigner, presigner, properties);
+                var service = new com.link.linkagent.creator.creation.service.GeneratedDraftService(renderer, generated, storage, properties, json);
+                var draft = service.registerGeneratedDraft(lease, request, () -> false);
+                assertThat(draft.status()).isEqualTo("UPLOADED");
+                assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).hasSize(8);
+                assertThat(service.registerGeneratedDraft(lease, request, () -> false).versionId()).isEqualTo(draft.versionId());
+                var mediaProperties = new CreatorMediaProperties(); mediaProperties.setEnabled(true);
+                var ffprobe = new com.link.linkagent.creator.media.probe.service.FfprobeMediaProbeService(mediaProperties, json);
+                try {
+                    var probe = new com.link.linkagent.creator.media.probe.service.DraftVideoProbeService(mediaProperties, storage, ffprobe, mapper,
+                            new DraftVideoProbeRecoveryService(mediaProperties, mapper));
+                    var probed = probe.probeDraftVideo("default", task, draft.versionId());
+                    assertThat(probed.durationMs()).isBetween(84100L, 84240L);
+                    assertThat(probed.status()).isEqualTo("READY_FOR_REVIEW");
+                    assertThat(readyGate.inspectPostPublishReadiness(task, "default", "发布").ready()).isFalse();
+                } finally { org.springframework.test.util.ReflectionTestUtils.invokeMethod(ffprobe, "closeOutputReaderExecutor"); }
+                runtime.cancel(task, "default", lease.runId()); runtime.acknowledgeCancellation(task, "default", lease.runId(), lease.worker(), lease.generation());
+                new MediaDeletionService(mapper, processing, reviews, storage).deleteMedia("default", task, draft.versionId());
+                assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).isEmpty();
+                assertThat(mapper.findVersionContext(task, "default", draft.versionId())).isPresent();
+                System.out.println("S3B_NATIVE_STORAGE_PROBE_DELETE_OK durationMs=84167 files=8");
+            }
+        }
+    }
+
+    private static String nativeSha(byte[] bytes) throws Exception {
+        return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+    }
+
+    private static List<GeneratedDraftFile> generatedFiles() {
+        return List.of("video.mp4", "subtitles.srt", "cover.png", "frame-start.png", "frame-middle.png", "frame-end.png", "render.log", "manifest.json")
+                .stream().map(name -> new GeneratedDraftFile(name, name.endsWith(".mp4") ? "video/mp4" : name.endsWith(".png") ? "image/png"
+                        : name.endsWith(".srt") ? "application/x-subrip" : name.endsWith(".json") ? "application/json" : "text/plain", 1024, "a".repeat(64))).toList();
+    }
+
+    private static GeneratedDraftAttempt prepareGenerated(GeneratedDraftLease lease, String attempt) {
+        return generated.prepare(lease, attempt, "a".repeat(64), "c".repeat(64), "board", "bucket", generatedFiles());
+    }
+
+    private static GeneratedDraftLease fullLease(String task, String input) {
+        runtime.initialize(task, "default", "budget-full", revision(task), cny("20"));
+        var queued = runtime.startProduction(task, "default", "full", revision(task), input, cny("0"));
+        var claimed = runtime.claim(task, "default", queued.runId(), "generated-worker", 600).orElseThrow();
+        return new GeneratedDraftLease(task, "default", claimed.runId(), "generated-worker", claimed.leaseGeneration());
+    }
+
+    private static String fullInput(String task, String contentHash) {
+        String plan = confirmedPlan(task);
+        jdbc.update("UPDATE creator_production_plan SET production_method='AI_GENERATION' WHERE plan_id=?", plan);
+        jdbc.update("INSERT INTO creator_production_step (step_id,plan_id,task_id,sequence_no,phase,step_name,objective,status) VALUES (?,?,?,1,'SCRIPT','真实产物步骤夹具','仅验证持久化','COMPLETED')", UUID.randomUUID().toString(), plan, task);
+        var values = jdbc.queryForMap("SELECT session_id,confirmed_result_id FROM creator_workflow_session WHERE task_id=? ORDER BY id DESC LIMIT 1", task);
+        var input = new GeneratedDraftInput(values.get("session_id").toString(), values.get("confirmed_result_id").toString(), plan,
+                mapper.findDraftVideo(task, "default").map(DraftVideoRecord::versionId).orElse(null), "board", contentHash);
+        try { return new ObjectMapper().writeValueAsString(input); } catch (Exception e) { throw new IllegalStateException(e); }
     }
 
     private static String confirmedPlan(String task) {

@@ -1621,7 +1621,7 @@ CREATE TABLE IF NOT EXISTS creator_creation_approval
     approval_id VARCHAR(64) PRIMARY KEY COMMENT '真实动作取得的执行授权标识',
     task_id VARCHAR(64) NOT NULL COMMENT '创作任务',
     owner_id VARCHAR(64) NOT NULL COMMENT '个人工作台媒体归属',
-    approval_kind VARCHAR(32) NOT NULL COMMENT '当前支持准备授权，不代表整片制作确认',
+    approval_kind VARCHAR(32) NOT NULL COMMENT '准备或整片执行授权，均不替代发布方案确认',
     input_fingerprint CHAR(64) NOT NULL COMMENT '不可变输入摘要',
     max_additional_cost_cny DECIMAL(18,6) NOT NULL COMMENT '此授权全部运行合计的费用上限',
     idempotency_key VARCHAR(128) NOT NULL COMMENT '授权动作幂等键',
@@ -1691,6 +1691,29 @@ CREATE TABLE IF NOT EXISTS creator_creation_cost_entry
     KEY idx_creation_cost_approval (task_id, owner_id, approval_id),
     KEY idx_creation_cost_run (run_id, status)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '制作费用预留及未知用量保留';
+
+CREATE TABLE IF NOT EXISTS creator_creation_render_attempt
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '明确的整片制作运行',
+    attempt_id VARCHAR(64) NOT NULL COMMENT '每次执行独立的尝试标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    lease_generation BIGINT NOT NULL COMMENT '创建清单时的租约代数，接管不能复用旧尝试',
+    version_id VARCHAR(64) NOT NULL COMMENT '后端预分配的视频身份，登记前不创建成片行',
+    production_plan_id VARCHAR(64) NOT NULL COMMENT '本运行专属制作蓝图',
+    input_hash CHAR(64) NOT NULL COMMENT '完整渲染输入摘要',
+    bundle_hash CHAR(64) NOT NULL COMMENT '本地固定文件清单摘要',
+    bucket_name VARCHAR(255) NOT NULL COMMENT '由部署配置选择的私有存储桶',
+    objects_json JSON NOT NULL COMMENT '上传前冻结的固定文件、对象键、类型、字节数和摘要',
+    status VARCHAR(32) NOT NULL DEFAULT 'UPLOADING' COMMENT '上传中或已登记为成片；未登记不能视为完整版本',
+    registered_run_key VARCHAR(64) GENERATED ALWAYS AS (IF(status='REGISTERED',run_id,NULL)) STORED COMMENT '同一运行最多登记一个输出版本',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '清单登记时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近状态变化',
+    PRIMARY KEY (run_id,attempt_id),
+    UNIQUE KEY uk_render_attempt_version (version_id),
+    UNIQUE KEY uk_render_registered_run (registered_run_key),
+    KEY idx_render_attempt_task (task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统渲染产物上传清单及版本登记事实';
 
 CREATE TABLE IF NOT EXISTS creator_video_version_context
 (

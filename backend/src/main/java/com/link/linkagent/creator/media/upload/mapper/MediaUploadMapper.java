@@ -32,6 +32,49 @@ import java.util.Optional;
 @Mapper
 public interface MediaUploadMapper {
 
+    /** 系统成片必须固定真实确认与专属蓝图，不能使用任务的已有成片跳过标志。 */
+    @Select("""
+            SELECT JSON_OBJECT('schemaVersion',1,'source','SYSTEM_RENDER','planningSkipped',0,
+                'publishingPlan',JSON_OBJECT('suggestionId',g.suggestion_id,'contentSummary',g.content_summary,
+                    'audienceProfile',g.audience_profile,'contentPositioning',g.content_positioning,
+                    'titles',g.title_suggestions,'description',g.description_suggestion),
+                'productionPlan',JSON_OBJECT('planId',p.plan_id,'title',p.plan_title,'corePromise',p.core_promise,
+                    'targetDurationMs',p.target_duration_ms,'productionMethod',p.production_method,'sourceSnapshot',p.source_snapshot,
+                    'steps',(SELECT JSON_ARRAYAGG(JSON_OBJECT('stepId',x.step_id,'name',x.step_name,'status',x.status,'skipReason',x.skip_reason))
+                        FROM creator_production_step x WHERE x.plan_id=p.plan_id AND x.task_id=t.task_id AND x.is_deleted=0)),
+                'materials',(SELECT JSON_OBJECTAGG(m.material_type,m.content) FROM creator_material m
+                    WHERE m.task_id=t.task_id AND m.is_deleted=0))
+            FROM creator_task t
+            JOIN creator_workflow_session s ON s.task_id=t.task_id AND s.user_id=t.user_id AND s.session_id=#{sessionId}
+                AND s.stage='PRE_PUBLISH' AND s.status='CONFIRMED' AND s.confirmed_result_id=#{resultId} AND s.is_deleted=0
+            JOIN creator_suggestion g ON g.task_id=t.task_id AND g.suggestion_id=#{resultId} AND g.is_deleted=0
+            JOIN creator_production_plan p ON p.task_id=t.task_id AND p.owner_id=t.user_id AND p.plan_id=#{planId}
+                AND p.production_method='AI_GENERATION' AND p.status='READY' AND p.is_deleted=0
+            WHERE t.task_id=#{taskId} AND t.user_id=#{ownerId} AND t.is_deleted=0
+                AND (#{latest}=0 OR s.id=(SELECT MAX(s2.id) FROM creator_workflow_session s2
+                    WHERE s2.task_id=t.task_id AND s2.stage='PRE_PUBLISH' AND s2.is_deleted=0))
+                AND (#{complete}=0 OR (EXISTS (SELECT 1 FROM creator_production_step x WHERE x.task_id=t.task_id AND x.plan_id=p.plan_id AND x.is_deleted=0)
+                    AND NOT EXISTS (SELECT 1 FROM creator_production_step x
+                    WHERE x.task_id=t.task_id AND x.plan_id=p.plan_id AND x.is_deleted=0 AND x.status NOT IN ('COMPLETED','SKIPPED')))
+                )
+            """)
+    Optional<String> findGeneratedProductionContext(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+            @Param("sessionId") String sessionId, @Param("resultId") String resultId, @Param("planId") String planId,
+            @Param("complete") boolean complete, @Param("latest") boolean latest);
+
+    @Select("""
+            SELECT COUNT(*) FROM creator_creation_run WHERE task_id=#{taskId} AND owner_id=#{ownerId}
+                AND kind IN ('FULL','REVISION') AND JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(request_json),request_json,'{}'),'$.productionPlanId'))=#{planId}
+            """)
+    int countProductionPlanRuns(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("planId") String planId);
+
+    @Select("""
+            SELECT o.object_key FROM creator_creation_render_attempt a
+            JOIN JSON_TABLE(a.objects_json,'$[*]' COLUMNS(object_key VARCHAR(1000) PATH '$.objectKey')) o
+            WHERE a.task_id=#{taskId} AND a.owner_id=#{ownerId} AND a.version_id=#{versionId} AND a.status='REGISTERED'
+            """)
+    List<String> listGeneratedObjectKeys(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("versionId") String versionId);
+
     @Select("""
             SELECT version_id, task_id, owner_id, planning_skipped, publishing_session_id,
                    publishing_result_id, production_plan_id, snapshot_json

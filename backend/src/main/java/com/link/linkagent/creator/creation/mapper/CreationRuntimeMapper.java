@@ -40,7 +40,7 @@ public interface CreationRuntimeMapper {
     Optional<Approval> approvalByKey(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("key") String key);
     @Select("SELECT * FROM creator_creation_approval WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND approval_id=#{approvalId}")
     Optional<Approval> approval(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("approvalId") String approvalId);
-    @Insert("INSERT INTO creator_creation_approval (approval_id, task_id, owner_id, approval_kind, input_fingerprint, max_additional_cost_cny, idempotency_key, request_hash) VALUES (#{approvalId}, #{taskId}, #{ownerId}, 'PREPARATION', #{inputFingerprint}, #{maxAdditionalCostCny}, #{idempotencyKey}, #{requestHash})")
+    @Insert("INSERT INTO creator_creation_approval (approval_id, task_id, owner_id, approval_kind, input_fingerprint, max_additional_cost_cny, idempotency_key, request_hash) VALUES (#{approvalId}, #{taskId}, #{ownerId}, #{approvalKind}, #{inputFingerprint}, #{maxAdditionalCostCny}, #{idempotencyKey}, #{requestHash})")
     int insertApproval(Approval approval);
     @Update("UPDATE creator_creation_approval SET status='REVOKED' WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND approval_id=#{approvalId} AND status='ACTIVE'")
     int revoke(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("approvalId") String approvalId);
@@ -111,4 +111,11 @@ public interface CreationRuntimeMapper {
     int closeReservations(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("runId") String runId);
     @Select("SELECT COUNT(*) FROM creator_creation_cost_entry WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND run_id=#{runId} AND status='RESERVED'")
     int pendingReservations(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("runId") String runId);
+
+    @Update("""
+            UPDATE creator_creation_run SET stage='ARTIFACT_READY',run_revision=run_revision+1
+            WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND run_id=#{runId} AND status='RUNNING'
+                AND lease_owner=#{worker} AND lease_generation=#{generation} AND lease_expires_at>CURRENT_TIMESTAMP(6)
+            """)
+    int artifactReady(com.link.linkagent.creator.creation.model.GeneratedDraftLease lease);
 }

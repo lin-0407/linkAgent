@@ -120,9 +120,33 @@ public class CreationRuntimeService {
         return startLocked(taskId, ownerId, kind, key, expectedRevision + 1, approval.approvalId(), requestJson, null);
     }
 
+    /** 内部确认入口：受理整片固定工程，不把准备授权升级为整片授权。 */
+    public Run startProduction(String taskId, String ownerId, String key, long expectedRevision,
+                               String requestJson, BigDecimal maxCost) {
+        lock(taskId, ownerId); media.lockTaskDraftVersions(taskId, ownerId); key(key);
+        String input = canonical(json, requestJson); productionInput(json, input); maxCost = money(maxCost, true);
+        String approvalKey = "production-" + hash(key);
+        String requestHash = hash("PRODUCTION:" + hash(input) + ":" + maxCost.toPlainString() + ":" + expectedRevision);
+        var previous = mapper.approvalByKey(taskId, ownerId, approvalKey);
+        Approval approval;
+        if (previous.isPresent()) {
+            approval = previous.get();
+            if (!requestHash.equals(approval.requestHash())) throw conflict("相同幂等键对应的授权内容不同");
+        } else {
+            var current = initialized(taskId, ownerId); revision(current, expectedRevision); idle(taskId, ownerId, current);
+            if (maxCost.compareTo(current.budgetLimitCny()) > 0) throw conflict("授权费用不能超过任务预算");
+            approval = new Approval(newId(), taskId, ownerId, "PRODUCTION", hash(input), maxCost, approvalKey,
+                    requestHash, "ACTIVE", null);
+            mapper.insertApproval(approval);
+            if (mapper.bump(taskId, ownerId, expectedRevision) != 1) throw conflict("工作区已变化");
+        }
+        return startLocked(taskId, ownerId, "FULL", key, expectedRevision + 1, approval.approvalId(), input, null);
+    }
+
     public Run retry(String taskId, String ownerId, String originalRunId, String key, long expectedRevision) {
         lock(taskId, ownerId); media.lockTaskDraftVersions(taskId, ownerId);
         var original = run(taskId, ownerId, originalRunId);
+        if ("FULL".equals(original.kind())) throw conflict("整片运行重试需要新制作计划，当前尚未接入");
         if (!Set.of("FAILED", "CANCELLED").contains(original.status())) throw conflict("仅失败或已取消的运行可以重试");
         return startLocked(taskId, ownerId, original.kind(), key, expectedRevision, original.approvalId(),
                 original.requestJson(), original.runId());
@@ -131,7 +155,7 @@ public class CreationRuntimeService {
     private Run startLocked(String taskId, String ownerId, String kind, String key, long expectedRevision,
                             String approvalId, String requestJson, String parent) {
         key(key); id(approvalId);
-        if (kind == null || !Set.of("TEXT", "PREPARE").contains(kind)) throw conflict("当前运行基础仅接受文稿或素材准备任务");
+        if (kind == null || !Set.of("TEXT", "PREPARE", "FULL").contains(kind)) throw conflict("当前运行基础仅接受文稿、素材准备或已授权整片任务");
         String input = canonical(json, requestJson); String fingerprint = hash(input);
         String requestHash = hash(kind + ":" + fingerprint + ":" + approvalId + ":" + expectedRevision + ":" + parent);
         var previous = mapper.runByKey(taskId, ownerId, key);
@@ -142,8 +166,18 @@ public class CreationRuntimeService {
         var current = initialized(taskId, ownerId); revision(current, expectedRevision); idle(taskId, ownerId, current);
         if (media.countPublishingFacts(taskId, ownerId) > 0) throw conflict("已进入发布后流程，不能启动制作运行");
         var approval = approval(taskId, ownerId, approvalId);
-        if (!"ACTIVE".equals(approval.status()) || !"PREPARATION".equals(approval.approvalKind())
+        if ("FULL".equals(kind) && !"PRODUCTION".equals(approval.approvalKind())) throw conflict("准备授权仅接受文稿或素材准备任务");
+        if (!"ACTIVE".equals(approval.status()) || !("FULL".equals(kind) ? "PRODUCTION" : "PREPARATION").equals(approval.approvalKind())
                 || !fingerprint.equals(approval.inputFingerprint())) throw conflict("授权已失效或与当前输入不一致");
+        if ("FULL".equals(kind)) {
+            var context = productionInput(json, input);
+            if (media.findGeneratedProductionContext(taskId, ownerId, context.publishingSessionId(), context.publishingResultId(),
+                    context.productionPlanId(), false, true).isEmpty()) throw conflict("整片制作需要真实发布确认和专属 AI 制作计划");
+            if (media.countProductionPlanRuns(taskId, ownerId, context.productionPlanId()) > 0)
+                throw conflict("本制作计划已经用于另一条整片运行，请准备新的专属计划");
+            if (!Objects.equals(context.baseVersionId(), media.findMediaWorkspace(taskId, ownerId).orElseThrow().currentVideoVersionId()))
+                throw conflict("基准成片已变化，请刷新后重新确认");
+        }
         var value = new Run(newId(), taskId, ownerId, kind, "QUEUED", "QUEUED", parent, approvalId,
                 approval.maxAdditionalCostCny(), fingerprint, input, key, requestHash, 0, null, 0, null, null,
                 0, null, null, null, null, null);
@@ -180,6 +214,7 @@ public class CreationRuntimeService {
 
     public Run complete(String taskId, String ownerId, String runId, String worker, long generation, String resultJson) {
         lock(taskId, ownerId);
+        if ("FULL".equals(run(taskId, ownerId, runId).kind())) throw conflict("整片必须完成真实媒体处理、完整试映和发布包，当前尚不能完成");
         if (mapper.pendingReservations(taskId, ownerId, runId) > 0) throw conflict("请先结算或标记调用费用状态");
         return finish(taskId, ownerId, runId, worker, generation, "RUNNING", "COMPLETED", null,
                 canonical(json, resultJson), null);

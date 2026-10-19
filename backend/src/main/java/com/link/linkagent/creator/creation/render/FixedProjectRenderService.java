@@ -43,6 +43,28 @@ public class FixedProjectRenderService {
     /** 业务身份来自已受理运行，不能从工程里的身份反向推断。 */
     public record Request(Path input, String runId, String attemptId, String storyboardId, String inputHash) { }
 
+    public record VerifiedOutput(RenderArtifacts artifacts, String projectJson) { }
+
+    /** 恢复或上传前重新验收工作目录，调用方仍须核对持久化租约和内容授权。 */
+    public VerifiedOutput verifyExisting(Request request, BooleanSupplier cancelled) {
+        validate(request);
+        Runnable check = () -> {
+            if (Thread.currentThread().isInterrupted() || cancelled.getAsBoolean()) throw failure("CANCELLED", "本次渲染已取消");
+        };
+        try {
+            Path root = Path.of(properties.getWorkRoot()).toRealPath();
+            Path attempt = root.resolve(request.runId()).resolve(request.attemptId());
+            Path input = request.input().toAbsolutePath().normalize();
+            if (!attempt.toRealPath().equals(attempt) || !input.startsWith(attempt)
+                    || !input.toRealPath().equals(input)) throw failure("INVALID_INPUT", "工程路径不属于本次尝试");
+            JsonNode project = verifier.input(input, request);
+            String before = RenderArtifactVerifier.digest(input, check);
+            RenderArtifacts result = verifier.verify(attempt.resolve("rendered"), project, request, check);
+            if (!before.equals(RenderArtifactVerifier.digest(input, check))) throw failure("INPUT_CHANGED", "验收期间工程已变化");
+            return new VerifiedOutput(result, json.writeValueAsString(project));
+        } catch (IOException e) { throw failure("INVALID_ARTIFACT", "无法读取本次工程或产物"); }
+    }
+
     public RenderArtifacts render(Request request, BooleanSupplier cancelled) {
         validate(request);
         if (cancelled == null) throw new IllegalArgumentException("必须提供取消检查");

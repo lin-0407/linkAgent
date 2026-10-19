@@ -11,6 +11,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.TreeSet;
+import java.util.Set;
+import com.link.linkagent.creator.creation.model.GeneratedDraftInput;
 
 /** 固定指纹与金额规则，避免 JSON 键顺序和浮点舍入改变幂等或预算含义。 */
 final class CreationInputRules {
@@ -33,8 +35,11 @@ final class CreationInputRules {
         return value;
     }
     static String canonical(ObjectMapper mapper, String value) {
+        return canonical(mapper, value, 65536);
+    }
+    private static String canonical(ObjectMapper mapper, String value, int maxBytes) {
         try {
-            if (value == null || value.getBytes(StandardCharsets.UTF_8).length > 65536) throw conflict("输入内容过大或为空");
+            if (value == null || value.getBytes(StandardCharsets.UTF_8).length > maxBytes) throw conflict("输入内容过大或为空");
             JsonNode node = mapper.reader().with(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
                     .with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(value);
             if (node == null || !node.isObject() || node.isEmpty()) throw conflict("输入必须是非空结构化对象");
@@ -61,6 +66,31 @@ final class CreationInputRules {
     static String hash(String value) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }
         catch (java.security.NoSuchAlgorithmException exception) { throw new IllegalStateException(exception); }
+    }
+
+    static GeneratedDraftInput productionInput(ObjectMapper mapper, String value) {
+        try {
+            JsonNode node = mapper.readTree(canonical(mapper, value));
+            Set<String> fields = new TreeSet<>(); node.fieldNames().forEachRemaining(fields::add);
+            if (!fields.equals(Set.of("publishingSessionId", "publishingResultId", "productionPlanId",
+                    "baseVersionId", "storyboardId", "renderContentHash"))) throw conflict("整片制作依据字段不完整");
+            for (String name : Set.of("publishingSessionId", "publishingResultId", "productionPlanId", "storyboardId"))
+                id(node.path(name).isTextual() ? node.path(name).textValue() : null);
+            if (!node.path("baseVersionId").isNull()) id(node.path("baseVersionId").textValue());
+            String hash = node.path("renderContentHash").asText();
+            if (!hash.matches("[0-9a-f]{64}")) throw conflict("工程内容摘要不正确");
+            return new GeneratedDraftInput(node.path("publishingSessionId").textValue(), node.path("publishingResultId").textValue(),
+                    node.path("productionPlanId").textValue(), node.path("baseVersionId").textValue(), node.path("storyboardId").textValue(), hash);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) { throw conflict("整片制作依据无效"); }
+    }
+
+    static String renderContentHash(ObjectMapper mapper, String document) {
+        try {
+            // 渲染工程沿用 S2 的 256KiB 上限，不能被运行控制请求的 64KiB 上限意外截断。
+            ObjectNode content = (ObjectNode) mapper.readTree(canonical(mapper, document, 256 * 1024));
+            content.remove(java.util.List.of("runId", "attemptId", "inputHash"));
+            return hash(canonical(mapper, mapper.writeValueAsString(content), 256 * 1024));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) { throw conflict("工程内容无效"); }
     }
     static ResponseStatusException conflict(String reason) { return new ResponseStatusException(HttpStatus.CONFLICT, reason); }
 }

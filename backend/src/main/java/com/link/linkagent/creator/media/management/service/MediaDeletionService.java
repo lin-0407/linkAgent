@@ -124,6 +124,8 @@ public class MediaDeletionService {
         for (MediaUploadRecord upload : uploads) {
             addObject(objects, draft.bucketName(), upload.objectKey());
         }
+        for (String key : uploadMapper.listGeneratedObjectKeys(draft.taskId(), draft.ownerId(), draft.versionId()))
+            addObject(objects, draft.bucketName(), key);
         addObject(objects, draft.bucketName(), draft.objectKey());
         objects.values().forEach(object -> storage.deleteObject(object.bucketName(), object.objectKey()));
     }
