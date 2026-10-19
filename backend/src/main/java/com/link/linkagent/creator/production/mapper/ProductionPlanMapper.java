@@ -87,7 +87,7 @@ public interface ProductionPlanMapper {
                 update_time = CURRENT_TIMESTAMP
             WHERE task_id = #{taskId}
               AND owner_id = #{ownerId}
-              AND status <> 'SUPERSEDED'
+              AND status IN ('CREATED', 'UPLOADING', 'VERIFYING')
               AND is_deleted = 0
             """)
     int invalidateMediaUploads(@Param("taskId") String taskId,
@@ -97,10 +97,13 @@ public interface ProductionPlanMapper {
             UPDATE creator_media_processing_job
             SET status = 'FAILED',
                 failure_message = '制作蓝图已重新定位，原处理任务已失效',
-                is_deleted = 1,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                completed_at = CURRENT_TIMESTAMP,
                 update_time = CURRENT_TIMESTAMP
             WHERE task_id = #{taskId}
               AND owner_id = #{ownerId}
+              AND status IN ('QUEUED', 'RUNNING')
               AND is_deleted = 0
             """)
     int invalidateMediaProcessingJobs(@Param("taskId") String taskId,
@@ -110,10 +113,16 @@ public interface ProductionPlanMapper {
             UPDATE creator_preflight_review
             SET status = 'CANCELLED',
                 cancel_requested = 1,
-                is_deleted = 1,
+                current_step = 'DONE',
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                next_run_at = NULL,
+                completed_at = CURRENT_TIMESTAMP,
+                event_sequence = event_sequence + 1,
                 update_time = CURRENT_TIMESTAMP
             WHERE task_id = #{taskId}
               AND owner_id = #{ownerId}
+              AND status IN ('QUEUED', 'RUNNING', 'RETRY_WAIT', 'CANCEL_REQUESTED')
               AND is_deleted = 0
             """)
     int invalidatePreflightReviews(@Param("taskId") String taskId,
@@ -121,23 +130,16 @@ public interface ProductionPlanMapper {
 
     @Update("""
             UPDATE creator_draft_video
-            SET duration_ms = NULL,
-                width = NULL,
-                height = NULL,
-                frame_rate = NULL,
-                video_codec = NULL,
-                audio_codec = NULL,
-                has_audio = NULL,
-                probe_attempt_id = NULL,
-                current_review_id = NULL,
-                status = 'UPLOAD_ABORTED',
+            SET probe_attempt_id = NULL,
+                status = CASE WHEN status = 'PROBING' THEN 'PROBE_FAILED' ELSE 'UPLOAD_ABORTED' END,
                 update_time = CURRENT_TIMESTAMP
             WHERE task_id = #{taskId}
               AND owner_id = #{ownerId}
+              AND status IN ('UPLOADING', 'PROBING')
               AND is_deleted = 0
             """)
-    int resetDraftVideosForReposition(@Param("taskId") String taskId,
-                                      @Param("ownerId") String ownerId);
+    int cancelUnfinishedDraftsForReposition(@Param("taskId") String taskId,
+                                           @Param("ownerId") String ownerId);
 
     /**
      * 只回退已经进入反馈或复盘的任务，避免把 DRAFT 等更早状态错误推进到发布前完成。

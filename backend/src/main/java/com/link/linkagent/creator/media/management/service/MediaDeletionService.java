@@ -48,6 +48,11 @@ public class MediaDeletionService {
     public void deleteMedia(String ownerId, String taskId, String versionId) {
         String normalizedTaskId = taskId.trim();
         String normalizedVersionId = versionId.trim();
+        uploadMapper.lockMediaTask(normalizedTaskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+        if (uploadMapper.countActiveCreationRuns(normalizedTaskId, ownerId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "制作运行尚未结束，不能删除媒体");
+        }
         processingMapper.lockDraftVersion(normalizedTaskId, ownerId, normalizedVersionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
         DraftVideoRecord draft = uploadMapper.findDraftVideoByVersion(

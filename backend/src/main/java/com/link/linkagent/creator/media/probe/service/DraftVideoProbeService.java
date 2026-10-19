@@ -101,9 +101,9 @@ public class DraftVideoProbeService {
     }
 
     /**
-     * 查询任务当前唯一成片的持久化事实。
+     * 查询任务当前选中成片的持久化事实。
      * <p>
-     * P0 固定一个任务只维护 V1，因此工作台不需要知道内部 versionId 也能恢复媒体门禁状态。
+     * 工作台通过工作区指针恢复状态；未采纳工作区的旧任务仍读取原 V1。
      */
     public DraftVideoResponse getCurrentDraftVideo(String ownerId, String taskId) {
         DraftVideoRecord draft = mediaUploadMapper.findDraftVideo(taskId.trim(), ownerId)

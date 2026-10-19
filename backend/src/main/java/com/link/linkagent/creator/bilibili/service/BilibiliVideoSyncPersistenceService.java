@@ -18,11 +18,13 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -69,6 +71,8 @@ public class BilibiliVideoSyncPersistenceService {
         Map<String, BilibiliVideoSyncItem> validVideos = collectValidVideos(account, payload, warningSet);
         LocalDateTime syncTime = LocalDateTime.now();
 
+        // 全部任务锁先于缓存写入，避免绑定事务持有任务锁却等待同步占用的缓存行。
+        List<TaskVideoBindingRecord> lockedBindings = lockUnchangedBindings(account, bindings, warningSet);
         for (BilibiliVideoSyncItem item : validVideos.values()) {
             bilibiliMapper.insertVideo(toVideoRecord(account.getBilibiliUid(), item, syncTime));
         }
@@ -83,7 +87,7 @@ public class BilibiliVideoSyncPersistenceService {
         int linkedCount = 0;
         int anomalyCount = 0;
         if (bindings != null) {
-            for (TaskVideoBindingRecord binding : bindings) {
+            for (TaskVideoBindingRecord binding : lockedBindings) {
                 BindingDecision decision = decideBinding(
                         account,
                         binding,
@@ -97,12 +101,19 @@ public class BilibiliVideoSyncPersistenceService {
                 if (!canUpdateBindingStatus(binding, decision.status(), warningSet)) {
                     continue;
                 }
-                bilibiliMapper.updateBindingStatus(
+                int updated = bilibiliMapper.updateBindingStatus(
                         binding.getBindingId(),
                         decision.status(),
                         decision.message()
                 );
+                if (updated == 0) {
+                    continue;
+                }
                 if ("BOUND".equals(decision.status())) {
+                    if (!"BOUND".equals(binding.getBindingStatus())) {
+                        bilibiliMapper.freezePublishedSnapshot(binding.getBindingId());
+                    }
+                    bilibiliMapper.markBoundVersionPublished(binding.getBindingId());
                     linkedCount++;
                 } else {
                     anomalyCount++;
@@ -146,6 +157,32 @@ public class BilibiliVideoSyncPersistenceService {
         );
     }
 
+    private List<TaskVideoBindingRecord> lockUnchangedBindings(BilibiliAccountRecord account,
+            List<TaskVideoBindingRecord> bindings, Set<String> warningSet) {
+        List<TaskVideoBindingRecord> result = new ArrayList<>();
+        if (bindings == null) return result;
+        for (TaskVideoBindingRecord previous : bindings.stream().filter(Objects::nonNull)
+                .sorted(Comparator.comparing(TaskVideoBindingRecord::getTaskId)).toList()) {
+            if (!Objects.equals(account.getUserId(), previous.getUserId())
+                    || !mediaWorkflowGateService.lockTaskForBindingSync(previous.getTaskId(), previous.getUserId())) {
+                warningSet.add("同步期间任务已删除或归属已变化，已跳过其BV绑定更新");
+                continue;
+            }
+            TaskVideoBindingRecord binding = bilibiliMapper.lockBindingByTaskId(previous.getTaskId()).orElse(null);
+            // 外部同步等待期间用户可能修正 BV 或重新定位，只能应用于原来的同一绑定。
+            if (binding == null || !Objects.equals(previous.getBindingId(), binding.getBindingId())
+                    || !Objects.equals(previous.getBvid(), binding.getBvid())
+                    || !Objects.equals(previous.getBilibiliUid(), binding.getBilibiliUid())
+                    || !Objects.equals(previous.getUserId(), binding.getUserId())
+                    || !Objects.equals(previous.getPublishedVersionId(), binding.getPublishedVersionId())) {
+                warningSet.add("同步期间BV绑定已变化，已跳过过期校验结果，请重新同步");
+                continue;
+            }
+            result.add(binding);
+        }
+        return result;
+    }
+
     /**
      * 同步账号缓存和负向校验事实可以继续写入，但不能借由旧 WAITING_VERIFY 记录绕过成片试映推进为 BOUND。
      * <p>
@@ -158,14 +195,19 @@ public class BilibiliVideoSyncPersistenceService {
             return true;
         }
         try {
-            mediaWorkflowGateService.ensureReadyForPostPublish(
+            // 历史空值不能靠当前视频补齐，用户重新提交绑定后才有明确版本。
+            if (!TextUtil.hasText(binding.getPublishedVersionId())) {
+                warningSet.add("历史绑定未记录发布版本，请重新确认BV绑定后再同步");
+                return false;
+            }
+            mediaWorkflowGateService.ensureBoundVersionReady(
                     binding.getTaskId(),
                     binding.getUserId(),
-                    "BV绑定"
+                    binding.getPublishedVersionId()
             );
             return true;
         } catch (ResponseStatusException exception) {
-            warningSet.add("存在尚未完成成片媒体探测的任务，已跳过其BV绑定通过状态更新");
+            warningSet.add("绑定的成片版本尚未完成媒体探测或试映，已跳过其BV绑定通过状态更新");
             return false;
         }
     }

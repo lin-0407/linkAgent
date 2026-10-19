@@ -67,6 +67,12 @@ public class MediaProcessingService {
         this.objectMapper = objectMapper;
     }
 
+    private void ensureNoCreationRun(String taskId, String ownerId) {
+        if (mediaUploadMapper.countActiveCreationRuns(taskId, ownerId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "制作运行尚未结束，请使用制作入口管理媒体任务");
+        }
+    }
+
     public MediaProcessingEstimate estimate(String ownerId,
                                             String taskId,
                                             String versionId,
@@ -85,8 +91,11 @@ public class MediaProcessingService {
                                                 String versionId,
                                                 MediaProcessingOptionsRequest options) {
         validateEnabledConfiguration();
+        mediaUploadMapper.lockMediaTask(taskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
         processingMapper.lockDraftVersion(taskId, ownerId, versionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        ensureNoCreationRun(taskId, ownerId);
         DraftVideoRecord draft = requireReadyDraft(ownerId, taskId, versionId);
         MediaProcessingJobRecord current = processingMapper.findCurrentJob(taskId, ownerId, versionId)
                 .orElse(null);
@@ -177,8 +186,11 @@ public class MediaProcessingService {
                                                String versionId,
                                                String jobId) {
         // 重试也锁定成片记录，避免用户删除媒体的同时把失败任务重新排队。
+        mediaUploadMapper.lockMediaTask(taskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
         processingMapper.lockDraftVersion(taskId, ownerId, versionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        ensureNoCreationRun(taskId, ownerId);
         requireReadyDraft(ownerId, taskId, versionId);
         MediaProcessingJobRecord job = requireJob(ownerId, taskId, versionId, jobId);
         if (!"FAILED".equals(job.status())) {

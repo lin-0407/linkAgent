@@ -146,9 +146,22 @@ agent:
       enabled: ${SUMMARY_MEMORY_ENABLED:true}
       # 触发压缩的 token 阈值（官方词表本地计量）。256k 占 1M 窗口的 25.6%，给输出（上限 384K）留足余量。
       trigger-token-threshold: ${SUMMARY_MEMORY_TRIGGER_TOKEN_THRESHOLD:256000}
+      # 压缩后保留尾部的 token 预算（官方词表本地计量），默认 16k：按整条消息从尾部往前累计。
+      # 工具执行结果进入会话历史后，固定留 2 条会把用户问题和本轮工具证据裁光，所以改成按 token 留。
+      # 设为 0 时退回 retained-message-count。
+      retained-token-budget: ${SUMMARY_MEMORY_RETAINED_TOKEN_BUDGET:16000}
+      # 只在拿不到 token 计量器（单测最小构造）或 token 预算为 0 时兜底：压缩后保留的消息条数。
       retained-message-count: ${SUMMARY_MEMORY_RETAINED_MESSAGE_COUNT:2}
+      # 摘要正文字数上限：0 表示不限制（作者 2026-10-18 取消 5000 字上限，压缩后原文不再保留，优先保信息）。
+      max-chars: ${SUMMARY_MEMORY_MAX_CHARS:0}
       # 压缩时抽取的事实点达到这个分数（1-100）才写入长期记忆；低于高分线的只留在摘要里，不单独占记忆条目。
       fact-importance-threshold: ${SUMMARY_MEMORY_FACT_IMPORTANCE_THRESHOLD:80}
+      # 摘要正文 token 预算：超过视为不合格（不落库、不裁剪），避免模型把爬取清单逐条搬进摘要导致输出膨胀/被截断。
+      max-summary-tokens: ${SUMMARY_MEMORY_MAX_SUMMARY_TOKENS:12000}
+      # 摘要生成请求的 max_tokens（包含思考 token）；0 表示不显式设置、交给供应商默认值。
+      max-output-tokens: ${SUMMARY_MEMORY_MAX_OUTPUT_TOKENS:32768}
+      # 压缩失败后的重试冷却：上下文再涨这么多 token 才允许下一次尝试；0 表示关闭冷却、每轮都可重试。
+      retry-token-delta: ${SUMMARY_MEMORY_RETRY_TOKEN_DELTA:16000}
     extract:
       # 递减预算初值：期望每 10 轮触发一次 × 平均每轮重要性 20（1-100 口径）＝ 200，见设计文档 D17.3 / 9.3 的 V2 起步值。
       # 预算与游标都存在 Redis，重启不丢；想更快看到触发效果就调小这个值。

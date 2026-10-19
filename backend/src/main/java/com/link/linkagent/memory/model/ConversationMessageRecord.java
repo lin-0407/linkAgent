@@ -21,6 +21,19 @@ public class ConversationMessageRecord {
     private String role;
     private String content;
     private String toolName;
+    /**
+     * 原生协议工具调用 id。
+     * <p>
+     * assistant 的 tool_call 消息与紧随其后的 tool 结果消息共用同一个 id；
+     * 普通消息和摘要检查点为 null。长期记忆增量查询靠它排除工具调用行。
+     */
+    private String toolCallId;
+    /**
+     * assistant 工具调用参数摘要（≤300 字）。
+     * <p>
+     * 只有 tool_call 消息有值，tool 结果消息为 null；用它和 tool 结果行区分开。
+     */
+    private String toolArguments;
     private Integer tokenCount;
     private LocalDateTime createTime;
     private Integer isDeleted;
@@ -71,6 +84,22 @@ public class ConversationMessageRecord {
 
     public void setToolName(String toolName) {
         this.toolName = toolName;
+    }
+
+    public String getToolCallId() {
+        return toolCallId;
+    }
+
+    public void setToolCallId(String toolCallId) {
+        this.toolCallId = toolCallId;
+    }
+
+    public String getToolArguments() {
+        return toolArguments;
+    }
+
+    public void setToolArguments(String toolArguments) {
+        this.toolArguments = toolArguments;
     }
 
     public Integer getTokenCount() {

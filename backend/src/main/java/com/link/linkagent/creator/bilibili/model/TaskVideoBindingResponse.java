@@ -15,6 +15,7 @@ public record TaskVideoBindingResponse(
         String bindingStatus,
         String verifyMessage,
         LocalDateTime createTime,
-        LocalDateTime updateTime
+        LocalDateTime updateTime,
+        String publishedVersionId
 ) {
 }

@@ -130,10 +130,10 @@ public class SummaryFactExtractor {
         return Math.min(MAX_IMPORTANCE, Math.max(MIN_IMPORTANCE, importance));
     }
 
-    /** 与被压缩消息保持同一文本格式，便于模型对照原文摘录。 */
+    /** 与被压缩消息保持同一文本格式，便于模型对照原文摘录；工具调用渲染成 ToolCall: 工具(参数)。 */
     private String formatMessages(List<MemoryMessage> messages) {
         return messages.stream()
-                .map(message -> MemoryObservationContext.prefix(message) + message.role() + ": " + message.content())
+                .map(message -> MemoryObservationContext.prefix(message) + message.role() + ": " + message.promptText())
                 .reduce((left, right) -> left + "\n" + right)
                 .orElse("");
     }

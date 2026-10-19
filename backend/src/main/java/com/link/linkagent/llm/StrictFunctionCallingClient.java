@@ -73,12 +73,17 @@ public class StrictFunctionCallingClient {
         }
         OpenAiChatOptions options = buildOptions(tools, toolChoice, disableThinking, maxTokens);
         try {
-            return client().prompt()
+            ChatResponse response = client().prompt()
                     .system(systemPrompt == null ? "" : systemPrompt)
                     .messages(messages)
                     .options(options)
                     .call()
                     .chatResponse();
+            // 记录真实请求形状与消息：下一轮摘要压缩要原样重放它（tools/thinking/tool_choice/消息任何一处不同，
+            // 供应商端的 prompt 前缀都会在正文之前分叉，25 万 token 就命中不了缓存）。
+            ChatReplayContext.record(ChatRequestEnvelope.strict(systemPrompt, messages, tools, toolChoice,
+                    disableThinking, maxTokens));
+            return response;
         } catch (RuntimeException exception) {
             // 端点或 Provider 不支持 strict 时进入短暂冷却，让同一请求的旧链路回退不再重复撞 Beta。
             disabledUntilNanos = System.nanoTime() + FAILURE_COOLDOWN_NANOS;

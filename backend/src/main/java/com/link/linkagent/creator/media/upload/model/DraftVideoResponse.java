@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
  *
  * @param versionId        成片版本唯一标识（UUID）
  * @param taskId           关联的创作任务 ID
- * @param versionNo        版本号（P0 固定为 1）
+ * @param versionNo        任务内版本序号，旧版本不随新上传被覆盖
  * @param versionName      用户填写的版本名称
  * @param originalFileName 用户原文件名（仅展示用）
  * @param contentType      媒体类型（以对象存储实际记录为准）

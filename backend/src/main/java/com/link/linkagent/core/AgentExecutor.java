@@ -1,6 +1,8 @@
 package com.link.linkagent.core;
 
 import com.link.linkagent.dto.AgentChatResponse;
+import com.link.linkagent.llm.ChatReplayContext;
+import com.link.linkagent.llm.ChatRequestEnvelope;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.LlmCallResult;
 import com.link.linkagent.llm.StrictToolCall;
@@ -24,6 +26,7 @@ import com.link.linkagent.memory.SummaryFactExtractionResult;
 import com.link.linkagent.memory.SummaryFactExtractor;
 import com.link.linkagent.memory.SummaryFactPoint;
 import com.link.linkagent.memory.SummaryMemory;
+import com.link.linkagent.memory.SummaryReplayPrefix;
 import com.link.linkagent.memory.model.AgentStepRecord;
 import com.link.linkagent.memory.model.AgentTraceRecord;
 import com.link.linkagent.memory.model.ConversationMessageRecord;
@@ -49,6 +52,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -99,11 +103,62 @@ public class AgentExecutor {
     private final boolean structuredKernelDefaultEnabled;
 
     /**
+     * 每个会话最近一次真实请求的「可复用信封」（2026-10，DSH 式缓存优化）。
+     * <p>
+     * 摘要压缩发生在下一轮请求组装时，这时上一轮真实请求的 prompt 还留在 DeepSeek 前缀缓存里。
+     * 只记 system/对话文本不够：供应商渲染前缀时还会带上 tools、thinking 等请求形状，任何一处不同都会让
+     * 25 万 token 在正文之前分叉。所以这里存的是 LLMService 实际发出的完整请求信封，
+     * 压缩时用它原样重放、只在末尾追加指令。没记到（评测首次压缩、进程刚重启）时退回冷启动 prompt。
+     */
+    private final Map<String, LastRequest> lastRequestPrefixes = new ConcurrentHashMap<>();
+
+    /**
+     * 上次压缩失败时的上下文 token 数（按会话）。
+     * <p>
+     * 压缩失败后原文仍保留，下一轮只多几千 token 就再次触发压缩，会在阈值附近连续烧「生成 + 复核」；
+     * 记下失败点，等上下文再涨 {@code retry-token-delta} 才允许重试，把失败重试从每轮一次降到隔几轮一次。
+     * 成功压缩后清除记录。
+     */
+    private final Map<String, Integer> compactionFailureTokens = new ConcurrentHashMap<>();
+
+    /**
+     * 一次真实请求的可复用信封。
+     *
+     * @param envelope 真实请求的出口、请求形状与当时的消息列表
+     * @param summary  当次请求里摘要块的正文，用来验证信封没有过期
+     */
+    private record LastRequest(ChatRequestEnvelope envelope, String summary) {
+    }
+
+    /**
+     * 最多保留多少个会话的请求信封。
+     * <p>
+     * 信封里带着上一轮完整请求消息（长会话可达几十万 token 的文本），不能无限存。
+     * 压缩永远只用到「当前会话最近一轮」，超出上限时淘汰任意旧会话即可，淘汰只影响缓存命中、不影响正确性。
+     */
+    private static final int MAX_CACHED_REPLAY_SESSIONS = 8;
+
+    /**
      * ReAct 最大迭代次数。防止 LLM 陷入死循环或工具调用递归耗尽资源（Token 成本 + CPU 时间）。
      * 10 次对大多数任务够用——常规问题 2~4 轮解决，复杂多步推理很少超过 8 轮。
      */
     private static final int MAX_ITERATIONS = 10;
 
+    /**
+     * 写进会话历史的工具参数摘要上限（字符数）。
+     * <p>
+     * 只保留定位一次调用所需的信息；完整参数仍在 t_agent_step.tool_input 里，需要回查时去那里拿。
+     * 不设上限时，一次带长文本参数的调用就能把整轮历史撑大，和「按 token 压缩」的计量口径对不上。
+     */
+    private static final int TOOL_MESSAGE_ARGUMENT_MAX_CHARS = 300;
+
+    /**
+     * 写进会话历史的工具结果上限（字符数）。
+     * <p>
+     * 和 {@link ToolResultCompressor} 的 2000 字符压缩阈值同口径：存储侧只做原文截断，不再额外调模型压缩，
+     * 避免每个工具步骤在持久化时多花一次模型调用；当轮模型看到的仍是压缩器给出的版本（≤6000 字）。
+     */
+    private static final int TOOL_MESSAGE_RESULT_MAX_CHARS = 2000;
     /**
      * 格式错误时的标准 Observation 文本。当 LLM 未按 Thought/Action/Action Input 格式输出时，
      * 将此文本作为 Observation 回灌到对话中，让 LLM 看到错误后自行修正下一步输出。
@@ -279,22 +334,31 @@ public class AgentExecutor {
         String resolvedSessionId = resolveSessionId(sessionId);
         String resolvedUserId = resolveUserId(userId);
         AgentPersistenceContext persistenceContext = startAgentTrace(resolvedSessionId, resolvedUserId, userMessage);
+        // 采集本轮第一次真实请求的信封；压缩会发生在下一轮组装上下文时，届时用它重放前缀。
+        // 计划执行模式成功时本函数会提前返回，那种轮次没有可复用的真实对话请求，作用域留到计划模式之后再开启。
+        ChatReplayContext.Scope replayScope = null;
 
         try {
             // 拼接记忆 + 用户输入作为对话起点；token 超过阈值时在这里先压缩（设计文档 A2 / A5）
-            StringBuilder conversation = new StringBuilder(
-                    buildConversationContext(resolvedSessionId, resolvedUserId, userMessage).text());
+            ContextAssembly assembly = buildConversationContext(resolvedSessionId, resolvedUserId, userMessage);
+            StringBuilder conversation = new StringBuilder(assembly.text());
 
             AgentExecutionMode selectedMode = executionModeRouter.route(requestedMode, userMessage);
-            if (selectedMode != AgentExecutionMode.REACT) conversation.insert(0,requestContext + "\n");
+            // 平台快照只在非 REACT 模式前置；它属于真实请求文本的一部分，压缩重放时由信封 + preamble 带上。
+            if (selectedMode != AgentExecutionMode.REACT) conversation.insert(0, requestContext + "\n");
             AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
             if (plannedResult != null) {
                 if (TextUtil.hasText(plannedResult.finalAnswer())) {
-                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer(), persistenceContext.totalTokens);
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer(),
+                            persistenceContext.totalTokens, plannedResult.steps());
                 }
                 completeAgentTrace(persistenceContext, 1, plannedResult.finalAnswer(), plannedResult.totalSteps(), null);
                 return toChatResponse(resolvedSessionId, plannedResult);
             }
+
+            // 从这里开始才是真正发对话请求的路径：开启采集作用域，记下本轮请求与当时的摘要版本。
+            replayScope = ChatReplayContext.begin();
+            replayScope.summary(assembly.summary());
 
             // === 结构化内核路径（阶段 5.4+） ===
             // 每步通过 chatStructured 产出受 JSON Schema 约束的 ReActStep，省去正则解析，降低格式错误率。
@@ -324,7 +388,8 @@ public class AgentExecutor {
                     completeAgentTrace(persistenceContext, 2, null, structuredSteps.size(), "迭代次数超过上限");
                     return new AgentChatResponse(resolvedSessionId, null, "迭代次数超过上限", structuredSteps.size(), structuredSteps);
                 }
-                persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer, persistenceContext.totalTokens);
+                persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer,
+                        persistenceContext.totalTokens, structuredSteps);
                 completeAgentTrace(persistenceContext, 1, structuredAnswer, structuredSteps.size(), null);
                 return new AgentChatResponse(resolvedSessionId, structuredAnswer, null, structuredSteps.size(), structuredSteps);
             }
@@ -364,7 +429,8 @@ public class AgentExecutor {
                     log.info("ReAct 第{}轮生成最终答案", iteration);
                     // Final Answer 拿到即持久化：短期记忆写 Human + AI 对、按需触发摘要、抽取长期记忆
                     persistAgentStep(persistenceContext, iteration, "final", finalAnswer, null, null, null, stepTokenCount);
-                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, finalAnswer, persistenceContext.totalTokens);
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, finalAnswer,
+                            persistenceContext.totalTokens, steps);
                     completeAgentTrace(persistenceContext, 1, finalAnswer, steps.size(), null);
                     return new AgentChatResponse(resolvedSessionId, finalAnswer, null, steps.size(), steps);
                 }
@@ -429,6 +495,9 @@ public class AgentExecutor {
             completeAgentTrace(persistenceContext, 2, null, persistenceContext.totalSteps,
                     exception.getMessage() != null ? exception.getMessage() : "未知错误");
             throw exception;
+        } finally {
+            // 把本轮第一次真实请求的信封留给下一轮压缩复用；异常轮也会保留（请求可能已经成功发出并进缓存）。
+            storeReplayEnvelope(resolvedSessionId, replayScope);
         }
     }
 
@@ -697,6 +766,8 @@ public class AgentExecutor {
      * 将短期记忆拼接到对话上下文中，格式为 "Recent conversation:" + 多行 "role:content"。
      * <p>
      * 短期记忆位于摘要之后、用户消息之前，为 LLM 提供最直接的对话连续性上下文。
+     * 角色除 Human/AI 外还包含 {@code Tool}：每轮执行过的工具步骤以「调用+结果」一条消息落在这里，
+     * 模型读取时的格式与 summary_memory 提示词里约定的 Tool 证据一致。
      * 不再按条数裁剪：只有请求 token 超过阈值、摘要成功生成后，才裁掉被摘要覆盖的旧消息
      * （见 buildConversationContext）。
      */
@@ -706,103 +777,250 @@ public class AgentExecutor {
         }
         conversation.append("Recent conversation:\n");
         for (MemoryMessage message : messages) {
+            // 工具调用消息正文为空，promptText 会渲染成 ToolCall: 工具(参数)；下一条 Tool 就是它的结果。
             conversation.append(MemoryObservationContext.prefix(message)).append(message.role())
                     .append(":")
-                    .append(message.content())
+                    .append(message.promptText())
                     .append("\n");
         }
         conversation.append("\n");
+    }
+
+    /** 生产路径：组装上下文时带上长期记忆，等价于 {@code buildConversationContext(..., true)}。 */
+    private ContextAssembly buildConversationContext(String sessionId, String userId, String userMessage) {
+        return buildConversationContext(sessionId, userId, userMessage, true);
     }
 
     /**
      * 组装一次请求的对话上下文，并在 token 超过阈值时先压缩（设计文档 A2 / A3 / A5）。
      *
      * <h3>为什么在这里判断</h3>
-     * 计量对象是「组装好准备发出去的上下文」——长期记忆只有几百 token、摘要上限 5000 字，
-     * 真正会变大的是短期记忆（不再按条数裁剪）与本轮用户输入。
-     * 系统提示词与工具定义（合计约 300 token）不在这里计量：它们相对 256k 阈值可以忽略，
-     * 且要等执行模式路由完成后才知道用哪一份提示词。
+     * 计量对象是「组装好准备发出去的上下文」——长期记忆只有几百 token，真正会变大的是短期记忆
+     * （不再按条数裁剪）与本轮用户输入。系统提示词与工具定义（合计约 300 token）不在这里计量：
+     * 它们相对 256k 阈值可以忽略，且要等执行模式路由完成后才知道用哪一份提示词。
      *
      * <h3>压缩规则</h3>
-     * 保留最近 {@code retainedMessageCount} 条消息，其余交给摘要承载；摘要必须通过复核才裁剪原文，
-     * 否则宁可这轮继续超阈值，也不能出现「原文已删、摘要没有」的空档（设计文档 D4 / D6 / B4）。
-     * 被压缩消息的原文不再保留，这是设计文档 A5 的明确取舍。
+     * 从尾部往前保留约 {@code retained-token-budget}（默认 16k）token 的整条消息，其余交给摘要承载；
+     * 工具消息一条同时包含调用和结果，裁剪边界永远落在消息之间，不会把「调用+结果」拆开。
+     * 摘要必须通过复核才裁剪原文，否则宁可这轮继续超阈值，也不能出现「原文已删、摘要没有」的空档
+     * （设计文档 D4 / D6 / B4）。被压缩消息的原文不再保留，这是设计文档 A5 的明确取舍。
      *
      * <h3>事实点抽取（B2 / B3）</h3>
      * 摘要生成的同时并行抽取事实点（两者互不依赖，串行会让压缩那一轮多等一次模型调用），
      * 只有压缩真正成立时才把达到高分线的事实点写进长期记忆——否则原文还在短期记忆里，
      * 下一轮会重新抽取，同一批消息会重复入库。
      *
+     * @param longTermMemoryEnabled 是否把长期记忆纳入本次组装。评测的摘要策略传 false：
+     *                              只走「摘要 + 最近消息」，不检索长期记忆、不抽事实点、不推进游标，
+     *                              否则压缩时抽到的事实点会在回答时被召回，把摘要的缺口补上。
      * @param sessionId   会话标识
      * @param userId      用户标识
      * @param userMessage 本轮用户输入
      * @return 组装（必要时已压缩）后的上下文文本
      */
-    private ContextAssembly buildConversationContext(String sessionId, String userId, String userMessage) {
+    private ContextAssembly buildConversationContext(String sessionId, String userId, String userMessage,
+                                                     boolean longTermMemoryEnabled) {
         List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(sessionId);
-        if (recentMessages.isEmpty()) {
+        if (longTermMemoryEnabled && recentMessages.isEmpty()) {
             // 首次读取必须先等旧历史写入完成，否则预算尾部中的真实事件会在新会话里不可见。
             longTermMemoryExtractionCoordinator.completeHistoryBeforeFirstRead(userId, sessionId);
         }
         // 长期记忆一轮只检索一次：压缩分支要用同一批记忆重拼上下文，检索两次会多一次向量化调用，
         // 也会把入选记忆的访问时间写两遍（设计文档 D6 的写回只应在真正取用时发生一次）。
-        List<LongTermMemoryRecord> longTermMemories = longTermMemory.retrieveForContext(userId, userMessage);
-        String context = assembleContext(sessionId, userId, recentMessages, userMessage, null, longTermMemories);
+        List<LongTermMemoryRecord> longTermMemories = longTermMemoryEnabled
+                ? longTermMemory.retrieveForContext(userId, userMessage)
+                : List.of();
+        AssembledContext assembled = assembleContext(sessionId, userId, recentMessages, userMessage, null, longTermMemories);
+        String context = assembled.text();
+        String currentSummary = assembled.summary();
         if (tokenCounter == null) {
             // 单测构造器不注入计量器：跳过压缩判断，行为与改造前一致。
-            return new ContextAssembly(context, null);
+            return new ContextAssembly(context, null, currentSummary);
         }
         int tokens = tokenCounter.count(context);
         int threshold = summaryMemory.getTokenThreshold();
         if (tokens < threshold) {
-            return new ContextAssembly(context, null);
+            return new ContextAssembly(context, null, currentSummary);
         }
-        int retainedCount = summaryMemory.getRetainedMessageCount();
+        // 压缩失败冷却：失败后原文还在，等上下文再涨一段再重试，避免在阈值附近连续多轮烧生成/复核。
+        Integer failedAt = compactionFailureTokens.get(sessionId);
+        int retryDelta = summaryMemory.getRetryTokenDelta();
+        if (retryDelta > 0 && failedAt != null && tokens < failedAt + retryDelta) {
+            log.info("上次压缩失败，上下文尚未增长到重试线，本轮跳过压缩，sessionId={}, tokens={}, 重试线={}",
+                    sessionId, tokens, failedAt + retryDelta);
+            return new ContextAssembly(context, null, currentSummary);
+        }
+        int retainedCount = retainedMessageCountForTail(recentMessages);
         int compressibleCount = recentMessages.size() - retainedCount;
         if (compressibleCount <= 0) {
             // 没有可压缩的历史消息：超长只可能来自本轮输入本身，压缩无从下手，交给 768k 硬上限兜底。
             log.warn("上下文超过压缩阈值但没有可压缩的历史消息，sessionId={}, tokens={}, threshold={}",
                     sessionId, tokens, threshold);
-            return new ContextAssembly(context, null);
+            return new ContextAssembly(context, null, currentSummary);
         }
         List<MemoryMessage> compressibleMessages = recentMessages.subList(0, compressibleCount);
         // 先发起事实点抽取再生成摘要：两次调用在同一批消息上独立工作，并行能省掉一次模型调用的等待。
-        CompletableFuture<SummaryFactExtractionResult> factsFuture = extractFactsAsync(compressibleMessages);
-        String summary = summaryMemory.summarize(sessionId, compressibleMessages);
+        // 摘要评测关闭长期记忆时连抽取一起跳过：事实点只写长期记忆，不参与摘要正文。
+        CompletableFuture<SummaryFactExtractionResult> factsFuture = longTermMemoryEnabled
+                ? extractFactsAsync(compressibleMessages)
+                : null;
+        // 摘要调用尽量复用上一轮真实请求的前缀：25 万 token 只有与上一轮请求逐字节一致时才会命中缓存，
+        // 自己另拼一份摘要 prompt 等于每轮冷启动一次（2026-10 缓存命中率优化）。
+        SummaryReplayPrefix replay = buildReplayPrefix(sessionId, currentSummary);
+        String summary = summaryMemory.summarize(sessionId, compressibleMessages, replay);
         if (TextUtil.isBlank(summary)) {
             // 摘要没通过（生成失败或复核不通过）时事实点也不落库：原文仍保留在短期记忆里，
             // 下一轮会重新抽取，现在写入只会让同一批消息重复进长期记忆。
+            compactionFailureTokens.put(sessionId, tokens);
             log.warn("摘要生成或复核未通过，本轮不压缩（保留原文），sessionId={}, tokens={}", sessionId, tokens);
-            return new ContextAssembly(context, null);
+            return new ContextAssembly(context, null, currentSummary);
         }
-        // 设计文档 6.1：摘要与提取都完成后才裁剪。事实点抽取失败时长期记忆游标不能推进，
-        // 这时候裁剪会让这批消息彻底离开上下文又没进长期记忆，所以与复核不通过同样处理：宁可继续超阈值。
-        SummaryFactExtractionResult factsResult = awaitFacts(factsFuture);
-        if (!factsResult.succeeded()) {
-            log.error("事实点抽取失败，本轮不压缩（保留原文），sessionId={}, tokens={}", sessionId, tokens);
-            return new ContextAssembly(context, null);
+        Long trimCursor = null;
+        if (longTermMemoryEnabled) {
+            // 设计文档 6.1：摘要与提取都完成后才裁剪。事实点抽取失败时长期记忆游标不能推进，
+            // 这时候裁剪会让这批消息彻底离开上下文又没进长期记忆，所以与复核不通过同样处理：宁可继续超阈值。
+            SummaryFactExtractionResult factsResult = awaitFacts(factsFuture);
+            if (!factsResult.succeeded()) {
+                compactionFailureTokens.put(sessionId, tokens);
+                log.error("事实点抽取失败，本轮不压缩（保留原文），sessionId={}, tokens={}", sessionId, tokens);
+                return new ContextAssembly(context, null, currentSummary);
+            }
+            saveHighImportanceFacts(userId, sessionId, factsResult.facts());
+            // 这批消息已经抽过事实点，长期记忆游标跟着推进；返回的游标值同时是裁剪边界——
+            // 只裁游标走过的消息，游标之后（还没进长期记忆）的消息留在短期记忆里（设计文档 A6 / D6）。
+            trimCursor = longTermMemoryExtractionCoordinator.advanceAfterCompaction(userId, compressibleMessages);
         }
-        saveHighImportanceFacts(userId, sessionId, factsResult.facts());
-        // 这批消息已经抽过事实点，长期记忆游标跟着推进；返回的游标值同时是裁剪边界——
-        // 只裁游标走过的消息，游标之后（还没进长期记忆）的消息留在短期记忆里（设计文档 A6 / D6）。
-        Long trimCursor = longTermMemoryExtractionCoordinator.advanceAfterCompaction(userId, compressibleMessages);
+        // 摘要评测没有长期记忆可依赖，被压缩的消息只剩摘要一个载体，尾部同样按 token 预算保留；
+        // 生产路径还要按游标保住尚未提取的消息（A6 / D6）。
         shortTermMemory.keepRecentMessages(sessionId, retainedCount, trimCursor);
         // 重拼时必须显式带上刚生成的摘要：检查点要等压缩后的计量结果才能写库，
         // 此刻 getSummary 读库拿到的还是上一版摘要，不传新摘要模型就看不到刚被压缩掉的历史（2026-09-19 联调实测）。
-        String compressed = assembleContext(sessionId, userId, shortTermMemory.getRecentMessages(sessionId),
-                userMessage, summary, longTermMemories);
+        AssembledContext compressedContext = assembleContext(sessionId, userId,
+                shortTermMemory.getRecentMessages(sessionId), userMessage, summary, longTermMemories);
+        String compressed = compressedContext.text();
         int compressedTokens = tokenCounter.count(compressed);
         // 摘要同时写进会话历史（role=summary 的检查点）：刷新页面或重启后端后，仍然能看到"这里压缩过"和摘要正文。
         summaryMemory.recordCompactionCheckpoint(sessionId, userId, summary, compressibleCount, tokens, compressedTokens);
-        log.info("上下文已按 token 压缩，sessionId={}, 压缩前={} token, 压缩后={} token",
-                sessionId, tokens, compressedTokens);
+        // 压缩成功：清掉失败冷却记录，下次到阈值正常触发。
+        compactionFailureTokens.remove(sessionId);
+        log.info("上下文已按 token 压缩，sessionId={}, 压缩前={} token, 压缩后={} token, 摘要前缀复用={}",
+                sessionId, tokens, compressedTokens, replay != null);
         return new ContextAssembly(compressed,
-                new CompactionNotice(summary, compressibleCount, tokens, compressedTokens));
+                new CompactionNotice(summary, compressibleCount, tokens, compressedTokens),
+                compressedContext.summary());
+    }
+
+    /**
+     * 构造摘要调用的可复用信封。
+     *
+     * <p>直接使用上一轮真实请求的完整信封（system/tools/thinking/消息列表），压缩时只在它末尾追加一条指令。
+     * 不按「被压缩消息」重新拼前缀：真实请求的消息 = 历史块 + 本轮用户输入，两者的分隔和空行无法从被压缩消息
+     * 反推出来，拼出来的文本一定在某一处对不上，缓存就断了。
+     *
+     * <p>两个放弃复用的条件：没有记录（评测首次压缩、进程刚重启）或摘要版本已经变过（上一轮之后
+     * 又压缩过一次）。这两种情况下前缀对不上，复用只会白费，退回冷启动 prompt 更安全。
+     */
+    private SummaryReplayPrefix buildReplayPrefix(String sessionId, String summary) {
+        LastRequest last = lastRequestPrefixes.get(sessionId);
+        if (last == null || last.envelope() == null) {
+            return null;
+        }
+        if (!TextUtil.trimToDefault(last.summary(), "").equals(TextUtil.trimToDefault(summary, ""))) {
+            return null;
+        }
+        return new SummaryReplayPrefix(last.envelope());
+    }
+
+    /**
+     * 把本轮采集到的真实请求信封存给下一轮压缩复用，并关闭采集作用域。
+     * <p>
+     * 没有信封（计划执行模式没记为可重放请求、结构化输出等）时保留上一份记录不动：
+     * 它最多是过期后缓存不命中，不会让摘要内容出错。
+     */
+    private void storeReplayEnvelope(String sessionId, ChatReplayContext.Scope scope) {
+        try {
+            if (scope == null || scope.envelope() == null || TextUtil.isBlank(sessionId)) {
+                return;
+            }
+            if (lastRequestPrefixes.size() >= MAX_CACHED_REPLAY_SESSIONS
+                    && !lastRequestPrefixes.containsKey(sessionId)) {
+                lastRequestPrefixes.keySet().stream().findFirst().ifPresent(lastRequestPrefixes::remove);
+            }
+            lastRequestPrefixes.put(sessionId, new LastRequest(scope.envelope(),
+                    TextUtil.trimToDefault(scope.usedSummary(), "")));
+        } finally {
+            if (scope != null) {
+                scope.close();
+            }
+        }
+    }
+
+    /**
+     * 按 token 预算计算压缩后要保留尾部的消息条数。
+     *
+     * <h3>为什么按 token 而不是条数</h3>
+     * 工具执行结果进入会话历史后，一条 Tool 消息可能是一轮里最长的消息；固定留 2 条会只留下
+     * 「最后一个工具结果 + 最终回答」，把用户问题和本轮前面的工具证据裁光。按尾部 token 预算保留，
+     * 保留量与模型窗口、每轮成本同口径，默认 16k 约等于几条到十几条消息，可配置。
+     *
+     * <h3>边界规则</h3>
+     * 只从尾部往前累加整条消息：要么整条留下，要么整条交给摘要，不切断任何一条消息。
+     * 工具调用和结果按原生协议是两条相邻消息，如果裁剪边界正好落在 Tool 结果上，
+     * 要把前一条 assistant 工具调用一起留下，否则模型会看到一条没有调用的结果。
+     * 最后一条消息即使自己就超过预算也至少留 1 条，否则压缩后可能一条历史都不剩。
+     *
+     * <h3>兜底</h3>
+     * 拿不到 token 计量器（单测最小构造）或预算配置为 0 时，退回 {@code retained-message-count} 的旧口径。
+     */
+    private int retainedMessageCountForTail(List<MemoryMessage> messages) {
+        int fallbackCount = summaryMemory.getRetainedMessageCount();
+        int tokenBudget = summaryMemory.getRetainedTokenBudget();
+        if (tokenCounter == null || tokenBudget <= 0 || messages.isEmpty()) {
+            return fallbackCount;
+        }
+        int usedTokens = 0;
+        int retainedCount = 0;
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            // 工具调用消息正文为空，按渲染后的 ToolCall 文本计量，和实际进上下文的体积一致。
+            int messageTokens = tokenCounter.count(messages.get(index).promptText());
+            // 已留了至少一条时，再往前一条会超预算就停：宁可少留，也不把这条切成两半。
+            if (retainedCount > 0 && usedTokens + messageTokens > tokenBudget) {
+                break;
+            }
+            usedTokens += messageTokens;
+            retainedCount++;
+            if (usedTokens >= tokenBudget) {
+                break;
+            }
+        }
+        // 原生协议配对边界：裁剪起点如果是 tool 结果，必须把前一条 assistant 调用一起留下。
+        int startIndex = messages.size() - retainedCount;
+        if (startIndex > 0 && startIndex < messages.size()
+                && messages.get(startIndex).isToolResult()
+                && messages.get(startIndex - 1).isToolCall()) {
+            retainedCount++;
+        }
+        return retainedCount;
     }
 
     /** 评测只取真实记忆上下文，避免为了回放历史而重新生成历史中的助手答案。 */
     public PreparedMemoryContext prepareMemoryContext(String sessionId, String userId, String question) {
         ContextAssembly assembly = buildConversationContext(sessionId, userId, question);
+        CompactionNotice notice = assembly.compaction();
+        return new PreparedMemoryContext(assembly.text(), notice == null ? null : Map.of(
+                "summary", notice.summary(), "compressed_message_count", notice.compressedMessageCount(),
+                "tokens_before", notice.tokensBefore(), "tokens_after", notice.tokensAfter()));
+    }
+
+    /**
+     * 评测摘要策略的上下文：只保留「摘要 + 最近消息」，不检索也不写长期记忆。
+     * <p>
+     * 单独开这个入口而不是复用 prepareMemoryContext：摘要评测要确认压缩本身丢了多少信息，
+     * 如果同时开长期记忆，压缩时抽到的高分事实点会在回答时被召回，把摘要的缺口补上，测出的结果偏乐观。
+     * 生产默认链路不调用这个方法，行为不变。
+     */
+    public PreparedMemoryContext prepareSummaryContext(String sessionId, String userId, String question) {
+        ContextAssembly assembly = buildConversationContext(sessionId, userId, question, false);
         CompactionNotice notice = assembly.compaction();
         return new PreparedMemoryContext(assembly.text(), notice == null ? null : Map.of(
                 "summary", notice.summary(), "compressed_message_count", notice.compressedMessageCount(),
@@ -926,14 +1144,19 @@ public class AgentExecutor {
      *                        （设计文档 D6 要避免的正是这种空档）。
      * @param longTermMemories 本次要注入的长期记忆（已按三维打分取 top-K）
      */
-    private String assembleContext(String sessionId, String userId, List<MemoryMessage> messages, String userMessage,
-                                   String summaryOverride, List<LongTermMemoryRecord> longTermMemories) {
+    private AssembledContext assembleContext(String sessionId, String userId, List<MemoryMessage> messages,
+                                             String userMessage, String summaryOverride,
+                                             List<LongTermMemoryRecord> longTermMemories) {
+        String summary = summaryOverride == null ? summaryMemory.getSummary(sessionId) : summaryOverride;
         StringBuilder conversation = new StringBuilder();
-        appendLongTermMemory(conversation, longTermMemories);
-        appendSummary(conversation, summaryOverride == null ? summaryMemory.getSummary(sessionId) : summaryOverride);
+        // 顺序按「跨轮稳定 → 每轮变化」排：摘要 → 短期记忆 → 长期记忆 → 用户输入。
+        // 长期记忆按当前问题检索，每轮内容都可能变；它放在摘要/短期记忆后面，前面那段才是稳定前缀，
+        // DeepSeek 的前缀缓存才有机会命中（2026-10 缓存命中率优化）。
+        appendSummary(conversation, summary);
         appendMemory(conversation, messages);
+        appendLongTermMemory(conversation, longTermMemories);
         conversation.append("Human:").append(userMessage).append("\n\n");
-        return conversation.toString();
+        return new AssembledContext(conversation.toString(), summary);
     }
 
     /**
@@ -970,8 +1193,17 @@ public class AgentExecutor {
         return toolResultCompressor.compressIfNeeded(toolName, result);
     }
 
-    /** 一次上下文组装的结果：文本，以及本次是否发生了压缩（供流式链路通知前端）。 */
-    private record ContextAssembly(String text, CompactionNotice compaction) {
+    /**
+     * 一次上下文组装的结果：文本、本次是否发生了压缩（供流式链路通知前端），以及本次使用的摘要正文。
+     * <p>
+     * 带 summary 是为了让调用方在真正发请求前记住「这一轮用的哪版摘要」，
+     * 下一轮压缩时据此判断记录的前缀是否还能复用。
+     */
+    private record ContextAssembly(String text, CompactionNotice compaction, String summary) {
+    }
+
+    /** 一次 assembleContext 的产物：拼好的上下文文本 + 本次使用的摘要。 */
+    private record AssembledContext(String text, String summary) {
     }
 
     /**
@@ -994,33 +1226,33 @@ public class AgentExecutor {
     }
 
     /**
-     * 持久化一次「面向用户的聊天回合」：写短期记忆 + 抽取长期记忆。
-     * 抽成方法是因为文本路与结构化路（5.4）在拿到 finalAnswer 后都要做同一件事，避免两处重复。
-     * 摘要压缩已上移到上下文组装（按 token 判断），这里不再触发。
-     */
-    private void persistChatTurn(String sessionId, String userId, String userMessage, String finalAnswer) {
-        persistChatTurn(sessionId, userId, userMessage, finalAnswer, 0);
-    }
-
-    /**
      * 持久化一次「面向用户的聊天回合」：写消息表、写短期记忆，再按预算决定是否抽取长期记忆。
      * <p>
-     * 与改造前的顺序不同：先写消息表拿主键，再写短期记忆。原因是短期记忆要带上消息 id——
-     * 长期记忆游标记的就是消息 id，压缩时判断「这条消息游标走过没有」全靠它（设计文档 A6 / C4）。
-     * 消息表写入失败时 id 保持 null，短期记忆照常写入，这类消息后续按「已覆盖」处理（消息表里查不到，不可能再被提取）。
+     * 抽成方法是因为文本路、结构化路与规划模式在拿到 finalAnswer 后都要做同一件事，避免多处重复。
+     * 摘要压缩已上移到上下文组装（按 token 判断），这里不再触发。
+     *
+     * @param toolSteps 本轮执行过的工具步骤；每个步骤按原生协议写成两条消息（assistant 工具调用 + tool 结果），
+     *                  不写模型思考/推理。非工具步骤（action 为空）直接忽略。
      */
-    private void persistChatTurn(String sessionId, String userId, String userMessage, String finalAnswer, int assistantTokenCount) {
-        persistChatTurn(sessionId, userId, userMessage, finalAnswer, assistantTokenCount, null, null);
+    private void persistChatTurn(String sessionId, String userId, String userMessage, String finalAnswer,
+                                 int assistantTokenCount, List<AgentStep> toolSteps) {
+        persistChatTurn(sessionId, userId, userMessage, finalAnswer, assistantTokenCount, toolSteps, null, null);
     }
 
     /**
      * 持久化一次聊天回合，并处理「客户端已断开」的情况。
+     * <p>
+     * 写入顺序固定为 user → (assistant tool_call → tool 结果)... → assistant：
+     * 工具调用与结果两条消息相邻、共用 toolCallId，消息 id 仍按发生顺序递增，
+     * 长期记忆提取的区间终点（assistant id）也仍然是本轮最后一条。
      *
+     * @param toolSteps     本轮工具执行步骤，按原生协议写成 assistant 调用 + tool 结果两条消息
      * @param cancelled     客户端断开标记；置位时这一轮不算完成，只保留用户消息（设计文档 C9 / D10）
      * @param turnRecorded  回填「这一轮已经处理过」的标记，断开兜底逻辑据此避免重复写入
      */
     private void persistChatTurn(String sessionId, String userId, String userMessage, String finalAnswer,
-                                 int assistantTokenCount, AtomicBoolean cancelled, AtomicBoolean turnRecorded) {
+                                 int assistantTokenCount, List<AgentStep> toolSteps,
+                                 AtomicBoolean cancelled, AtomicBoolean turnRecorded) {
         if (cancelled != null && cancelled.get()) {
             persistCancelledTurn(sessionId, userMessage);
             if (turnRecorded != null) {
@@ -1029,16 +1261,70 @@ public class AgentExecutor {
             return;
         }
         ConversationMessageRecord userRecord = buildConversationMessage(userId, sessionId, "user", userMessage, null, 0);
+        List<PersistedToolStep> toolStepRecords = buildToolStepRecords(userId, sessionId, toolSteps);
         ConversationMessageRecord assistantRecord = buildConversationMessage(userId, sessionId, "assistant", finalAnswer, null, assistantTokenCount);
-        persistConversationMessages(userRecord, assistantRecord);
+        persistConversationMessages(userRecord, toolStepRecords, assistantRecord);
         shortTermMemory.append(sessionId, "Human", userMessage, userRecord.getId());
+        for (PersistedToolStep toolStep : toolStepRecords) {
+            // 原生协议：先追加 assistant 的工具调用消息（正文空，渲染成 ToolCall: 工具(参数)），
+            // 再追加对应的 Tool 结果消息；两条用 toolCallId 配对，裁剪时必须成对保留。
+            shortTermMemory.append(sessionId, MemoryMessage.toolCall("AI", toolStep.callRecord().getId(),
+                    toolStep.toolCallId(), toolStep.toolName(), toolStep.toolArguments()));
+            shortTermMemory.append(sessionId, MemoryMessage.toolResult(ShortTermMemory.ROLE_TOOL,
+                    toolStep.resultRecord().getId(), toolStep.toolCallId(), toolStep.toolName(),
+                    toolStep.resultRecord().getContent()));
+        }
         shortTermMemory.append(sessionId, "AI", finalAnswer, assistantRecord.getId());
         // 摘要触发已上移到上下文组装（按 token 判断）；长期记忆提取由协调器决定是否入队，
-        // 带的区间终点是本轮最后一条消息（助手消息）的 id（设计文档 C7）。
+        // 带的区间终点是本轮最后一条消息（助手最终回答）的 id（设计文档 C7）。
         longTermMemoryExtractionCoordinator.afterTurn(userId, sessionId, userMessage, finalAnswer, assistantRecord.getId());
         if (turnRecorded != null) {
             turnRecorded.set(true);
         }
+    }
+
+    /**
+     * 把本轮工具步骤组装成原生协议的两条消息。
+     * <p>
+     * assistant 工具调用消息：content 为空（模型思考/推理不写进会话历史），工具名、参数摘要、配对 id 落到
+     * tool_name/tool_arguments/tool_call_id 三列；tool 结果消息：content 是结果（≤2000 字），
+     * 与调用共用 tool_call_id。持久化时不再调用 ToolResultCompressor，否则每个工具步骤都要多等一次模型调用。
+     */
+    private List<PersistedToolStep> buildToolStepRecords(String userId, String sessionId,
+                                                         List<AgentStep> toolSteps) {
+        if (toolSteps == null || toolSteps.isEmpty()) {
+            return List.of();
+        }
+        List<PersistedToolStep> records = new ArrayList<>();
+        for (AgentStep step : toolSteps) {
+            if (step == null || TextUtil.isBlank(step.action())) {
+                continue;
+            }
+            // tool_name 列只有 64 字符：超长工具名按列宽截断，参数摘要和结果按上面的上限截断。
+            String toolName = TextUtil.abbreviate(step.action(), 64);
+            String arguments = TextUtil.abbreviate(
+                    TextUtil.trimToDefault(step.actionInput(), ""), TOOL_MESSAGE_ARGUMENT_MAX_CHARS);
+            String result = TextUtil.abbreviate(
+                    TextUtil.trimToDefault(step.observation(), ""), TOOL_MESSAGE_RESULT_MAX_CHARS);
+            String toolCallId = newToolCallId();
+            ConversationMessageRecord callRecord = buildConversationMessage(userId, sessionId, "assistant", "",
+                    toolName, toolCallId, arguments, 0);
+            ConversationMessageRecord resultRecord = buildConversationMessage(userId, sessionId, "tool", result,
+                    toolName, toolCallId, null, 0);
+            records.add(new PersistedToolStep(toolCallId, toolName, arguments, callRecord, resultRecord));
+        }
+        return records;
+    }
+
+    /** 生成原生协议的工具调用 id：assistant 调用与 tool 结果共用，普通消息不用。 */
+    private String newToolCallId() {
+        return "call_" + UUID.randomUUID().toString().replace("-", "");
+    }
+
+    /** 一次工具步骤落库后的两条消息：assistant 调用 + tool 结果，两条共用 toolCallId。 */
+    private record PersistedToolStep(String toolCallId, String toolName, String toolArguments,
+                                     ConversationMessageRecord callRecord,
+                                     ConversationMessageRecord resultRecord) {
     }
 
     /**
@@ -1104,6 +1390,11 @@ public class AgentExecutor {
      */
     private void persistAgentStep(AgentPersistenceContext context, int stepIndex, String stepType, String content,
                                   String toolName, String toolInput, String toolOutput, int tokenCount) {
+        // 工具步骤先收进内存列表，再决定要不要写 trace 库：即使可观测旁路不可用（enabled=false），
+        // 本轮工具执行记录仍要写进会话历史——模型这一轮实际看到过这些结果，丢了下一轮就再也看不到。
+        if (context != null && TextUtil.hasText(toolName)) {
+            context.toolSteps.add(new AgentStep(stepIndex, content, toolName, toolInput, toolOutput));
+        }
         if (context == null || !context.enabled || agentTraceMapper == null) {
             return;
         }
@@ -1152,18 +1443,26 @@ public class AgentExecutor {
     }
 
     /**
-     * 将完整用户问答写入 MySQL 消息表，并把生成的主键回填到传入的记录对象上。
+     * 将完整用户问答（含本轮工具调用与结果）写入 MySQL 消息表，并把生成的主键回填到传入的记录对象上。
      * <p>
      * 主键必须回填：调用方要用它给短期记忆带上消息 id（长期记忆游标的比较基准，设计文档 A6 / C4）。
-     * 用户消息不记录 token，是因为当前 token 是模型调用级别数据，无法可靠拆分到用户消息本身。
+     * 用户消息不记录 token，是因为当前 token 是模型调用级别数据，无法可靠拆分到用户消息本身；
+     * 工具调用/结果也不记 token，它们的体积已经由参数摘要/结果截断上限控制。
      * 写入失败只打 warn，记录对象上的 id 保持 null。
      */
-    private void persistConversationMessages(ConversationMessageRecord userRecord, ConversationMessageRecord assistantRecord) {
+    private void persistConversationMessages(ConversationMessageRecord userRecord,
+                                             List<PersistedToolStep> toolSteps,
+                                             ConversationMessageRecord assistantRecord) {
         if (conversationSessionMapper == null) {
             return;
         }
         try {
             conversationSessionMapper.insertMessage(userRecord);
+            for (PersistedToolStep toolStep : toolSteps) {
+                // 原生协议：assistant 工具调用消息在前，tool 结果消息在后，两条共用 toolCallId。
+                conversationSessionMapper.insertMessage(toolStep.callRecord());
+                conversationSessionMapper.insertMessage(toolStep.resultRecord());
+            }
             conversationSessionMapper.insertMessage(assistantRecord);
         } catch (Exception exception) {
             log.warn("会话消息持久化失败，sessionId={}, error={}", userRecord.getSessionId(), exception.getMessage());
@@ -1171,19 +1470,33 @@ public class AgentExecutor {
     }
 
     /**
-     * 组装一条待落库的消息。
+     * 组装一条待落库的消息（普通消息或工具结果）。
      * <p>
      * 带上 userId 是为了让消息表自己就能按用户捞出增量（设计文档 C5）：长期记忆的游标只认消息 id，
      * 若还要靠 JOIN 会话表判断归属，会话被归档或删除时会连带影响增量查询。
      */
     private ConversationMessageRecord buildConversationMessage(String userId, String sessionId, String role, String content,
                                                                String toolName, int tokenCount) {
+        return buildConversationMessage(userId, sessionId, role, content, toolName, null, null, tokenCount);
+    }
+
+    /**
+     * 组装一条待落库的消息（含原生协议工具字段）。
+     *
+     * @param toolCallId    工具调用配对 id；普通消息为 null
+     * @param toolArguments 工具调用参数摘要；只有 assistant 调用消息有值，tool 结果为 null
+     */
+    private ConversationMessageRecord buildConversationMessage(String userId, String sessionId, String role, String content,
+                                                               String toolName, String toolCallId, String toolArguments,
+                                                               int tokenCount) {
         ConversationMessageRecord record = new ConversationMessageRecord();
         record.setSessionId(sessionId);
         record.setUserId(userId);
         record.setRole(role);
         record.setContent(TextUtil.trimToDefault(content, ""));
         record.setToolName(TextUtil.trimToNull(toolName));
+        record.setToolCallId(TextUtil.trimToNull(toolCallId));
+        record.setToolArguments(TextUtil.trimToNull(toolArguments));
         record.setTokenCount(tokenCount);
         record.setCreateTime(LocalDateTime.now());
         return record;
@@ -1215,6 +1528,12 @@ public class AgentExecutor {
     private static class AgentPersistenceContext {
         private final String traceId;
         private final String sessionId;
+        /**
+         * 本轮已执行的工具步骤（按执行顺序）。
+         * 由 {@link #persistAgentStep} 在每次工具执行后收集，供 persistChatTurn 按原生协议写成
+         * assistant 工具调用 + tool 结果两条消息。
+         */
+        private final List<AgentStep> toolSteps = new ArrayList<>();
         private boolean enabled;
         private int totalTokens;
         private int totalSteps;
@@ -1489,6 +1808,8 @@ public class AgentExecutor {
             - Recent conversation 里用户明确更正过的事实，优先于更早的说法；更正出现在后面时，即使只有一句话也优先。
             - Recent conversation 里用户说得含糊（“好像”“不确定”），而 Long-term memory 是确定值时，以长期记忆为准。
             - 助手在历史里的建议和数字不算用户事实，除非用户明确确认过。
+            - Recent conversation 里以 ToolCall: 开头的 AI 消息是助手自己的工具调用（工具名 + 参数），紧跟其后的 Tool 消息是这次调用的结果；它们都是执行证据，不是用户说的话。
+            - 工具调用的参数和结果里的数字、路径、错误信息可以作为执行证据引用，但不能当成用户偏好、用户身份或用户已确认的事实。
             - 两条 Long-term memory 冲突时，以内容日期更晚的为准；无法比较时不要把两者强行合并。
             - 回答前同时检查 Long-term memory、Conversation summary（摘要）和 Recent conversation，不要只看其中一处就断言信息不可用。
             """;
@@ -1568,6 +1889,9 @@ public class AgentExecutor {
         AtomicBoolean turnRecorded = new AtomicBoolean(false);
         String resolvedSessionId = null;
         String resolvedUserId = null;
+        // 采集本轮第一次真实请求的信封，供下一轮压缩重放（流式请求同样走普通 ChatClient + tools 的形状）。
+        // 计划执行成功时不会发对话请求，作用域留到计划模式之后再开启。
+        ChatReplayContext.Scope replayScope = null;
         try {
             resolvedSessionId = resolveSessionId(sessionId);
             resolvedUserId = resolveUserId(userId);
@@ -1592,8 +1916,8 @@ public class AgentExecutor {
             AgentRunResult plannedResult = tryRunPlannedMode(selectedMode, requestedMode, conversation.toString(), userMessage);
             if (plannedResult != null) {
                 if (TextUtil.hasText(plannedResult.finalAnswer())) {
-                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer(), persistenceContext.totalTokens,
-                            cancelled, turnRecorded);
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, plannedResult.finalAnswer(),
+                            persistenceContext.totalTokens, plannedResult.steps(), cancelled, turnRecorded);
                     // 先发送步骤追踪，让前端看到规划模式的步骤详情
                     sendPlannedSteps(emitter, plannedResult);
                     // 流式发送最终答案
@@ -1604,6 +1928,10 @@ public class AgentExecutor {
                 emitter.complete();
                 return;
             }
+
+            // 从这里开始才真正发对话请求：开启采集作用域，记下本轮请求与当时的摘要版本。
+            replayScope = ChatReplayContext.begin();
+            replayScope.summary(assembly.summary());
 
             // === 结构化内核路径（阶段 5.4+） ===
             // 走结构化 schema 约束的 JSON ReAct，每步通过 chatStructured 产出 ReActStep
@@ -1624,8 +1952,9 @@ public class AgentExecutor {
                 );
                 String structuredAnswer = streamed.answer();
                 if (structuredAnswer != null) {
-                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer, persistenceContext.totalTokens,
-                            cancelled, turnRecorded);
+                    // 流式链路没有单独的 steps 列表，工具步骤由 persistAgentStep 收在 persistenceContext 里。
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, structuredAnswer,
+                            persistenceContext.totalTokens, persistenceContext.toolSteps, cancelled, turnRecorded);
                     completeAgentTrace(persistenceContext, 1, structuredAnswer, persistenceContext.totalSteps, null);
                     // 真流式链路已经把正文逐片推完了，不能再发一遍；
                     // 回退到结构化 ReAct 时才有完整答案需要切片补发。
@@ -1643,8 +1972,8 @@ public class AgentExecutor {
                         + (requestContext.isEmpty() ? "" : "\n\n"+requestContext);
                 String textAnswer = runTextLoopStreaming(systemPrompt, conversation, userMessage, emitter, persistenceContext);
                 if (textAnswer != null) {
-                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, textAnswer, persistenceContext.totalTokens,
-                            cancelled, turnRecorded);
+                    persistChatTurn(resolvedSessionId, resolvedUserId, userMessage, textAnswer,
+                            persistenceContext.totalTokens, persistenceContext.toolSteps, cancelled, turnRecorded);
                     completeAgentTrace(persistenceContext, 1, textAnswer, persistenceContext.totalSteps, null);
                     streamTokens(emitter, textAnswer);
                 } else {
@@ -1677,6 +2006,9 @@ public class AgentExecutor {
                 sendSseEvent(emitter, "error", Map.of("message", e.getMessage() != null ? e.getMessage() : "未知错误"));
             } catch (IOException ignored) {}
             emitter.completeWithError(e);
+        } finally {
+            // 流式轮同样保存请求信封；客户端中途断开也保留，下一轮压缩仍可能吃到已写入的前缀缓存。
+            storeReplayEnvelope(resolvedSessionId, replayScope);
         }
     }
 

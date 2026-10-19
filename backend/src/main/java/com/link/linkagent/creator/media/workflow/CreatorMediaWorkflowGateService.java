@@ -17,13 +17,18 @@ import com.link.linkagent.creator.workflow.model.CreatorWorkflowStage;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStatus;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * 阶段 7 发布后流程门禁。
  * <p>
- * 成片上传成功不代表已完成发布前检查。反馈、BV 绑定等发布后写入操作必须确认当前成片
- * 已通过 FFprobe、媒体预处理和发布前试映，才能避免任务绕过“成片试映 -> 实际发布”的发布前检查。
+ * 成片上传成功不代表已完成发布前检查。BV 绑定检查当前成片，反馈等后续操作优先检查明确的发布版本，
+ * 必须通过 FFprobe、媒体预处理和发布前试映，才能避免绕过“成片试映 -> 实际发布”的检查。
  */
 @Service
 public class CreatorMediaWorkflowGateService {
@@ -52,6 +57,40 @@ public class CreatorMediaWorkflowGateService {
         this.probeRecoveryService = probeRecoveryService;
     }
 
+    /** BV 事务先锁任务再读取状态，避免检查旧版后却把刚上传的新版关联到 BV。 */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void lockForVideoBinding(String taskId, String ownerId) {
+        mediaUploadMapper.lockMediaTask(taskId.trim(), ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+        if (mediaUploadMapper.countActiveCreationRuns(taskId.trim(), ownerId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "制作运行尚未结束，不能绑定 BV");
+        }
+        if (mediaUploadMapper.findCurrentUpload(taskId.trim(), ownerId).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "成片仍在上传或确认，请完成后再绑定 BV");
+        }
+    }
+
+    /** 同步先与上传、重新定位共用任务锁；任务已删除时只跳过该绑定。 */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean lockTaskForBindingSync(String taskId, String ownerId) {
+        return mediaUploadMapper.lockMediaTask(taskId.trim(), ownerId).isPresent();
+    }
+
+    /** 显式绑定固定本次通过检查的当前版本，不能沿用待修正绑定中的旧版本。 */
+    public String requireReadyVersionForBinding(String taskId, String ownerId) {
+        return requireReadyDraft(taskId, ownerId, "BV绑定",
+                () -> mediaUploadMapper.findDraftVideo(taskId.trim(), ownerId)).versionId();
+    }
+
+    /** 延迟同步只能验证绑定时选定的版本，不能在当前版通过后替旧版放行。 */
+    public void ensureBoundVersionReady(String taskId, String ownerId, String versionId) {
+        if (versionId == null || versionId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "历史绑定未记录发布版本，请重新确认 BV 绑定");
+        }
+        requireReadyDraft(taskId, ownerId, "BV绑定",
+                () -> mediaUploadMapper.findDraftVideoByVersion(taskId.trim(), ownerId, versionId));
+    }
+
     /**
      * 检查媒体能力总开关。
      * <p>
@@ -67,16 +106,26 @@ public class CreatorMediaWorkflowGateService {
     }
 
     /**
-     * 检查任务的当前成片是否已通过媒体探测、P0-2 媒体预处理和 P0-4a 完整发布前体检。
+     * 已有明确 BV 发布版本时检查该版本，否则沿用当前成片的媒体处理与完整试映检查。
      *
      * @param taskId        创作任务 ID
      * @param ownerId       当前单人工作台可信归属
      * @param nextStageName 即将进入的发布后阶段名称
      */
     public void ensureReadyForPostPublish(String taskId, String ownerId, String nextStageName) {
+        requireReadyDraft(taskId, ownerId, nextStageName, () -> findPostPublishDraft(taskId, ownerId));
+    }
+
+    private DraftVideoRecord requireReadyDraft(String taskId, String ownerId, String nextStageName,
+                                               Supplier<Optional<DraftVideoRecord>> candidate) {
         ensureMediaEnabled(nextStageName);
-        requirePrePublishConfirmed(taskId, ownerId, nextStageName);
-        DraftVideoRecord draft = mediaUploadMapper.findDraftVideo(taskId.trim(), ownerId)
+        Optional<DraftVideoRecord> selected = candidate.get();
+        if (selected.isPresent()) {
+            ensureVersionContextOrLegacyConfirmation(taskId, ownerId, selected.get().versionId(), nextStageName);
+        } else {
+            requirePrePublishConfirmed(taskId, ownerId, nextStageName);
+        }
+        DraftVideoRecord draft = selected
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.CONFLICT,
                         "请先上传成片并完成媒体探测，才能进入" + nextStageName + "阶段。"
@@ -87,6 +136,15 @@ public class CreatorMediaWorkflowGateService {
         if (!readiness.ready()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, readiness.blockingReason());
         }
+        return draft;
+    }
+
+    private Optional<DraftVideoRecord> findPostPublishDraft(String taskId, String ownerId) {
+        Optional<String> published = mediaUploadMapper.findPublishedVideoVersionId(taskId.trim(), ownerId);
+        // 已记录的发布版本若不存在或被删除，必须阻断，不能回退到另一个当前版本。
+        return published.isPresent()
+                ? mediaUploadMapper.findDraftVideoByVersion(taskId.trim(), ownerId, published.get())
+                : mediaUploadMapper.findDraftVideo(taskId.trim(), ownerId);
     }
 
     /**
@@ -101,17 +159,39 @@ public class CreatorMediaWorkflowGateService {
                                                             String nextStageName) {
         try {
             ensureMediaEnabled(nextStageName);
+            Optional<DraftVideoRecord> selected = findPostPublishDraft(taskId, ownerId);
+            if (selected.isPresent()) {
+                ensureVersionContextOrLegacyConfirmation(taskId, ownerId, selected.get().versionId(), nextStageName);
+                return evaluatePostPublishReadiness(taskId.trim(), ownerId, nextStageName, selected.get());
+            }
             requirePrePublishConfirmed(taskId, ownerId, nextStageName);
+            return new PostPublishReadiness(false, "请先上传成片并完成媒体探测，才能进入" + nextStageName + "阶段。");
         } catch (ResponseStatusException exception) {
             return new PostPublishReadiness(false, exception.getReason());
         }
-        return mediaUploadMapper.findDraftVideo(taskId.trim(), ownerId)
-                .map(draft -> evaluatePostPublishReadiness(
-                        taskId.trim(), ownerId, nextStageName, draft))
-                .orElseGet(() -> new PostPublishReadiness(
-                        false,
-                        "请先上传成片并完成媒体探测，才能进入" + nextStageName + "阶段。"
-                ));
+    }
+
+    /** 有验证过的不可变上下文就读取原依据；旧任务仍沿用真实确认门禁。 */
+    public boolean ensureVersionContextOrLegacyConfirmation(String taskId, String ownerId,
+                                                             String versionId, String nextStageName) {
+        ensureMediaEnabled(nextStageName);
+        var context = mediaUploadMapper.findVersionContext(taskId.trim(), ownerId, versionId);
+        if (context.isPresent()) {
+            var value = context.get();
+            if (!value.planningSkipped() && (value.publishingSessionId() == null
+                    || value.publishingResultId() == null || value.productionPlanId() == null)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "成片制作上下文不完整，请重新确认");
+            }
+            return true;
+        }
+        requirePrePublishConfirmed(taskId, ownerId, nextStageName);
+        return false;
+    }
+
+    /** 选版和绑定使用同一套精确版本的试映判断。 */
+    public void ensureVersionReady(String taskId, String ownerId, String versionId, String nextStageName) {
+        requireReadyDraft(taskId, ownerId, nextStageName,
+                () -> mediaUploadMapper.findDraftVideoByVersion(taskId.trim(), ownerId, versionId));
     }
 
     private PostPublishReadiness evaluatePostPublishReadiness(String taskId,

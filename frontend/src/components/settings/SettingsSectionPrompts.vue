@@ -80,17 +80,19 @@ async function savePrompt(template: PromptTemplate) {
 
 <template>
   <section class="creator-section settings-section">
-    <button
-      type="button"
-      class="settings-section-toggle"
-      :aria-expanded="!collapsed"
-      @click="emit('toggleSection')"
-    >
-      <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
-      <h3>提示词模板管理</h3>
-      <span class="settings-section-hint" v-if="collapsed && promptTemplates.length">
-        {{ promptTemplates.length }} 条模板
-      </span>
+    <div class="settings-section-heading">
+      <button
+        type="button"
+        class="settings-section-toggle"
+        :aria-expanded="!collapsed"
+        @click="emit('toggleSection')"
+      >
+        <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
+        <span class="settings-section-title">提示词模板管理</span>
+        <span class="settings-section-hint" v-if="collapsed && promptTemplates.length">
+          {{ promptTemplates.length }} 条模板
+        </span>
+      </button>
       <button
         type="button"
         class="creator-secondary-action creator-mini-button"
@@ -99,7 +101,7 @@ async function savePrompt(template: PromptTemplate) {
       >
         {{ promptLoading ? '加载中…' : promptTemplates.length ? '刷新' : '加载提示词' }}
       </button>
-    </button>
+    </div>
 
     <div v-if="!collapsed" class="settings-section-body">
       <div v-if="promptError" class="creator-alert error-alert">

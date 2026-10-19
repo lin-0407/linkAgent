@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   cancelAssistantPlan, confirmAssistantPlan, getAssistantPlans, getPlatformOperations, resumeAssistantPlan,
-  submitAssistantPlanFiles, submitAssistantPlanInputs,
+  submitAssistantPlanFiles, submitAssistantPlanInputs, assistantErrorMessage,
   type AssistantPlan, type AssistantPlanProgress, type PlatformOperation,
 } from '@/api/assistant'
 import { useMediaUpload } from '@/composables/creator/useMediaUpload'
@@ -11,12 +11,20 @@ import { ASSISTANT_BUSINESS_CHANGED } from '@/composables/useAssistantBusinessRe
 import { useAppStore } from '@/stores/appStore'
 
 const props = defineProps<{ generating: boolean; stepCount: number }>()
-const emit = defineEmits<{ active: [value: boolean] }>()
+const emit = defineEmits<{
+  active: [value: boolean]
+  'load-state': [state: { ready: boolean; error: string }]
+  attention: [plans: AssistantPlan[]]
+}>()
 const router = useRouter()
 const appStore = useAppStore()
 const plans = ref<AssistantPlan[]>([])
 const operations = ref<PlatformOperation[]>([])
 const error = ref('')
+const catalogError = ref('')
+const planLoadError = ref('')
+const catalogLoading = ref(true)
+const plansLoaded = ref(false)
 const busy = ref('')
 const inputs = reactive<Record<string, Record<string, string>>>({})
 const selectedFiles = reactive<Record<string, File[]>>({})
@@ -39,7 +47,12 @@ const labels: Record<string, string> = {
   embeddingBaseUrl: '向量接口地址', enabled: '是否开启', value: '设置值', settingKey: '设置项',
   content: '内容', note: '备注', status: '状态', category: '分区', query: '检索内容', limit: '查询数量',
 }
-const active = computed(() => plans.value.some(p => ['PENDING', 'WAIT_INPUT', 'RUNNING', 'WAITING', 'CANCEL_REQUESTED', 'INTERRUPTED'].includes(p.status)))
+const activeStatuses = ['PENDING', 'WAIT_INPUT', 'INTERRUPTED', 'RUNNING', 'WAITING', 'CANCEL_REQUESTED']
+const activePlans = computed(() => plans.value.filter(p => activeStatuses.includes(p.status))
+  .sort((a, b) => activeStatuses.indexOf(a.status) - activeStatuses.indexOf(b.status)))
+const active = computed(() => activePlans.value.length > 0)
+// 旧的完成记录不能挤掉待确认计划；仅完成历史限制数量。
+const visiblePlans = computed(() => [...activePlans.value, ...plans.value.filter(p => !activeStatuses.includes(p.status)).slice(0, 8)])
 const groups = computed(() => [...new Set(operations.value.map(o => o.group))])
 let timer: ReturnType<typeof setTimeout> | undefined
 let generation = 0
@@ -48,18 +61,37 @@ let loaded = false
 const completed = new Set<string>()
 
 watch(active, value => emit('active', value), { immediate: true })
+watch(activePlans, value => emit('attention', value), { immediate: true })
+watch([catalogError, planLoadError, catalogLoading, plansLoaded], () => {
+  const loadError = catalogError.value || planLoadError.value
+  emit('load-state', { ready: !loadError && !catalogLoading.value && plansLoaded.value, error: loadError })
+}, { immediate: true })
 watch(() => [props.generating, props.stepCount], () => {
   clearTimeout(timer)
   timer = setTimeout(() => void refresh(), 450)
 })
-void getPlatformOperations().then(value => { if (!disposed) operations.value = value }).catch(() => {
-  if (!disposed) error.value = '平台操作目录暂时无法读取，请刷新或更新服务后重试。'
-})
+void loadOperations()
 void refresh()
 onBeforeUnmount(() => {
   disposed = true; generation++; clearTimeout(timer); uploader.disposeUpload()
   Object.keys(inputs).forEach(key => delete inputs[key])
 })
+
+async function loadOperations() {
+  catalogLoading.value = true
+  try {
+    const result = await getPlatformOperations()
+    if (disposed) return
+    operations.value = result
+    catalogError.value = ''
+  } catch (reason) {
+    if (!disposed) catalogError.value = assistantErrorMessage(reason, '暂时无法读取可用操作，请重试。')
+  } finally {
+    if (!disposed) catalogLoading.value = false
+  }
+}
+
+defineExpose({ reload: () => Promise.all([loadOperations(), refresh()]) })
 
 async function refresh() {
   const current = ++generation
@@ -68,6 +100,8 @@ async function refresh() {
     const result = await getAssistantPlans()
     if (current !== generation || disposed) return
     plans.value = result
+    planLoadError.value = ''
+    plansLoaded.value = true
     for (const plan of result) {
       for (let index = 0; index < plan.state.steps.length; index++) {
         const progress = plan.state.steps[index]!
@@ -88,18 +122,20 @@ async function refresh() {
     }
     loaded = true
     if (result.some(p => ['RUNNING', 'WAITING', 'CANCEL_REQUESTED'].includes(p.status))) timer = setTimeout(() => void refresh(), 2000)
-  } catch (reason) { if (!disposed) error.value = message(reason) }
+  } catch (reason) {
+    if (!disposed && current === generation) planLoadError.value = assistantErrorMessage(reason, '暂时无法读取执行计划，请重试。')
+  }
 }
 
 async function act(plan: AssistantPlan, action: 'confirm' | 'resume' | 'cancel') {
   if (busy.value) return
   busy.value = plan.planId; error.value = ''
   try {
-    if (action === 'confirm') await confirmAssistantPlan(plan)
-    else if (action === 'resume') await resumeAssistantPlan(plan.planId)
-    else await cancelAssistantPlan(plan.planId)
+    const result = action === 'confirm' ? await confirmAssistantPlan(plan)
+      : action === 'resume' ? await resumeAssistantPlan(plan.planId) : await cancelAssistantPlan(plan.planId)
+    plans.value = plans.value.map(item => item.planId === result.planId ? result : item)
   } catch (reason) { error.value = message(reason) }
-  finally { busy.value = ''; await refresh() }
+  finally { await refresh(); busy.value = '' }
 }
 
 function waiting(plan: AssistantPlan) { return plan.state.steps.find(s => s.status === 'WAIT_INPUT') }
@@ -205,17 +241,19 @@ function message(reason: unknown) { return reason instanceof Error ? reason.mess
 <template>
   <div class="assistant-plans">
     <details class="assistant-capabilities">
-      <summary>平台操作 · {{ operations.length }} 项能力 <span>查看能做什么</span></summary>
+      <summary>可用操作 <span>{{ catalogLoading ? '正在读取…' : catalogError ? '尚未连接' : `${operations.length} 项，点击查看` }}</span></summary>
       <p>可以直接描述目标。我会查询实际状态，展示具体计划，确认后执行。</p>
       <div v-for="group in groups" :key="group" class="assistant-capability-group">
         <strong>{{ group }}</strong><p>{{ operations.filter(o => o.group === group).map(o => o.label).join('、') }}</p>
       </div>
     </details>
     <p v-if="error" class="plan-error" role="alert">{{ error }}</p>
-    <article v-for="plan in plans.slice(0, 8)" :key="plan.planId" class="assistant-plan" :data-status="plan.status">
-      <details :open="['PENDING', 'WAIT_INPUT', 'RUNNING', 'WAITING', 'INTERRUPTED'].includes(plan.status)">
-        <summary><strong>{{ plan.title }}</strong><span>{{ status(plan.status) }}</span></summary>
+    <p v-if="plansLoaded && !plans.length && !planLoadError" class="assistant-plan-empty">还没有执行计划。对话中创建的实际计划会出现在这里，确认后才会执行。</p>
+    <article v-for="plan in visiblePlans" :key="plan.planId" class="assistant-plan" :data-status="plan.status">
+        <header class="plan-heading"><strong>{{ plan.title }}</strong><span>{{ status(plan.status) }}</span></header>
         <p class="plan-message">{{ plan.state.message }}</p>
+      <details class="plan-review-details">
+        <summary>核对 {{ plan.definition.steps.length }} 个步骤的操作、对象与影响</summary>
         <ol class="plan-steps">
           <li v-for="(step, index) in plan.definition.steps" :key="step.id">
             <div><strong>{{ plan.operations[index]?.label }}</strong><span>{{ status(plan.state.steps[index]?.status || 'PENDING') }}</span></div>
@@ -227,7 +265,8 @@ function message(reason: unknown) { return reason instanceof Error ? reason.mess
             <details v-if="plan.state.steps[index]?.result"><summary>查看实际返回结果</summary><pre>{{ resultText(plan.state.steps[index]?.result) }}</pre></details>
           </li>
         </ol>
-        <p v-if="plan.status === 'PENDING'" class="plan-notice">确认后按以上动作连续执行，可能调用模型并产生费用。新增动作或修改已确定参数会重新确认。</p>
+      </details>
+        <p v-if="plan.status === 'PENDING'" class="plan-notice">请先展开核对具体步骤。确认后连续执行；涉及模型调用时会产生费用，删除等操作可能无法恢复。修改计划后需要重新确认。</p>
         <button v-if="plan.status === 'PENDING'" class="plan-primary" :disabled="!!busy || props.generating" @click="act(plan, 'confirm')">确认整份计划并执行</button>
         <form v-if="plan.status === 'WAIT_INPUT' && waiting(plan)" @submit.prevent="submit(plan)">
           <label v-for="field in waiting(plan)!.inputs" :key="field.path">
@@ -250,16 +289,20 @@ function message(reason: unknown) { return reason instanceof Error ? reason.mess
           <button v-if="plan.state.steps.some(s => s.status === 'SUCCEEDED')" @click="open(plan)">打开业务页面</button>
           <button @click="refresh">刷新状态</button>
         </div>
-      </details>
     </article>
   </div>
 </template>
 
 <style scoped>
 .assistant-plans { margin-top: 10px; font-size: 12px; line-height: 1.6; }
+.assistant-plan-empty { color: var(--muted); padding-block: 16px; }
+.plan-heading { display: flex; align-items: start; gap: 10px; justify-content: space-between; }
+.plan-heading strong { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.plan-heading > span { flex-shrink: 0; color: var(--accent); font-size: 11px; }
+.plan-review-details { padding: 10px 0; border-block: 1px solid var(--border); }
 summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 summary span { opacity: .7; font-size: 11px; flex-shrink: 0; }
-.assistant-capabilities { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.assistant-capabilities { padding: 5px 0; color: var(--muted); }
 .assistant-capability-group { margin-top: 8px; }.assistant-capability-group p { margin: 2px 0; opacity: .75; }
 .assistant-plan { margin-top: 10px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 .plan-message { margin: 8px 0; }.plan-steps { padding-left: 20px; margin: 8px 0; }.plan-steps li { margin: 10px 0; }

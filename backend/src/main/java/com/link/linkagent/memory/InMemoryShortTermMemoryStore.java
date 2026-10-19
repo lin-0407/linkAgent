@@ -58,7 +58,8 @@ public class InMemoryShortTermMemoryStore implements ShortTermMemoryStore {
                         MemoryMessage latest = messages.peekLast();
                         return new SessionInfo(
                                 entry.getKey(),
-                                TextUtil.preview(latest == null ? null : latest.content(), 48, "Empty session"),
+                                // 工具调用消息正文为空，预览用渲染后的 ToolCall 文本。
+                                TextUtil.preview(latest == null ? null : latest.promptText(), 48, "Empty session"),
                                 messages.size()
                         );
                     }

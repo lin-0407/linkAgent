@@ -38,14 +38,7 @@ class PreflightReviewServiceTest {
         when(mapper.findReview("task-1", "default", "review-1")).thenReturn(Optional.of(review));
         when(mapper.findCurrentByVersion("task-1", "default", "version-1"))
                 .thenReturn(Optional.of(review));
-        PreflightReviewService service = new PreflightReviewService(
-                new CreatorMediaProperties(),
-                mapper,
-                mock(MediaUploadMapper.class),
-                mock(MediaProcessingMapper.class),
-                mock(PreflightEventPublisher.class),
-                new ObjectMapper()
-        );
+        PreflightReviewService service = service(mapper);
 
         ResponseStatusException exception = catchThrowableOfType(
                 () -> service.retry("default", "task-1", "review-1"),
@@ -113,6 +106,7 @@ class PreflightReviewServiceTest {
     }
 
     private PreflightReviewService service(PreflightReviewMapper mapper, MediaUploadMapper uploadMapper) {
+        when(uploadMapper.lockMediaTask("task-1", "default")).thenReturn(Optional.of("task-1"));
         return new PreflightReviewService(
                 new CreatorMediaProperties(),
                 mapper,

@@ -29,17 +29,19 @@ function statusLabel(status: string) {
 
 <template>
   <section class="creator-section settings-section">
-    <button
-      type="button"
-      class="settings-section-toggle"
-      :aria-expanded="!collapsed"
-      @click="emit('toggleSection')"
-    >
-      <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
-      <h3>连通性检测</h3>
-      <span class="settings-section-hint" v-if="collapsed">
-        点击展开后可检测 MySQL、Redis、向量库和模型连接
-      </span>
+    <div class="settings-section-heading">
+      <button
+        type="button"
+        class="settings-section-toggle"
+        :aria-expanded="!collapsed"
+        @click="emit('toggleSection')"
+      >
+        <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
+        <span class="settings-section-title">连通性检测</span>
+        <span class="settings-section-hint" v-if="collapsed">
+          点击展开后可检测 MySQL、Redis、向量库和模型连接
+        </span>
+      </button>
       <button
         type="button"
         class="creator-secondary-action"
@@ -48,7 +50,7 @@ function statusLabel(status: string) {
       >
         {{ loading ? '检测中…' : '检测连接' }}
       </button>
-    </button>
+    </div>
 
     <div v-if="!collapsed" class="settings-section-body">
       <div v-if="error" class="creator-alert error-alert">

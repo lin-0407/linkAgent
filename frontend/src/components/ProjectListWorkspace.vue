@@ -154,13 +154,13 @@ function formatDate(value: string) {
       <header class="creator-header project-list-header">
         <div>
           <p class="creator-kicker">项目列表</p>
-          <h2>历史视频项目</h2>
-          <p>从这里继续上次的发布方案或复盘，不需要回到技术调试入口。</p>
+          <h2>我的创作项目</h2>
+          <p>整理进行中的视频，继续发布方案、制作或复盘。</p>
         </div>
         <div class="creator-header-actions project-list-actions">
           <button type="button" class="creator-primary-button creator-mini-button" @click="createNewTask">
             <Plus :size="16" :stroke-width="1.8" aria-hidden="true" />
-            开始优化一条视频
+            新建视频项目
           </button>
           <button
             type="button"
@@ -229,7 +229,7 @@ function formatDate(value: string) {
               </div>
             </div>
             <button type="button" class="creator-primary-button creator-mini-button" @click="continueTask(task)">
-              继续复盘
+              继续创作
               <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </article>

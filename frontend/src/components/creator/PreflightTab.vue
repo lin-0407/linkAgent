@@ -23,6 +23,7 @@ import {
 } from '@/api/media'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 import { useMediaUpload } from '@/composables/creator/useMediaUpload'
+import VideoVersionHistory from './VideoVersionHistory.vue'
 
 const {
   currentDraftVideo,
@@ -94,6 +95,7 @@ const mediaDeleteBusy = ref(false)
 const mediaDeleteError = ref('')
 const isRestoringMediaState = ref(true)
 const mediaStateRestoreFailed = ref(false)
+const preparingNewVersion = ref(false)
 const newPreflightIdempotencyKey = ref('')
 const openIssueIgnoreId = ref('')
 const openEditIgnoreId = ref('')
@@ -409,6 +411,7 @@ async function seekPreview(startMs: number) {
 }
 
 watch(completedDraft, (draft) => {
+  if (draft) preparingNewVersion.value = false
   if (draft && draft.taskId === taskId.value) currentDraftVideo.value = draft
   currentMediaProcessingStatus.value = null
   currentPreflightReviewStatus.value = null
@@ -467,11 +470,12 @@ onMounted(() => {
   void restoreMediaState(taskId.value, viewGeneration)
 })
 
-watch(taskId, async (nextTaskId) => {
+function resetMediaView() {
   viewGeneration += 1
   processingEstimateGeneration += 1
   const generation = viewGeneration
   mediaStateRestoreFailed.value = false
+  preparingNewVersion.value = false
   isProbing.value = false
   clearProbeRefreshTimer()
   clearProcessingRefreshTimer()
@@ -501,8 +505,33 @@ watch(taskId, async (nextTaskId) => {
   if (fileInput.value) fileInput.value.value = ''
   localError.value = ''
   closeResultModal(false)
+  return generation
+}
+
+async function restoreSelectedVersion(nextTaskId: string) {
+  const generation = resetMediaView()
   await restoreMediaState(nextTaskId, generation)
-})
+}
+
+watch(taskId, restoreSelectedVersion)
+
+async function handleVersionSelected(selectedTaskId: string) {
+  if (selectedTaskId !== taskId.value) return
+  currentDraftVideo.value = null
+  await restoreSelectedVersion(selectedTaskId)
+}
+
+function prepareNewVersion() {
+  try {
+    mediaUpload.prepareNewVersion(taskId.value)
+    resetMediaView()
+    versionName.value = '新版本'
+    preparingNewVersion.value = true
+    statusMessage.value = '新视频上传完成后才会成为当前版本，原视频和报告会保留。'
+  } catch (error) {
+    localError.value = toMessage(error)
+  }
+}
 
 onBeforeUnmount(() => {
   isDisposed = true
@@ -1338,6 +1367,12 @@ function toMessage(error: unknown) {
         <small>最大 1.5 GB</small>
       </div>
     </header>
+
+    <VideoVersionHistory :task-id="taskId" :active-version-id="activeVersionId"
+      :busy="isRestoringMediaState || isUploading || isProbing || processingIsActive || preflightIsActive || mediaDeleteBusy"
+      @selected="handleVersionSelected" @upload-new="prepareNewVersion" />
+    <button v-if="preparingNewVersion" type="button" :disabled="isUploading || uploadBlocksMediaDeletion"
+      @click="handleVersionSelected(taskId)">返回当前版本</button>
 
     <div class="preflight-route" aria-label="媒体上传链路">
       <span>选择成片</span><i aria-hidden="true"></i><span>分片上传</span><i aria-hidden="true"></i

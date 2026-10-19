@@ -167,17 +167,19 @@ async function testConfigConnectivity(configId: string) {
 
 <template>
   <section class="creator-section settings-section">
-    <button
-      type="button"
-      class="settings-section-toggle"
-      :aria-expanded="!collapsed"
-      @click="emit('toggleSection')"
-    >
-      <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
-      <h3>API 配置</h3>
-      <span class="settings-section-hint" v-if="collapsed && llmConfigs.length">
-        {{ llmConfigs.length }} 个供应商
-      </span>
+    <div class="settings-section-heading">
+      <button
+        type="button"
+        class="settings-section-toggle"
+        :aria-expanded="!collapsed"
+        @click="emit('toggleSection')"
+      >
+        <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
+        <span class="settings-section-title">API 配置</span>
+        <span class="settings-section-hint" v-if="collapsed && llmConfigs.length">
+          {{ llmConfigs.length }} 个供应商
+        </span>
+      </button>
       <button
         type="button"
         class="creator-secondary-action creator-mini-button"
@@ -186,7 +188,7 @@ async function testConfigConnectivity(configId: string) {
       >
         {{ llmConfigLoading ? '加载中…' : llmConfigs.length ? '刷新' : '加载配置' }}
       </button>
-    </button>
+    </div>
 
     <div v-if="!collapsed" class="settings-section-body">
       <div v-if="llmConfigError" class="creator-alert error-alert">

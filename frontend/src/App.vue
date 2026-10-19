@@ -1,6 +1,19 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { Menu, SlidersHorizontal, X } from '@lucide/vue'
+import { computed, nextTick, ref, watch } from 'vue'
+import {
+  Activity,
+  BrainCircuit,
+  ChevronRight,
+  Clapperboard,
+  FolderOpen,
+  HelpCircle,
+  Library,
+  Menu,
+  MessageCircle,
+  MonitorPlay,
+  SlidersHorizontal,
+  X,
+} from '@lucide/vue'
 import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AgentFloatingWindow from '@/components/AgentFloatingWindow.vue'
@@ -11,26 +24,31 @@ import { useModalDialog } from '@/composables/useModalDialog'
 import { useAppStore } from '@/stores/appStore'
 
 const appStore = useAppStore()
-const { settingsOpen, developerMode } = storeToRefs(appStore)
-
+const { settingsOpen, assistantOpen, developerMode } = storeToRefs(appStore)
 const route = useRoute()
-const isHomeRoute = computed(() => route.path === '/')
-const isCreatorRoute = computed(() => route.path === '/creator')
-const isUsageLogRoute = computed(() => route.path === '/usage-logs')
-const routeDirectory = computed(
-  () => {
-    const directory = {
-        '/': { label: '首页', detail: '创作总览' },
-        '/creator': { label: '创作台', detail: '视频发布与复盘助手' },
-        '/knowledge': { label: '参考案例', detail: '案例检索' },
-        '/projects': { label: '项目列表', detail: '历史视频项目' },
-        '/memory': { label: '记忆管理', detail: '长期偏好与关键信息' },
-        '/video-analysis': { label: '视频分析', detail: '视频分析与复盘' },
-        '/usage-logs': { label: '使用日志', detail: '模型调用记录' },
-      } as Record<string, { label: string; detail: string }>
-    return directory[route.path]
-      ?? (route.name === 'notFound' ? { label: '页面未找到', detail: '导航恢复' } : undefined)
+// 桌面侧栏和手机菜单共用入口，避免两端的功能导航逐渐不一致。
+const navigationGroups = [
+  {
+    label: '创作空间',
+    items: [
+      { path: '/creator', label: '创作台', icon: Clapperboard },
+      { path: '/knowledge', label: '参考案例', icon: Library },
+      { path: '/projects', label: '项目列表', icon: FolderOpen },
+      { path: '/video-analysis', label: '视频分析', icon: MonitorPlay },
+    ],
   },
+  {
+    label: '工作台管理',
+    items: [
+      { path: '/memory', label: '记忆管理', icon: BrainCircuit },
+      { path: '/usage-logs', label: '使用日志', icon: Activity },
+    ],
+  },
+]
+const routeLabel = computed(
+  () =>
+    navigationGroups.flatMap((group) => group.items).find((item) => item.path === route.path)
+      ?.label ?? '页面未找到',
 )
 const guideOpen = ref(false)
 const mobileNavigationOpen = ref(false)
@@ -38,110 +56,113 @@ const mobileNavigationOpen = ref(false)
 function closeGuide() {
   guideOpen.value = false
 }
-
 function closeMobileNavigation() {
   mobileNavigationOpen.value = false
 }
-
+async function openGuideFromNavigation() {
+  closeMobileNavigation()
+  // 先释放导航弹层的焦点，再打开指南，避免回焦到即将移除的菜单按钮。
+  await nextTick()
+  guideOpen.value = true
+}
 const { dialogRef: guideDialogRef, handleDialogKeydown: handleGuideKeydown } = useModalDialog(
   guideOpen,
   closeGuide,
 )
-const {
-  dialogRef: mobileNavigationDialogRef,
-  handleDialogKeydown: handleMobileNavigationKeydown,
-} = useModalDialog(mobileNavigationOpen, closeMobileNavigation)
-
-watch(
-  () => route.path,
-  closeMobileNavigation,
-)
+const { dialogRef: mobileNavigationDialogRef, handleDialogKeydown: handleMobileNavigationKeydown } =
+  useModalDialog(mobileNavigationOpen, closeMobileNavigation)
+watch(() => route.path, closeMobileNavigation)
 </script>
 
 <template>
   <div
-    class="surface-root"
-    :class="{ 'surface-root-home': isHomeRoute, 'surface-root-creator': isCreatorRoute }"
+    class="surface-root workbench-app"
+    :class="{ 'surface-root-creator': route.path === '/creator', 'workbench-with-assistant': assistantOpen }"
   >
-    <header
-      class="surface-topbar"
-      :class="{ 'surface-topbar-home': isHomeRoute, 'surface-topbar-creator': isCreatorRoute }"
-    >
-      <div class="surface-topbar-left">
-        <RouterLink to="/" class="surface-brand" aria-label="返回首页">
-          <span class="surface-brand-mark" aria-hidden="true"></span>
-          <strong>LinkAgent</strong>
-          <b>AI</b>
-        </RouterLink>
-        <nav v-if="routeDirectory" class="surface-breadcrumb" aria-label="当前位置">
-          <RouterLink :to="route.path">{{ routeDirectory.label }}</RouterLink>
-          <span>/</span>
-          <strong>{{ routeDirectory.detail }}</strong>
-        </nav>
-      </div>
-
-      <nav class="surface-switch" aria-label="导航">
-        <RouterLink to="/" custom v-slot="{ navigate, isExactActive }">
-          <button type="button" :class="{ active: isExactActive }" @click="navigate">首页</button>
-        </RouterLink>
-        <RouterLink to="/creator" custom v-slot="{ navigate, isActive }">
-          <button type="button" :class="{ active: isActive }" @click="navigate">创作台</button>
-        </RouterLink>
-        <RouterLink to="/knowledge" custom v-slot="{ navigate, isActive }">
-          <button type="button" :class="{ active: isActive }" @click="navigate">参考案例</button>
-        </RouterLink>
-        <RouterLink to="/projects" custom v-slot="{ navigate, isActive }">
-          <button type="button" :class="{ active: isActive }" @click="navigate">项目列表</button>
-        </RouterLink>
-        <!-- P1-2: 长期记忆管理页入口 — 查看和管理系统自动提取的长期记忆 -->
-        <RouterLink to="/memory" custom v-slot="{ navigate, isActive }">
-          <button type="button" :class="{ active: isActive }" @click="navigate">记忆管理</button>
-        </RouterLink>
-        <!-- P0-3: 视频分析独立页面入口 — 展示已绑定任务的视频并支持复盘追问 -->
-        <RouterLink to="/video-analysis" custom v-slot="{ navigate, isActive }">
-          <button type="button" :class="{ active: isActive }" @click="navigate">视频分析</button>
-        </RouterLink>
-        <RouterLink to="/usage-logs" custom v-slot="{ navigate, isActive }">
-          <button type="button" :class="{ active: isActive }" @click="navigate">使用日志</button>
-        </RouterLink>
+    <a class="workbench-skip-link" href="#workspace-content">跳到页面内容</a>
+    <header class="workbench-topbar">
+      <RouterLink to="/creator" class="workbench-brand" aria-label="LinkAgent 创作台">
+        <span class="workbench-brand-mark" aria-hidden="true"
+          ><Clapperboard :size="24" :stroke-width="1.8"
+        /></span>
+        <strong>LinkAgent</strong>
+      </RouterLink>
+      <nav class="workbench-breadcrumb" aria-label="当前位置">
+        <span>创作工作台</span><ChevronRight :size="14" aria-hidden="true" /><strong>{{
+          routeLabel
+        }}</strong>
       </nav>
-
-      <div class="surface-mobile-navigation">
+      <button
+        type="button"
+        class="workbench-mobile-toggle"
+        aria-label="打开页面导航"
+        :aria-expanded="mobileNavigationOpen"
+        aria-controls="surface-mobile-navigation-menu"
+        @click="mobileNavigationOpen = true"
+      >
+        <Menu :size="19" :stroke-width="1.8" aria-hidden="true" /><span>{{ routeLabel }}</span>
+      </button>
+      <div class="workbench-topbar-actions" aria-label="辅助入口">
         <button
+          id="workbench-assistant-toggle"
           type="button"
-          class="surface-mobile-navigation-toggle"
-          :aria-expanded="mobileNavigationOpen"
-          aria-controls="surface-mobile-navigation-menu"
-          @click="mobileNavigationOpen = !mobileNavigationOpen"
+          class="workbench-assistant-button"
+          :class="{ active: assistantOpen }"
+          :aria-label="assistantOpen ? '收起创作助手' : '打开创作助手'"
+          :aria-expanded="assistantOpen"
+          aria-controls="workbench-assistant-panel"
+          @click="assistantOpen = !assistantOpen"
         >
-          <Menu :size="18" :stroke-width="1.8" aria-hidden="true" />
-          <span>{{ routeDirectory?.label || '页面导航' }}</span>
+          <MessageCircle :size="19" :stroke-width="1.8" aria-hidden="true" /><span>创作助手</span>
         </button>
-      </div>
-
-      <div class="surface-topbar-actions" aria-label="辅助入口">
-        <button
-          v-if="isCreatorRoute"
-          type="button"
-          class="surface-action-pill"
-          :class="{ active: guideOpen }"
-          @click="guideOpen = true"
-        >
-          使用指南
+        <button type="button" class="workbench-guide-button" @click="guideOpen = true">
+          <HelpCircle :size="17" :stroke-width="1.8" aria-hidden="true" /><span>使用指南</span>
         </button>
-        <!-- 首页不预取画像数据，避免产品入口在未启动后端时产生无意义请求。 -->
-        <CreatorProfilePopover v-if="!isHomeRoute" />
+        <span class="workbench-topbar-divider" aria-hidden="true"></span>
+        <CreatorProfilePopover />
         <button
           type="button"
-          class="surface-settings-button"
+          class="workbench-settings-button"
           :class="{ active: settingsOpen }"
           aria-label="打开设置"
           @click="settingsOpen = true"
         >
-          <SlidersHorizontal :size="18" :stroke-width="1.8" aria-hidden="true" />
+          <SlidersHorizontal :size="19" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </div>
     </header>
+
+    <aside class="workbench-sidebar" aria-label="工作台导航">
+      <nav
+        v-for="group in navigationGroups"
+        :key="group.label"
+        class="workbench-nav-group"
+        :aria-label="group.label"
+      >
+        <span class="workbench-nav-caption">{{ group.label }}</span>
+        <RouterLink
+          v-for="item in group.items"
+          :key="item.path"
+          :to="item.path"
+          class="workbench-nav-link"
+        >
+          <component :is="item.icon" :size="19" :stroke-width="1.7" aria-hidden="true" /><span>{{
+            item.label
+          }}</span>
+        </RouterLink>
+      </nav>
+      <div class="workbench-sidebar-note">
+        <Clapperboard :size="18" :stroke-width="1.5" aria-hidden="true" /><span
+          >为每一次创作<br />加点灵感</span
+        >
+      </div>
+    </aside>
+
+    <div id="workspace-content" class="workbench-content" tabindex="-1">
+      <RouterView v-slot="{ Component }"
+        ><component :is="Component" :developer-mode="developerMode"
+      /></RouterView>
+    </div>
 
     <Teleport to="body">
       <Transition name="surface-mobile-menu">
@@ -154,7 +175,7 @@ watch(
           <nav
             id="surface-mobile-navigation-menu"
             ref="mobileNavigationDialogRef"
-            class="surface-mobile-navigation-menu"
+            class="surface-mobile-navigation-menu workbench-mobile-menu"
             role="dialog"
             aria-modal="true"
             aria-label="页面导航"
@@ -162,7 +183,7 @@ watch(
             @keydown="handleMobileNavigationKeydown"
           >
             <header>
-              <strong>页面导航</strong>
+              <strong>我的创作工作台</strong>
               <button
                 type="button"
                 aria-label="关闭页面导航"
@@ -172,13 +193,26 @@ watch(
                 <X :size="19" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </header>
-            <RouterLink to="/" @click="closeMobileNavigation">首页</RouterLink>
-            <RouterLink to="/creator" @click="closeMobileNavigation">创作台</RouterLink>
-            <RouterLink to="/knowledge" @click="closeMobileNavigation">参考案例</RouterLink>
-            <RouterLink to="/projects" @click="closeMobileNavigation">项目列表</RouterLink>
-            <RouterLink to="/memory" @click="closeMobileNavigation">记忆管理</RouterLink>
-            <RouterLink to="/video-analysis" @click="closeMobileNavigation">视频分析</RouterLink>
-            <RouterLink to="/usage-logs" @click="closeMobileNavigation">使用日志</RouterLink>
+            <div
+              v-for="group in navigationGroups"
+              :key="group.label"
+              class="workbench-mobile-group"
+            >
+              <RouterLink
+                v-for="item in group.items"
+                :key="item.path"
+                :to="item.path"
+                @click="closeMobileNavigation"
+              >
+                <component :is="item.icon" :size="18" :stroke-width="1.7" aria-hidden="true" />{{
+                  item.label
+                }}
+              </RouterLink>
+            </div>
+            <button type="button" class="workbench-mobile-help" @click="openGuideFromNavigation">
+              <HelpCircle :size="18" :stroke-width="1.7" aria-hidden="true" />
+              使用指南
+            </button>
           </nav>
         </div>
       </Transition>
@@ -216,63 +250,49 @@ watch(
                 <X :size="19" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </header>
-
             <ol class="surface-guide-steps">
               <li>
                 <b>1</b>
                 <div>
-                  <strong>输入创意或创建任务</strong>
-                  <p>
-                    从一个选题想法、视频类型或已有任务开始，让 AI
-                    先理解目标受众、表达方向和缺失素材。
-                  </p>
+                  <strong>说说你的视频想法</strong>
+                  <p>从一个选题或已有任务开始，补充文稿与素材，让 AI 先理解你的表达方向。</p>
                 </div>
               </li>
               <li>
                 <b>2</b>
                 <div>
-                  <strong>确认创意方向</strong>
-                  <p>
-                    查看 AI
-                    生成的创意卡片，选择最适合的一版；确认后会回写到任务材料，继续进入发布前优化。
-                  </p>
+                  <strong>对齐想法，确认发布方案</strong>
+                  <p>直接纠正 AI 没理解的地方。方向对齐后，由你主动生成并确认发布方案。</p>
                 </div>
               </li>
               <li>
                 <b>3</b>
                 <div>
-                  <strong>生成发布前优化</strong>
-                  <p>
-                    基于材料、历史偏好、视频语境和案例证据生成标题、简介、标签、风险点和发布检查清单。
-                  </p>
+                  <strong>完成制作蓝图</strong>
+                  <p>把方案拆成内容结构、镜头和制作步骤，再开始制作成片。</p>
                 </div>
               </li>
               <li>
                 <b>4</b>
                 <div>
-                  <strong>完成制作蓝图</strong>
-                  <p>确认发布方案后，先拆解内容结构、镜头和制作步骤，再开始制作成片。</p>
+                  <strong>上传成片并完成试映</strong>
+                  <p>
+                    上传私有成片，完成媒体处理和发布前试映。已有成片可在创建任务后显式跳过前期策划，直接进入这里。
+                  </p>
                 </div>
               </li>
               <li>
                 <b>5</b>
                 <div>
-                  <strong>上传成片并完成试映</strong>
-                  <p>上传私有成片，完成媒体处理和发布前试映。已有成片也必须从这里进入。</p>
+                  <strong>实际发布并绑定 BV</strong>
+                  <p>在 B 站实际发布视频后，再到视频分析页绑定 BV。</p>
                 </div>
               </li>
               <li>
                 <b>6</b>
                 <div>
-                  <strong>实际发布并绑定 BV</strong>
-                  <p>在 B 站完成实际发布后，再到视频分析页绑定公开视频 BV。</p>
-                </div>
-              </li>
-              <li>
-                <b>7</b>
-                <div>
-                  <strong>导入反馈并复盘</strong>
-                  <p>同步评论弹幕，结合竞品结论生成复盘报告，并把有效偏好沉淀到下一次创作中。</p>
+                  <strong>收集反馈，完成复盘</strong>
+                  <p>同步评论和弹幕，查看观众反馈并生成总体复盘，把有效偏好留给下一次创作。</p>
                 </div>
               </li>
             </ol>
@@ -280,16 +300,8 @@ watch(
         </div>
       </Transition>
     </Teleport>
-
-    <RouterView v-slot="{ Component }">
-      <component :is="Component" :developer-mode="developerMode" />
-    </RouterView>
-    <!-- 创作台也需要任务查询和操作确认，因此实际功能页统一提供平台助手入口。 -->
-    <AgentFloatingWindow
-      v-if="!isHomeRoute"
-      :developer-mode="developerMode"
-    />
-    <SystemStatusBar v-if="!isHomeRoute && !isUsageLogRoute" />
+    <AgentFloatingWindow :developer-mode="developerMode" :background-inert="settingsOpen || guideOpen || mobileNavigationOpen" />
+    <SystemStatusBar v-if="route.path !== '/usage-logs'" />
     <SettingsDrawer v-model:open="settingsOpen" v-model:developer-mode="developerMode" />
   </div>
 </template>

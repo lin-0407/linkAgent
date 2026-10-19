@@ -71,8 +71,10 @@ public class PreflightReviewService {
                                           String taskId,
                                           String idempotencyKey,
                                           CreatePreflightReviewRequest request) {
+        lockTask(taskId, ownerId);
         mapper.lockDraftVersion(taskId, ownerId, request.versionId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        ensureNoCreationRun(taskId, ownerId);
         PreflightReviewRecord idempotent = mapper.findByIdempotency(taskId, ownerId, idempotencyKey)
                 .orElse(null);
         if (idempotent != null) {
@@ -195,6 +197,7 @@ public class PreflightReviewService {
 
     @Transactional
     public PreflightReviewResponse retry(String ownerId, String taskId, String reviewId) {
+        lockTask(taskId, ownerId);
         PreflightReviewRecord review = requireReview(ownerId, taskId, reviewId);
         if (!"FAILED".equals(review.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "只有失败的试映任务可以重试");
@@ -221,6 +224,7 @@ public class PreflightReviewService {
     /** 已完成的 P0-4a 任务由作者显式补全，避免页面刷新后自动产生新的模型费用。 */
     @Transactional
     public PreflightReviewResponse completeScreening(String ownerId, String taskId, String reviewId) {
+        lockTask(taskId, ownerId);
         PreflightReviewRecord review = requireReview(ownerId, taskId, reviewId);
         PreflightStepRecord audience = mapper.findStep(reviewId, "SCREEN_AUDIENCE").orElse(null);
         if (audience != null) {
@@ -249,11 +253,23 @@ public class PreflightReviewService {
     private void requireMediaAvailableForNewWork(String ownerId, String taskId, String versionId) {
         mapper.lockDraftVersion(taskId, ownerId, versionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        ensureNoCreationRun(taskId, ownerId);
         DraftVideoRecord draft = uploadMapper.findDraftVideoByVersion(taskId, ownerId, versionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
         if (draft.mediaDeletedAt() != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "媒体文件已删除，不能重新执行发布前试映");
         }
+    }
+
+    private void ensureNoCreationRun(String taskId, String ownerId) {
+        if (uploadMapper.countActiveCreationRuns(taskId, ownerId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "制作运行尚未结束，请使用制作入口管理试映任务");
+        }
+    }
+
+    private void lockTask(String taskId, String ownerId) {
+        uploadMapper.lockMediaTask(taskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
     }
 
     @Transactional

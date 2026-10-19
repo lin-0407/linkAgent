@@ -120,7 +120,7 @@ onUnmounted(() => {
       <summary>采集设置 · 指数 &gt; {{ minIndex }} · 单轮最多 {{ maxImports }} 条</summary>
       <form class="collection-fields" @submit.prevent="start">
         <label>最低视频指数<input v-model.number="minIndex" type="number" min="0" max="100" step="0.1" required :disabled="running" /></label>
-        <label>单轮入库上限<input v-model.number="maxImports" type="number" min="1" max="1000" required :disabled="running" /></label>
+        <label>单轮入库上限<input v-model.number="maxImports" type="number" min="1" required :disabled="running" /></label>
         <label>单轮检查上限<input v-model.number="maxChecks" type="number" min="1" max="10000" required :disabled="running" /></label>
         <fieldset class="category-field" :disabled="running">
           <legend>视频分类（可选）</legend>

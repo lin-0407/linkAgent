@@ -1,22 +1,31 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { AlertCircle, RefreshCw } from '@lucide/vue'
 import PlanTracePanel from '@/components/PlanTracePanel.vue'
 import AssistantPlanPanel from '@/components/AssistantPlanPanel.vue'
 import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 import {
   confirmAssistantAction, getAssistantActions, getAssistantContext, getBusinessAgentTraces,
-  parseBusinessTrace, prepareAssistantAction,
-  type AssistantAction, type AssistantActionType, type AssistantTaskContext, type BusinessAgentTrace,
+  parseBusinessTrace, prepareAssistantAction, assistantErrorMessage,
+  type AssistantAction, type AssistantActionType, type AssistantTaskContext, type BusinessAgentTrace, type AssistantPlan,
 } from '@/api/assistant'
 
 const props = defineProps<{ taskId?: string; page: string; generating: boolean; stepCount: number }>()
-const emit = defineEmits<{ ask: [message: string] }>()
+const emit = defineEmits<{
+  status: [value: 'loading' | 'ready' | 'error']
+  active: [value: boolean]
+  attention: [plans: AssistantPlan[]]
+  'action-attention': [actions: AssistantAction[]]
+}>()
 const router = useRouter()
 const context = ref<AssistantTaskContext | null>(null)
 const actions = ref<AssistantAction[]>([])
 const traces = ref<BusinessAgentTrace[]>([])
 const error = ref('')
+const contextError = ref('')
+const planState = ref({ ready: false, error: '' })
+const planPanelRef = ref<InstanceType<typeof AssistantPlanPanel> | null>(null)
 const loading = ref(false)
 const busy = ref(false)
 const planActive = ref(false)
@@ -28,11 +37,15 @@ const pageLabel = computed(() => ({
   '/creator': 'AI 创作台', '/projects': '创作任务', '/knowledge': '参考案例库',
   '/video-analysis': '视频与观众反馈', '/memory': '长期记忆', '/usage-logs': '模型使用记录',
 }[props.page] || 'LinkAgent 工作台'))
-const questions = computed(() => props.taskId
-  ? ['这期任务目前卡在哪一步？', '下一步应该怎么做？']
-  : ['这个页面怎么用？', '我已有成片，应该从哪里开始？'])
+const serviceError = computed(() => contextError.value || planState.value.error)
+watch([serviceError, context, () => planState.value.ready], () => {
+  emit('status', serviceError.value ? 'error' : context.value && planState.value.ready ? 'ready' : 'loading')
+}, { immediate: true })
 const hasPendingAction = computed(() => planActive.value || actions.value.some(item => item.status === 'RUNNING'
   || (item.status === 'PENDING' && !expired(item))))
+watch(hasPendingAction, value => emit('active', value), { immediate: true })
+watch(() => actions.value.filter(item => item.status === 'RUNNING' || (item.status === 'PENDING' && !expired(item))),
+  value => emit('action-attention', value), { immediate: true })
 
 watch(() => [props.taskId, props.page], () => {
   generation += 1
@@ -40,6 +53,7 @@ watch(() => [props.taskId, props.page], () => {
   actions.value = []
   traces.value = []
   error.value = ''
+  contextError.value = ''
   void refresh()
 }, { immediate: true })
 watch(() => [props.generating, props.stepCount], () => {
@@ -62,16 +76,24 @@ async function refresh() {
     ])
     if (version !== generation) return
     ;[context.value, actions.value, traces.value] = results
-    error.value = ''
+    contextError.value = ''
     if (actions.value.some(item => item.status === 'RUNNING') || traces.value.some(item => item.status === 'RUNNING')) {
       pollingTimer = setTimeout(() => void refresh(), 2000)
     }
   } catch (reason) {
-    if (version === generation) error.value = reason instanceof Error ? reason.message : '读取工作台上下文失败'
+    if (version === generation) contextError.value = assistantErrorMessage(reason, '暂时无法读取当前工作，请重试。')
   } finally {
     if (version === generation) loading.value = false
   }
 }
+
+function retryConnection() {
+  void refresh()
+  void planPanelRef.value?.reload()
+}
+
+// 对话结束后主动读取落库结果，确认入口只跟实际计划同步，不解析模型的口头承诺。
+defineExpose({ reload: () => Promise.all([refresh(), planPanelRef.value?.reload()]) })
 
 async function prepare(type: AssistantActionType) {
   if (!props.taskId || busy.value) return
@@ -117,14 +139,17 @@ function openResult(action: AssistantAction) {
 <template>
   <section class="creator-assistant-panel" :class="{ 'has-pending-action': hasPendingAction }" aria-label="创作助手的工作台上下文">
     <div class="assistant-context-heading">
-      <div><small>{{ pageLabel }}</small><strong>{{ context?.taskName || 'LinkAgent 助手' }}</strong></div>
-      <button type="button" :disabled="loading" @click="refresh">{{ loading ? '读取中…' : '刷新状态' }}</button>
+      <div><small>当前{{ props.taskId ? '任务' : '页面' }}</small><strong>{{ context?.taskName || pageLabel }}</strong></div>
+      <button type="button" :disabled="loading" aria-label="刷新助手状态" title="刷新状态" @click="retryConnection"><RefreshCw :size="15" :class="{ 'is-loading': loading }" /></button>
     </div>
     <p v-if="context?.blockingReason && props.taskId" class="assistant-blocking">{{ context.blockingReason }}</p>
-    <p v-else-if="!props.taskId" class="assistant-hint">可以直接描述目标，例如“帮我新建一期视频任务”，确认具体计划后执行。</p>
-    <AssistantPlanPanel :generating="props.generating" :step-count="props.stepCount" @active="planActive = $event" />
-    <div v-if="!hasPendingAction" class="assistant-shortcuts">
-      <button v-for="question in questions" :key="question" type="button" @click="emit('ask', question)">{{ question }}</button>
+    <div v-if="serviceError" class="assistant-service-error" role="alert">
+      <AlertCircle :size="18" aria-hidden="true" />
+      <div><strong>助手暂时不可用</strong><p>{{ serviceError }}</p></div>
+      <button type="button" :disabled="loading" @click="retryConnection">重试</button>
+    </div>
+    <AssistantPlanPanel ref="planPanelRef" :generating="props.generating" :step-count="props.stepCount" @active="planActive = $event" @attention="emit('attention', $event)" @load-state="planState = $event" />
+    <div v-if="!hasPendingAction && !serviceError && context?.availableActions.length" class="assistant-shortcuts">
       <button v-for="type in context?.availableActions || []" :key="type" type="button" :disabled="busy || props.generating" @click="prepare(type)">{{ label(type) }}</button>
     </div>
     <p v-if="error" class="assistant-error" role="alert">{{ error }}</p>
@@ -151,9 +176,13 @@ function openResult(action: AssistantAction) {
 </template>
 
 <style scoped>
-.creator-assistant-panel { padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--surface-sub); max-height: 42%; overflow: auto; flex: 0 1 auto; }
+.creator-assistant-panel { padding: 0 0 14px; border-bottom: 1px solid var(--border); }
 .assistant-context-heading, .assistant-action-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .assistant-context-heading strong, .assistant-context-heading small { display: block; }
+.assistant-context-heading strong { margin-top: 3px; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+.assistant-context-heading small { color: var(--muted); font-size: 11px; }
+.assistant-context-heading > button { display: grid; flex: 0 0 auto; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; color: var(--muted); background: transparent; }
+.assistant-context-heading > button:hover { color: var(--accent); background: var(--accent-tint); }
 .assistant-context-heading small, .assistant-hint, .assistant-action small { opacity: .72; font-size: 12px; line-height: 1.6; }
 .assistant-blocking, .assistant-action p { margin: 8px 0; font-size: 12px; line-height: 1.65; }
 .assistant-shortcuts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
@@ -164,8 +193,10 @@ button:disabled { opacity: .5; cursor: default; }
 .assistant-action-title span { font-size: 11px; opacity: .7; }
 .assistant-confirm { margin-top: 8px; background: var(--accent); border-color: var(--accent); color: white; }
 .assistant-error { color: #b42b3e; font-size: 12px; line-height: 1.65; }
+.assistant-service-error { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 9px; margin-top: 12px; padding: 12px; color: #a82948; background: #fff4f7; border: 1px solid #f2d4dd; border-radius: 10px; }
+.assistant-service-error strong { font-size: 12px; }
+.assistant-service-error p { margin: 4px 0 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.assistant-service-error button { color: #a82948; font-size: 11px; }
 .assistant-business-trace { padding-top: 12px; font-size: 12px; }
 .assistant-business-trace summary { cursor: pointer; }
-@media (max-width: 600px) { .creator-assistant-panel { padding: 10px 12px; max-height: 38%; } }
-.creator-assistant-panel.has-pending-action { max-height: 65%; flex-shrink: 0; }
 </style>

@@ -77,7 +77,9 @@ public class FfprobeMediaProbeService {
         command.add("-f");
         command.add("mov");
         command.add("-protocol_whitelist");
-        command.add("http,https,tcp,tls");
+        // HTTPS 经已配置的 HTTP 代理回源时，FFmpeg 内部需要 httpproxy 协议。
+        // 仍只允许网络协议，输入仍由上面的固定 MP4 解复用器解析。
+        command.add("http,https,tcp,tls,httpproxy");
         command.add("-print_format");
         command.add("json");
         command.add("-show_entries");

@@ -166,7 +166,7 @@ onMounted(() => {
   <main class="usage-log-page">
     <header class="usage-log-heading">
       <div>
-        <span class="usage-log-kicker">模型可观测性</span>
+        <span class="usage-log-kicker">模型调用记录</span>
         <h1>使用日志</h1>
       </div>
       <p>查看文本模型、向量化与重排序的每次调用记录</p>

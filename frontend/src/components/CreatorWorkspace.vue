@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { ArrowRight, FileText, FolderOpen } from '@lucide/vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ApiError } from '@/api/http'
 import {
@@ -354,6 +355,12 @@ const resultModalTarget = ref<ResultModalTarget | null>(null)
 const feedbackEvent = useCreatorFeedbackEvent(successMessage, errorMessage)
 
 const hasTaskHistory = computed(() => tasks.value.length > 0)
+// 最近创作只复用已经加载的任务，首页入口不再需要额外的统计接口。
+const recentTasks = computed(() =>
+  [...tasks.value]
+    .sort((left, right) => right.updateTime.localeCompare(left.updateTime))
+    .slice(0, 3),
+)
 const showDeveloperTools = computed(() => props.developerMode)
 const hasCompletedCreatorReport = computed(() =>
   ['ANALYZED', 'ARCHIVED'].includes(selectedTask.value?.status ?? ''),
@@ -626,6 +633,8 @@ async function initializeWorkspace() {
 
 function loadPrePublishLayoutPreview() {
   const fixture = createPrePublishLayoutPreviewFixture()
+  // 布局预览覆盖启用媒体后的完整步骤栏，避免六步时的拥挤只能依赖真实后端才能发现。
+  isMediaFeatureEnabled.value = true
   taskModule.tasks.value = [fixture.taskSummary]
   taskModule.selectedTask.value = fixture.task
   taskModule.fillTaskForm(fixture.task)
@@ -1052,7 +1061,8 @@ async function confirmDeleteTask() {
 }
 
 async function selectTask(taskId: string, options: TaskSelectionOptions = {}) {
-  if (activeInteractiveTaskId.value === taskId && !hasPendingInteractiveUpload.value && !options.reload) {
+  // 刷新后缓存的任务标识不代表页面已经恢复，必须先读取实际任务再结束骨架状态。
+  if (activeInteractiveTaskId.value === taskId && !isRestoringTask.value && !hasPendingInteractiveUpload.value && !options.reload) {
     closeTaskManager()
     await finishSkippedTaskSelection(options)
     return
@@ -2132,9 +2142,9 @@ provideCreatorWorkspace({
 
     <header v-if="!isRestoringTask && !selectedTask && !isTaskComposerOpen" class="creator-header">
       <div>
-        <p class="creator-kicker">创作台</p>
-        <h2>视频发布与复盘助手</h2>
-        <p>围绕一条视频整理资料、生成发布方案、读懂观众反馈，并沉淀下一期行动。</p>
+        <p class="creator-kicker">创作空间</p>
+        <h2>今天，想创作点什么？</h2>
+        <p>从一个想法开始，把下一条视频慢慢打磨好。</p>
       </div>
       <div
         v-if="selectedTask || isTaskComposerOpen"
@@ -2241,12 +2251,44 @@ provideCreatorWorkspace({
           class="creator-start-link-action"
           @click="openTaskManager"
         >
-          继续上次复盘
+          继续最近的创作
         </button>
         <button type="button" class="creator-start-link-action" @click="startCreateTask">
+          <FileText :size="16" :stroke-width="1.7" aria-hidden="true" />
           手动填写资料
         </button>
+        <RouterLink to="/projects" class="creator-start-link-action">
+          <FolderOpen :size="16" :stroke-width="1.7" aria-hidden="true" />
+          查看全部项目
+          <ArrowRight :size="14" aria-hidden="true" />
+        </RouterLink>
       </div>
+
+      <section v-if="recentTasks.length" class="creator-recent" aria-labelledby="creator-recent-title">
+        <header class="creator-recent-head">
+          <h3 id="creator-recent-title">最近的创作</h3>
+          <span>接着上次的灵感，继续往前一步</span>
+        </header>
+        <div class="creator-recent-grid">
+          <button v-for="task in recentTasks" :key="task.taskId" type="button" class="creator-recent-card" @click="selectTask(task.taskId)">
+            <span class="creator-recent-icon" :data-complete="task.status === 'ANALYZED'" aria-hidden="true">
+              <FileText :size="23" :stroke-width="1.5" />
+            </span>
+            <span class="creator-recent-copy">
+              <strong>{{ task.taskName }}</strong>
+              <small>{{ task.videoType || '未分类' }}<span>{{ statusLabel(task.status) }}</span></small>
+            </span>
+            <ArrowRight :size="16" :stroke-width="1.7" aria-hidden="true" />
+          </button>
+        </div>
+      </section>
+
+      <ol class="creator-workflow-overview" aria-label="视频创作流程">
+        <li v-for="(label, index) in ['发布方案', '制作蓝图', '成片试映', '实际发布', '观众反馈', '总体复盘']" :key="label">
+          <span>{{ index + 1 }}</span>{{ label }}
+          <ArrowRight v-if="index < 5" :size="13" aria-hidden="true" />
+        </li>
+      </ol>
     </section>
 
     <div v-else class="creator-layout">

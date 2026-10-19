@@ -95,6 +95,7 @@ class MediaDeletionServiceTest {
     }
 
     private void stubDraft(DraftVideoRecord draft) {
+        when(uploadMapper.lockMediaTask("task-1", "default")).thenReturn(Optional.of("task-1"));
         when(processingMapper.lockDraftVersion("task-1", "default", "version-1"))
                 .thenReturn(Optional.of("version-1"));
         when(uploadMapper.findDraftVideoByVersion("task-1", "default", "version-1"))

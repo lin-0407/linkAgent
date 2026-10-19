@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-// 首页为产品化入口，工作台通过路由独立访问
+// 展示页已移除，访问根地址直接进入可以开始工作的创作台。
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   // 跨页面进入创作台时回到顶部，避免上一页滚动位置让移动端吸附流程栏压住任务操作。
@@ -10,8 +10,7 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'home',
-      component: () => import('@/views/HomePage.vue'),
+      redirect: '/creator',
     },
     {
       path: '/creator',

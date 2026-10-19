@@ -36,7 +36,7 @@ public class LlmApiUsageService {
                                   Integer completionTokens,
                                   Integer totalTokens,
                                   Long elapsedMs) {
-        recordTextSuccess(modelName, promptTokens, completionTokens, totalTokens, null, elapsedMs);
+        recordTextSuccess(modelName, promptTokens, completionTokens, totalTokens, null, null, elapsedMs);
     }
 
     public void recordTextSuccess(String modelName,
@@ -45,8 +45,22 @@ public class LlmApiUsageService {
                                   Integer totalTokens,
                                   String reasoningEffort,
                                   Long elapsedMs) {
+        recordTextSuccess(modelName, promptTokens, completionTokens, totalTokens, null, reasoningEffort, elapsedMs);
+    }
+
+    /**
+     * 文本调用成功流水：cachedPromptTokens 是供应商返回的缓存命中 token 数，
+     * 单列出来是为了后续统计缓存命中率（不传就和其他模型分类一样保持 null）。
+     */
+    public void recordTextSuccess(String modelName,
+                                  Integer promptTokens,
+                                  Integer completionTokens,
+                                  Integer totalTokens,
+                                  Integer cachedPromptTokens,
+                                  String reasoningEffort,
+                                  Long elapsedMs) {
         recordWithErrorMessage(LlmApiModelCategory.TEXT, modelName, promptTokens, completionTokens, totalTokens,
-                reasoningEffort, elapsedMs, LlmApiCallStatus.SUCCESS, null, null);
+                cachedPromptTokens, reasoningEffort, elapsedMs, LlmApiCallStatus.SUCCESS, null, null);
     }
 
     public void recordTextFailure(Long elapsedMs, Exception exception) {
@@ -58,7 +72,7 @@ public class LlmApiUsageService {
                                   Long elapsedMs,
                                   Exception exception) {
         recordWithException(LlmApiModelCategory.TEXT, modelName, null, null, null,
-                reasoningEffort, elapsedMs, LlmApiCallStatus.FAILED, exception, null);
+                null, reasoningEffort, elapsedMs, LlmApiCallStatus.FAILED, exception, null);
     }
 
     public void recordEmbeddingSuccess(String modelName,
@@ -67,7 +81,7 @@ public class LlmApiUsageService {
                                        Long elapsedMs,
                                        Integer inputCount) {
         recordWithErrorMessage(LlmApiModelCategory.EMBEDDING, modelName, promptTokens, null, totalTokens,
-                null, elapsedMs, LlmApiCallStatus.SUCCESS, null, inputCount);
+                null, null, elapsedMs, LlmApiCallStatus.SUCCESS, null, inputCount);
     }
 
     public void recordEmbeddingFailure(String modelName,
@@ -75,7 +89,7 @@ public class LlmApiUsageService {
                                        Exception exception,
                                        Integer inputCount) {
         recordWithException(LlmApiModelCategory.EMBEDDING, modelName, null, null, null,
-                null, elapsedMs, LlmApiCallStatus.FAILED, exception, inputCount);
+                null, null, elapsedMs, LlmApiCallStatus.FAILED, exception, inputCount);
     }
 
     public void recordRerankSuccess(String modelName,
@@ -84,12 +98,12 @@ public class LlmApiUsageService {
                                     Long elapsedMs,
                                     Integer inputCount) {
         recordWithErrorMessage(LlmApiModelCategory.RERANK, modelName, promptTokens, null, totalTokens,
-                null, elapsedMs, LlmApiCallStatus.SUCCESS, null, inputCount);
+                null, null, elapsedMs, LlmApiCallStatus.SUCCESS, null, inputCount);
     }
 
     public void recordRerankSkipped(String modelName, String reason, Integer inputCount) {
         recordWithErrorMessage(LlmApiModelCategory.RERANK, modelName, null, null, null,
-                null, 0L, LlmApiCallStatus.SKIPPED, reason, inputCount);
+                null, null, 0L, LlmApiCallStatus.SKIPPED, reason, inputCount);
     }
 
     public void recordRerankFailure(String modelName,
@@ -97,7 +111,7 @@ public class LlmApiUsageService {
                                     Exception exception,
                                     Integer inputCount) {
         recordWithException(LlmApiModelCategory.RERANK, modelName, null, null, null,
-                null, elapsedMs, LlmApiCallStatus.FAILED, exception, inputCount);
+                null, null, elapsedMs, LlmApiCallStatus.FAILED, exception, inputCount);
     }
 
     public LlmApiUsageSummaryResponse summarizeTask(String taskId) {
@@ -249,13 +263,14 @@ public class LlmApiUsageService {
                                      Integer promptTokens,
                                      Integer completionTokens,
                                      Integer totalTokens,
+                                     Integer cachedPromptTokens,
                                      String reasoningEffort,
                                      Long elapsedMs,
                                      LlmApiCallStatus status,
                                      Exception exception,
                                      Integer inputCount) {
         recordWithErrorMessage(modelCategory, modelName, promptTokens, completionTokens, totalTokens,
-                reasoningEffort, elapsedMs, status, TextUtil.normalizeExceptionMessage(exception), inputCount);
+                cachedPromptTokens, reasoningEffort, elapsedMs, status, TextUtil.normalizeExceptionMessage(exception), inputCount);
     }
 
     private void recordWithErrorMessage(LlmApiModelCategory modelCategory,
@@ -263,6 +278,7 @@ public class LlmApiUsageService {
                                         Integer promptTokens,
                                         Integer completionTokens,
                                         Integer totalTokens,
+                                        Integer cachedPromptTokens,
                                         String reasoningEffort,
                                         Long elapsedMs,
                                         LlmApiCallStatus status,
@@ -285,6 +301,7 @@ public class LlmApiUsageService {
             record.setReasoningEffort(TextUtil.trimToNull(reasoningEffort));
             record.setPromptTokens(normalizeTokenCount(promptTokens));
             record.setCompletionTokens(normalizeTokenCount(completionTokens));
+            record.setCachedPromptTokens(normalizeTokenCount(cachedPromptTokens));
             record.setTotalTokens(normalizeTokenCount(totalTokens));
             record.setElapsedMs(normalizeElapsedMs(elapsedMs));
             record.setStatus(status.name());

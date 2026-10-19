@@ -276,10 +276,15 @@ public class S3ObjectStorageService implements ObjectStorageService {
      */
     @Override
     public StoredObjectMetadata headObject(String objectKey) {
+        return headObject(properties.getBucket(), objectKey);
+    }
+
+    @Override
+    public StoredObjectMetadata headObject(String bucketName, String objectKey) {
         try {
             HeadObjectResponse response = s3Client.headObject(
                     HeadObjectRequest.builder()
-                            .bucket(properties.getBucket())
+                            .bucket(bucketName)
                             .key(objectKey)
                             .build()
             );

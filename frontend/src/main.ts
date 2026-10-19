@@ -4,6 +4,7 @@ import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
 import App from './App.vue'
 import router from './router'
 import './styles/theme.css'
+import './styles/workbench.css'
 
 const app = createApp(App)
 

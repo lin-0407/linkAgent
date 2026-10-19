@@ -117,6 +117,9 @@ public interface ObjectStorageService {
      */
     StoredObjectMetadata headObject(String objectKey);
 
+    /** 历史版本使用持久化的桶，不能因部署默认桶变化而读错对象。 */
+    StoredObjectMetadata headObject(String bucketName, String objectKey);
+
     /**
      * 删除对象。
      *

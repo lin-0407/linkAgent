@@ -9,6 +9,7 @@ import com.link.linkagent.creator.media.preflight.model.PreflightStepRecord;
 import com.link.linkagent.creator.media.preflight.model.TimelineEvidenceRecord;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.StructuredCallResult;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -56,7 +57,8 @@ public class AudienceScreeningService {
                 step.stepId(), fingerprint) != 1) {
             throw new AudienceScreeningException("观众试映调用记录创建失败");
         }
-        try {
+        // Worker 没有 HTTP 请求上下文，需显式把文本用量归到当前创作任务。
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(review.taskId(), "AI观众试映")) {
             StructuredCallResult<AudienceOutput> call = llmService.chatStructuredWithUsage(
                     systemPrompt(), userPrompt(review, issues, evidence), AudienceOutput.class);
             List<ValidatedPersona> personas = validate(call.entity(), issues, evidence);

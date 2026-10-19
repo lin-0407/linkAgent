@@ -820,6 +820,8 @@ export type TaskVideoBinding = {
   /** 绑定状态：WAITING_VERIFY=等待校验，BOUND=已绑定校验通过，UID_MISMATCH=BV不属于该UID，VIDEO_NOT_FOUND=BV查不到视频 */
   bindingStatus: string
   verifyMessage: string | null
+  /** 绑定时明确通过试映的版本；历史归属未知时保留为空。 */
+  publishedVersionId: string | null
   createTime: string
   updateTime: string
 }

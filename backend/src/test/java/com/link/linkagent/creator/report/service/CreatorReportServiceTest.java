@@ -1,5 +1,8 @@
 package com.link.linkagent.creator.report.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService;
+import com.link.linkagent.creator.bilibili.mapper.CreatorBilibiliMapper;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackItemRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackMetricRecord;
@@ -9,6 +12,7 @@ import com.link.linkagent.creator.competitor.model.CreatorCompetitorReportRecord
 import com.link.linkagent.creator.competitor.model.CreatorCompetitorSampleRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackStatRecord;
 import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
+import com.link.linkagent.support.TestTransactions;
 import com.link.linkagent.creator.preference.mapper.CreatorPreferenceMapper;
 import com.link.linkagent.creator.preference.model.CreatorPreferenceRecord;
 import com.link.linkagent.creator.preference.service.CreatorPreferenceService;
@@ -19,6 +23,7 @@ import com.link.linkagent.creator.report.model.CreatorReportResponse;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskRecord;
+import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
 import com.link.linkagent.creator.task.model.CreatorTaskStatus;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.prompt.StubPromptService;
@@ -28,6 +33,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import com.link.linkagent.creator.report.model.CreatorReportHistorySummary;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,6 +44,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 class CreatorReportServiceTest {
 
@@ -43,6 +54,7 @@ class CreatorReportServiceTest {
         FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
         taskMapper.taskRecord = createTaskRecord();
         taskMapper.taskRecord.setPlanningSkipped(true);
+        taskMapper.taskRecord.setTaskName("Codex 复盘历史实测");
 
         FakeCreatorFeedbackMapper feedbackMapper = new FakeCreatorFeedbackMapper();
         feedbackMapper.reportRecord = createFeedbackReportRecord();
@@ -65,8 +77,13 @@ class CreatorReportServiceTest {
                 llmService,
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 new ReportPromptService(),
-                mock(CreatorMediaWorkflowGateService.class));
+                mock(CreatorMediaWorkflowGateService.class),
+                TestTransactions.directTemplate(), new CreatorPublishedVideoContextService(mock(CreatorBilibiliMapper.class), new ObjectMapper()));
 
+        var businessAgent=mock(com.link.linkagent.assistant.CreatorBusinessAgentService.class);
+        when(businessAgent.review(org.mockito.ArgumentMatchers.eq("task-1"),org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("\n分工分析意见：先解释观众疑问");
+        service.setBusinessAgent(businessAgent);
         CreatorReportResponse response = service.analyze(
                 "task-1",
                 new CreatorReportAnalyzeRequest("请重点看复盘重点", "关注下一期方向", "尽量简短")
@@ -83,8 +100,15 @@ class CreatorReportServiceTest {
         assertThat(preferenceMapper.savedRecord.getSourceTaskId()).isEqualTo("task-1");
         assertThat(preferenceMapper.savedRecord.getPreferenceContent()).contains("偏好干货表达");
         assertThat(llmService.lastUserMessage)
-                .contains("播放量：1000", "反馈摘要", "竞品整体打法")
-                .doesNotContain("创作素材", "发布前建议结果", "制作蓝图");
+                .contains("播放量：1000", "反馈摘要", "竞品整体打法", "task-1",
+                        "任务名称（包括历史任务名称）仅是工作台管理标识", "缺少原文时明确无法评价")
+                .doesNotContain("创作素材", "发布前建议结果", "制作蓝图", "Codex 复盘历史实测");
+        assertThat(llmService.lastUserMessage).contains("分工分析意见：先解释观众疑问");
+        verify(businessAgent).review(org.mockito.ArgumentMatchers.eq("task-1"),org.mockito.ArgumentMatchers.argThat(
+                source -> source.contains("反馈摘要") && !source.contains("制作蓝图")));
+        assertThat(llmService.lastSystemPrompt)
+                .contains("不得据此推断视频讲了什么", "不能把建议改写成已发布事实",
+                        "只序列化一次", "合法反斜杠必须保持不变");
     }
 
     @Test
@@ -105,35 +129,162 @@ class CreatorReportServiceTest {
                 new FixedLlmService("{}"),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 new StubPromptService(),
-                mock(CreatorMediaWorkflowGateService.class));
+                mock(CreatorMediaWorkflowGateService.class),
+                TestTransactions.directTemplate(), new CreatorPublishedVideoContextService(mock(CreatorBilibiliMapper.class), new ObjectMapper()));
 
         assertThatThrownBy(() -> service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null)))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("请先完成评论弹幕分析");
     }
 
+    private static final String VALID_REPORT_JSON = """
+            {"contentSummary":"本期内容总结","coreSellingPoints":["卖点"],"titleDescriptionReview":{"titleConclusion":"标题合适","descriptionConclusion":"简介清楚","tagAndPartitionConclusion":"分区准确","riskReminder":"注意风险"},"audienceFeedbackSummary":"反馈不错","competitorComparison":{"benchmarkConclusion":"对标清楚","ownAdvantages":["优势"],"ownDisadvantages":["短板"],"differentiationStrategy":"做差异化"},"controversyAndMisunderstanding":[],"nextActionSuggestions":[{"suggestion":"做下一期","reason":"观众想看","priority":"HIGH"}],"creatorPreferenceInsight":["偏好干货表达"],"overallConclusion":"适合继续做"}
+            """;
+
     @Test
-    void shouldFailWhenCompetitorReportMissing() {
-        FakeCreatorTaskMapper taskMapper = new FakeCreatorTaskMapper();
-        taskMapper.taskRecord = createTaskRecord();
+    void shouldExcludeCurrentAndHistoricalTaskNamesFromCrossPeriodPrompt() {
+        Fixture f = fixture();
+        f.tasks.taskRecord.setTaskName("黑洞形成原理课堂");
+        CreatorTaskSummaryRecord historicalTask = new CreatorTaskSummaryRecord();
+        historicalTask.setTaskId("historical-task-astronomy");
+        historicalTask.setTaskName("火星殖民计划详解");
+        historicalTask.setStatus(CreatorTaskStatus.ANALYZED.name());
+        f.tasks.recentTasks = List.of(historicalTask);
 
-        FakeCreatorFeedbackMapper feedbackMapper = new FakeCreatorFeedbackMapper();
-        feedbackMapper.reportRecord = createFeedbackReportRecord();
+        // 用实际历史报告内容确认跨期分支已执行，避免空列表让名称省略断言误通过。
+        CreatorReportRecord historicalReport = new CreatorReportRecord();
+        historicalReport.setParseStatus("PARSED");
+        historicalReport.setOverallConclusion("历史评论样本尚不足以确定题材");
+        historicalReport.setCoreSellingPoints("历史样本有一条明确鼓励");
+        historicalReport.setAudienceFeedbackSummary("历史反馈主要是泛化玩梗");
+        historicalReport.setNextActionSuggestions("先补充具体内容反馈");
+        f.reports.historicalReports.put(historicalTask.getTaskId(), historicalReport);
 
-        CreatorReportService service = new CreatorReportService(
-                taskMapper,
-                feedbackMapper,
-                new FakeCreatorCompetitorMapper(),
-                new FakeCreatorReportMapper(),
-                new CreatorPreferenceService(new FakeCreatorPreferenceMapper()),
-                new FixedLlmService("{}"),
-                new com.fasterxml.jackson.databind.ObjectMapper(),
-                new StubPromptService(),
-                mock(CreatorMediaWorkflowGateService.class));
+        f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
 
-        assertThatThrownBy(() -> service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null)))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("请先完成同类型视频竞品分析");
+        assertThat(f.llm.lastUserMessage)
+                .contains("task-1", "第1期任务ID：historical-task-astronomy",
+                        "历史评论样本尚不足以确定题材", "先补充具体内容反馈")
+                .doesNotContain("黑洞形成原理课堂", "火星殖民计划详解");
+    }
+
+    @Test
+    void shouldGenerateAndSnapshotReportWithoutCompetitor() {
+        Fixture f = fixture();
+        CreatorReportResponse response = f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
+        assertThat(response.competitorComparison()).contains("未提供竞品分析", "无法判断相对优势")
+                .doesNotContain("对标清楚", "做差异化");
+        assertThat(f.llm.lastUserMessage).contains("未提供完整竞品分析");
+        assertThat(f.service.listHistory("task-1", 1, 10).total()).isEqualTo(1);
+        assertThat(f.service.listHistory("task-1", 1, 10).items().getFirst().hasCompetitor()).isFalse();
+        assertThat(f.service.getHistory("task-1", response.reportId())).isEqualTo(response);
+    }
+
+    @Test
+    void shouldPreserveFirstSnapshotAfterCompetitorInvalidatesLatestAndRegeneration() {
+        Fixture f = fixture();
+        CreatorReportResponse first = f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
+        // 模拟补充竞品后只失效当前报告，历史仍然可读。
+        f.reports.savedRecord = null;
+        f.competitors.reportRecord = createCompetitorReportRecord();
+        f.tasks.taskRecord.setStatus(CreatorTaskStatus.COMPETITOR_ANALYZED.name());
+        f.llm.response = VALID_REPORT_JSON.replace("本期内容总结", "补充竞品后的总结");
+        CreatorReportResponse second = f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
+        assertThat(second.reportId()).isNotEqualTo(first.reportId());
+        assertThat(second.competitorComparison()).contains("对标清楚");
+        assertThat(f.service.getHistory("task-1", first.reportId())).isEqualTo(first);
+        assertThat(f.service.listHistory("task-1", 1, 10).items()).hasSize(2);
+        assertThat(f.service.listHistory("task-1", 1, 10).items().getFirst().hasCompetitor()).isTrue();
+    }
+
+    @Test
+    void shouldKeepLatestAndHistoryWhenRegenerationFails() {
+        Fixture f = fixture();
+        CreatorReportResponse first = f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
+        f.llm.response = "{}";
+        assertThatThrownBy(() -> f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(f.service.getReport("task-1")).isEqualTo(first);
+        assertThat(f.service.listHistory("task-1", 1, 10).total()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldDropReportWhenCompetitorArrivesDuringGeneration() {
+        Fixture f = fixture();
+        f.llm.duringCall = () -> f.competitors.reportRecord = createCompetitorReportRecord();
+        assertThatThrownBy(() -> f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null)))
+                .isInstanceOf(ResponseStatusException.class).hasMessageContaining("发生变化");
+        assertThat(f.reports.savedRecord).isNull();
+        assertThat(f.service.listHistory("task-1", 1, 10).total()).isZero();
+    }
+
+    @Test
+    void shouldBackfillLegacyLatestOnceAndPaginateWithoutOverwritingSnapshots() {
+        Fixture f = fixture();
+        CreatorReportResponse first = f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
+        // 清空历史模拟功能升级前只有最新报告的情况。
+        f.reports.snapshots.clear();
+        for (int i = 0; i < 11; i++) {
+            f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
+        }
+        assertThat(f.service.getHistory("task-1", first.reportId())).isEqualTo(first);
+        assertThat(f.service.listHistory("task-1", 1, 10).total()).isEqualTo(12);
+        assertThat(f.service.listHistory("task-1", 2, 10).items()).hasSize(2);
+        assertThat(f.service.listHistory("task-1", 2, 10).items().getLast().hasCompetitor()).isNull();
+        assertThatThrownBy(() -> f.service.getHistory("task-1", "another-task-history"))
+                .isInstanceOf(ResponseStatusException.class).hasMessageContaining("复盘历史不存在");
+    }
+
+    @Test
+    void shouldNotReturnAnotherTasksSnapshot() {
+        Fixture f = fixture();
+        CreatorReportResponse first = f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null));
+        f.tasks.taskRecord.setTaskId("task-2");
+        assertThatThrownBy(() -> f.service.getHistory("task-2", first.reportId()))
+                .isInstanceOf(ResponseStatusException.class).hasMessageContaining("复盘历史不存在");
+        assertThat(f.service.listHistory("task-2", 1, 10).total()).isZero();
+    }
+
+    @Test
+    void shouldAppendPublishedMetadataEvenWhenLegacyReportTemplateOmitsIt() {
+        Fixture f = fixture();
+        when(f.published.buildPrompt(any())).thenReturn("正式标题：BV核验后的标题\n正式简介：公开简介原文\n标签：未提供");
+        f.service.analyze("task-1", new CreatorReportAnalyzeRequest(null,null,null));
+        assertThat(f.llm.lastUserMessage).contains("【自身已绑定视频的正式发布资料】", "BV核验后的标题", "公开简介原文", "标签：未提供")
+                .doesNotContain(f.tasks.taskRecord.getTaskName());
+    }
+
+    @Test
+    void shouldDropReportAndHistoryWhenPublishedSnapshotChangesDuringModelCall() {
+        Fixture f = fixture();
+        when(f.published.buildPrompt(any())).thenReturn("正式标题：旧标题", "正式标题：同步后的新标题");
+        assertThatThrownBy(() -> f.service.analyze("task-1",new CreatorReportAnalyzeRequest(null,null,null)))
+                .isInstanceOf(ResponseStatusException.class).hasMessageContaining("发布资料").hasMessageContaining("发生变化");
+        assertThat(f.reports.savedRecord).isNull();
+        assertThat(f.service.listHistory("task-1",1,10).total()).isZero();
+        assertThat(f.tasks.updatedStatus).isNull();
+    }
+
+    private record Fixture(CreatorReportService service, FakeCreatorTaskMapper tasks,
+                           FakeCreatorCompetitorMapper competitors, FakeCreatorReportMapper reports, FixedLlmService llm,
+                           CreatorPublishedVideoContextService published) {}
+
+    private Fixture fixture() {
+        FakeCreatorTaskMapper tasks = new FakeCreatorTaskMapper();
+        tasks.taskRecord = createTaskRecord();
+        tasks.taskRecord.setStatus(CreatorTaskStatus.FEEDBACK_ANALYZED.name());
+        FakeCreatorFeedbackMapper feedback = new FakeCreatorFeedbackMapper();
+        feedback.reportRecord = createFeedbackReportRecord();
+        FakeCreatorCompetitorMapper competitors = new FakeCreatorCompetitorMapper();
+        FakeCreatorReportMapper reports = new FakeCreatorReportMapper();
+        FixedLlmService llm = new FixedLlmService(VALID_REPORT_JSON);
+        CreatorPublishedVideoContextService published = mock(CreatorPublishedVideoContextService.class);
+        when(published.buildPrompt(any())).thenReturn("未提供（无已核验BV的公开资料）");
+        CreatorReportService service = new CreatorReportService(tasks, feedback, competitors, reports,
+                new CreatorPreferenceService(new FakeCreatorPreferenceMapper()), llm,
+                new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(), new ReportPromptService(),
+                mock(CreatorMediaWorkflowGateService.class), TestTransactions.directTemplate(), published);
+        return new Fixture(service, tasks, competitors, reports, llm, published);
     }
 
     @Test
@@ -158,7 +309,8 @@ class CreatorReportServiceTest {
                 new FixedLlmService("{}"),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 new StubPromptService(),
-                mock(CreatorMediaWorkflowGateService.class));
+                mock(CreatorMediaWorkflowGateService.class),
+                TestTransactions.directTemplate(), new CreatorPublishedVideoContextService(mock(CreatorBilibiliMapper.class), new ObjectMapper()));
 
         assertThatThrownBy(() -> service.analyze(
                 "task-1",
@@ -189,8 +341,9 @@ class CreatorReportServiceTest {
                 new FixedLlmService("{}"),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 new StubPromptService(),
-                mediaWorkflowGateService
-        );
+                mediaWorkflowGateService,
+                TestTransactions.directTemplate()
+        , new CreatorPublishedVideoContextService(mock(CreatorBilibiliMapper.class), new ObjectMapper()));
 
         assertThatThrownBy(() -> service.analyze("task-1", new CreatorReportAnalyzeRequest(null, null, null)))
                 .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
@@ -267,8 +420,10 @@ class CreatorReportServiceTest {
 
     private static class FixedLlmService extends LLMService {
 
-        private final String response;
+        private String response;
+        private Runnable duringCall = () -> {};
         private String lastUserMessage;
+        private String lastSystemPrompt;
 
         FixedLlmService(String response) {
             super();
@@ -278,6 +433,8 @@ class CreatorReportServiceTest {
         @Override
         public <T> T chatStructured(String systemPrompt, String userMessage, Class<T> type) {
             this.lastUserMessage = userMessage;
+            this.lastSystemPrompt = systemPrompt;
+            duringCall.run();
             try {
                 return new com.fasterxml.jackson.databind.ObjectMapper().readValue(response, type);
             } catch (Exception exception) {
@@ -314,6 +471,7 @@ class CreatorReportServiceTest {
 
         private CreatorTaskRecord taskRecord;
         private String updatedStatus;
+        private List<CreatorTaskSummaryRecord> recentTasks = List.of();
 
         @Override
         public int insertTask(CreatorTaskRecord record) {
@@ -342,7 +500,7 @@ class CreatorReportServiceTest {
 
         @Override
         public List<com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord> listTasksByUser(String userId, int limit) {
-            return List.of();
+            return recentTasks.stream().limit(limit).toList();
         }
 
         @Override
@@ -536,6 +694,7 @@ class CreatorReportServiceTest {
     private static class FakeCreatorReportMapper implements CreatorReportMapper {
 
         private CreatorReportRecord savedRecord;
+        private final Map<String, CreatorReportRecord> historicalReports = new LinkedHashMap<>();
 
         @Override
         public int upsert(CreatorReportRecord record) {
@@ -545,7 +704,38 @@ class CreatorReportServiceTest {
 
         @Override
         public Optional<CreatorReportRecord> findByTaskId(String taskId) {
-            return Optional.ofNullable(savedRecord);
+            return Optional.ofNullable(historicalReports.getOrDefault(taskId, savedRecord));
+        }
+        private final Map<String, String> snapshots = new LinkedHashMap<>();
+        private final Map<String, Boolean> includedCompetitor = new LinkedHashMap<>();
+
+        @Override
+        public int insertHistory(String historyId, String taskId, String feedbackReportId, String competitorReportId, String snapshot) {
+            String key = taskId + ":" + historyId;
+            if (snapshots.containsKey(key)) return 0;
+            snapshots.put(key, snapshot);
+            includedCompetitor.put(key, feedbackReportId == null ? null : competitorReportId != null);
+            return 1;
+        }
+
+        @Override
+        public List<CreatorReportHistorySummary> listHistory(String taskId, int size, int offset) {
+            List<CreatorReportHistorySummary> rows = new ArrayList<>();
+            snapshots.forEach((key, snapshot) -> {
+                if (key.startsWith(taskId + ":")) rows.add(new CreatorReportHistorySummary(
+                        key.substring(taskId.length() + 1), "摘要", includedCompetitor.get(key), LocalDateTime.now()));
+            });
+            return rows.reversed().stream().skip(offset).limit(size).toList();
+        }
+
+        @Override
+        public long countHistory(String taskId) {
+            return snapshots.keySet().stream().filter(key -> key.startsWith(taskId + ":")).count();
+        }
+
+        @Override
+        public Optional<String> findHistorySnapshot(String taskId, String historyId) {
+            return Optional.ofNullable(snapshots.get(taskId + ":" + historyId));
         }
     }
 

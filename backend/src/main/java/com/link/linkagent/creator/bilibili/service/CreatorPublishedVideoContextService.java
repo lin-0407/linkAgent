@@ -33,7 +33,8 @@ public class CreatorPublishedVideoContextService {
 
     public String buildPrompt(CreatorTaskRecord task) {
         TaskVideoBindingRecord binding = bilibiliMapper.findBindingByTaskId(task.getTaskId()).orElse(null);
-        if (binding == null || !"BOUND".equals(binding.getBindingStatus())
+        if (binding == null || (!"BOUND".equals(binding.getBindingStatus())
+                    && !(TextUtil.hasText(binding.getPublishedVersionId()) && TextUtil.hasText(binding.getPublishedSnapshotJson())))
                 || !Objects.equals(task.getTaskId(), binding.getTaskId())
                 || !Objects.equals(task.getUserId(), binding.getUserId())
                 || TextUtil.isBlank(binding.getBvid()) || TextUtil.isBlank(binding.getBilibiliUid())) {
@@ -41,22 +42,44 @@ public class CreatorPublishedVideoContextService {
         }
         BilibiliVideoRecord video = bilibiliMapper.findVideoByBvidAndUid(binding.getBvid(), binding.getBilibiliUid())
                 .orElse(null);
-        if (video == null || !"SYNCED".equals(video.getSyncStatus())
+        boolean versioned = TextUtil.hasText(binding.getPublishedVersionId());
+        JsonNode frozen = versioned ? readSnapshot(binding.getPublishedSnapshotJson()) : null;
+        if (versioned && (frozen == null
+                || !binding.getBvid().equals(frozen.path("bvid").asText())
+                || !binding.getBilibiliUid().equals(frozen.path("uid").asText())
+                || !binding.getPublishedVersionId().equals(frozen.path("versionId").asText()))) {
+            return "未提供（已记录发布版本，但正式发布资料快照缺失或不匹配；不能用当前缓存或草稿反推历史文案）";
+        }
+        if (video != null && (!"SYNCED".equals(video.getSyncStatus())
                 || !Objects.equals(binding.getBvid(), video.getBvid())
-                || !Objects.equals(binding.getBilibiliUid(), video.getBilibiliUid())) {
+                || !Objects.equals(binding.getBilibiliUid(), video.getBilibiliUid()))) video = null;
+        if (video == null && frozen == null) {
             return "未提供（已核验 BV 的匹配公开资料缓存缺失，需重新同步）";
         }
-        JsonNode snapshot = readSnapshot(video.getRawSnapshot());
+        JsonNode live = video == null ? null : readSnapshot(video.getRawSnapshot());
+        if (live != null && (conflicts(live.get("bvid"), binding.getBvid())
+                || conflicts(live.path("owner").get("mid"), binding.getBilibiliUid())
+                || conflicts(live.get("mid"), binding.getBilibiliUid()))) {
+            if (frozen == null) return "未提供（公开资料原始快照与已核验 BV 或 UID 不一致，需重新同步）";
+            // 冻结文案仍可信，但冲突缓存的实时指标不能混入同一视频的复盘。
+            video = null;
+            live = null;
+        }
+        JsonNode snapshot = frozen == null ? live : frozen.path("raw");
         // 旧缓存的补充字段可能不完整；明确的归属/BV冲突则整份缓存都不能当作当前视频证据。
         if (snapshot != null && (conflicts(snapshot.get("bvid"), binding.getBvid())
                 || conflicts(snapshot.path("owner").get("mid"), binding.getBilibiliUid())
                 || conflicts(snapshot.get("mid"), binding.getBilibiliUid()))) {
             return "未提供（公开资料原始快照与已核验 BV 或 UID 不一致，需重新同步）";
         }
-        StringBuilder result = new StringBuilder("来源：B站公开视频缓存；当前任务 BV 归属核验通过。\n");
+        StringBuilder result = new StringBuilder(frozen == null
+                ? "来源：B站公开视频缓存；当前任务 BV 归属核验通过。\n"
+                : "来源：归属核验通过时保存的不可变发布资料；以下文案与后续实时指标分开读取。\n");
         append(result, "BV", binding.getBvid());
         append(result, "所属 UID", binding.getBilibiliUid());
-        append(result, "正式标题", text(video.getTitle()));
+        if (frozen != null) append(result, "当前归属校验状态", binding.getBindingStatus());
+        if (versioned) append(result, "实际发布版本", binding.getPublishedVersionId());
+        append(result, "正式标题", frozen == null ? text(video.getTitle()) : textField(frozen, "title", null));
         append(result, "正式简介", textField(snapshot, "desc", "description"));
         append(result, "分区名称", textField(snapshot, "tname", null));
         append(result, "分区 ID", integerField(snapshot, "tid", "typeid"));
@@ -64,14 +87,15 @@ public class CreatorPublishedVideoContextService {
         append(result, "新版分区名称", textField(snapshot, "tname_v2", null));
         append(result, "新版分区 ID", integerField(snapshot, "tid_v2", null));
         append(result, "标签", tags(snapshot));
-        append(result, "发布时间（东八区）", time(video.getPublishTime()));
-        append(result, "公开资料及指标同步时间（东八区）", time(video.getLastSyncTime()));
-        append(result, "播放量", metric(video.getViewCount()));
-        append(result, "点赞数", metric(video.getLikeCount()));
-        append(result, "投币数", metric(video.getCoinCount()));
-        append(result, "收藏数", metric(video.getFavoriteCount()));
-        append(result, "分享数", metric(video.getShareCount()));
-        JsonNode stats = snapshot == null ? null : snapshot.get("stat");
+        append(result, "发布时间（东八区）", frozen == null ? time(video.getPublishTime()) : textField(frozen, "publishTime", null));
+        if (frozen != null) append(result, "发布资料保存时间（东八区）", textField(frozen, "capturedAt", null));
+        append(result, "公开资料及指标同步时间（东八区）", video == null ? "未提供" : time(video.getLastSyncTime()));
+        append(result, "播放量", metric(video == null ? null : video.getViewCount()));
+        append(result, "点赞数", metric(video == null ? null : video.getLikeCount()));
+        append(result, "投币数", metric(video == null ? null : video.getCoinCount()));
+        append(result, "收藏数", metric(video == null ? null : video.getFavoriteCount()));
+        append(result, "分享数", metric(video == null ? null : video.getShareCount()));
+        JsonNode stats = live == null ? null : live.get("stat");
         append(result, "平台评论总量", integerField(stats, "reply", null));
         append(result, "平台弹幕总量", integerField(stats, "danmaku", null));
         result.append("以上是公开接口的历史快照，未读取已发布视频本体；标题、简介不能证明实际画面、节奏或创作者意图。\n")

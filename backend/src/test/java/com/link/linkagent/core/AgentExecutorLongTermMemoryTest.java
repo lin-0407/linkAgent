@@ -8,8 +8,11 @@ import com.link.linkagent.llm.ToolCallingCallResult;
 import com.link.linkagent.memory.InMemoryShortTermMemoryStore;
 import com.link.linkagent.memory.LongTermMemory;
 import com.link.linkagent.memory.LongTermMemoryCandidate;
+import com.link.linkagent.memory.LongTermMemoryExtractionResult;
 import com.link.linkagent.memory.LongTermMemoryExtractor;
+import com.link.linkagent.memory.LongTermMemoryExtractionCoordinator;
 import com.link.linkagent.memory.LongTermMemoryMapper;
+import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.LongTermMemoryRecord;
 import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.memory.SummaryMemory;
@@ -29,8 +32,45 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.*;
 
 class AgentExecutorLongTermMemoryTest {
+
+    @Test
+    void shouldCompleteOldHistoryBeforeRetrievingMemoryForNewSession() {
+        LongTermMemory longTerm = mock(LongTermMemory.class);
+        LongTermMemoryExtractionCoordinator coordinator = mock(LongTermMemoryExtractionCoordinator.class);
+        ShortTermMemory recent = new ShortTermMemory(new InMemoryShortTermMemoryStore());
+        SummaryMemory summary = mock(SummaryMemory.class);
+        AgentExecutor executor = new AgentExecutor(mock(LLMService.class), new ToolRegistry(List.of()), emptyToolExecutor(),
+                recent, summary, longTerm, null, new StubPromptService(), null,
+                null, null, null, null, null, null, null, null, coordinator);
+
+        executor.prepareMemoryContext("new-session", "default", "首次保养后出了什么问题");
+
+        var order = inOrder(coordinator, longTerm);
+        order.verify(coordinator).completeHistoryBeforeFirstRead("default", "new-session");
+        order.verify(longTerm).retrieveForContext("default", "首次保养后出了什么问题");
+        clearInvocations(coordinator);
+        recent.append("new-session", "Human", "已有对话");
+        executor.prepareMemoryContext("new-session", "default", "继续聊");
+        verifyNoInteractions(coordinator);
+    }
+
+    @Test
+    void platformContextMustGuideThisTurnWithoutBecomingUserMemory() {
+        var llm=new CapturingLlmService();
+        var memory=new ShortTermMemory(new InMemoryShortTermMemoryStore());
+        var executor=new AgentExecutor(llm,new ToolRegistry(List.of()),emptyToolExecutor(),memory,
+                new SummaryMemory(new SummaryMemoryProperties(false,256_000,2),prompt -> new ChatResponse(List.of()),new StubPromptService()),
+                new LongTermMemory(new FakeLongTermMemoryMapper()),new NoopLongTermMemoryExtractor(),new StubPromptService());
+        executor.run("assistant-context-test","default","我现在应该做什么",AgentExecutionMode.REACT,
+                "平台助手规则：当前任务尚未完成成片试映");
+        assertThat(llm.lastSystemPrompt).contains("当前任务尚未完成成片试映");
+        assertThat(memory.getRecentMessages("assistant-context-test")).extracting(MemoryMessage::content)
+                .contains("我现在应该做什么","好的")
+                .noneMatch(value -> value.contains("当前任务尚未完成成片试映"));
+    }
 
     @Test
     void shouldAppendDefaultUserLongTermMemoryToPrompt() {
@@ -54,6 +94,42 @@ class AgentExecutorLongTermMemoryTest {
                 .contains("Long-term memory:")
                 .contains("user.preference.language: 用户偏好使用 Java")
                 .contains("Human:请根据我的偏好回答");
+    }
+
+    @Test
+    void shouldEmitLongTermMemoryInStableOrderInPrompt() {
+        CapturingLlmService llmService = new CapturingLlmService();
+        FakeLongTermMemoryMapper mapper = new FakeLongTermMemoryMapper();
+        // id=2 分数更高（重要性 90 > 10），但拼进 Prompt 的顺序必须是 id 升序（D12），否则前缀缓存每轮作废
+        mapper.retrievalRecords = List.of(
+                memory(2L, "project.profile.summary", "项目是个人工作台", 90),
+                memory(1L, "user.preference.language", "用户偏好使用 Java", 10));
+        AgentExecutor executor = new AgentExecutor(
+                llmService,
+                new ToolRegistry(List.of()),
+                emptyToolExecutor(),
+                new ShortTermMemory(new InMemoryShortTermMemoryStore()),
+                new SummaryMemory(new SummaryMemoryProperties(false, 256_000, 2), prompt -> new ChatResponse(List.of()), new StubPromptService()),
+                new LongTermMemory(mapper),
+                new NoopLongTermMemoryExtractor(),
+                new StubPromptService()
+        );
+
+        executor.run("session-1", "user-1", "随便问一句");
+
+        assertThat(llmService.lastUserMessage.indexOf("用户偏好使用 Java"))
+                .isGreaterThanOrEqualTo(0)
+                .isLessThan(llmService.lastUserMessage.indexOf("项目是个人工作台"));
+    }
+
+    private static LongTermMemoryRecord memory(Long id, String memoryKey, String content, int importance) {
+        LongTermMemoryRecord record = new LongTermMemoryRecord();
+        record.setId(id);
+        record.setUserId("default");
+        record.setMemoryKey(memoryKey);
+        record.setContent(content);
+        record.setImportance(importance);
+        return record;
     }
 
     @Test
@@ -255,6 +331,7 @@ class AgentExecutorLongTermMemoryTest {
     private static class CapturingLlmService extends LLMService {
 
         private String lastUserMessage;
+        private String lastSystemPrompt;
 
         CapturingLlmService() {
             super();
@@ -263,6 +340,7 @@ class AgentExecutorLongTermMemoryTest {
         @Override
         public String chat(String systemPrompt, String userMessage) {
             this.lastUserMessage = userMessage;
+            this.lastSystemPrompt = systemPrompt;
             return """
                     Thought:我现在已经掌握了所需信息
                     Final Answer:好的
@@ -455,16 +533,19 @@ class AgentExecutorLongTermMemoryTest {
 
         private String listUserId;
         private LongTermMemoryRecord savedRecord;
+        private List<LongTermMemoryRecord> retrievalRecords;
 
         @Override
-        public int upsert(LongTermMemoryRecord record) {
+        public int insert(LongTermMemoryRecord record) {
             this.savedRecord = record;
+            // 模拟数据库回填自增主键：步骤 6 起 id 是记忆的身份，写入后必须能拿到它
+            record.setId(1L);
             return 1;
         }
 
         @Override
-        public Optional<LongTermMemoryRecord> findByKey(String userId, String memoryKey) {
-            return Optional.empty();
+        public Optional<LongTermMemoryRecord> findActiveById(String userId, Long id) {
+            return Optional.ofNullable(savedRecord);
         }
 
         @Override
@@ -474,22 +555,42 @@ class AgentExecutorLongTermMemoryTest {
         }
 
         @Override
-        public List<LongTermMemoryRecord> listRecentByUser(String userId, int limit) {
+        public List<LongTermMemoryRecord> listActiveForRetrieval(String userId) {
+            // 检索入口：步骤 8 起上下文里的长期记忆来自这里，不再是「最近 N 条」
             this.listUserId = userId;
-            LongTermMemoryRecord record = new LongTermMemoryRecord();
-            record.setUserId(userId);
-            record.setMemoryKey("user.preference.language");
-            record.setContent("用户偏好使用 Java");
-            return List.of(record);
+            if (retrievalRecords != null) {
+                return retrievalRecords;
+            }
+            return List.of(memory(1L, "user.preference.language", "用户偏好使用 Java", 80));
         }
 
         @Override
-        public int softDelete(String userId, String memoryKey) {
+        public int updateEmbedding(String userId, Long id, String embedding) {
             return 1;
         }
 
         @Override
-        public int restore(String userId, String memoryKey) {
+        public int markAccessed(String userId, List<Long> ids, java.time.LocalDateTime accessedTime) {
+            return ids.size();
+        }
+
+        @Override
+        public int updateContent(String userId, Long id, String content, int importance) {
+            return 1;
+        }
+
+        @Override
+        public int markDeletedByDecision(String userId, Long id, Long supersededBy) {
+            return 1;
+        }
+
+        @Override
+        public int softDelete(String userId, Long id) {
+            return 1;
+        }
+
+        @Override
+        public int restore(String userId, Long id) {
             return 1;
         }
     }
@@ -501,8 +602,8 @@ class AgentExecutorLongTermMemoryTest {
         }
 
         @Override
-        public Optional<LongTermMemoryCandidate> extract(String userMessage, String finalAnswer) {
-            return Optional.empty();
+        public LongTermMemoryExtractionResult extract(List<MemoryMessage> messages) {
+            return LongTermMemoryExtractionResult.noMemory();
         }
     }
 
@@ -513,8 +614,8 @@ class AgentExecutorLongTermMemoryTest {
         }
 
         @Override
-        public Optional<LongTermMemoryCandidate> extract(String userMessage, String finalAnswer) {
-            return Optional.of(new LongTermMemoryCandidate(
+        public LongTermMemoryExtractionResult extract(List<MemoryMessage> messages) {
+            return LongTermMemoryExtractionResult.remembered(new LongTermMemoryCandidate(
                     true,
                     "user.preference.example_language",
                     "用户希望后续回答优先使用 Java 示例"

@@ -12,9 +12,9 @@ const router = useRouter()
       <h1 id="not-found-title">页面不存在</h1>
       <p>这个地址可能已失效，或者页面已经移动。</p>
       <div class="not-found-actions">
-        <RouterLink to="/" class="not-found-primary-action">
+        <RouterLink to="/creator" class="not-found-primary-action">
           <Home :size="17" :stroke-width="1.8" aria-hidden="true" />
-          返回首页
+          返回创作台
         </RouterLink>
         <button type="button" class="not-found-secondary-action" @click="router.back()">
           <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />

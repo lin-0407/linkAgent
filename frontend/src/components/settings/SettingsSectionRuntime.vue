@@ -27,17 +27,19 @@ function handleValueChange(key: string, event: Event) {
 
 <template>
   <section class="creator-section settings-section">
-    <button
-      type="button"
-      class="settings-section-toggle"
-      :aria-expanded="!collapsed"
-      @click="emit('toggleSection')"
-    >
-      <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
-      <h3>运行期开关</h3>
-      <span class="settings-section-hint" v-if="collapsed">
-        {{ toggles.filter(t => t.enabled).length }}/{{ toggles.length }} 已开启
-      </span>
+    <div class="settings-section-heading">
+      <button
+        type="button"
+        class="settings-section-toggle"
+        :aria-expanded="!collapsed"
+        @click="emit('toggleSection')"
+      >
+        <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
+        <span class="settings-section-title">运行期开关</span>
+        <span class="settings-section-hint" v-if="collapsed">
+          {{ toggles.filter(t => t.enabled).length }}/{{ toggles.length }} 已开启
+        </span>
+      </button>
       <button
         type="button"
         class="creator-secondary-action"
@@ -46,7 +48,7 @@ function handleValueChange(key: string, event: Event) {
       >
         {{ loading ? '刷新中…' : '刷新' }}
       </button>
-    </button>
+    </div>
 
     <div v-if="!collapsed" class="settings-section-body">
       <div v-if="error" class="creator-alert error-alert">

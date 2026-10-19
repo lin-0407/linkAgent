@@ -8,7 +8,9 @@ import com.link.linkagent.creator.media.preflight.model.PreflightStepRecord;
 import com.link.linkagent.creator.media.preflight.model.TimelineEvidenceRecord;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.StructuredCallResult;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -34,10 +36,14 @@ class AudienceScreeningServiceTest {
         AudienceScreeningService.PersonaOutput coreFan = persona("CORE_FAN");
         when(llmService.chatStructuredWithUsage(anyString(), anyString(),
                 eq(AudienceScreeningService.AudienceOutput.class)))
-                .thenReturn(new StructuredCallResult<>(
+                .thenAnswer(invocation -> {
+                    assertThat(LlmUsageContext.current().taskId()).isEqualTo("task-1");
+                    assertThat(LlmUsageContext.current().scene()).isEqualTo("AI观众试映");
+                    return new StructuredCallResult<>(
                         new AudienceScreeningService.AudienceOutput(List.of(casual, target, coreFan)),
                         1200, 360, 1560, 80L
-                ));
+                    );
+                });
         when(mapper.listIssues("review-1")).thenReturn(List.of(issue()));
         when(mapper.listEvidence("review-1")).thenReturn(List.of(evidence()));
         when(mapper.insertTextScreeningCall(anyString(), anyString(), anyString(), anyString(), anyString(), anyString()))
@@ -50,9 +56,18 @@ class AudienceScreeningServiceTest {
         AudienceScreeningService.Result result = service.screen(review(), step());
 
         assertThat(result.personaCount()).isEqualTo(3);
-        verify(llmService, times(1)).chatStructuredWithUsage(anyString(), anyString(),
+        assertThat(LlmUsageContext.current()).isNull();
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
+        verify(llmService, times(1)).chatStructuredWithUsage(system.capture(), user.capture(),
                 eq(AudienceScreeningService.AudienceOutput.class));
-        verify(mapper, times(3)).insertAudienceScreening(any());
+        assertThat(system.getValue()).contains("不能代替独立事实", "不得沿用或编造 B 站规范名称、审核先例",
+                "非设计意图、损坏或制作失误", "不得声称既有风格、内容重复或粉丝实际期待",
+                "不得把缺少依据的审核、AI误判或限流说法改写为条件式修改理由", "无法100%排除",
+                "不能自行认定由系统或播放器叠加", "不得仅凭 VOLUME 数值声称音量正常");
+        assertThat(user.getValue()).contains("只有给定历史作品或粉丝反馈时才比较风格");
+        verify(mapper, times(3)).insertAudienceScreening(org.mockito.ArgumentMatchers.argThat(record ->
+                "audience_screening_v3_evidence_bounds".equals(record.promptVersion())));
         verify(mapper).updateIssueAffectedPersonas(eq("review-1"), eq("issue-1"),
                 org.mockito.ArgumentMatchers.contains("CASUAL"));
     }

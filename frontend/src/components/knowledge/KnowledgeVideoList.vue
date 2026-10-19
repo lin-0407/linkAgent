@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowRight, Play } from '@lucide/vue'
 import { useModalDialog } from '@/composables/useModalDialog'
+import { useReferenceVideoPageSize } from '@/composables/useReferenceVideoPageSize'
 import type { ReferenceVideo } from '@/types/knowledge'
 import {
   formatKnowledgeCount,
@@ -27,6 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'page-change': [page: number]
+  'page-size-change': [size: number]
   'filter-change': [tier: string, category: string]
   refresh: []
   'refresh-public-metadata': [video: ReferenceVideo]
@@ -39,6 +41,8 @@ const detailTarget = ref<ReferenceVideo | null>(null)
 const cardListRef = ref<HTMLElement | null>(null)
 const failedCoverItems = ref(new Map<string, ReferenceVideo>())
 let missingCoverObserver: IntersectionObserver | null = null
+
+useReferenceVideoPageSize(cardListRef, (size) => emit('page-size-change', size))
 
 watch(() => props.category, (val) => {
   filterCategoryInput.value = val
@@ -128,7 +132,7 @@ function openCompetitorFromDetail(video: ReferenceVideo) {
   emit('open-competitor', video)
 }
 
-const totalPages = computed(() => Math.max(1, Math.ceil(props.total / props.pageSize)))
+const totalPages = computed(() => Math.max(1, Math.ceil(props.total / Math.max(1, props.pageSize))))
 
 type PagerItem = {
   key: string
@@ -224,7 +228,7 @@ function goToPage(targetPage: number | null) {
     <p v-if="!items.length && !loading && !error" class="creator-muted">
       还没有案例，可通过下方的“添加参考案例”导入一个 BV。
     </p>
-    <div v-else-if="!error" ref="cardListRef" class="knowledge-card-list">
+    <div v-if="!error" ref="cardListRef" class="knowledge-card-list" :aria-busy="loading">
       <article
         v-for="item in items"
         :key="item.id"
@@ -472,7 +476,7 @@ function goToPage(targetPage: number | null) {
 
 .knowledge-card-list {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
   gap: var(--s5) var(--s4);
 }
 
@@ -808,10 +812,6 @@ function goToPage(targetPage: number | null) {
     margin-left: 0;
   }
 
-  .knowledge-card-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .knowledge-detail-stats {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -836,7 +836,6 @@ function goToPage(targetPage: number | null) {
     gap: var(--s1);
   }
 
-  .knowledge-card-list,
   .knowledge-detail-meta {
     grid-template-columns: 1fr;
   }

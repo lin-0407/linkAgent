@@ -13,6 +13,7 @@ import com.link.linkagent.creator.suggestion.model.CreatorSuggestionRecord;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
 import com.link.linkagent.creator.task.model.CreatorMaterialRecord;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.prompt.service.PromptService;
 import org.springframework.stereotype.Service;
 
@@ -77,8 +78,21 @@ public class ProductionBlueprintGenerator {
                 .filter(value -> value != null && !value.isBlank())
                 .toList());
         String userMessage = writeJson(context);
-        ProductionBlueprintOutput output = llmService.chatStructured(
-                promptService.get(promptKey), userMessage, ProductionBlueprintOutput.class);
+        String systemPrompt = promptService.get(promptKey) + """
+
+                【当前工作台流程边界】
+                制作蓝图的终点是“真实成片、字幕、封面和发布文案已经制作并完成本地自查，可以上传成片试映”。
+                全部蓝图步骤完成后，页面才会开放成片上传和 AI 试映。因此不得把运行本平台试映、
+                根据本平台试映报告修改、实际发布、作者发布、BV 绑定、评论采集或发布后复盘列为蓝图步骤，
+                否则会产生“先完成试映才能进入试映”的循环前置条件。
+                可以安排本地播放自查和整理交付文件；平台试映和实际发布由后续独立页面执行。
+                availableAssets 是本轮现有产物，以它为准，不把原始想法里“没有素材”的旧状态当成最新状态。
+                """;
+        ProductionBlueprintOutput output;
+        // 蓝图生成与内部重试都应归属本期任务，避免单任务费用统计漏掉这部分调用。
+        try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(taskId, "制作蓝图")) {
+            output = llmService.chatStructured(systemPrompt, userMessage, ProductionBlueprintOutput.class);
+        }
         validate(output);
         return new GenerationResult(output, userMessage, promptKey);
     }
@@ -91,6 +105,12 @@ public class ProductionBlueprintGenerator {
         for (ProductionBlueprintStepOutput step : output.steps()) {
             if (step == null || blank(step.stepName()) || blank(step.objective()) || blank(step.phase())) {
                 throw new IllegalStateException("AI 制作蓝图缺少步骤名称、阶段或目标");
+            }
+            // 这些动作必须在蓝图门禁之后执行，不能持久化为门禁本身的前置步骤。
+            String name = step.stepName().replaceAll("\\s+", "");
+            if (List.of("本平台AI观众试映", "平台AI试映", "运行试映", "开始试映", "实际发布",
+                    "作者发布", "BV绑定", "绑定BV", "评论采集", "发布后复盘").stream().anyMatch(name::contains)) {
+                throw new IllegalStateException("制作蓝图包含后续阶段动作，需改为成片上传前可完成的制作步骤：" + step.stepName());
             }
         }
     }

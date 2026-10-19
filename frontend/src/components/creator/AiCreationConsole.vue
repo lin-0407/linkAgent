@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { MonitorPlay } from '@lucide/vue'
+import { ArrowRight, MonitorPlay, Sparkles } from '@lucide/vue'
 import {
   createInteractiveTask,
   getInteractiveTask,
@@ -146,12 +146,21 @@ const canSendFeedback = computed(() =>
   canSendWorkflowMessage.value &&
   !isBusy.value,
 )
+
+watch(() => suggestion.value?.suggestionId, (suggestionId, previousId) => {
+  if (!suggestionId || suggestionId === previousId) return
+  // 请求超时后后台仍可能完成；真实新结果到达时，不能继续提示用户付费重试。
+  if (noticeMessage.value === '发布方案仍在后台生成，完成后会自动显示，请勿重复提交。') {
+    errorMessage.value = ''
+    noticeMessage.value = '发布方案已经生成，你可以查看并确认。'
+  }
+})
 const statusText = computed(() => {
   if (isRestoring.value) return '正在恢复创作现场...'
   if (props.skippingToPreflight) return '正在进入成片试映...'
   if (isCreating.value) return '正在创建任务...'
   if (isUploading.value) return '正在解析补充资料...'
-  if (isAligning.value) return 'AI 正在重新理解...'
+  if (isAligning.value) return 'AI 正在理解你的想法...'
   if (isGeneratingPlan.value) return '正在生成发布方案...'
   if (isConfirming.value) return '正在确认方案...'
   if (workflowSession.value?.status === 'RUNNING') return '服务端任务运行中，正在继续接收进度...'
@@ -339,7 +348,7 @@ async function restoreInteractiveTask(taskId: string) {
     })
     if (version !== restoreVersion || interactiveTask.value?.taskId !== task.taskId) return
     if (!savedDraft && hasAlignmentResponse.value) activePanel.value = 'alignment'
-    noticeMessage.value = '已恢复此前的创作输入、对话、生成次数和已上传资料。'
+    noticeMessage.value = '已载入当前创作任务，可继续补充资料或对齐想法。'
   } catch (error) {
     if (version !== restoreVersion) return
     creatorStore.setActiveInteractiveTaskId(null)
@@ -450,13 +459,21 @@ async function generatePlan() {
       errorMessage.value = generationBlockReason.value || '当前还不能生成发布方案。'
       return
     }
+    const previousSuggestionId = suggestion.value?.suggestionId
     const result = await runAnalyze({})
-    await refreshWorkflow()
-    if (result) {
+    const generationError = errorMessage.value
+    await syncWorkflow()
+    if (result || (suggestion.value && suggestion.value.suggestionId !== previousSuggestionId)) {
+      errorMessage.value = ''
       noticeMessage.value = '发布方案已经生成。你可以确认，也可以继续告诉 AI 哪里不对。'
       return
     }
-    if (!errorMessage.value) errorMessage.value = '发布方案生成失败，请检查当前状态后重试。'
+    if (workflowSession.value?.status === 'RUNNING') {
+      errorMessage.value = ''
+      noticeMessage.value = '发布方案仍在后台生成，完成后会自动显示，请勿重复提交。'
+      return
+    }
+    if (!errorMessage.value) errorMessage.value = generationError || '发布方案生成失败，请检查当前状态后重试。'
   } catch (error) {
     showError(error)
   } finally {
@@ -596,9 +613,8 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
   <section class="ai-creation-console" aria-label="AI 创作台">
     <div class="ai-creation-header">
       <div>
-        <p class="creator-kicker">AI 创作台</p>
-        <h3>先把想法说清楚，再生成发布方案</h3>
-        <p>AI 每轮只说明它现在怎么理解。你觉得没问题时，再自己点击生成方案。</p>
+        <h3><Sparkles :size="19" :stroke-width="1.7" aria-hidden="true" />开始新创作</h3>
+        <p>先把想法聊清楚，准备好了再生成发布方案。</p>
       </div>
       <span class="ai-creation-status">{{ statusText }}</span>
     </div>
@@ -634,27 +650,28 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
     <div class="ai-creation-panel" role="tabpanel">
       <form v-if="activePanel === 'idea'" class="ai-creation-composer" @submit.prevent="submitIdea">
         <label class="ai-creation-field ai-creation-field-main">
-          <span>你想做什么视频</span>
+          <span class="ai-creation-field-label">你想做什么视频<small aria-hidden="true">{{ form.idea.length }} / 3000</small></span>
           <textarea
             v-model="form.idea"
             rows="4"
             maxlength="3000"
             :disabled="interactiveTask !== null"
-            placeholder="直接按你的说话方式写，不需要整理成正式需求。"
+            placeholder="聊聊你的选题、想表达的内容，或者一个还没成形的灵感…"
           />
         </label>
-        <label class="ai-creation-field">
-          <span>视频类型</span>
-          <select v-model="form.videoType" :disabled="interactiveTask !== null">
-            <option v-for="option in videoTypeOptions" :key="option" :value="option">{{ option }}</option>
-          </select>
-        </label>
-        <button v-if="!interactiveTask" type="submit" class="creator-primary-button" :disabled="!canSubmitIdea">
-          {{ isCreating ? '创建中...' : '提交想法' }}
-        </button>
-        <button v-else type="button" class="creator-secondary-action" @click="activePanel = 'context'">
-          继续补充资料
-        </button>
+        <div class="ai-creation-submit-row">
+          <label class="ai-creation-field">
+            <span>视频类型</span>
+            <select v-model="form.videoType" :disabled="interactiveTask !== null">
+              <option v-for="option in videoTypeOptions" :key="option" :value="option">{{ option }}</option>
+            </select>
+          </label>
+          <span class="ai-creation-submit-hint">先说想法，资料可以稍后补充</span>
+          <button v-if="!interactiveTask" type="submit" class="creator-primary-button" :disabled="!canSubmitIdea">
+            {{ isCreating ? '创建中...' : '提交想法' }}<ArrowRight :size="16" aria-hidden="true" />
+          </button>
+          <button v-else type="button" class="creator-secondary-action" @click="activePanel = 'context'">继续补充资料</button>
+        </div>
       </form>
 
       <div v-else-if="activePanel === 'context'" class="ai-creation-context-panel">

@@ -1,7 +1,15 @@
-import { get, post, upload } from './http'
+import { ApiError, get, post, upload } from './http'
 import type { AgentChatResponse } from '@/types/agent'
 
 export type AssistantChatContext = { page: string; taskId?: string; step?: string }
+
+export function assistantErrorMessage(reason: unknown, fallback: string) {
+  if (reason instanceof ApiError && reason.status === 404) {
+    return '助手接口尚未就绪，请更新后端服务后重试。'
+  }
+  return reason instanceof Error ? reason.message : fallback
+}
+
 export type AssistantActionType = 'ANALYZE_FEEDBACK' | 'GENERATE_REVIEW'
 export type AssistantTaskContext = {
   page: string

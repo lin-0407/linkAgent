@@ -243,6 +243,8 @@ export function analyzePrePublishWorkflow(
   return post<CreatorSuggestion>(
     `/creator/tasks/${encodeURIComponent(taskId)}/workflow/sessions/${encodeURIComponent(sessionId)}/pre-publish/analyze`,
     cleanPayload(payload),
+    // 真实取证与独立审查可能超过五分钟，等待时间只放宽这一项长任务。
+    { timeout: 900_000 },
   )
 }
 

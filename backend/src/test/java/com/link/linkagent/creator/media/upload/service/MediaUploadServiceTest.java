@@ -16,8 +16,11 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -37,6 +40,80 @@ import static org.mockito.Mockito.when;
  * </ul>
  */
 class MediaUploadServiceTest {
+
+    @Test
+    void shouldCreateIndependentVersionWithoutReadingOrResettingCurrentDraft() {
+        var mapper = mock(MediaUploadMapper.class);
+        when(mapper.countTaskByOwner("task-1", "default")).thenReturn(1);
+        var storage = mock(ObjectStorageService.class);
+        when(storage.createMultipartUpload(anyString(), anyString()))
+                .thenReturn(new com.link.linkagent.creator.media.storage.MultipartUploadHandle("new-storage-upload"));
+        var persistence = mock(MediaUploadPersistenceService.class);
+        when(persistence.saveCreatedUpload(any(), any(), anyLong())).thenAnswer(call -> call.getArgument(1));
+        var properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        var service = new MediaUploadService(properties, configuredStorageProperties(), storage, mapper,
+                persistence, mock(CreatorMediaWorkflowGateService.class));
+
+        var response = service.createUpload("default", "task-1", "new-key",
+                new CreateMediaUploadRequest("第二版", "new.mp4", 1024L, "video/mp4", 2L));
+
+        var draft = org.mockito.ArgumentCaptor.forClass(com.link.linkagent.creator.media.upload.model.DraftVideoRecord.class);
+        verify(persistence).saveCreatedUpload(draft.capture(), any(), anyLong());
+        assertThat(draft.getValue().versionId()).isEqualTo(response.versionId());
+        // 应用层仅生成身份；真正的展示序号必须由事务分配。
+        assertThat(draft.getValue().versionNo()).isZero();
+        verify(mapper, never()).findDraftVideo(anyString(), anyString());
+        verify(storage, never()).deleteObject(anyString(), anyString());
+    }
+
+    @Test
+    void shouldRejectNewUploadForBoundTaskBeforeCreatingStorageSession() {
+        var mapper = mock(MediaUploadMapper.class);
+        when(mapper.countTaskByOwner("task-1", "default")).thenReturn(1);
+        when(mapper.countPublishingFacts("task-1", "default")).thenReturn(1);
+        var storage = mock(ObjectStorageService.class);
+        var properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        var service = new MediaUploadService(properties, configuredStorageProperties(), storage, mapper,
+                mock(MediaUploadPersistenceService.class), mock(CreatorMediaWorkflowGateService.class));
+
+        assertThatThrownBy(() -> service.createUpload("default", "task-1", "new-key",
+                new CreateMediaUploadRequest("新版本", "new.mp4", 1024L, "video/mp4", 2L)))
+                .isInstanceOf(ResponseStatusException.class);
+        org.mockito.Mockito.verifyNoInteractions(storage);
+    }
+
+    @Test
+    void concurrentIdempotentWinnerMustOnlyAbortLosingStorageUpload() {
+        var mapper = mock(MediaUploadMapper.class);
+        when(mapper.countTaskByOwner("task-1", "default")).thenReturn(1);
+        var winner = new java.util.concurrent.atomic.AtomicReference<MediaUploadRecord>();
+        when(mapper.findUploadByIdempotency(anyString(), anyString(), anyString()))
+                .thenAnswer(call -> Optional.ofNullable(winner.get()));
+        var storage = mock(ObjectStorageService.class);
+        when(storage.createMultipartUpload(anyString(), anyString()))
+                .thenReturn(new com.link.linkagent.creator.media.storage.MultipartUploadHandle("losing-storage-upload"));
+        var persistence = mock(MediaUploadPersistenceService.class);
+        when(persistence.saveCreatedUpload(any(), any(), anyLong())).thenAnswer(call -> {
+            MediaUploadRecord value = call.getArgument(1);
+            var saved = new MediaUploadRecord(null, "winning-session", "winning-version", value.taskId(), value.ownerId(),
+                    "winning-storage", "winning-object", value.contentType(), value.expectedSize(), value.fileFingerprint(),
+                    value.partSize(), value.totalParts(), "CREATED", value.idempotencyKey(), null, value.expiresAt(), null, null, null);
+            winner.set(saved);
+            return saved;
+        });
+        var properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        var service = new MediaUploadService(properties, configuredStorageProperties(), storage, mapper,
+                persistence, mock(CreatorMediaWorkflowGateService.class));
+        var result = service.createUpload("default", "task-1", "same-key",
+                new CreateMediaUploadRequest("新版", "new.mp4", 1024L, "video/mp4", 2L));
+        assertThat(result.uploadSessionId()).isEqualTo("winning-session");
+        verify(storage).abortMultipartUpload(org.mockito.ArgumentMatchers.eq("test-media-bucket"),
+                anyString(), org.mockito.ArgumentMatchers.eq("losing-storage-upload"));
+        verify(storage, never()).deleteObject(anyString(), anyString());
+    }
 
     /**
      * 测试：VERIFYING 状态下调用 signParts 应返回 409 CONFLICT。

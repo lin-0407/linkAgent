@@ -24,9 +24,11 @@ const {
         <button
           type="button"
           class="creator-secondary-action creator-mini-button"
+          :disabled="selectedTask.status !== 'DRAFT'"
+          :title="selectedTask.status !== 'DRAFT' ? '发布方案已确认，任务资料仅可查看' : '编辑任务资料'"
           @click="startEditTask(selectedTask.taskId)"
         >
-          编辑
+          {{ selectedTask.status !== 'DRAFT' ? '资料只读' : '编辑' }}
         </button>
         <button
           type="button"

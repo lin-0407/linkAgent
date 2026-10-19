@@ -45,7 +45,7 @@ function submit() {
   <form class="production-positioning" @submit.prevent="submit">
     <div class="production-form-heading">
       <div>
-        <p class="production-kicker">P0-1 · 制作蓝图</p>
+        <p class="production-kicker">制作蓝图</p>
         <h2>先把成片路径定下来</h2>
         <p>蓝图会把定位、素材、工具和验收标准拆成可勾选的步骤。</p>
       </div>

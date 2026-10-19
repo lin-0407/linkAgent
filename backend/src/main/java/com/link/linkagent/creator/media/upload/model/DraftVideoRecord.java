@@ -13,7 +13,7 @@ import java.time.LocalDateTime;
  * @param versionId        成片版本唯一标识（UUID）
  * @param taskId           关联创作任务 ID
  * @param ownerId          可信媒体归属（P0 固定为 default）
- * @param versionNo        版本号（P0 固定为 1）
+ * @param versionNo        任务内版本序号，由持久化事务分配
  * @param versionName      用户填写的版本名称
  * @param originalFileName 用户原文件名（仅展示用，不参与对象键生成）
  * @param bucketName       原片所在 OSS Bucket 名称
@@ -58,4 +58,11 @@ public record DraftVideoRecord(
         LocalDateTime createTime,
         LocalDateTime updateTime
 ) {
+    /** 序号必须在任务锁内分配，不能在请求开始时读取最大值后自行加一。 */
+    public DraftVideoRecord withVersionNo(int number) {
+        return new DraftVideoRecord(id, versionId, taskId, ownerId, number, versionName,
+                originalFileName, bucketName, objectKey, contentType, fileSize, durationMs,
+                width, height, frameRate, videoCodec, audioCodec, hasAudio, probeAttemptId,
+                status, mediaDeletedAt, createTime, updateTime);
+    }
 }

@@ -268,7 +268,9 @@ public class LongTermMemoryExtractor {
      */
     private String formatMessages(List<MemoryMessage> messages) {
         return messages.stream()
-                .map(message -> MemoryObservationContext.prefix(message) + roleLabel(message.role()) + ": " + message.content())
+                // 工具调用消息正文为空，统一走 promptText 渲染成 ToolCall: 工具(参数)；
+                // 普通消息 promptText 就是 content，行为不变。
+                .map(message -> MemoryObservationContext.prefix(message) + roleLabel(message.role()) + ": " + message.promptText())
                 .reduce((left, right) -> left + "\n" + right)
                 .orElse("");
     }
