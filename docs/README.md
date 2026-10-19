@@ -26,6 +26,8 @@ S1 本轮继续补齐 [精确发布版本绑定](develop/视频自动制作-S1�
 
 全部核心业务基线已在 `feature/creator-workspace-s1` 独立分支提交推送；干净暂存快照 222 项回归通过，含 55 项真实 MySQL，见 [分支验证](error/核心业务分支推送验证记录.md)。S2 已实现固定工程真实离线渲染：30 项渲染测试通过，三个不同主题的中文离线配音工程实际生成 MP4/SRT/封面与清单，整片解码及实际抽帧验证完成。尚未接入 S3 的业务 worker、版本注册及完整试映，也不是模型自动制作。见 [实现说明](develop/视频自动制作-S2固定工程真实渲染.md)、[使用与边界](reference/固定工程离线渲染说明.md)、[实际验证](error/视频固定工程渲染S2验证记录.md)。
 
+S3a 已增加 [Java 后端渲染桥接](develop/视频自动制作-S3a后端渲染桥接.md)：实际调用 Python/FFmpeg、取消与超时、进程环境隔离，以及完整产物归属、长度和摘要验收。269 项后端测试通过，含新增 47 项和真实隔离 MySQL 55 项；Java 实际渲染并接收 84 秒中文配音视频，见 [验证记录](error/后端渲染桥接S3a验证记录.md)。视频怎样合成、内部调用及部署前提见 [接入说明](reference/后端固定工程渲染接入说明.md)。尚未接入持久化 worker、OSS 版本注册和完整试映，默认关闭，`executionAvailable=false`。
+
 Agent 业务嵌入与平台助手重构见 [需求与设计](develop/Agent业务嵌入与平台助手重构.md)、[使用与验证说明](reference/平台助手与业务Agent使用说明.md) 和 [验证注意事项](error/平台助手重构验证注意事项.md)。本轮先改 Java：发布前方案使用 Plan 取证、总体复盘使用多 Agent 分工，助手读取当前任务并提供确认后执行的操作；Python 尚未切换。
 
 独立本地 DeepEval 评测 GUI 见 [实现说明](develop/DeepEval独立评测GUI实现说明.md)、[使用说明](reference/DeepEval本地评测工具使用说明.md)、[验证问题记录](error/DeepEval评测GUI验证问题记录.md) 和 `evals/deepeval_gui/README.md`。它用于开发者记忆评测与回归，不进入创作者主流程。
