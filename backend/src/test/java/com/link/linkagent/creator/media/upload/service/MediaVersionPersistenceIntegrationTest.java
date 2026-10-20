@@ -1782,19 +1782,37 @@ class MediaVersionPersistenceIntegrationTest {
         throw new AssertionError("固定工程未到达预期状态：" + status);
     }
 
-    @Test
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints={1,2})
     @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named="LINKAGENT_GENERATED_NATIVE", matches="true")
-    void realRenderedVideoSurvivesPrivateStorageRegistrationProbeAndDeletion(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
+    void realRenderedVideoSurvivesPrivateStorageRegistrationProbeAndDeletion(int schemaVersion, @org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
         var json = new ObjectMapper();
         java.nio.file.Path source = java.nio.file.Path.of(System.getenv("LINKAGENT_RENDERER_SAMPLE_ROOT"));
         var document = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(source.resolve("input.json").toFile());
+        java.nio.file.Path clipSource = root.resolve("source-clip.mp4");
+        if (schemaVersion == 2) {
+            var scene = (com.fasterxml.jackson.databind.node.ObjectNode) document.path("scenes").get(0);
+            int fps = document.path("video").path("fps").asInt();
+            long clipMs = Math.round((scene.path("endFrame").asLong() - scene.path("startFrame").asLong()) * 1000.0 / fps);
+            var maker = new ProcessBuilder("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i",
+                    "color=c=blue:s=320x180:r=" + fps + ":d=" + ((clipMs + 1500) / 1000.0),
+                    "-an", "-c:v", "libx264", "-threads", "2", "-movflags", "+faststart", "-y", clipSource.toString())
+                    .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+            assertThat(maker.waitFor(15, TimeUnit.SECONDS)).isTrue(); assertThat(maker.exitValue()).isZero();
+            document.put("schemaVersion", 2);
+            ((com.fasterxml.jackson.databind.node.ArrayNode) document.path("assets")).addObject().put("id", "video-clip")
+                    .put("path", "source-clip.mp4").put("mime", "video/mp4").put("sha256", nativeSha(java.nio.file.Files.readAllBytes(clipSource)));
+            scene.put("layout", "VIDEO_CLIP"); scene.remove("imageAssetId"); scene.putArray("body");
+            scene.putObject("clip").put("assetId", "video-clip").put("sourceStartMs", 1000).put("sourceEndMs", 1000 + clipMs)
+                    .put("fit", "CONTAIN").put("audioMode", "MUTE").put("gainDb", 0);
+        }
         String task = task(); var job = queuedAutomaticJob(task, document);
         String attemptId = job.sourceAttemptId();
         java.nio.file.Path attempt = java.nio.file.Files.createDirectories(root.resolve(job.runId()).resolve(attemptId));
         for (var asset : document.path("assets")) {
             String name = asset.path("path").asText(); java.nio.file.Path target = attempt.resolve(name).normalize();
             assertThat(target.startsWith(attempt)).isTrue();
-            java.nio.file.Files.createDirectories(target.getParent()); java.nio.file.Files.copy(source.resolve(name), target);
+            java.nio.file.Files.createDirectories(target.getParent()); java.nio.file.Files.copy(schemaVersion == 2 && name.equals("source-clip.mp4") ? clipSource : source.resolve(name), target);
         }
         String inputHash = document.path("inputHash").asText();
         java.nio.file.Path inputFile = attempt.resolve("input.json"); json.writeValue(inputFile.toFile(), document);
@@ -1861,7 +1879,7 @@ class MediaVersionPersistenceIntegrationTest {
                 new MediaDeletionService(mapper, processing, reviews, storage).deleteMedia("default", task, draft.versionId());
                 assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).isEmpty();
                 assertThat(mapper.findVersionContext(task, "default", draft.versionId())).isPresent();
-                System.out.println("S3D_NATIVE_AUTO_BLUEPRINT_STORAGE_RECOVERY_OK durationMs=" + observedDuration + " files=8 autoSteps=6 generation=2");
+                System.out.println("V2_NATIVE_BLUEPRINT_STORAGE_RECOVERY_OK schemaVersion=" + schemaVersion + " durationMs=" + observedDuration + " files=8 autoSteps=6 generation=2");
             }
         }
     }

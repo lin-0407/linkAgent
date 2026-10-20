@@ -37,7 +37,7 @@ final class RenderArtifactVerifier {
     JsonNode input(Path path, FixedProjectRenderService.Request request) throws IOException {
         JsonNode input = read(path, 256 * 1024);
         identity(input, request);
-        require(integer(input, "schemaVersion") == 1, "不支持此工程版本");
+        require(Set.of(1, 2).contains(integer(input, "schemaVersion")), "不支持此工程版本");
         JsonNode video = input.path("video");
         int width = integer(video, "width"), height = integer(video, "height");
         int fps = integer(video, "fps"), frames = integer(video, "frameCount");
@@ -56,6 +56,10 @@ final class RenderArtifactVerifier {
         JsonNode manifest = read(manifestPath, 65536);
         identity(manifest, request);
         require(integer(manifest, "schemaVersion") == 1, "不支持此产物清单版本");
+        if (input.path("schemaVersion").asInt() == 2)
+            require(integer(manifest, "inputSchemaVersion") == 2, "产物工程版本不匹配");
+        else if (manifest.has("inputSchemaVersion"))
+            require(integer(manifest, "inputSchemaVersion") == 1, "产物工程版本不匹配");
         require(manifest.path("rendererVersion").isTextual()
                 && manifest.path("rendererVersion").asText().matches("[0-9]+\\.[0-9]+\\.[0-9]+"), "渲染器版本无效");
         require(manifest.path("fontSha256").asText().matches("[0-9a-f]{64}"), "缺少字体摘要");
@@ -72,12 +76,14 @@ final class RenderArtifactVerifier {
                 && integer(media, "audioSampleRate") == 48000
                 && media.path("fullDecodePassed").isBoolean() && media.path("fullDecodePassed").booleanValue()
                 && longValue(media, "clippedSamples") == 0, "产物未通过本地媒体检查");
+        boolean silent = explicitlySilent(input);
         for (String field : Set.of("decodedPeak", "decodedRms", "sourcePeak", "sourceRms")) {
             JsonNode number = media.path(field);
             require(number.isNumber() && Double.isFinite(number.doubleValue())
-                    && number.doubleValue() > 0 && number.doubleValue() <= 1, "产物音轨检查无效");
+                    && (silent ? number.doubleValue() >= 0 && number.doubleValue() <= .0001 : number.doubleValue() > 0)
+                    && number.doubleValue() <= 1, "产物音轨检查无效");
         }
-        require(media.path("decodedPeak").doubleValue() > .0001
+        require((silent || media.path("decodedPeak").doubleValue() > .0001)
                 && media.path("sourcePeak").doubleValue() <= .95, "产物音轨无效");
         JsonNode declared = manifest.path("files");
         require(declared.isObject() && keys(declared).equals(LIMITS.keySet()), "产物文件清单不完整");
@@ -98,6 +104,17 @@ final class RenderArtifactVerifier {
         check.run();
         return new RenderArtifacts(output, artifacts, request.inputHash(), manifest.path("rendererVersion").asText(),
                 duration, integer(video, "width"), integer(video, "height"), integer(video, "fps"), integer(video, "frameCount"));
+    }
+
+    private boolean explicitlySilent(JsonNode input) {
+        if (input.path("schemaVersion").asInt() != 2 || !input.path("scenes").isArray() || input.path("scenes").isEmpty()) return false;
+        // 静音必须来自每个场景的明确选择，不能靠清单中的一个标记放宽所有音轨检查。
+        for (JsonNode scene : input.path("scenes")) {
+            if (!scene.has("voice") || !scene.path("voice").isNull()) return false;
+            if ("VIDEO_CLIP".equals(scene.path("layout").asText())
+                    && !"MUTE".equals(scene.path("clip").path("audioMode").asText())) return false;
+        }
+        return true;
     }
 
     static String digest(Path file, Runnable check) throws IOException {

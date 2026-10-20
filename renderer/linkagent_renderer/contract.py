@@ -90,10 +90,16 @@ class Project:
     height: int
     fps: int
     frame_count: int
+    video_assets: frozenset
 
     @property
     def duration_ms(self):
         return self.frame_count * 1000 / self.fps
+
+    @property
+    def expects_audio(self):
+        return any(scene["voice"] is not None or scene.get("clip", {}).get("audioMode", "MUTE") != "MUTE"
+                   for scene in self.document["scenes"])
 
 
 def load_project(input_path, work_root):
@@ -109,7 +115,8 @@ def load_project(input_path, work_root):
         raise RenderError("INVALID_INPUT", "JSON 无效或层级过深") from error
     fields(document, ("schemaVersion", "runId", "attemptId", "storyboardId", "seed", "inputHash",
                       "video", "assets", "scenes", "subtitles"))
-    require(type(document["schemaVersion"]) is int and document["schemaVersion"] == 1, "不支持此工程版本")
+    require(type(document["schemaVersion"]) is int and document["schemaVersion"] in (1, 2), "不支持此工程版本")
+    version = document["schemaVersion"]
     for name in ("runId", "attemptId", "storyboardId"):
         identifier(document[name])
     integer(document["seed"], 0, 2**31 - 1)
@@ -124,7 +131,7 @@ def load_project(input_path, work_root):
     require(video["codec"] == "h264" and video["audioSampleRate"] == 48000
             and video["fontId"] == "cjk_sans", "不支持的编码或字体配置")
     require(type(document["assets"]) is list and 0 < len(document["assets"]) <= 64, "资产数量不正确")
-    assets, audio_info = {}, {}
+    assets, audio_info, video_assets = {}, {}, set()
     total_size = 0
     for asset in document["assets"]:
         fields(asset, ("id", "path", "sha256", "mime"))
@@ -154,6 +161,9 @@ def load_project(input_path, work_root):
                     audio_info[key] = (rate, channels, samples)
             except (wave.Error, EOFError) as error:
                 raise RenderError("INVALID_AUDIO", "音频格式无法读取") from error
+        elif version == 2 and mime in ("video/mp4", "video/quicktime"):
+            require(file.suffix.lower() == (".mp4" if mime == "video/mp4" else ".mov"), "视频扩展名与类型不匹配")
+            video_assets.add(key)
         else:
             require(mime in ("image/png", "image/jpeg"), "不支持的资产 MIME")
             require(file.suffix.lower() in ((".png",) if mime == "image/png" else (".jpg", ".jpeg")), "图片扩展名与类型不匹配")
@@ -168,7 +178,8 @@ def load_project(input_path, work_root):
     scenes, cursor, scene_ids, voice_windows = document["scenes"], 0, set(), {}
     require(type(scenes) is list and 0 < len(scenes) <= 48, "场景数量不正确")
     for scene in scenes:
-        fields(scene, ("id", "startFrame", "endFrame", "layout", "background", "title", "body", "voice"), ("imageAssetId",))
+        fields(scene, ("id", "startFrame", "endFrame", "layout", "background", "title", "body", "voice"),
+               ("imageAssetId", "clip") if version == 2 else ("imageAssetId",))
         sid = identifier(scene["id"])
         require(sid not in scene_ids, "场景 ID 重复")
         scene_ids.add(sid)
@@ -176,7 +187,8 @@ def load_project(input_path, work_root):
         end = integer(scene["endFrame"], 1, count)
         require(start == cursor and 0 < end - start <= fps * 30, "场景须连续且单段不超过 30 秒")
         cursor = end
-        require(scene["layout"] in ("TITLE_CARD", "IMAGE_CARD", "SPLIT_CARD", "COMPARE_CARD"), "不支持此布局")
+        require(scene["layout"] in (("TITLE_CARD", "IMAGE_CARD", "SPLIT_CARD", "COMPARE_CARD", "VIDEO_CLIP")
+                                    if version == 2 else ("TITLE_CARD", "IMAGE_CARD", "SPLIT_CARD", "COMPARE_CARD")), "不支持此布局")
         require(type(scene["background"]) is str and re.fullmatch(r"#[0-9a-fA-F]{6}", scene["background"]), "背景颜色不正确")
         channels = [int(scene["background"][n:n+2], 16) / 255 for n in (1, 3, 5)]
         linear = [c / 12.92 if c <= .04045 else ((c + .055) / 1.055) ** 2.4 for c in channels]
@@ -189,10 +201,30 @@ def load_project(input_path, work_root):
         if image_id is not None:
             identifier(image_id)
         if scene["layout"] in ("IMAGE_CARD", "SPLIT_CARD"):
-            require(image_id in assets and image_id not in audio_info, "图文布局需要有效图片资产")
+            require(image_id in assets and image_id not in audio_info and image_id not in video_assets, "图文布局需要有效图片资产")
         else:
             require(image_id is None, "此布局不接受图片资产")
         voice = scene["voice"]
+        if scene["layout"] == "VIDEO_CLIP":
+            clip = scene.get("clip")
+            fields(clip, ("assetId", "sourceStartMs", "sourceEndMs", "fit", "audioMode", "gainDb"))
+            identifier(clip["assetId"])
+            require(clip["assetId"] in video_assets, "片段需要有效视频资产")
+            begin, finish = integer(clip["sourceStartMs"], 0, 1800000), integer(clip["sourceEndMs"], 1, 1800000)
+            require(finish > begin and abs((finish - begin) * fps - (end - start) * 1000) <= fps,
+                    "视频截取时长必须对应场景，不自动变速或补帧凑时长")
+            require(clip["fit"] in ("CONTAIN", "COVER") and clip["audioMode"] in ("MUTE", "ORIGINAL", "MIX"), "片段显示或声音模式不受支持")
+            require(type(clip["gainDb"]) in (int, float) and math.isfinite(clip["gainDb"]) and -24 <= clip["gainDb"] <= 0,
+                    "原声音量超出范围")
+            require(not scene["body"], "视频画面不叠加图文正文")
+            require(clip["audioMode"] != "ORIGINAL" or voice is None, "保留原声模式不能同时叠加旁白，请明确选择混音")
+            require(clip["audioMode"] != "MIX" or voice is not None, "混音模式需要旁白")
+            if clip["audioMode"] != "MUTE" and voice is None:
+                voice_windows[sid] = (clip["assetId"], start * 1000 / fps, end * 1000 / fps)
+        else:
+            require("clip" not in scene, "图文场景不能夹带视频截取字段")
+        if version == 2 and voice is None:
+            continue
         fields(voice, ("assetId", "offsetMs", "gainDb"))
         identifier(voice["assetId"])
         require(voice["assetId"] in audio_info, "旁白音频资产不存在")
@@ -206,7 +238,7 @@ def load_project(input_path, work_root):
         voice_windows[sid] = (voice["assetId"], voice_start, voice_end)
     require(cursor == count, "场景总帧数与工程不一致")
     subtitles, last_end, cue_ids = document["subtitles"], 0, set()
-    require(type(subtitles) is list and 0 < len(subtitles) <= 200, "字幕数量不正确")
+    require(type(subtitles) is list and (0 if version == 2 else 1) <= len(subtitles) <= 200, "字幕数量不正确")
     covered_scenes = set()
     for cue in subtitles:
         fields(cue, ("id", "sceneId", "startMs", "endMs", "text", "audioAssetId"))
@@ -222,5 +254,6 @@ def load_project(input_path, work_root):
         text(cue["text"], 120)
         covered_scenes.add(cue["sceneId"])
         last_end = finish
-    require(covered_scenes == scene_ids, "每个旁白场景都须有明确字幕")
-    return Project(document, root, assets, audio_info, width, height, fps, count)
+    required_cues = {scene["id"] for scene in scenes if scene["voice"] is not None}
+    require(required_cues <= covered_scenes, "每个旁白场景都须有明确字幕")
+    return Project(document, root, assets, audio_info, width, height, fps, count, frozenset(video_assets))

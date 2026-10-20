@@ -63,7 +63,7 @@ public class AutomaticProductionPlanService {
                 .orElseThrow(() -> conflict("自动制作需要当前真实发布方案确认，不能使用已有成片跳过入口"));
         ObjectNode snapshot = read(confirmed);
         snapshot.put("automaticRequestHash", requestHash).put("storyboardId", request.storyboardId())
-                .put("renderContentHash", request.renderContentHash()).put("executionProfile", "FIXED_PROJECT_V1");
+                .put("renderContentHash", request.renderContentHash()).put("executionProfile", "FIXED_PROJECT");
         int previousVersion = plans.findMaxPlanVersion(taskId, ownerId);
         if (previousVersion == Integer.MAX_VALUE) throw conflict("制作蓝图版本序号已达到上限");
         String planId = UUID.randomUUID().toString();

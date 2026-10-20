@@ -71,7 +71,13 @@ class Visuals:
             y += height
         return y
 
-    def frame(self, scene, frame_no, subtitles=True):
+    def frame(self, scene, frame_no, subtitles=True, clip_frame=None):
+        if scene["layout"] == "VIDEO_CLIP":
+            # 视频保留实际画面，不套用图文标题模板；元数据标题不覆盖录屏内容。
+            image = clip_frame.copy() if clip_frame is not None else Image.new("RGB", (self.project.width, self.project.height))
+            if subtitles:
+                self.subtitle(ImageDraw.Draw(image), frame_no)
+            return image
         image = Image.new("RGB", (self.project.width, self.project.height), scene["background"])
         draw = ImageDraw.Draw(image)
         local = (frame_no - scene["startFrame"]) / max(1, scene["endFrame"] - scene["startFrame"] - 1)
@@ -111,15 +117,18 @@ class Visuals:
                 cursor = self.lines(draw, rows, "body", 102, cursor) + 24
             require(cursor <= 574, "正文会遮挡字幕安全区", "TEXT_OVERFLOW")
         if subtitles:
-            timestamp = frame_no * 1000 / self.project.fps
-            for cue in self.project.document["subtitles"]:
-                if cue["startMs"] <= timestamp < cue["endMs"]:
-                    rows = self.cues[cue["id"]]
-                    top = 618 if len(rows) == 1 else 572
-                    self.box(draw, (70, top - 12, 1210, top + 49 * len(rows) + 10), "#08101c", 10)
-                    self.lines(draw, rows, "subtitle", 640, top, center=True)
-                    break
+            self.subtitle(draw, frame_no)
         return image
+
+    def subtitle(self, draw, frame_no):
+        timestamp = frame_no * 1000 / self.project.fps
+        for cue in self.project.document["subtitles"]:
+            if cue["startMs"] <= timestamp < cue["endMs"]:
+                rows = self.cues[cue["id"]]
+                top = 618 if len(rows) == 1 else 572
+                self.box(draw, (70, top - 12, 1210, top + 49 * len(rows) + 10), "#08101c", 10)
+                self.lines(draw, rows, "subtitle", 640, top, center=True)
+                break
 
     def close(self):
         if self.loaded_image is not None:

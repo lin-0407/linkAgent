@@ -16,6 +16,7 @@ import numpy as np
 from . import VERSION
 from .contract import RenderError, contained, digest, load_project, require
 from .visuals import Visuals
+from .clips import ClipFrames, inspect_clips, original_audio
 
 
 class Control:
@@ -59,9 +60,21 @@ class Control:
             self.check()
         return child
 
-    def run(self, args, capture=False):
+    def run(self, args, capture=False, maximum=256 * 1024):
         child = self.spawn(args, stdout=subprocess.PIPE if capture else subprocess.DEVNULL)
-        output = child.communicate()[0]
+        output = None
+        if capture:
+            # 原声解码和探测输出都设上限；不能把异常工具输出无限读入内存。
+            chunks, size = [], 0
+            try:
+                while chunk := child.stdout.read(min(65536, maximum - size + 1)):
+                    size += len(chunk)
+                    require(size <= maximum, "媒体工具输出超过本次上限", "OUTPUT_TOO_LARGE")
+                    chunks.append(chunk); self.check()
+            finally:
+                child.stdout.close()
+            output = b"".join(chunks)
+        child.wait()
         self.check()
         if child.returncode:
             raise RenderError("ENCODING_FAILED", "媒体工具执行失败，详见本次渲染日志", 4)
@@ -75,7 +88,7 @@ def timestamp(milliseconds):
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
 
 
-def write_audio(project, output, control):
+def write_audio(project, output, control, clips, ffmpeg):
     peak, squares, samples_count = 0.0, 0.0, 0
     with wave.open(str(output), "wb") as destination:
         destination.setparams((2, 2, 48000, 0, "NONE", "not compressed"))
@@ -85,24 +98,27 @@ def write_audio(project, output, control):
             start_sample = round(scene["startFrame"] * 48000 / project.fps)
             end_sample = round(scene["endFrame"] * 48000 / project.fps)
             mixed = np.zeros((end_sample - start_sample, 2), dtype=np.float32)
+            if "clip" in scene and scene["clip"]["audioMode"] != "MUTE":
+                mixed += original_audio(project, scene, clips[scene["clip"]["assetId"]], ffmpeg, control, len(mixed))
             voice = scene["voice"]
-            asset = project.assets[voice["assetId"]]
-            with wave.open(str(asset), "rb") as source:
-                audio = np.frombuffer(source.readframes(source.getnframes()), dtype="<i2").reshape((-1, source.getnchannels())).astype(np.float32) / 32768
-                length = round(len(audio) * 48000 / source.getframerate())
-                source_axis = np.arange(len(audio), dtype=np.float64)
-                target_axis = np.arange(length, dtype=np.float64) * source.getframerate() / 48000
-                converted = np.column_stack([np.interp(target_axis, source_axis, audio[:, min(c, audio.shape[1] - 1)]) for c in range(2)]).astype(np.float32)
-            offset = round(voice["offsetMs"] * 48)
-            require(offset + len(converted) <= len(mixed), "旁白音轨量化后超出场景", "AUDIO_OVERFLOW")
-            converted *= 10 ** (voice["gainDb"] / 20) * 0.85
-            mixed[offset: offset + len(converted)] = converted
+            if voice is not None:
+                asset = project.assets[voice["assetId"]]
+                with wave.open(str(asset), "rb") as source:
+                    audio = np.frombuffer(source.readframes(source.getnframes()), dtype="<i2").reshape((-1, source.getnchannels())).astype(np.float32) / 32768
+                    length = round(len(audio) * 48000 / source.getframerate())
+                    source_axis = np.arange(len(audio), dtype=np.float64)
+                    target_axis = np.arange(length, dtype=np.float64) * source.getframerate() / 48000
+                    converted = np.column_stack([np.interp(target_axis, source_axis, audio[:, min(c, audio.shape[1] - 1)]) for c in range(2)]).astype(np.float32)
+                offset = round(voice["offsetMs"] * 48)
+                require(offset + len(converted) <= len(mixed), "旁白音轨量化后超出场景", "AUDIO_OVERFLOW")
+                converted *= 10 ** (voice["gainDb"] / 20) * 0.85
+                mixed[offset: offset + len(converted)] += converted
             current_peak = float(np.max(np.abs(mixed)))
             require(current_peak <= 0.95, "旁白超过编码峰值范围", "AUDIO_CLIPPING")
             peak = max(peak, current_peak)
             squares += float(np.sum(mixed.astype(np.float64) ** 2)); samples_count += mixed.size
             destination.writeframes((mixed * 32767).astype("<i2").tobytes())
-    require(peak > 0.0001, "音轨无有效声音", "AUDIO_SILENT")
+    require(not project.expects_audio or peak > 0.0001, "音轨无有效声音", "AUDIO_SILENT")
     return {"sourcePeak": round(peak, 6), "sourceRms": round(math.sqrt(squares / samples_count), 6)}
 
 
@@ -144,7 +160,8 @@ def inspect_output(project, output, ffmpeg, ffprobe, control):
             squares += float(np.sum(values ** 2)); count += values.size
             clipped += int(np.count_nonzero(np.abs(values) >= 32767 / 32768))
     decoded.unlink()
-    require(peak > .0001 and clipped == 0, "编码音轨静音或削波", "QUALITY_FAILED")
+    require((peak > .0001 if project.expects_audio else peak <= .0001) and clipped == 0,
+            "编码音轨与声音方案不符或存在削波", "QUALITY_FAILED")
     for name, frame in (("start", 0), ("middle", project.frame_count // 2), ("end", project.frame_count - 1)):
         control.run([ffmpeg, "-v", "error", "-nostdin", "-threads", "2", "-protocol_whitelist", "file,pipe",
                      "-i", str(output), "-vf", f"select=eq(n\\,{frame})", "-threads", "2", "-frames:v", "1", "-y", str(output.parent / f"frame-{name}.png")])
@@ -186,13 +203,12 @@ def render(input_path, work_root, output_dir, font_path, ffmpeg="ffmpeg", ffprob
             control.log = log
             log.write(f"renderer={VERSION} inputHash={project.document['inputHash']} frames={project.frame_count}\n".encode("ascii"))
             log.flush()
-            levels = write_audio(project, output / "_audio.wav", control)
+            clips = inspect_clips(project, ffprobe, control)
+            levels = write_audio(project, output / "_audio.wav", control, clips, ffmpeg)
             cues = project.document["subtitles"]
             srt = "\n\n".join(f"{index}\n{timestamp(cue['startMs'])} --> {timestamp(cue['endMs'])}\n{cue['text']}"
                                 for index, cue in enumerate(cues, 1)) + "\n"
             (output / "subtitles.srt").write_text(srt, encoding="utf-8")
-            cover = visuals.frame(project.document["scenes"][0], 0, False)
-            cover.save(output / "cover.png"); cover.close()
             command = [ffmpeg, "-v", "error", "-nostdin", "-threads", "2", "-filter_threads", "1",
                        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s:v", f"{project.width}x{project.height}",
                        "-r", str(project.fps), "-i", "pipe:0", "-protocol_whitelist", "file,pipe",
@@ -204,15 +220,34 @@ def render(input_path, work_root, output_dir, font_path, ffmpeg="ffmpeg", ffprob
             child = control.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
             try:
                 for scene in project.document["scenes"]:
-                    for frame in range(scene["startFrame"], scene["endFrame"]):
-                        control.check()
-                        if frame % 24 == 0:
-                            require((output / "render.log").stat().st_size <= 1024**2
-                                    and (not (output / "_video.partial.mp4").exists()
-                                         or (output / "_video.partial.mp4").stat().st_size <= 512 * 1024**2),
-                                    "输出或日志超过本次大小限制", "OUTPUT_TOO_LARGE")
-                        image = visuals.frame(scene, frame)
-                        child.stdin.write(image.tobytes()); image.close()
+                    decoder = (ClipFrames(project, scene, clips[scene["clip"]["assetId"]], ffmpeg, control)
+                               if "clip" in scene else None)
+                    try:
+                        for frame in range(scene["startFrame"], scene["endFrame"]):
+                            control.check()
+                            if frame % 24 == 0:
+                                require((output / "render.log").stat().st_size <= 1024**2
+                                        and (not (output / "_video.partial.mp4").exists()
+                                             or (output / "_video.partial.mp4").stat().st_size <= 512 * 1024**2),
+                                        "输出或日志超过本次大小限制", "OUTPUT_TOO_LARGE")
+                            source = decoder.frame() if decoder else None
+                            try:
+                                if frame == 0:
+                                    cover = visuals.frame(scene, frame, False, source)
+                                    cover.save(output / "cover.png"); cover.close()
+                                image = visuals.frame(scene, frame, True, source)
+                                try:
+                                    child.stdin.write(image.tobytes())
+                                finally:
+                                    image.close()
+                            finally:
+                                if source is not None:
+                                    source.close()
+                        if decoder:
+                            decoder.finish()
+                    finally:
+                        if decoder:
+                            decoder.close()
                 child.stdin.close()
                 child.wait()
             except BrokenPipeError as error:
@@ -235,6 +270,9 @@ def render(input_path, work_root, output_dir, font_path, ffmpeg="ffmpeg", ffprob
                   "durationMs": round(project.duration_ms), "elapsedMs": round((time.monotonic() - started) * 1000),
                   "media": quality | levels, "files": files,
                   "warnings": ["字幕文意由输入提供；本地检查不等同于 ASR 对齐或发布前完整试映"]}
+        if project.document["schemaVersion"] == 2:
+            result["inputSchemaVersion"] = 2
+            result["clipSources"] = clips
         control.check()
         partial = output / "_manifest.partial.json"
         partial.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

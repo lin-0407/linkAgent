@@ -1,17 +1,17 @@
 # LinkAgent 离线渲染器
 
-S2 固定工程媒体生成模块。接收后端解析好的本地工程与资产，生成完整 MP4、独立 SRT、封面、实际成片首中尾抽帧和 `manifest.json`。不生成脚本、不调用模型或 TTS、不连接业务数据库和 OSS。整片本地检查不替代发布前完整试映。
+固定工程媒体生成模块。接收后端解析好的本地工程与资产，生成完整 MP4、独立 SRT、封面、实际成片首中尾抽帧和 `manifest.json`。V1 支持图片与 WAV，V2 已增加视频片段、截取、完整显示/裁切、原声与旁白混音。模块不生成脚本、不调用模型或 TTS、不连接业务数据库和 OSS；本地检查不替代发布前完整试映。
 
 ## 环境与调用
 
 使用 Python 3.12、FFmpeg/FFprobe、中文字体和 `requirements.txt` 中固定版本依赖。容器内安装 Noto CJK 字体及其系统包许可证；不复制 Windows 字体。
 
 ```powershell
-docker build -t linkagent-renderer:s2 renderer
-docker run --rm --network none --memory 512m --cpus 2 --pids-limit 64 --read-only --tmpfs /tmp:rw,size=64m --mount type=bind,source=E:/linkAgent/linkAgent/export/renderer-s2-20261020,target=/work linkagent-renderer:s2 render --input /work/rest/input.json --work-root /work --output-dir /work/rest/attempt-1 --timeout-seconds 600
+docker build -t linkagent-renderer:local renderer
+docker run --rm --network none --memory 512m --cpus 2 --pids-limit 64 --read-only --tmpfs /tmp:rw,size=64m --mount type=bind,source=E:/linkAgent/linkAgent/export/renderer-s2-20261020,target=/work linkagent-renderer:local render --input /work/rest/input.json --work-root /work --output-dir /work/rest/attempt-1 --timeout-seconds 600
 ```
 
-原生命令为 `python -m linkagent_renderer render --input ... --work-root ... --output-dir ... --font ...`，在 `renderer` 目录运行或安装对应包路径。解释器、二进制路径和字体文件都是部署者配置，不能来自模型字段。Java 的业务启动和产物注册将在 S3 接入，本步没有对外业务 HTTP API 或 Schema 变更。
+原生命令为 `python -m linkagent_renderer render --input ... --work-root ... --output-dir ... --font ...`，在 `renderer` 目录运行或安装对应包路径。解释器、二进制路径和字体文件都是部署者配置，不能来自模型字段。Java 已有内部固定工程调度、自动蓝图与产物注册；公开制作入口仍关闭，尚未部署到作者服务。此次 V2 没有对外业务 HTTP API 或 Schema 变更。
 
 工作根目录必须存在，输入和资产解析后须位于该根目录，输出须为全新尝试目录。拒绝覆盖旧输出和越界链接；成功前不生成 `manifest.json`。进程取消只终止本次创建的编码/探测子进程。
 
@@ -50,9 +50,21 @@ docker run --rm --network none --memory 512m --cpus 2 --pids-limit 64 --read-onl
 
 字幕字段为 `id/sceneId/startMs/endMs/text/audioAssetId`。同一实际音频可以对应多条字幕，但字幕须位于其实际播放范围且不重叠。渲染器只验证确定性范围，不能独立证明文字是原音频的准确转写；实际业务由 S3/S4 提供核实过的 cue。烧录字幕和 SRT 使用同一组输入。
 
+## RenderInputV2 视频片段
+
+顶层 `schemaVersion=2`，其余顶层及摘要算法沿用 V1。每个 VIDEO_CLIP 场景通过 `clip` 引用本地 MP4/MOV 资产，包含 `assetId/sourceStartMs/sourceEndMs/fit/audioMode/gainDb`。区间必须与实际视频时长和场景帧数对应；CONTAIN 完整显示，COVER 居中裁切铺满；MUTE、ORIGINAL、MIX 分别表示静音原声、只保留原声、原声加旁白。
+
+V2 的 `voice=null` 表示没有旁白，原声字幕引用片段资产，旁白字幕继续引用 WAV。全片明确静音才允许零峰值输出；仍输出 AAC 音轨。没有对白可使用空字幕数组，不生成占位文字。源音轨延迟不被抹掉，所截区间没有原声或原声 cue 越出实际音轨范围时拒绝。
+
+支持本地 H.264/HEVC、单视频流、至多一条音轨；源画面及像素比例规范化的中间画面均至多 800 万像素、帧率至多 60fps、源时长至多 30 分钟，仍受单资产 32MiB、总量 256MiB 限制。HDR、异常元数据和不支持编码需先规范化。本步不包含 BGM、素材上传或 ASR。
+
+完整场景示例、声音组合及业务边界见 [接入说明](../docs/reference/视频片段合成接入说明.md)。V1 继续按原规则拒绝新增字段。
+
 ## 产物与错误
 
 `manifest.json` 保存运行/尝试/工程身份、输入与字体摘要、渲染器版本、实际媒体参数、音轨峰值与 RMS、整片解码结果、文件大小/SHA-256 和警告。所有文件名均为相对本次输出目录的固定名称。下游必须验证清单与文件摘要，不能凭 `video.mp4` 存在就注册成功。
+
+清单版本仍为 1；V2 输入额外记录 `inputSchemaVersion=2` 和实际 `clipSources`，下游必须检查与工程版本一致。空字幕只写一个空行的 SRT，不能冒充实际转写结果。
 
 退出码：0 成功，2 输入/资产/布局不合法，3 字体或媒体环境缺失，4 编码或检查失败，124 超时，130 取消。stdout 返回一条结构化成功或失败 JSON；详细媒体错误留在尝试目录日志，不打印环境或密钥。
 
@@ -66,7 +78,7 @@ docker run --rm --network none --memory 512m --cpus 2 --pids-limit 64 --read-onl
 python renderer/examples/build_examples.py --work-root export/renderer-s2-20261020
 powershell -NoProfile -ExecutionPolicy Bypass -File renderer/examples/synthesize_local.ps1 -WorkRoot export/renderer-s2-20261020
 python renderer/examples/build_examples.py --work-root export/renderer-s2-20261020 --finish
-docker run --rm --network none --memory 512m --cpus 2 --entrypoint python linkagent-renderer:s2 -m unittest discover -s tests -v
+docker run --rm --network none --memory 512m --cpus 2 --entrypoint python linkagent-renderer:local -m unittest discover -s tests -v
 ```
 
 测试和样例输出必须区分：单元编码测试用固定测试音验证协议，跨主题样例用真实中文离线配音验证可观看成片。合成声音需在实际发布材料中按平台要求说明。当前结果见仓库 `docs/error/视频固定工程渲染S2验证记录.md`。

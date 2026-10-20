@@ -48,6 +48,17 @@ class FixedProjectJobFilesTest {
         assertThat(Files.readString(request.input().getParent().resolve("assets/picture.png"))).isEqualTo("asset-fixture");
     }
 
+    @Test void v2FreezeAndNewAttemptKeepVersionAndClipFingerprint() throws Exception {
+        document.put("schemaVersion", 2);
+        document.putArray("scenes").addObject().putObject("clip").put("sourceStartMs", 1000).put("sourceEndMs", 3000);
+        var job = files.freeze("task", "default", write());
+        var prepared = files.prepare(job, run(1), () -> false);
+        assertThat(json.readTree(prepared.input().toFile()).path("schemaVersion").asInt()).isEqualTo(2);
+        assertThat(renderContentHash(json, Files.readString(prepared.input()))).isEqualTo(renderContentHash(json, job.projectJson()));
+        document.putArray("scenes").addObject().putObject("clip").put("sourceStartMs", 2000).put("sourceEndMs", 4000);
+        assertThat(renderContentHash(json, document.toString())).isNotEqualTo(renderContentHash(json, job.projectJson()));
+    }
+
     @Test void changedSourceAssetCannotBeAdoptedByNewAttempt() throws Exception {
         var job = files.freeze("task", "default", write());
         Files.writeString(source.resolve("assets/picture.png"), "different-file");

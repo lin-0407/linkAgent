@@ -76,6 +76,31 @@ class RenderArtifactVerifierTest {
     @Test void rejectsNumericStrings() { media().put("width", "1280"); assertRejected(); }
     @Test void rejectsDurationOverflow() { media().put("containerDurationMs", Long.MIN_VALUE + 2000); assertRejected(); }
 
+    @Test void v2ManifestMustMatchInputVersion() {
+        ((ObjectNode) input).put("schemaVersion", 2); assertRejected();
+        manifest.put("inputSchemaVersion", 1); assertRejected();
+    }
+
+    @Test void v1CannotAcceptV2ManifestAsSameProject() {
+        ((ObjectNode) input).put("schemaVersion", 1); manifest.put("inputSchemaVersion", 2); assertRejected();
+    }
+
+    @Test void onlyExplicitlySilentV2ScenesCanAcceptZeroAudio() throws Exception {
+        ((ObjectNode) input).put("schemaVersion", 2);
+        ((ObjectNode) input).putArray("scenes").addObject().put("layout", "VIDEO_CLIP").putNull("voice")
+                .putObject("clip").put("audioMode", "MUTE");
+        manifest.put("inputSchemaVersion", 2);
+        for (String field : List.of("decodedPeak", "decodedRms", "sourcePeak", "sourceRms")) media().put(field, 0);
+        assertThat(verify().files()).hasSize(8);
+        ((ObjectNode) input.path("scenes").get(0).path("clip")).put("audioMode", "ORIGINAL"); assertRejected();
+    }
+
+    @Test void explicitlySilentProjectCannotHideUnexpectedSound() {
+        ((ObjectNode) input).put("schemaVersion", 2);
+        ((ObjectNode) input).putArray("scenes").addObject().putNull("voice");
+        manifest.put("inputSchemaVersion", 2); assertRejected();
+    }
+
     @Test void rejectsSymlinkedArtifactEvenIfHashMatches() throws Exception {
         Path outside = Files.createTempFile(root.getParent(), "render-external-", ".mp4");
         try {

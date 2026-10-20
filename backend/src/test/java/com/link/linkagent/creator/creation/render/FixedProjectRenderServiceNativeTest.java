@@ -78,6 +78,36 @@ class FixedProjectRenderServiceNativeTest {
                 .isInstanceOfSatisfying(RenderExecutionException.class, error -> assertThat(error.code()).isEqualTo("OUTPUT_EXISTS"));
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void receivesActualV2ClipWithOriginalAudioOrExplicitSilence(boolean silent) throws Exception {
+        Path clip = request.input().getParent().resolve("clip.mp4");
+        var maker = new ProcessBuilder("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=c=blue:s=320x180:r=24:d=3",
+                "-i", request.input().getParent().resolve("voice.wav").toString(), "-c:v", "libx264", "-threads", "2", "-c:a", "aac",
+                "-movflags", "+faststart", "-y", clip.toString()).redirectError(ProcessBuilder.Redirect.INHERIT).start();
+        assertThat(maker.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)).isTrue(); assertThat(maker.exitValue()).isZero();
+        ObjectNode document = (ObjectNode) json.readTree(request.input().toFile()); document.put("schemaVersion", 2);
+        document.putArray("assets").addObject().put("id", "clip").put("path", "clip.mp4").put("mime", "video/mp4")
+                .put("sha256", RenderArtifactVerifier.digest(clip, () -> { }));
+        ObjectNode scene = (ObjectNode) document.path("scenes").get(0);
+        scene.put("layout", "VIDEO_CLIP").putNull("voice"); scene.putArray("body");
+        scene.putObject("clip").put("assetId", "clip").put("sourceStartMs", 0).put("sourceEndMs", 2000)
+                .put("fit", "CONTAIN").put("audioMode", silent ? "MUTE" : "ORIGINAL").put("gainDb", -3);
+        document.putArray("subtitles"); document.remove("inputHash");
+        String hash = sha(json.copy().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsBytes(json.convertValue(document, Map.class)));
+        document.put("inputHash", hash); json.writeValue(request.input().toFile(), document);
+        request = new FixedProjectRenderService.Request(request.input(), request.runId(), request.attemptId(), request.storyboardId(), hash);
+        var result = service().render(request, () -> false);
+        var manifest = json.readTree(result.files().get("manifest.json").path().toFile());
+        assertThat(manifest.path("inputSchemaVersion").asInt()).isEqualTo(2);
+        double peak = manifest.path("media").path("decodedPeak").asDouble();
+        if (silent) assertThat(peak).isLessThanOrEqualTo(.0001); else assertThat(peak).isGreaterThan(.001);
+        assertThat(result.frameCount()).isEqualTo(48); assertThat(result.files()).hasSize(8);
+        var frame = javax.imageio.ImageIO.read(result.files().get("frame-start.png").path().toFile());
+        var color = new java.awt.Color(frame.getRGB(640, 360)); assertThat(color.getBlue()).isGreaterThan(200);
+        assertThat(Files.readString(result.files().get("subtitles.srt").path())).isEqualTo("\n");
+    }
+
     @Test void cancellationTerminatesRealRenderingAndLeavesNoSuccessManifest() {
         AtomicInteger checks = new AtomicInteger();
         assertThatThrownBy(() -> service().render(request, () -> checks.incrementAndGet() >= 12))

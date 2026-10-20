@@ -43,7 +43,8 @@ public class FixedProjectJobFiles {
             String document = renderDocument(json, StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString());
             ObjectNode node = (ObjectNode) json.readTree(document);
-            if (!node.path("schemaVersion").isIntegralNumber() || node.path("schemaVersion").asInt() != 1 || !request.runId().equals(node.path("runId").asText())
+            if (!node.path("schemaVersion").isIntegralNumber() || !node.path("schemaVersion").canConvertToInt()
+                    || !Set.of(1, 2).contains(node.path("schemaVersion").asInt()) || !request.runId().equals(node.path("runId").asText())
                     || !request.attemptId().equals(node.path("attemptId").asText())
                     || !request.storyboardId().equals(node.path("storyboardId").asText())
                     || !renderInputHash(json, node).equals(request.inputHash())
