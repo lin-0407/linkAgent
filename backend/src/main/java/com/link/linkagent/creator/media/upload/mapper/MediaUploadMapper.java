@@ -933,6 +933,11 @@ public interface MediaUploadMapper {
               AND status IN ('UPLOADED', 'PROBE_FAILED')
               AND media_deleted_at IS NULL
               AND is_deleted = 0
+              AND NOT EXISTS (SELECT 1 FROM creator_creation_render_attempt a JOIN creator_creation_run r
+                  ON r.run_id=a.run_id AND r.task_id=a.task_id AND r.owner_id=a.owner_id
+                  WHERE a.version_id=creator_draft_video.version_id AND a.task_id=creator_draft_video.task_id
+                    AND a.owner_id=creator_draft_video.owner_id AND a.status='REGISTERED'
+                    AND r.status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED'))
             """)
     int claimDraftVideoProbe(@Param("taskId") String taskId,
                              @Param("ownerId") String ownerId,
@@ -956,6 +961,11 @@ public interface MediaUploadMapper {
               AND status = 'PROBING'
               AND update_time < #{staleBefore}
               AND is_deleted = 0
+              AND NOT EXISTS (SELECT 1 FROM creator_creation_render_attempt a JOIN creator_creation_run r
+                  ON r.run_id=a.run_id AND r.task_id=a.task_id AND r.owner_id=a.owner_id
+                  WHERE a.version_id=creator_draft_video.version_id AND a.task_id=creator_draft_video.task_id
+                    AND a.owner_id=creator_draft_video.owner_id AND a.status='REGISTERED'
+                    AND r.status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED'))
             """)
     int recoverStaleDraftVideoProbe(@Param("taskId") String taskId,
                                     @Param("ownerId") String ownerId,

@@ -65,6 +65,35 @@ class CreatorTaskServiceTest {
     }
 
     @Test
+    void shouldKeepTaskAndMaterialsWhenCreationOrCostStillNeedsClosing() {
+        FakeCreatorTaskMapper mapper = new FakeCreatorTaskMapper();
+        mapper.taskRecord = createTaskRecord();
+        mapper.materials.add(createMaterialRecord("TITLE_DRAFT", "标题"));
+        mapper.deletionBlockers = 1;
+
+        assertThatThrownBy(() -> new CreatorTaskService(mapper).deleteTask("task-1"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT))
+                .hasMessageContaining("制作运行或待结算费用");
+
+        assertThat(mapper.deletedTaskFlag).isFalse();
+        assertThat(mapper.materialsDeletedFlag).isFalse();
+        assertThat(mapper.materials).hasSize(1);
+    }
+
+    @Test
+    void shouldRejectMissingTaskBeforeDeletingAnything() {
+        FakeCreatorTaskMapper mapper = new FakeCreatorTaskMapper();
+
+        assertThatThrownBy(() -> new CreatorTaskService(mapper).deleteTask("missing-task"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+
+        assertThat(mapper.deletedTaskFlag).isFalse();
+        assertThat(mapper.materialsDeletedFlag).isFalse();
+    }
+
+    @Test
     void shouldMarkDraftTaskAsPlanningSkipped() {
         FakeCreatorTaskMapper mapper = new FakeCreatorTaskMapper();
         mapper.taskRecord = createTaskRecord();
@@ -174,6 +203,7 @@ class CreatorTaskServiceTest {
         private String deletedTaskStatus;
         private boolean deletedTaskFlag;
         private boolean materialsDeletedFlag;
+        private int deletionBlockers;
 
         @Override
         public int insertTask(CreatorTaskRecord record) {
@@ -205,6 +235,16 @@ class CreatorTaskServiceTest {
                 return Optional.empty();
             }
             return Optional.of(taskRecord);
+        }
+
+        @Override
+        public Optional<CreatorTaskRecord> lockTaskForDeletion(String taskId) {
+            return findTaskByTaskId(taskId);
+        }
+
+        @Override
+        public int countDeletionBlockers(String taskId, String ownerId) {
+            return deletionBlockers;
         }
 
         @Override

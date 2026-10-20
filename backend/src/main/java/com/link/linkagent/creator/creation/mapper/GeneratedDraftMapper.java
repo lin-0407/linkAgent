@@ -32,4 +32,16 @@ public interface GeneratedDraftMapper {
             VALUES (#{versionId},#{taskId},#{ownerId},0,#{publishingSessionId},#{publishingResultId},#{productionPlanId},#{snapshotJson})
             """)
     int insertContext(VideoVersionContextRecord context);
+
+    // 接管只能替换读取到的那一次探测，旧进程即使返回也不能覆盖新 token。
+    @Update("""
+            UPDATE creator_draft_video SET status='PROBING',probe_attempt_id=#{nextToken},
+                duration_ms=NULL,width=NULL,height=NULL,frame_rate=NULL,video_codec=NULL,audio_codec=NULL,has_audio=NULL,
+                update_time=CURRENT_TIMESTAMP
+            WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND version_id=#{versionId}
+                AND status=#{expectedStatus} AND probe_attempt_id <=> #{expectedToken}
+                AND media_deleted_at IS NULL AND is_deleted=0
+            """)
+    int claimProbe(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("versionId") String versionId,
+            @Param("expectedStatus") String expectedStatus, @Param("expectedToken") String expectedToken, @Param("nextToken") String nextToken);
 }

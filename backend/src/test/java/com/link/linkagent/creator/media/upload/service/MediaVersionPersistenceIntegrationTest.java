@@ -22,6 +22,10 @@ import com.link.linkagent.creator.creation.service.FixedProjectJobFiles;
 import com.link.linkagent.creator.creation.service.FixedProjectWorker;
 import com.link.linkagent.creator.creation.service.CreationWorkerProperties;
 import com.link.linkagent.creator.creation.service.GeneratedDraftPersistenceService;
+import com.link.linkagent.creator.creation.service.GeneratedDraftProbePersistenceService;
+import com.link.linkagent.creator.creation.service.GeneratedDraftProbeService;
+import com.link.linkagent.creator.media.probe.model.MediaProbeResult;
+import com.link.linkagent.creator.media.probe.service.FfprobeMediaProbeService;
 import com.link.linkagent.creator.creation.model.*;
 import com.link.linkagent.creator.creation.service.CreationRuntimeService;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Run;
@@ -125,6 +129,9 @@ class MediaVersionPersistenceIntegrationTest {
     static FixedProjectJobPersistenceService fixedJobs;
     static AutomaticProductionMapper automaticMapper;
     static AutomaticProductionPlanService automaticPlans;
+    static com.link.linkagent.creator.task.service.CreatorTaskService taskService;
+    static ProductionPlanMapper productionMapper;
+    static GeneratedDraftProbePersistenceService generatedProbes;
     final List<FixedProjectJob> fixedJobsToClean = new ArrayList<>();
 
     @BeforeAll
@@ -158,6 +165,10 @@ class MediaVersionPersistenceIntegrationTest {
         proxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         persistence = (MediaUploadPersistenceService) proxy.getProxy();
         var session = new SqlSessionTemplate(factory.getObject());
+        productionMapper = session.getMapper(ProductionPlanMapper.class);
+        var taskProxy = new ProxyFactory(new com.link.linkagent.creator.task.service.CreatorTaskService(session.getMapper(CreatorTaskMapper.class)));
+        taskProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+        taskService = (com.link.linkagent.creator.task.service.CreatorTaskService) taskProxy.getProxy();
         processing = session.getMapper(MediaProcessingMapper.class);
         reviews = session.getMapper(PreflightReviewMapper.class);
         var productionProxy = new ProxyFactory(new ProductionPlanPersistenceService(
@@ -185,6 +196,9 @@ class MediaVersionPersistenceIntegrationTest {
         var generatedProxy = new ProxyFactory(new GeneratedDraftPersistenceService(mapper, runtimeMapper, generatedMapper, new ObjectMapper(), runtime, automaticPlans));
         generatedProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         generated = (GeneratedDraftPersistenceService) generatedProxy.getProxy();
+        var probeProxy = new ProxyFactory(new GeneratedDraftProbePersistenceService(runtime,runtimeMapper,generatedMapper,fixedJobMapper,mapper,new ObjectMapper()));
+        probeProxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        generatedProbes = (GeneratedDraftProbePersistenceService) probeProxy.getProxy();
         var fixedProxy = new ProxyFactory(new FixedProjectJobPersistenceService(mapper, runtimeMapper, fixedJobMapper, new ObjectMapper()));
         fixedProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         fixedJobs = (FixedProjectJobPersistenceService) fixedProxy.getProxy();
@@ -1516,6 +1530,106 @@ class MediaVersionPersistenceIntegrationTest {
     }
 
     @Test
+    void taskDeletionKeepsActiveRunAndMaterialsUntilCancellationFinishes() {
+        String task = task(); var run = preparedRun(task, "0");
+        jdbc.update("INSERT INTO creator_material(task_id,material_type,content) VALUES (?,'SCRIPT','删除保护')", task);
+        assertThatThrownBy(() -> taskService.deleteTask(task)).hasMessageContaining("制作运行或待结算费用");
+        assertThat(mapper.countTaskByOwner(task,"default")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_material WHERE task_id=? AND is_deleted=0",Integer.class,task)).isEqualTo(1);
+        runtime.cancel(task,"default",run.runId()); taskService.deleteTask(task);
+        assertThat(mapper.countTaskByOwner(task,"default")).isZero();
+        assertThat(runtimeMapper.workspace(task,"default").orElseThrow().activeRunId()).isNull();
+    }
+
+    @Test
+    void unknownSentCostMustBeSettledBeforeTaskDeletion() {
+        String task=task(); var run=claimed(preparedRun(task,"5"),"worker"); reserve(run,"late","2");
+        String key=run.runId()+"late"; runtime.markSent(task,"default",key,"worker",run.leaseGeneration());
+        runtime.cancel(task,"default",run.runId());
+        assertThatThrownBy(() -> taskService.deleteTask(task)).hasMessageContaining("制作运行或待结算费用");
+        runtime.acknowledgeCancellation(task,"default",run.runId(),"worker",run.leaseGeneration());
+        assertThat(runtimeMapper.charge(task,"default",key).orElseThrow().status()).isEqualTo("UNKNOWN");
+        assertThatThrownBy(() -> taskService.deleteTask(task)).hasMessageContaining("制作运行或待结算费用");
+        runtime.settle(task,"default",key,cny("1"),"PROVIDER_REPORTED","review.receipt"); taskService.deleteTask(task);
+        assertThat(runtimeMapper.charge(task,"default",key).orElseThrow().status()).isEqualTo("SETTLED");
+        assertThat(mapper.countTaskByOwner(task,"default")).isZero();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints={1,2,3})
+    void taskDeletionAndRunAdmissionSerializeOnTheSameTask(int iteration) throws Exception {
+        String task=task(); runtime.initialize(task,"default","budget",revision(task),cny("20"));
+        var approval=runtime.approvePreparation(task,"default","approve",revision(task),"{\"script\":\"测试\"}",cny("0"));
+        long expected=revision(task); var go=new CountDownLatch(1);
+        try (var pool=Executors.newFixedThreadPool(2)) {
+            var start=pool.submit(() -> { go.await(); try { runtime.start(task,"default","TEXT","start",expected,approval.approvalId(),"{\"script\":\"测试\"}"); return true; } catch (ResponseStatusException e) { return false; } });
+            var delete=pool.submit(() -> { go.await(); try { taskService.deleteTask(task); return true; } catch (ResponseStatusException e) { return false; } });
+            go.countDown();
+            assertThat(List.of(start.get(15,TimeUnit.SECONDS),delete.get(15,TimeUnit.SECONDS))).containsExactlyInAnyOrder(true,false);
+        }
+        if (mapper.countTaskByOwner(task,"default")==1) {
+            var active=runtime.snapshot(task,"default").activeRun(); assertThat(active).isNotNull(); runtime.cancel(task,"default",active.runId());
+        } else assertThat(runtimeMapper.workspace(task,"default").orElseThrow().activeRunId()).isNull();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void terminatedIncompleteAutomaticPlanReturnsToOwnVideoUpload(boolean fail) {
+        String task=task(); var old=readyVideo(task,"manual-video"); String manual=confirmedPlan(task);
+        jdbc.update("INSERT INTO creator_production_step(step_id,plan_id,task_id,sequence_no,phase,step_name,objective,status) VALUES (?,?,?,1,'SCRIPT','人工完成','回退依据','COMPLETED')",UUID.randomUUID().toString(),manual,task);
+        var gate=new com.link.linkagent.creator.production.service.ProductionPlanGateService(productionMapper,mock(CreatorWorkflowMapper.class),mock(CreatorSuggestionMapper.class));
+        assertThat(gate.requireReady(task,"default").planId()).isEqualTo(manual);
+        runtime.initialize(task,"default","fallback-budget",revision(task),cny("20"));
+        var request=automaticRequest(task,"c".repeat(64),2000); long expected=revision(task);
+        var run=automaticPlans.start(task,"default","fallback-auto",expected,request,cny("0"));
+        var rows=automaticMapper.steps(task,"default",run.runId()); String system=rows.getFirst().productionPlanId();
+        if (fail) { var lease=runtime.claim(task,"default",run.runId(),"worker",60).orElseThrow(); runtime.fail(task,"default",run.runId(),"worker",lease.leaseGeneration(),"RENDER_FAILED"); }
+        else runtime.cancel(task,"default",run.runId());
+        assertThat(productionMapper.findPlan(task,"default",system).orElseThrow().status()).isEqualTo("STALE");
+        assertThat(automaticMapper.steps(task,"default",run.runId())).filteredOn(s -> "PENDING".equals(s.stepStatus())).hasSize(5);
+        assertThat(gate.requireReady(task,"default").planId()).isEqualTo(manual);
+        assertThat(automaticPlans.start(task,"default","fallback-auto",expected,request,cny("0")).runId()).isEqualTo(run.runId());
+        assertThat(mapper.findDraftVideo(task,"default").orElseThrow().versionId()).isEqualTo(old.versionId());
+        var props=new CreatorMediaProperties(); props.setEnabled(true); var storageProps=new ObjectStorageProperties();
+        storageProps.setBucket("isolated-test"); storageProps.setAccessKey("test-key"); storageProps.setSecretKey("test-secret");
+        var storage=mock(ObjectStorageService.class);
+        when(storage.createMultipartUpload(anyString(),anyString())).thenReturn(new com.link.linkagent.creator.media.storage.MultipartUploadHandle("own-cover-upload"));
+        var uploads=new MediaUploadService(props,storageProps,storage,mapper,persistence,mock(CreatorMediaWorkflowGateService.class),gate);
+        var upload=uploads.createUpload("default",task,"own-cover",new com.link.linkagent.creator.media.upload.model.CreateMediaUploadRequest("自己的覆盖成片","own.mp4",1024L,"video/mp4",2L));
+        assertThat(upload.versionId()).isNotEqualTo(old.versionId());
+        assertThat(mapper.findDraftVideo(task,"default").orElseThrow().versionId()).isEqualTo(old.versionId());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void completedAutomaticFactsRemainWhenRunIsCancelled(boolean register) throws Exception {
+        var job=queuedAutomaticJob(task(),fixedDocument()); fixedJobs.attach(job); var lease=automaticLease(job);
+        prepareAutomatic(lease,job.projectJson()); generated.recordValidatedRender(lease,"source",job.projectJson()); generated.confirmStored(lease,"source");
+        if (register) generated.register(lease,"source");
+        runtime.cancel(job.taskId(),"default",job.runId());
+        runtime.acknowledgeCancellation(job.taskId(),"default",job.runId(),lease.worker(),lease.generation());
+        assertThat(productionMapper.findPlan(job.taskId(),"default",automaticMapper.steps(job.taskId(),"default",job.runId()).getFirst().productionPlanId()).orElseThrow().status()).isEqualTo("READY");
+        assertThat(automaticMapper.steps(job.taskId(),"default",job.runId())).allMatch(s -> "COMPLETED".equals(s.stepStatus()));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"24,0,true","24,41,true","24,43,false","25,40,true","25,41,false","30,33,true","30,35,false","24,-41,true","24,-43,false"})
+    void automaticProjectAdmissionChecksExactPlanDurationWithinOneFrame(int fps,int deltaMs,boolean allowed) throws Exception {
+        var document=fixedDocument(); ((com.fasterxml.jackson.databind.node.ObjectNode)document.path("video")).put("fps",fps).put("frameCount",fps*2);
+        var job=queuedAutomaticJob(task(),document,2000L+deltaMs);
+        if (allowed) assertThat(fixedJobs.attach(job)).isNotNull();
+        else { assertThatThrownBy(() -> fixedJobs.attach(job)).hasMessageContaining("工程实际时长与已确认目标不一致"); assertThat(fixedJobMapper.find(job.taskId(),"default",job.runId())).isEmpty(); }
+    }
+
+    @Test void automaticDurationMismatchIsRejectedAndManualPlanTargetRemainsAdvisory() throws Exception {
+        var mismatched=queuedAutomaticJob(task(),fixedDocument(),1000L);
+        assertThatThrownBy(() -> fixedJobs.attach(mismatched)).hasMessageContaining("工程实际时长与已确认目标不一致");
+        var manual=queuedFixedJob(task(),fixedDocument());
+        jdbc.update("UPDATE creator_production_plan SET target_duration_ms=1000 WHERE task_id=?",manual.taskId());
+        assertThat(fixedJobs.attach(manual)).isNotNull();
+    }
+
+    @Test
     void automaticVersionRegistrationRequiresLocalAndStorageEvidence() throws Exception {
         var job = queuedAutomaticJob(task(), fixedDocument()); fixedJobs.attach(job); var lease = automaticLease(job);
         prepareAutomatic(lease, job.projectJson());
@@ -1587,6 +1701,90 @@ class MediaVersionPersistenceIntegrationTest {
         var input = json.readTree(runtimeMapper.run(lease.taskId(), lease.ownerId(), lease.runId()).orElseThrow().requestJson());
         return generated.prepare(lease, project.path("attemptId").asText(), project.path("inputHash").asText(), input.path("renderContentHash").asText(),
                 project.path("storyboardId").asText(), "fixture-bucket", generatedFiles());
+    }
+
+    private record ProbeFixture(FixedProjectJob job,GeneratedDraftLease lease,DraftVideoRecord draft) { }
+
+    private ProbeFixture registeredProbeFixture() throws Exception {
+        var job=queuedAutomaticJob(task(),fixedDocument()); fixedJobs.attach(job); var lease=automaticLease(job);
+        prepareAutomatic(lease,job.projectJson()); generated.recordValidatedRender(lease,"source",job.projectJson()); generated.confirmStored(lease,"source");
+        return new ProbeFixture(job,lease,generated.register(lease,"source"));
+    }
+
+    private MediaProbeResult expectedProbeResult() {
+        return new MediaProbeResult(2000,1280,720,new BigDecimal("24.000000"),"h264","aac",true);
+    }
+
+    @Test void generatedProbePersistsExactVersionAndReusesReadyWithoutNetwork() throws Exception {
+        var fixture=registeredProbeFixture(); var properties=new CreatorMediaProperties(); properties.setEnabled(true);
+        var storage=mock(ObjectStorageService.class); var ffprobe=mock(FfprobeMediaProbeService.class);
+        when(storage.presignGetObject(anyString(),anyString(),any())).thenReturn(new com.link.linkagent.creator.media.storage.PresignedObjectRead("https://media.invalid/source.mp4",java.time.Instant.now().plusSeconds(300)));
+        when(ffprobe.probe(anyString(),any())).thenReturn(expectedProbeResult());
+        var service=new GeneratedDraftProbeService(properties,storage,ffprobe,generatedProbes);
+        assertThat(service.probe(fixture.lease(),fixture.draft().versionId(),() -> false).status()).isEqualTo("READY_FOR_REVIEW");
+        assertThat(service.probe(fixture.lease(),fixture.draft().versionId(),() -> false).durationMs()).isEqualTo(2000);
+        verify(storage,times(1)).presignGetObject(anyString(),anyString(),any()); verify(ffprobe,times(1)).probe(anyString(),any());
+        assertThat(runtimeMapper.run(fixture.job().taskId(),"default",fixture.job().runId()).orElseThrow().status()).isEqualTo("RUNNING");
+        assertThatThrownBy(() -> runtime.complete(fixture.job().taskId(),"default",fixture.job().runId(),fixture.lease().worker(),fixture.lease().generation(),"{\"done\":true}")).hasMessageContaining("完整试映");
+    }
+
+    @Test void generatedProbeTakeoverRejectsBothLateSuccessAndLateFailure() throws Exception {
+        var fixture=registeredProbeFixture(); var old=generatedProbes.begin(fixture.lease(),fixture.draft().versionId());
+        assertThatThrownBy(() -> generatedProbes.begin(fixture.lease(),fixture.draft().versionId())).hasMessageContaining("已经领取");
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,-1,NOW(6)) WHERE run_id=?",fixture.job().runId());
+        var next=runtime.claim(fixture.job().taskId(),"default",fixture.job().runId(),"probe-replacement",30).orElseThrow();
+        var lease=new GeneratedDraftLease(next.taskId(),next.ownerId(),next.runId(),"probe-replacement",next.leaseGeneration());
+        var current=generatedProbes.begin(lease,fixture.draft().versionId()); assertThat(current.attemptId()).isNotEqualTo(old.attemptId());
+        assertThatThrownBy(() -> generatedProbes.complete(fixture.lease(),fixture.draft().versionId(),old.attemptId(),expectedProbeResult())).hasMessageContaining("租约失效");
+        assertThatThrownBy(() -> generatedProbes.fail(fixture.lease(),fixture.draft().versionId(),old.attemptId())).hasMessageContaining("租约失效");
+        assertThat(generatedProbes.complete(lease,fixture.draft().versionId(),current.attemptId(),expectedProbeResult()).status()).isEqualTo("READY_FOR_REVIEW");
+    }
+
+    @Test void generatedProbeExcludesManualClaimAndLazyRecoveryUntilCancellation() throws Exception {
+        var fixture=registeredProbeFixture(); String task=fixture.job().taskId(),version=fixture.draft().versionId();
+        assertThat(mapper.claimDraftVideoProbe(task,"default",version,"manual-token")).isZero();
+        var claim=generatedProbes.begin(fixture.lease(),version);
+        jdbc.update("UPDATE creator_draft_video SET update_time=TIMESTAMPADD(MINUTE,-5,NOW()) WHERE version_id=?",version);
+        var properties=new CreatorMediaProperties(); properties.setEnabled(true);
+        var recovery=new DraftVideoProbeRecoveryService(properties,mapper);
+        assertThat(recovery.recover(mapper.findDraftVideoByVersion(task,"default",version).orElseThrow()).probeAttemptId()).isEqualTo(claim.attemptId());
+        runtime.cancel(task,"default",fixture.job().runId());
+        assertThatThrownBy(() -> generatedProbes.complete(fixture.lease(),version,claim.attemptId(),expectedProbeResult())).hasMessageContaining("取消");
+        runtime.acknowledgeCancellation(task,"default",fixture.job().runId(),fixture.lease().worker(),fixture.lease().generation());
+        assertThat(mapper.findDraftVideoByVersion(task,"default",version).orElseThrow().status()).isEqualTo("PROBE_FAILED");
+        assertThat(mapper.claimDraftVideoProbe(task,"default",version,"manual-after-cancel")).isEqualTo(1);
+    }
+
+    @Test void cancellationTakeoverClearsAnOlderGenerationsProbeToken() throws Exception {
+        var fixture=registeredProbeFixture(); generatedProbes.begin(fixture.lease(),fixture.draft().versionId());
+        runtime.cancel(fixture.job().taskId(),"default",fixture.job().runId());
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,-1,NOW(6)) WHERE run_id=?",fixture.job().runId());
+        var next=runtime.claim(fixture.job().taskId(),"default",fixture.job().runId(),"cancel-replacement",30).orElseThrow();
+        runtime.acknowledgeCancellation(next.taskId(),next.ownerId(),next.runId(),"cancel-replacement",next.leaseGeneration());
+        var draft=mapper.findDraftVideoByVersion(next.taskId(),next.ownerId(),fixture.draft().versionId()).orElseThrow();
+        assertThat(draft.status()).isEqualTo("PROBE_FAILED"); assertThat(draft.probeAttemptId()).isNull();
+    }
+
+    @Test void actualSourceMismatchCannotBeSavedAsReady() throws Exception {
+        var fixture=registeredProbeFixture(); var claim=generatedProbes.begin(fixture.lease(),fixture.draft().versionId());
+        var wrong=new MediaProbeResult(4000,1280,720,new BigDecimal("24"),"h264","aac",true);
+        assertThatThrownBy(() -> generatedProbes.complete(fixture.lease(),fixture.draft().versionId(),claim.attemptId(),wrong)).hasMessageContaining("实测信息");
+        var draft=mapper.findDraftVideoByVersion(fixture.job().taskId(),"default",fixture.draft().versionId()).orElseThrow();
+        assertThat(draft.status()).isEqualTo("PROBING"); assertThat(draft.durationMs()).isNull();
+        generatedProbes.fail(fixture.lease(),fixture.draft().versionId(),claim.attemptId());
+        assertThat(mapper.findDraftVideoByVersion(fixture.job().taskId(),"default",fixture.draft().versionId()).orElseThrow().status()).isEqualTo("PROBE_FAILED");
+    }
+
+    @Test void expiredLeaseDuringMetadataWriteRollsBackReadyAndMetadata() throws Exception {
+        var fixture=registeredProbeFixture(); var claim=generatedProbes.begin(fixture.lease(),fixture.draft().versionId());
+        String trigger="probe_expiry_"+UUID.randomUUID().toString().replace("-","");
+        jdbc.execute("CREATE TRIGGER "+trigger+" BEFORE UPDATE ON creator_draft_video FOR EACH ROW BEGIN IF NEW.version_id='"+fixture.draft().versionId()+"' AND NEW.status='READY_FOR_REVIEW' THEN DO SLEEP(2.2); END IF; END");
+        try {
+            jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,2,NOW(6)) WHERE run_id=?",fixture.job().runId());
+            assertThatThrownBy(() -> generatedProbes.complete(fixture.lease(),fixture.draft().versionId(),claim.attemptId(),expectedProbeResult())).hasMessageContaining("租约已失效");
+            var draft=mapper.findDraftVideoByVersion(fixture.job().taskId(),"default",fixture.draft().versionId()).orElseThrow();
+            assertThat(draft.status()).isEqualTo("PROBING"); assertThat(draft.durationMs()).isNull(); assertThat(draft.probeAttemptId()).isEqualTo(claim.attemptId());
+        } finally { jdbc.execute("DROP TRIGGER "+trigger); }
     }
 
     @Test
@@ -1727,13 +1925,17 @@ class MediaVersionPersistenceIntegrationTest {
     }
 
     private FixedProjectJob queuedAutomaticJob(String task, com.fasterxml.jackson.databind.node.ObjectNode document) throws Exception {
+        return queuedAutomaticJob(task,document,null);
+    }
+
+    private FixedProjectJob queuedAutomaticJob(String task, com.fasterxml.jackson.databind.node.ObjectNode document, Long requestedDurationMs) throws Exception {
         var json = new ObjectMapper(); var sorted = json.copy().enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
         var content = document.deepCopy(); content.remove(List.of("runId", "attemptId", "inputHash"));
         String contentHash = nativeSha(sorted.writeValueAsBytes(json.convertValue(content, Map.class)));
         confirmedPlan(task);
         var confirmed = jdbc.queryForMap("SELECT session_id,confirmed_result_id FROM creator_workflow_session WHERE task_id=? ORDER BY id DESC LIMIT 1", task);
         runtime.initialize(task, "default", "auto-budget", revision(task), cny("20"));
-        long duration = Math.round(document.path("video").path("frameCount").asDouble() * 1000 / document.path("video").path("fps").asInt());
+        long duration = requestedDurationMs != null ? requestedDurationMs : Math.round(document.path("video").path("frameCount").asDouble() * 1000 / document.path("video").path("fps").asInt());
         var request = new AutomaticProductionRequest(confirmed.get("session_id").toString(), confirmed.get("confirmed_result_id").toString(),
                 mapper.findDraftVideo(task, "default").map(DraftVideoRecord::versionId).orElse(null), document.path("storyboardId").asText(), contentHash, duration);
         var run = automaticPlans.start(task, "default", "automatic-fixed", revision(task), request, cny("0"));
@@ -1745,8 +1947,23 @@ class MediaVersionPersistenceIntegrationTest {
     private FixedProjectWorker fixedWorker(FixedProjectJobFiles files,
             com.link.linkagent.creator.creation.render.FixedProjectRenderService renderer,
             com.link.linkagent.creator.creation.service.GeneratedDraftService drafts) {
+        return fixedWorker(files,renderer,drafts,protocolProbe());
+    }
+
+    private GeneratedDraftProbeService protocolProbe() {
+        var probe=mock(GeneratedDraftProbeService.class);
+        when(probe.probe(any(),anyString(),any())).thenAnswer(call -> {
+            GeneratedDraftLease lease=call.getArgument(0);
+            return mapper.findDraftVideoByVersion(lease.taskId(),lease.ownerId(),call.getArgument(1)).orElseThrow();
+        });
+        return probe;
+    }
+
+    private FixedProjectWorker fixedWorker(FixedProjectJobFiles files,
+            com.link.linkagent.creator.creation.render.FixedProjectRenderService renderer,
+            com.link.linkagent.creator.creation.service.GeneratedDraftService drafts,GeneratedDraftProbeService probe) {
         var properties = new CreationWorkerProperties(); properties.setEnabled(true); properties.setLeaseSeconds(5); properties.setHeartbeatSeconds(1);
-        return new FixedProjectWorker(properties, fixedJobMapper, runtime, files, renderer, drafts, generated);
+        return new FixedProjectWorker(properties, fixedJobMapper, runtime, files, renderer, drafts, generated,probe);
     }
 
     @org.springframework.context.annotation.Configuration(proxyBeanMethods=false)
@@ -1756,6 +1973,12 @@ class MediaVersionPersistenceIntegrationTest {
     private org.springframework.context.annotation.AnnotationConfigApplicationContext scheduledFixedWorker(FixedProjectJobFiles files,
             com.link.linkagent.creator.creation.render.FixedProjectRenderService renderer,
             com.link.linkagent.creator.creation.service.GeneratedDraftService drafts) {
+        return scheduledFixedWorker(files,renderer,drafts,protocolProbe());
+    }
+
+    private org.springframework.context.annotation.AnnotationConfigApplicationContext scheduledFixedWorker(FixedProjectJobFiles files,
+            com.link.linkagent.creator.creation.render.FixedProjectRenderService renderer,
+            com.link.linkagent.creator.creation.service.GeneratedDraftService drafts,GeneratedDraftProbeService probe) {
         var context = new org.springframework.context.annotation.AnnotationConfigApplicationContext();
         context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("fixed-worker-test",
                 Map.of("creator.media.enabled", "true", "creator.creation.renderer.enabled", "true",
@@ -1768,6 +1991,7 @@ class MediaVersionPersistenceIntegrationTest {
         context.registerBean(com.link.linkagent.creator.creation.render.FixedProjectRenderService.class, () -> renderer);
         context.registerBean(com.link.linkagent.creator.creation.service.GeneratedDraftService.class, () -> drafts);
         context.registerBean(GeneratedDraftPersistenceService.class, () -> generated);
+        context.registerBean(GeneratedDraftProbeService.class, () -> probe);
         context.register(FixedWorkerScheduling.class, FixedProjectWorker.class); context.refresh(); return context;
     }
 
@@ -1817,7 +2041,7 @@ class MediaVersionPersistenceIntegrationTest {
         String inputHash = document.path("inputHash").asText();
         java.nio.file.Path inputFile = attempt.resolve("input.json"); json.writeValue(inputFile.toFile(), document);
         var rendererProperties = new com.link.linkagent.creator.creation.render.FixedProjectRendererProperties();
-        rendererProperties.setEnabled(true); rendererProperties.setPythonPath("python"); rendererProperties.setModuleRoot("/opt/renderer");
+        rendererProperties.setEnabled(true); rendererProperties.setPythonPath("python"); rendererProperties.setModuleRoot(System.getenv("LINKAGENT_RENDERER_MODULE_ROOT"));
         rendererProperties.setWorkRoot(root.toString()); rendererProperties.setTimeout(Duration.ofSeconds(120));
         var renderer = new com.link.linkagent.creator.creation.render.FixedProjectRenderService(rendererProperties, json);
         var request = new com.link.linkagent.creator.creation.render.FixedProjectRenderService.Request(inputFile, job.runId(), attemptId,
@@ -1837,15 +2061,20 @@ class MediaVersionPersistenceIntegrationTest {
             try (var client = config.mediaS3Client(properties, s3Config, credentials);
                  var presigner = config.mediaS3Presigner(properties, s3Config, credentials)) {
                 client.createBucket(b -> b.bucket(properties.getBucket()));
-                var storage = new com.link.linkagent.creator.media.storage.S3ObjectStorageService(client, presigner, presigner, properties);
+                var storage = spy(new com.link.linkagent.creator.media.storage.S3ObjectStorageService(client, presigner, presigner, properties));
                 var service = new com.link.linkagent.creator.creation.service.GeneratedDraftService(renderer, generated, storage, properties, json);
-                try (var context = scheduledFixedWorker(jobFiles, renderer, service)) {
+                var mediaProperties = new CreatorMediaProperties(); mediaProperties.setEnabled(true);
+                var ffprobe = new FfprobeMediaProbeService(mediaProperties, json);
+                try {
+                var autoProbe = new GeneratedDraftProbeService(mediaProperties,storage,ffprobe,generatedProbes);
+                try (var context = scheduledFixedWorker(jobFiles, renderer, service,autoProbe)) {
                     awaitFixedStatus(job, "WAITING_DEPENDENCY", 150);
                     assertThat(context.getBean(FixedProjectWorker.class)).isNotNull();
                 }
                 var registered = generatedMapper.registered(task, "default", job.runId()).orElseThrow();
                 var draft = mapper.findDraftVideoByVersion(task, "default", registered.versionId()).orElseThrow();
-                assertThat(draft.status()).isEqualTo("UPLOADED");
+                assertThat(draft.status()).isEqualTo("READY_FOR_REVIEW");
+                assertThat(draft.durationMs()).isBetween(84100L,84240L);
                 var automaticSteps = automaticMapper.steps(task, "default", job.runId());
                 assertThat(automaticSteps).hasSize(6).allMatch(step -> "COMPLETED".equals(step.stepStatus()) && step.evidenceJson() != null);
                 assertThat(automaticSteps).filteredOn(step -> !"APPROVED".equals(step.stepCode()))
@@ -1857,29 +2086,21 @@ class MediaVersionPersistenceIntegrationTest {
                 // 移走本测试创建的完整工作目录，接管仍须从登记事实恢复同一版本。
                 java.nio.file.Files.move(root.resolve(job.runId()), root.resolve("removed-workdir"));
                 runtime.wake(task, "default", job.runId(), waiting.runRevision());
-                try (var worker = fixedWorker(jobFiles, renderer, service)) { worker.poll(); awaitFixedStatus(job, "WAITING_DEPENDENCY", 5); }
+                try (var worker = fixedWorker(jobFiles, renderer, service,autoProbe)) { worker.poll(); awaitFixedStatus(job, "WAITING_DEPENDENCY", 5); }
                 assertThat(runtimeMapper.run(task, "default", job.runId()).orElseThrow().leaseGeneration()).isEqualTo(2);
                 assertThat(mapper.findMediaWorkspace(task, "default").orElseThrow().nextVersionNo()).isEqualTo(2);
                 assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).hasSize(8);
                 assertThat(runtime.snapshot(task, "default").executionAvailable()).isFalse();
-                var mediaProperties = new CreatorMediaProperties(); mediaProperties.setEnabled(true);
-                var ffprobe = new com.link.linkagent.creator.media.probe.service.FfprobeMediaProbeService(mediaProperties, json);
-                long observedDuration = 0;
-                try {
-                    var probe = new com.link.linkagent.creator.media.probe.service.DraftVideoProbeService(mediaProperties, storage, ffprobe, mapper,
-                            new DraftVideoProbeRecoveryService(mediaProperties, mapper));
-                    var probed = probe.probeDraftVideo("default", task, draft.versionId());
-                    observedDuration = probed.durationMs();
-                    assertThat(probed.durationMs()).isBetween(84100L, 84240L);
-                    assertThat(probed.status()).isEqualTo("READY_FOR_REVIEW");
-                    assertThat(readyGate.inspectPostPublishReadiness(task, "default", "发布").ready()).isFalse();
-                } finally { org.springframework.test.util.ReflectionTestUtils.invokeMethod(ffprobe, "closeOutputReaderExecutor"); }
+                long observedDuration = draft.durationMs();
+                verify(storage,times(1)).presignGetObject(eq(draft.bucketName()),eq(draft.objectKey()),any());
+                assertThat(readyGate.inspectPostPublishReadiness(task, "default", "发布").ready()).isFalse();
                 runtime.cancel(task, "default", job.runId());
                 try (var worker = fixedWorker(jobFiles, renderer, service)) { worker.poll(); awaitFixedStatus(job, "CANCELLED", 5); }
                 new MediaDeletionService(mapper, processing, reviews, storage).deleteMedia("default", task, draft.versionId());
                 assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).isEmpty();
                 assertThat(mapper.findVersionContext(task, "default", draft.versionId())).isPresent();
-                System.out.println("V2_NATIVE_BLUEPRINT_STORAGE_RECOVERY_OK schemaVersion=" + schemaVersion + " durationMs=" + observedDuration + " files=8 autoSteps=6 generation=2");
+                System.out.println("S3E_NATIVE_AUTOPROBE_STORAGE_RECOVERY_OK schemaVersion=" + schemaVersion + " durationMs=" + observedDuration + " files=8 autoSteps=6 generation=2 sourceProbeCalls=1");
+                } finally { org.springframework.test.util.ReflectionTestUtils.invokeMethod(ffprobe,"closeOutputReaderExecutor"); }
             }
         }
     }
@@ -1898,7 +2119,7 @@ class MediaVersionPersistenceIntegrationTest {
         }
         var inputFile = prepared.resolve("input.json"); json.writeValue(inputFile.toFile(), document);
         var properties = new com.link.linkagent.creator.creation.render.FixedProjectRendererProperties();
-        properties.setEnabled(true); properties.setPythonPath("python"); properties.setWorkRoot(root.toString()); properties.setModuleRoot("/opt/renderer");
+        properties.setEnabled(true); properties.setPythonPath("python"); properties.setWorkRoot(root.toString()); properties.setModuleRoot(System.getenv("LINKAGENT_RENDERER_MODULE_ROOT"));
         properties.setTimeout(Duration.ofSeconds(120));
         var renderer = new com.link.linkagent.creator.creation.render.FixedProjectRenderService(properties, json);
         var files = new FixedProjectJobFiles(properties, json);

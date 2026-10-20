@@ -23,14 +23,16 @@ class Visuals:
                           for name, size in (("title", 48), ("body", 30), ("subtitle", 36), ("label", 20))}
         except Exception as error:
             raise RenderError("FONT_INVALID", "中文字体无法加载", 3) from error
-        texts = [s["title"] for s in project.document["scenes"]]
-        texts += [t for s in project.document["scenes"] for t in s["body"]]
+        visible_scenes = [s for s in project.document["scenes"] if s["layout"] != "VIDEO_CLIP"]
+        # 片段标题只作元数据，不应因未绘制的文字而拒绝实际视频；字幕仍单独检查。
+        texts = [s["title"] for s in visible_scenes]
+        texts += [t for s in visible_scenes for t in s["body"]]
         texts += [c["text"] for c in project.document["subtitles"]]
         missing = {ord(c) for value in texts for c in value if not c.isspace() and ord(c) not in coverage}
         if missing:
             raise RenderError("FONT_GLYPH_MISSING", "字体缺少工程所需字形", 3)
         self.layouts = {}
-        for scene in project.document["scenes"]:
+        for scene in visible_scenes:
             if scene["layout"] == "COMPARE_CARD":
                 require(len(scene["body"]) == 2, "对比构图需要两个对比项")
             title = self.wrap(scene["title"], "title", 1120, 2)

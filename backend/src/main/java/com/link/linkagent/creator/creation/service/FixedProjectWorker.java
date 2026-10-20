@@ -27,15 +27,17 @@ public class FixedProjectWorker implements AutoCloseable {
     private final FixedProjectRenderService renderer;
     private final GeneratedDraftService drafts;
     private final GeneratedDraftPersistenceService persistence;
+    private final GeneratedDraftProbeService probe;
     private final AtomicBoolean busy = new AtomicBoolean(), stopping = new AtomicBoolean();
     private final ExecutorService executor = Executors.newSingleThreadExecutor(Thread.ofPlatform().name("creation-fixed-worker").daemon(true).factory());
     private final ScheduledExecutorService heartbeats = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("creation-fixed-heartbeat").daemon(true).factory());
 
     public FixedProjectWorker(CreationWorkerProperties properties, FixedProjectJobMapper jobs,
             CreationRuntimeService runtime, FixedProjectJobFiles files, FixedProjectRenderService renderer,
-            GeneratedDraftService drafts, GeneratedDraftPersistenceService persistence) {
+            GeneratedDraftService drafts, GeneratedDraftPersistenceService persistence, GeneratedDraftProbeService probe) {
         properties.validate(); this.properties = properties; this.jobs = jobs; this.runtime = runtime;
         this.files = files; this.renderer = renderer; this.drafts = drafts; this.persistence = persistence;
+        this.probe = probe;
     }
 
     @Scheduled(fixedDelayString = "${creator.creation.worker.poll-interval-ms:2000}")
@@ -89,6 +91,8 @@ public class FixedProjectWorker implements AutoCloseable {
                 renderer.render(request, cancelled);
                 draft = drafts.registerGeneratedDraft(lease, request, cancelled);
             }
+            if (cancelled.getAsBoolean()) throw new RenderExecutionException("CANCELLED", "本次执行已停止");
+            probe.probe(lease, draft.versionId(), cancelled);
             if (cancelled.getAsBoolean()) throw new RenderExecutionException("CANCELLED", "本次执行已停止");
             // 成片登记之后仍有真实媒体处理和完整试映；不能提前完成 FULL 或释放活动槽。
             runtime.waitForDependency(run.taskId(), run.ownerId(), run.runId(), workerId, run.leaseGeneration(), draft.versionId());

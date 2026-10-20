@@ -492,6 +492,16 @@ public class PrePublishAgentGoldenQualityTest {
         }
 
         @Override
+        public Optional<CreatorTaskRecord> lockTaskForDeletion(String taskId) {
+            return findTaskByTaskId(taskId);
+        }
+
+        @Override
+        public int countDeletionBlockers(String taskId, String ownerId) {
+            return 0;
+        }
+
+        @Override
         public List<CreatorMaterialRecord> listMaterialsByTaskId(String taskId) {
             return materials;
         }

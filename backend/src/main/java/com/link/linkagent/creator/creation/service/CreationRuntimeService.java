@@ -329,7 +329,10 @@ public class CreationRuntimeService {
     }
 
     private void close(String taskId, String ownerId, String runId) {
-        mapper.closeReservations(taskId, ownerId, runId); mapper.deactivate(taskId, ownerId, runId);
+        mapper.closeReservations(taskId, ownerId, runId);
+        mapper.closeGeneratedProbe(taskId, ownerId, runId);
+        mapper.retireUnfinishedAutomaticPlan(taskId, ownerId, runId);
+        mapper.deactivate(taskId, ownerId, runId);
     }
     private void idle(String taskId, String ownerId, Workspace current) {
         media.lockTaskDraftVersions(taskId, ownerId);

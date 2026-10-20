@@ -50,6 +50,21 @@ public interface CreatorTaskMapper {
             """)
     Optional<CreatorTaskRecord> findTaskByTaskId(@Param("taskId") String taskId);
 
+    // 删除和制作受理共用任务行锁，防止检查通过后又受理新的运行或费用。
+    @Select("""
+            SELECT id, task_id, user_id, task_name, video_type, status, planning_skipped, create_time, update_time
+            FROM creator_task WHERE task_id=#{taskId} AND is_deleted=0 LIMIT 1 FOR UPDATE
+            """)
+    Optional<CreatorTaskRecord> lockTaskForDeletion(@Param("taskId") String taskId);
+
+    @Select("""
+            SELECT (SELECT COUNT(*) FROM creator_creation_run WHERE task_id=#{taskId} AND owner_id=#{ownerId}
+                AND status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED'))
+            + (SELECT COUNT(*) FROM creator_creation_cost_entry WHERE task_id=#{taskId} AND owner_id=#{ownerId}
+                AND status IN ('RESERVED','UNKNOWN'))
+            """)
+    int countDeletionBlockers(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
     @Select("""
             SELECT id, task_id, material_type, content, create_time, update_time
             FROM creator_material

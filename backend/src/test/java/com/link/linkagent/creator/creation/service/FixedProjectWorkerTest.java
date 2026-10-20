@@ -23,6 +23,7 @@ class FixedProjectWorkerTest {
     final FixedProjectRenderService renderer = mock(FixedProjectRenderService.class);
     final GeneratedDraftService drafts = mock(GeneratedDraftService.class);
     final GeneratedDraftPersistenceService persistence = mock(GeneratedDraftPersistenceService.class);
+    final GeneratedDraftProbeService probe = mock(GeneratedDraftProbeService.class);
     final Run run = mock(Run.class);
     final FixedProjectJob job = new FixedProjectJob("run", "task", "default", "source", "{}");
     final FixedProjectRenderService.Request request = new FixedProjectRenderService.Request(Path.of("input.json"), "run", "attempt", "board", "a".repeat(64));
@@ -58,6 +59,7 @@ class FixedProjectWorkerTest {
                 .thenAnswer(call -> { ended.countDown(); return run; });
         try (var worker = worker()) { worker.poll(); assertThat(ended.await(3, TimeUnit.SECONDS)).isTrue(); }
         verifyNoInteractions(files, renderer, drafts);
+        verifyNoInteractions(probe);
     }
 
     @Test void registeredVersionRecoveryDoesNotRequireInputDirectory() throws Exception {
@@ -68,7 +70,20 @@ class FixedProjectWorkerTest {
                 .thenAnswer(call -> { ended.countDown(); return run; });
         try (var worker = worker()) { worker.poll(); assertThat(ended.await(3, TimeUnit.SECONDS)).isTrue(); }
         verifyNoInteractions(files, renderer, drafts);
+        verify(probe).probe(any(), eq("version"), any());
         verify(runtime, never()).complete(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString());
+    }
+
+    @Test void failedSourceProbeKeepsRegisteredVersionButDoesNotWaitForUnreadyMedia() throws Exception {
+        var draft = mock(DraftVideoRecord.class); when(draft.versionId()).thenReturn("version");
+        when(persistence.registeredResult(any())).thenReturn(Optional.of(draft));
+        when(probe.probe(any(), eq("version"), any())).thenThrow(new RenderExecutionException("SOURCE_PROBE_FAILED", "探测失败"));
+        CountDownLatch ended = new CountDownLatch(1);
+        when(runtime.fail(eq("task"), eq("default"), eq("run"), anyString(), eq(1L), eq("SOURCE_PROBE_FAILED")))
+                .thenAnswer(call -> { ended.countDown(); return run; });
+        try (var worker = worker()) { worker.poll(); assertThat(ended.await(3, TimeUnit.SECONDS)).isTrue(); }
+        verifyNoInteractions(files, renderer, drafts);
+        verify(runtime, never()).waitForDependency(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString());
     }
 
     @Test void heartbeatFailureStopsRenderWithoutWritingFailedWithOldLease() throws Exception {
@@ -104,6 +119,6 @@ class FixedProjectWorkerTest {
         assertThatThrownBy(this::worker).isInstanceOf(IllegalStateException.class);
     }
 
-    private FixedProjectWorker worker() { return new FixedProjectWorker(properties, jobs, runtime, files, renderer, drafts, persistence); }
+    private FixedProjectWorker worker() { return new FixedProjectWorker(properties, jobs, runtime, files, renderer, drafts, persistence, probe); }
     private RunView view(String state) { return new RunView("run", "FULL", state, state, null, 1, 1, null, null, null); }
 }

@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+import struct
 import wave
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -58,8 +59,23 @@ def digest(path):
 
 def fingerprint(document):
     payload = {k: v for k, v in document.items() if k != "inputHash"}
-    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True,
-                                     separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+    return hashlib.sha256(fingerprint_tokens(payload).encode("utf-8")).hexdigest()
+
+
+def fingerprint_tokens(value, depth=0):
+    if depth > 20:
+        raise ValueError("工程层级过深")
+    if type(value) is dict:
+        return "{" + ",".join(json.dumps(key, ensure_ascii=False) + ":" + fingerprint_tokens(value[key], depth + 1)
+                              for key in sorted(value)) + "}"
+    if type(value) is list:
+        return "[" + ",".join(fingerprint_tokens(item, depth + 1) for item in value) + "]"
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("工程数值必须有限")
+        # 裸类型标记不能与带引号的用户文字混淆，也不改变实际 JSON 中的数值类型。
+        return "f64:" + struct.pack(">d", value).hex()
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 def contained(path, root):
@@ -120,7 +136,11 @@ def load_project(input_path, work_root):
     for name in ("runId", "attemptId", "storyboardId"):
         identifier(document[name])
     integer(document["seed"], 0, 2**31 - 1)
-    require(document["inputHash"] == fingerprint(document), "输入摘要不匹配", "INPUT_HASH_MISMATCH")
+    try:
+        actual_hash = fingerprint(document)
+    except (ValueError, OverflowError) as error:
+        raise RenderError("INVALID_INPUT", "工程数值或层级无效") from error
+    require(document["inputHash"] == actual_hash, "输入摘要不匹配", "INPUT_HASH_MISMATCH")
     video = document["video"]
     fields(video, ("width", "height", "fps", "frameCount", "codec", "audioSampleRate", "fontId"))
     width = integer(video["width"], 1, 1920)

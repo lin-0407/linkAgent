@@ -66,6 +66,8 @@ export function useMediaUpload() {
           restoredUpload = await getCurrentDraftVideoUpload(taskId)
         } catch (error) {
           if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
+            // 切换任务后，旧请求的失败也不能清空新任务已恢复的上传状态。
+            if (generation !== operationGeneration) return null
             clearUploadState()
             return null
           }

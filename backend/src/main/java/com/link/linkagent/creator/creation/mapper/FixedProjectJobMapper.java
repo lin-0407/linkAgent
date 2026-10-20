@@ -7,6 +7,14 @@ import java.util.Optional;
 
 @Mapper
 public interface FixedProjectJobMapper {
+    @Select("""
+            SELECT p.target_duration_ms FROM creator_production_plan p
+            JOIN creator_creation_auto_step e ON e.production_plan_id=p.plan_id AND e.task_id=p.task_id
+                AND e.owner_id=p.owner_id AND e.step_code='APPROVED'
+            WHERE e.task_id=#{taskId} AND e.owner_id=#{ownerId} AND e.run_id=#{runId} AND p.is_deleted=0
+            """)
+    Optional<Long> automaticTargetDuration(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("runId") String runId);
+
     @Select("SELECT run_id,task_id,owner_id,source_attempt_id,project_json FROM creator_creation_fixed_job WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND run_id=#{runId}")
     Optional<FixedProjectJob> find(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("runId") String runId);
 

@@ -36,6 +36,23 @@ class ClipRendererTest(unittest.TestCase):
                         "-y", str(cls.media / "offset.mp4")], check=True, capture_output=True, timeout=15)
         subprocess.run(["ffmpeg", "-v", "error", "-i", str(cls.media / "source.mp4"), "-c:v", "copy", "-af", "atrim=duration=1",
                         "-c:a", "aac", "-y", str(cls.media / "short-audio.mp4")], check=True, capture_output=True, timeout=15)
+        for name, size in (("narrow.mp4", "32x1920"), ("wide.mp4", "1920x32")):
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                            f"color=c=red:s={size}:r=24:d=4,drawbox=x=iw/4:y=ih/4:w=iw/2:h=ih/2:color=lime:t=fill",
+                            "-c:v", "libx264", "-threads", "2", "-pix_fmt", "yuv420p", "-y", str(cls.media / name)],
+                           check=True, capture_output=True, timeout=15)
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                        "color=c=blue:s=320x180:r=24:d=4,drawbox=x=150:y=80:w=20:h=20:color=red:t=fill,setsar=2/1",
+                        "-c:v", "libx264", "-threads", "2", "-pix_fmt", "yuv420p", "-y", str(cls.media / "anamorphic.mp4")],
+                       check=True, capture_output=True, timeout=15)
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=lime:s=320x180:r=24:d=4,setsar=1/512",
+                        "-c:v", "libx264", "-threads", "2", "-pix_fmt", "yuv420p", "-y", str(cls.media / "extreme-sar.mp4")],
+                       check=True, capture_output=True, timeout=15)
+        for source, rotated in (("wide.mp4", "rotated-wide.mp4"), ("anamorphic.mp4", "anamorphic-rotated.mp4"),
+                                ("extreme-sar.mp4", "rotated-extreme-sar.mp4")):
+            subprocess.run(["ffmpeg", "-v", "error", "-i", str(cls.media / source), "-c", "copy",
+                            "-metadata:s:v:0", "rotate=90", "-y", str(cls.media / rotated)],
+                           check=True, capture_output=True, timeout=15)
 
     @classmethod
     def tearDownClass(cls):
@@ -112,6 +129,28 @@ class ClipRendererTest(unittest.TestCase):
     def test_v2_contract_accepts_original_audio_without_inventing_subtitles(self):
         self.assertTrue(load_project(self.input, self.root).expects_audio)
 
+    def test_video_metadata_title_does_not_require_visible_layout_or_glyphs(self):
+        for index, title in enumerate(("one\ntwo\nthree", "recording 🎉")):
+            with self.subTest(title=title):
+                self.scene["title"] = title
+                result = self.run_render(str(index))
+                self.assertTrue(result["media"]["fullDecodePassed"])
+                with Image.open(self.root / str(index) / "frame-start.png") as frame:
+                    for point in ((80, 80), (640, 360)):
+                        r, g, b = frame.getpixel(point)
+                        self.assertGreater(g, r + b + 60)
+
+    def test_video_subtitles_still_require_visible_layout_and_glyphs(self):
+        self.scene["title"] = "metadata 🎉"
+        self.narration("MUTE")
+        for text, code in (("subtitle 🎉", "FONT_GLYPH_MISSING"), ("one\ntwo\nthree", "TEXT_OVERFLOW")):
+            with self.subTest(text=text):
+                self.document["subtitles"][0]["text"] = text
+                with self.assertRaises(RenderError) as error:
+                    self.run_render()
+                self.assertEqual(code, error.exception.code)
+                self.assertFalse((self.root / "output/manifest.json").exists())
+
     def test_v1_cannot_receive_video_fields(self):
         self.document["schemaVersion"] = 1
         self.assert_invalid("MIME")
@@ -170,6 +209,13 @@ class ClipRendererTest(unittest.TestCase):
         sound = self.spectrum(); self.assertGreater(sound(440), sound(1000) * 30)
         self.assertEqual("\n", (self.root / "output/subtitles.srt").read_text())
 
+    def test_fractional_original_gain_renders_with_canonical_input_hash(self):
+        self.scene["clip"]["gainDb"] = -0.0001
+        result = self.run_render()
+        self.assertTrue(result["media"]["fullDecodePassed"])
+        sound = self.spectrum()
+        self.assertGreater(sound(440), sound(1000) * 30)
+
     def test_mute_original_and_replace_with_narration(self):
         self.narration("MUTE"); self.run_render()
         sound = self.spectrum(); self.assertGreater(sound(1000), sound(440) * 30)
@@ -197,6 +243,55 @@ class ClipRendererTest(unittest.TestCase):
                     self.assertLess(r + g + b, 12)
                 else:
                     self.assertGreater(g, r + b + 60)
+
+    def test_cover_crops_extreme_ratios_before_scaling_actual_frames(self):
+        self.scene["clip"].update(fit="COVER", audioMode="MUTE")
+        for name, portrait in (("narrow.mp4", True), ("wide.mp4", False), ("rotated-wide.mp4", True)):
+            with self.subTest(source=name):
+                self.replace_video(name)
+                result = self.run_render(name)
+                self.assertEqual(48, result["media"]["frameCount"])
+                with Image.open(self.root / name / "frame-start.png") as frame:
+                    r, g, b = frame.getpixel((640, 360))
+                    self.assertGreater(g, r + b + 100)
+                    green_edge, red_edge = ((640, 10), (10, 360)) if portrait else ((10, 360), (640, 10))
+                    r, g, b = frame.getpixel(green_edge)
+                    self.assertGreater(g, r + b + 100)
+                    r, g, b = frame.getpixel(red_edge)
+                    self.assertGreater(r, g + b + 100)
+
+    def test_fit_keeps_sample_aspect_ratio_and_rotation_in_actual_geometry(self):
+        self.scene["clip"]["audioMode"] = "MUTE"
+        for fit, name, expected_ratio in ((fit, name, ratio) for fit in ("CONTAIN", "COVER")
+                                          for name, ratio in (("anamorphic.mp4", 2), ("anamorphic-rotated.mp4", .5))):
+            with self.subTest(fit=fit, source=name):
+                self.scene["clip"]["fit"] = fit
+                self.replace_video(name)
+                directory = f"{fit}-{name}"
+                self.run_render(directory)
+                with Image.open(self.root / directory / "frame-start.png") as frame:
+                    pixels = np.asarray(frame)
+                    ys, xs = np.where((pixels[:, :, 0] > 150) & (pixels[:, :, 1] < 80) & (pixels[:, :, 2] < 80))
+                    self.assertGreater(len(xs), 100)
+                    actual_ratio = (int(xs.max()) - int(xs.min()) + 1) / (int(ys.max()) - int(ys.min()) + 1)
+                    self.assertAlmostEqual(expected_ratio, actual_ratio, delta=.1)
+
+    def test_fit_extreme_rotated_sar_without_large_intermediate_frames(self):
+        self.replace_video("rotated-extreme-sar.mp4")
+        self.scene["clip"]["audioMode"] = "MUTE"
+        for fit in ("CONTAIN", "COVER"):
+            with self.subTest(fit=fit):
+                self.scene["clip"]["fit"] = fit
+                result = self.run_render(fit)
+                self.assertEqual(48, result["media"]["frameCount"])
+                with Image.open(self.root / fit / "frame-start.png") as frame:
+                    r, g, b = frame.getpixel((640, 360))
+                    self.assertGreater(g, r + b + 100)
+                    if fit == "CONTAIN":
+                        self.assertLess(sum(frame.getpixel((10, 10))), 12)
+                    else:
+                        r, g, b = frame.getpixel((10, 10))
+                        self.assertGreater(g, r + b + 100)
 
     def test_audio_delay_is_preserved_relative_to_video(self):
         self.replace_video("delayed.mp4"); self.scene["clip"].update(sourceStartMs=0, sourceEndMs=2000)

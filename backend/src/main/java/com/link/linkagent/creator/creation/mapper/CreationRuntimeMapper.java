@@ -109,6 +109,43 @@ public interface CreationRuntimeMapper {
     int unknown(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("key") String key);
     @Update("UPDATE creator_creation_cost_entry SET status=IF(sent_at IS NULL,'RELEASED','UNKNOWN'), evidence_ref=IF(sent_at IS NULL,'NOT_SENT','LEASE_OR_RUN_ENDED') WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND run_id=#{runId} AND status='RESERVED'")
     int closeReservations(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("runId") String runId);
+
+    // 失败或取消的半成品蓝图不能遮住原人工蓝图，步骤证据和已登记成片仍作为历史事实保留。
+    @Update("""
+            UPDATE creator_production_plan p
+            JOIN creator_creation_auto_step e ON e.production_plan_id=p.plan_id AND e.task_id=p.task_id
+                AND e.owner_id=p.owner_id AND e.step_code='APPROVED'
+            JOIN creator_creation_run r ON r.run_id=e.run_id AND r.task_id=e.task_id AND r.owner_id=e.owner_id
+            SET p.status='STALE',p.update_time=CURRENT_TIMESTAMP
+            WHERE r.task_id=#{taskId} AND r.owner_id=#{ownerId} AND r.run_id=#{runId}
+                AND r.kind='FULL' AND r.status IN ('FAILED','CANCELLED') AND p.status='READY' AND p.is_deleted=0
+                AND EXISTS (SELECT 1 FROM creator_production_step s WHERE s.plan_id=p.plan_id
+                    AND s.task_id=p.task_id AND s.is_deleted=0 AND s.status NOT IN ('COMPLETED','SKIPPED'))
+                AND NOT EXISTS (SELECT 1 FROM creator_creation_render_attempt a WHERE a.run_id=r.run_id
+                    AND a.task_id=r.task_id AND a.owner_id=r.owner_id AND a.status='REGISTERED')
+            """)
+    int retireUnfinishedAutomaticPlan(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("runId") String runId);
+
+    // 终态由当前权威执行者提交；只清理本运行精确成片上的自动探测，不触碰人工探测。
+    @Update("""
+            UPDATE creator_draft_video d
+            JOIN creator_creation_render_attempt a ON a.version_id=d.version_id AND a.task_id=d.task_id
+                AND a.owner_id=d.owner_id AND a.status='REGISTERED'
+            JOIN creator_creation_run r ON r.run_id=a.run_id AND r.task_id=a.task_id AND r.owner_id=a.owner_id
+            SET d.status='PROBE_FAILED',d.probe_attempt_id=NULL,d.update_time=CURRENT_TIMESTAMP
+            WHERE r.task_id=#{taskId} AND r.owner_id=#{ownerId} AND r.run_id=#{runId}
+                AND r.kind='FULL' AND r.status IN ('FAILED','CANCELLED')
+                AND d.status='PROBING' AND d.probe_attempt_id LIKE 'creation-%'
+                AND d.media_deleted_at IS NULL AND d.is_deleted=0
+            """)
+    int closeGeneratedProbe(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("runId") String runId);
+
+    @Update("""
+            UPDATE creator_creation_run SET stage=#{stage},run_revision=run_revision+1
+            WHERE task_id=#{lease.taskId} AND owner_id=#{lease.ownerId} AND run_id=#{lease.runId} AND status='RUNNING'
+                AND lease_owner=#{lease.worker} AND lease_generation=#{lease.generation} AND lease_expires_at>CURRENT_TIMESTAMP(6)
+            """)
+    int sourceProbeStage(@Param("lease") com.link.linkagent.creator.creation.model.GeneratedDraftLease lease, @Param("stage") String stage);
     @Select("SELECT COUNT(*) FROM creator_creation_cost_entry WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND run_id=#{runId} AND status='RESERVED'")
     int pendingReservations(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("runId") String runId);
 

@@ -43,8 +43,34 @@ final class CreationInputRules {
     static String renderInputHash(ObjectMapper mapper, ObjectNode document) {
         try {
             ObjectNode content = document.deepCopy(); content.remove("inputHash");
-            return hash(renderDocument(mapper, mapper.writeValueAsString(content)));
+            return renderFingerprint(mapper, mapper.readTree(renderDocument(mapper, mapper.writeValueAsString(sorted(mapper, content, 0)))));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) { throw conflict("工程内容无效"); }
+    }
+
+    private static String renderFingerprint(ObjectMapper mapper, JsonNode node) throws com.fasterxml.jackson.core.JsonProcessingException {
+        // JSON 仍保存数字；仅摘要统一使用浮点位模式，避免两种语言的科学记数格式不同。
+        return hash(renderTokens(mapper, node, 0));
+    }
+
+    private static String renderTokens(ObjectMapper mapper, JsonNode node, int depth) throws com.fasterxml.jackson.core.JsonProcessingException {
+        if (depth > 20) throw conflict("输入层级过深");
+        if (node.isObject()) {
+            var names = new TreeSet<String>(); node.fieldNames().forEachRemaining(names::add);
+            var entries = new java.util.ArrayList<String>();
+            for (String name : names) entries.add(mapper.writeValueAsString(name) + ":" + renderTokens(mapper, node.get(name), depth + 1));
+            return "{" + String.join(",", entries) + "}";
+        }
+        if (node.isArray()) {
+            var entries = new java.util.ArrayList<String>();
+            for (JsonNode item : node) entries.add(renderTokens(mapper, item, depth + 1));
+            return "[" + String.join(",", entries) + "]";
+        }
+        if (node.isFloatingPointNumber()) {
+            double value = node.doubleValue();
+            if (!Double.isFinite(value)) throw conflict("工程数值必须有限");
+            return "f64:" + HexFormat.of().toHexDigits(Double.doubleToRawLongBits(value));
+        }
+        return mapper.writeValueAsString(node);
     }
     private static String canonical(ObjectMapper mapper, String value, int maxBytes) {
         try {
@@ -59,6 +85,7 @@ final class CreationInputRules {
     }
     private static JsonNode sorted(ObjectMapper mapper, JsonNode node, int depth) {
         if (depth > 20) throw conflict("输入层级过深");
+        if (node.isFloatingPointNumber() && !Double.isFinite(node.doubleValue())) throw conflict("输入数值必须有限");
         if (node.isObject()) {
             ObjectNode result = mapper.createObjectNode();
             var names = new TreeSet<String>(); node.fieldNames().forEachRemaining(names::add);
@@ -98,7 +125,7 @@ final class CreationInputRules {
             // 渲染工程沿用 S2 的 256KiB 上限，不能被运行控制请求的 64KiB 上限意外截断。
             ObjectNode content = (ObjectNode) mapper.readTree(canonical(mapper, document, 256 * 1024));
             content.remove(java.util.List.of("runId", "attemptId", "inputHash"));
-            return hash(canonical(mapper, mapper.writeValueAsString(content), 256 * 1024));
+            return renderFingerprint(mapper, content);
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) { throw conflict("工程内容无效"); }
     }
     static ResponseStatusException conflict(String reason) { return new ResponseStatusException(HttpStatus.CONFLICT, reason); }

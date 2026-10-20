@@ -103,11 +103,14 @@ class ClipFrames:
         self.project, self.control = project, control
         clip = scene["clip"]; begin, finish = interval(clip, facts)
         width, height = project.width, project.height
-        fit = (f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+        # 直接按实际像素比例求源裁切或目标尺寸，避免窄长画面和旋转后的 SAR 放大中间帧。
+        fit = (f"scale=w='max(1,min({width},{height}*iw*sar/ih))':h='max(1,min({height},{width}*ih/(iw*sar)))',"
+               f"setsar=1,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
                if clip["fit"] == "CONTAIN" else
-               f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}")
+               f"crop=w='max(1,min(iw,ih*{width}/{height}/sar))':h='max(1,min(ih,iw*{height}/{width}*sar))':"
+               f"exact=1,scale={width}:{height},setsar=1")
         filters = (f"trim=start={begin}:end={finish},setpts=PTS-({begin})/TB,"
-                   f"fps={project.fps}:start_time=0:round=near,scale=trunc(iw*sar/2)*2:ih,setsar=1,{fit},setsar=1")
+                   f"fps={project.fps}:start_time=0:round=near,{fit}")
         command = local_input(ffmpeg, project.assets[clip["assetId"]]) + [
             "-map", "0:v:0", "-an", "-vf", filters, "-frames:v", str(scene["endFrame"] - scene["startFrame"]),
             "-threads", "2", "-pix_fmt", "rgb24", "-fps_mode", "passthrough", "-f", "rawvideo", "pipe:1"]

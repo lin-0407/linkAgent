@@ -28,6 +28,7 @@ public class FixedProjectJobPersistenceService {
         media.lockMediaTask(job.taskId(), job.ownerId()).orElseThrow(() -> conflict("创作任务不存在"));
         media.lockTaskDraftVersions(job.taskId(), job.ownerId());
         String document = renderDocument(json, job.projectJson());
+        validateAutomaticDuration(job, document);
         var existing = jobs.find(job.taskId(), job.ownerId(), job.runId());
         if (existing.isPresent()) {
             var previous = existing.get();
@@ -58,5 +59,22 @@ public class FixedProjectJobPersistenceService {
         var frozen = new FixedProjectJob(job.runId(), job.taskId(), job.ownerId(), job.sourceAttemptId(), document);
         if (jobs.insert(frozen) != 1) throw conflict("无法冻结制作工程");
         return frozen;
+    }
+
+    private void validateAutomaticDuration(FixedProjectJob job, String document) {
+        var target = jobs.automaticTargetDuration(job.taskId(), job.ownerId(), job.runId());
+        if (target.isEmpty()) return;
+        try {
+            var video = json.readTree(document).path("video");
+            var fps = video.path("fps"); var frames = video.path("frameCount");
+            if (!fps.isIntegralNumber() || !fps.canConvertToInt() || !java.util.Set.of(24, 25, 30).contains(fps.intValue())
+                    || !frames.isIntegralNumber() || !frames.canConvertToInt()
+                    || frames.intValue() < fps.intValue() || frames.intValue() > fps.intValue() * 180
+                    || target.get() < 1000 || target.get() > 180000)
+                throw conflict("自动制作工程时长参数无效");
+            // 只容纳一帧量化误差，不能用另一段实际长度悄悄替代用户确认的目标。
+            if (Math.abs(frames.longValue() * 1000 - target.get() * fps.longValue()) > 1000)
+                throw conflict("工程实际时长与已确认目标不一致，请调整工程后重新确认");
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) { throw conflict("工程内容无效"); }
     }
 }
