@@ -286,6 +286,9 @@ public interface ProductionPlanMapper {
             """)
     List<ProductionStepRecord> listSteps(@Param("taskId") String taskId, @Param("planId") String planId);
 
+    @Select("SELECT COUNT(*) FROM creator_creation_auto_step WHERE task_id=#{taskId} AND production_plan_id=#{planId} AND step_id=#{stepId}")
+    int countAutomaticStep(@Param("taskId") String taskId, @Param("planId") String planId, @Param("stepId") String stepId);
+
     @Update("""
             UPDATE creator_production_step
             SET status = #{status},

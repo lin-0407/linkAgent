@@ -96,6 +96,9 @@ public class ProductionPlanPersistenceService {
                            String status,
                            String skipReason,
                            long rowVersion) {
+        if (mapper.countAutomaticStep(taskId, planId, stepId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "系统制作步骤由真实产物更新，不能手工勾选或跳过");
+        }
         if (mapper.updateStepStatus(taskId, planId, stepId, status, skipReason, rowVersion) != 1) {
             throw new IllegalStateException("制作步骤已被其他页面更新，请刷新后重试");
         }

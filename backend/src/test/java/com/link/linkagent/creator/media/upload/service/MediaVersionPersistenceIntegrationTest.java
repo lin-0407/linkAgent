@@ -15,6 +15,8 @@ import com.link.linkagent.creator.creation.mapper.CreationWorkspaceMapper;
 import com.link.linkagent.creator.creation.mapper.CreationRuntimeMapper;
 import com.link.linkagent.creator.creation.mapper.GeneratedDraftMapper;
 import com.link.linkagent.creator.creation.mapper.FixedProjectJobMapper;
+import com.link.linkagent.creator.creation.mapper.AutomaticProductionMapper;
+import com.link.linkagent.creator.creation.service.AutomaticProductionPlanService;
 import com.link.linkagent.creator.creation.service.FixedProjectJobPersistenceService;
 import com.link.linkagent.creator.creation.service.FixedProjectJobFiles;
 import com.link.linkagent.creator.creation.service.FixedProjectWorker;
@@ -121,6 +123,8 @@ class MediaVersionPersistenceIntegrationTest {
     static GeneratedDraftMapper generatedMapper;
     static FixedProjectJobMapper fixedJobMapper;
     static FixedProjectJobPersistenceService fixedJobs;
+    static AutomaticProductionMapper automaticMapper;
+    static AutomaticProductionPlanService automaticPlans;
     final List<FixedProjectJob> fixedJobsToClean = new ArrayList<>();
 
     @BeforeAll
@@ -142,6 +146,7 @@ class MediaVersionPersistenceIntegrationTest {
         configuration.addMapper(CreationRuntimeMapper.class);
         configuration.addMapper(GeneratedDraftMapper.class);
         configuration.addMapper(FixedProjectJobMapper.class);
+        configuration.addMapper(AutomaticProductionMapper.class);
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setConfiguration(configuration);
@@ -171,10 +176,15 @@ class MediaVersionPersistenceIntegrationTest {
         runtimeProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         runtime = (CreationRuntimeService) runtimeProxy.getProxy();
         generatedMapper = session.getMapper(GeneratedDraftMapper.class);
-        var generatedProxy = new ProxyFactory(new GeneratedDraftPersistenceService(mapper, runtimeMapper, generatedMapper, new ObjectMapper()));
+        fixedJobMapper = session.getMapper(FixedProjectJobMapper.class);
+        automaticMapper = session.getMapper(AutomaticProductionMapper.class);
+        var automaticProxy = new ProxyFactory(new AutomaticProductionPlanService(mapper, session.getMapper(ProductionPlanMapper.class),
+                runtimeMapper, runtime, automaticMapper, generatedMapper, fixedJobMapper, new ObjectMapper()));
+        automaticProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+        automaticPlans = (AutomaticProductionPlanService) automaticProxy.getProxy();
+        var generatedProxy = new ProxyFactory(new GeneratedDraftPersistenceService(mapper, runtimeMapper, generatedMapper, new ObjectMapper(), runtime, automaticPlans));
         generatedProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         generated = (GeneratedDraftPersistenceService) generatedProxy.getProxy();
-        fixedJobMapper = session.getMapper(FixedProjectJobMapper.class);
         var fixedProxy = new ProxyFactory(new FixedProjectJobPersistenceService(mapper, runtimeMapper, fixedJobMapper, new ObjectMapper()));
         fixedProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         fixedJobs = (FixedProjectJobPersistenceService) fixedProxy.getProxy();
@@ -1430,6 +1440,156 @@ class MediaVersionPersistenceIntegrationTest {
     }
 
     @Test
+    void automaticPlanAdmissionIsIdempotentAndPreservesExistingVideoAndReview() throws Exception {
+        String task = task(); var old = readyVideo(task, "before-auto"); confirmedPlan(task);
+        runtime.initialize(task, "default", "auto-budget", revision(task), cny("20")); long before = revision(task);
+        var request = automaticRequest(task, "c".repeat(64), 2000);
+        var run = automaticPlans.start(task, "default", "auto-idempotent", before, request, cny("0"));
+        fixedJobsToClean.add(new FixedProjectJob(run.runId(), task, "default", "source", "{}"));
+        assertThat(automaticPlans.start(task, "default", "auto-idempotent", before, request, cny("0")).runId()).isEqualTo(run.runId());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_production_plan WHERE task_id=?", Integer.class, task)).isEqualTo(2);
+        var rows = automaticMapper.steps(task, "default", run.runId());
+        assertThat(rows).hasSize(6); assertThat(rows).filteredOn(step -> "COMPLETED".equals(step.stepStatus())).hasSize(1);
+        assertThat(rows.getFirst().stepCode()).isEqualTo("APPROVED");
+        assertThat(mapper.findDraftVideo(task, "default").orElseThrow().versionId()).isEqualTo(old.versionId());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_preflight_review WHERE version_id=? AND status='COMPLETED'", Integer.class, old.versionId())).isEqualTo(1);
+        var changed = new AutomaticProductionRequest(request.publishingSessionId(), request.publishingResultId(), request.baseVersionId(), "board", request.renderContentHash(), 3000);
+        assertThatThrownBy(() -> automaticPlans.start(task, "default", "auto-idempotent", before, changed, cny("0"))).hasMessageContaining("内容不同");
+    }
+
+    @Test
+    void automaticPlanDoesNotInventMissingPublishingConfirmation() {
+        String task = task();
+        assertThatThrownBy(() -> automaticPlans.start(task, "default", "missing-confirmation", -1,
+                new AutomaticProductionRequest("absent-session", "absent-result", null, "board", "c".repeat(64), 2000), cny("0")))
+                .hasMessageContaining("真实发布方案确认");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_production_plan WHERE task_id=?", Integer.class, task)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_creation_run WHERE task_id=?", Integer.class, task)).isZero();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"SKIPPED", "NEW_SUGGESTION", "NEW_SESSION"})
+    void automaticPlanRejectsSkippedOrSupersededPublishingContext(String change) {
+        String task = task(); confirmedPlan(task); runtime.initialize(task, "default", "auto-budget", revision(task), cny("20"));
+        var request = automaticRequest(task, "c".repeat(64), 2000);
+        if ("SKIPPED".equals(change)) jdbc.update("UPDATE creator_task SET planning_skipped=1 WHERE task_id=?", task);
+        else {
+            String session = request.publishingSessionId(), suggestion = UUID.randomUUID().toString();
+            if ("NEW_SESSION".equals(change)) {
+                session = UUID.randomUUID().toString();
+                jdbc.update("INSERT INTO creator_workflow_session (session_id,task_id,stage,status,confirmed_result_id) VALUES (?,?,'PRE_PUBLISH','CONFIRMED',?)", session, task, suggestion);
+            }
+            // 同会话重新生成沿用业务 upsert，替换方案标识后旧确认必须失效。
+            jdbc.update("INSERT INTO creator_suggestion (suggestion_id,task_id,session_id,content_summary,raw_output) VALUES (?,?,?,'新方案','{}') ON DUPLICATE KEY UPDATE suggestion_id=VALUES(suggestion_id),content_summary=VALUES(content_summary)", suggestion, task, session);
+        }
+        assertThatThrownBy(() -> automaticPlans.start(task, "default", "stale-auto", revision(task), request, cny("0"))).hasMessageContaining("真实发布方案确认");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_creation_auto_step WHERE task_id=?", Integer.class, task)).isZero();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void automaticPlanAndStepsRollBackWhenRunAdmissionFails(boolean overBudget) {
+        String task = task(); confirmedPlan(task); runtime.initialize(task, "default", "auto-budget", revision(task), cny("20"));
+        var request = automaticRequest(task, "c".repeat(64), 2000);
+        assertThatThrownBy(() -> automaticPlans.start(task, "default", "atomic-auto", revision(task) + (overBudget ? 0 : 1), request,
+                cny(overBudget ? "21" : "0"))).isInstanceOf(ResponseStatusException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_production_plan WHERE task_id=?", Integer.class, task)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_production_step WHERE task_id=?", Integer.class, task)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_creation_run WHERE task_id=?", Integer.class, task)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM creator_creation_approval WHERE task_id=?", Integer.class, task)).isZero();
+        assertThat(runtime.snapshot(task, "default").activeRun()).isNull();
+    }
+
+    @Test
+    void automaticStepsCannotBeManuallyCompletedOrSkipped() throws Exception {
+        var job = queuedAutomaticJob(task(), fixedDocument());
+        var row = automaticMapper.steps(job.taskId(), "default", job.runId()).getLast();
+        for (String state : List.of("COMPLETED", "SKIPPED")) {
+            assertThatThrownBy(() -> production.updateStep(job.taskId(), row.productionPlanId(), row.stepId(), state, "手工操作夹具", 0))
+                    .hasMessageContaining("不能手工勾选或跳过");
+        }
+        assertThat(automaticMapper.steps(job.taskId(), "default", job.runId()).getLast().stepStatus()).isEqualTo("PENDING");
+        String manualTask = task(), manualPlan = confirmedPlan(manualTask), manualStep = UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO creator_production_step (step_id,plan_id,task_id,sequence_no,phase,step_name,objective) VALUES (?,?,?,1,'SCRIPT','人工步骤','人工完成')", manualStep, manualPlan, manualTask);
+        production.updateStep(manualTask, manualPlan, manualStep, "COMPLETED", null, 0);
+        assertThat(jdbc.queryForObject("SELECT status FROM creator_production_step WHERE step_id=?", String.class, manualStep)).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void automaticVersionRegistrationRequiresLocalAndStorageEvidence() throws Exception {
+        var job = queuedAutomaticJob(task(), fixedDocument()); fixedJobs.attach(job); var lease = automaticLease(job);
+        prepareAutomatic(lease, job.projectJson());
+        assertThatThrownBy(() -> generated.confirmStored(lease, "source")).hasMessageContaining("本地制作证据");
+        generated.recordValidatedRender(lease, "source", job.projectJson());
+        var local = automaticMapper.steps(job.taskId(), "default", job.runId());
+        assertThat(local).filteredOn(step -> "COMPLETED".equals(step.stepStatus())).hasSize(5);
+        long revisions = jdbc.queryForObject("SELECT SUM(row_version) FROM creator_production_step WHERE task_id=? AND plan_id=?", Long.class, job.taskId(), local.getFirst().productionPlanId());
+        generated.recordValidatedRender(lease, "source", job.projectJson());
+        assertThat(jdbc.queryForObject("SELECT SUM(row_version) FROM creator_production_step WHERE task_id=? AND plan_id=?", Long.class, job.taskId(), local.getFirst().productionPlanId())).isEqualTo(revisions);
+        assertThatThrownBy(() -> generated.register(lease, "source")).hasMessageContaining("存储完成证据");
+        generated.confirmStored(lease, "source");
+        var draft = generated.register(lease, "source"); assertThat(draft.status()).isEqualTo("UPLOADED");
+        assertThat(automaticMapper.steps(job.taskId(), "default", job.runId())).allMatch(step -> "COMPLETED".equals(step.stepStatus()));
+        assertThatThrownBy(() -> runtime.complete(job.taskId(), "default", job.runId(), lease.worker(), lease.generation(), "{\"done\":true}"))
+                .hasMessageContaining("完整试映");
+    }
+
+    @Test
+    void changedProjectCannotCompleteAutomaticSteps() throws Exception {
+        var job = queuedAutomaticJob(task(), fixedDocument()); fixedJobs.attach(job); var lease = automaticLease(job); prepareAutomatic(lease, job.projectJson());
+        var changed = (com.fasterxml.jackson.databind.node.ObjectNode) new ObjectMapper().readTree(job.projectJson()); changed.put("seed", 8);
+        assertThatThrownBy(() -> generated.recordValidatedRender(lease, "source", changed.toString())).hasMessageContaining("已验收工程不一致");
+        assertThat(automaticMapper.steps(job.taskId(), "default", job.runId())).filteredOn(step -> "COMPLETED".equals(step.stepStatus())).hasSize(1);
+    }
+
+    @Test
+    void cancelledAutomaticAttemptCannotCompleteSavedStep() throws Exception {
+        var job = queuedAutomaticJob(task(), fixedDocument()); fixedJobs.attach(job); var lease = automaticLease(job);
+        prepareAutomatic(lease, job.projectJson()); generated.recordValidatedRender(lease, "source", job.projectJson());
+        runtime.cancel(job.taskId(), "default", job.runId());
+        assertThatThrownBy(() -> generated.confirmStored(lease, "source")).hasMessageContaining("租约失效");
+        assertThat(automaticMapper.steps(job.taskId(), "default", job.runId()).getLast().stepStatus()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void takeoverMustProduceItsOwnEvidenceAndCannotUseOldLease() throws Exception {
+        var job = queuedAutomaticJob(task(), fixedDocument()); fixedJobs.attach(job); var oldLease = automaticLease(job);
+        prepareAutomatic(oldLease, job.projectJson()); generated.recordValidatedRender(oldLease, "source", job.projectJson());
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=DATE_SUB(CURRENT_TIMESTAMP(6),INTERVAL 1 SECOND) WHERE run_id=?", job.runId());
+        var claimed = runtime.claim(job.taskId(), "default", job.runId(), "auto-replacement", 30).orElseThrow();
+        var lease = new GeneratedDraftLease(job.taskId(), "default", job.runId(), "auto-replacement", claimed.leaseGeneration());
+        assertThatThrownBy(() -> generated.confirmStored(oldLease, "source")).hasMessageContaining("租约失效");
+        var json = new ObjectMapper(); var next = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(job.projectJson());
+        next.put("attemptId", "next"); next.remove("inputHash");
+        next.put("inputHash", nativeSha(json.copy().enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsBytes(json.convertValue(next, Map.class))));
+        prepareAutomatic(lease, next.toString());
+        assertThatThrownBy(() -> generated.confirmStored(lease, "next")).hasMessageContaining("本地制作证据");
+        generated.recordValidatedRender(lease, "next", next.toString()); generated.confirmStored(lease, "next");
+        var draft = generated.register(lease, "next");
+        assertThat(generatedMapper.registered(job.taskId(), "default", job.runId()).orElseThrow().versionId()).isEqualTo(draft.versionId());
+        assertThat(automaticMapper.steps(job.taskId(), "default", job.runId())).filteredOn(step -> !"APPROVED".equals(step.stepCode()))
+                .allMatch(step -> "next".equals(step.attemptId()) && step.leaseGeneration() == 2);
+    }
+
+    private AutomaticProductionRequest automaticRequest(String task, String hash, long duration) {
+        var confirmed = jdbc.queryForMap("SELECT session_id,confirmed_result_id FROM creator_workflow_session WHERE task_id=? ORDER BY id DESC LIMIT 1", task);
+        return new AutomaticProductionRequest(confirmed.get("session_id").toString(), confirmed.get("confirmed_result_id").toString(),
+                mapper.findDraftVideo(task, "default").map(DraftVideoRecord::versionId).orElse(null), "board", hash, duration);
+    }
+
+    private GeneratedDraftLease automaticLease(FixedProjectJob job) {
+        var claimed = runtime.claim(job.taskId(), "default", job.runId(), "auto-test", 30).orElseThrow();
+        return new GeneratedDraftLease(job.taskId(), "default", job.runId(), "auto-test", claimed.leaseGeneration());
+    }
+
+    private GeneratedDraftAttempt prepareAutomatic(GeneratedDraftLease lease, String document) throws Exception {
+        var json = new ObjectMapper(); var project = json.readTree(document);
+        var input = json.readTree(runtimeMapper.run(lease.taskId(), lease.ownerId(), lease.runId()).orElseThrow().requestJson());
+        return generated.prepare(lease, project.path("attemptId").asText(), project.path("inputHash").asText(), input.path("renderContentHash").asText(),
+                project.path("storyboardId").asText(), "fixture-bucket", generatedFiles());
+    }
+
+    @Test
     void fixedProjectAttachmentIsDurableIdempotentAndRejectsDifferentContent() throws Exception {
         var job = queuedFixedJob(task(), fixedDocument());
         var saved = fixedJobs.attach(job);
@@ -1566,6 +1726,22 @@ class MediaVersionPersistenceIntegrationTest {
         var job = new FixedProjectJob(run.runId(), task, "default", "source", document.toString()); fixedJobsToClean.add(job); return job;
     }
 
+    private FixedProjectJob queuedAutomaticJob(String task, com.fasterxml.jackson.databind.node.ObjectNode document) throws Exception {
+        var json = new ObjectMapper(); var sorted = json.copy().enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+        var content = document.deepCopy(); content.remove(List.of("runId", "attemptId", "inputHash"));
+        String contentHash = nativeSha(sorted.writeValueAsBytes(json.convertValue(content, Map.class)));
+        confirmedPlan(task);
+        var confirmed = jdbc.queryForMap("SELECT session_id,confirmed_result_id FROM creator_workflow_session WHERE task_id=? ORDER BY id DESC LIMIT 1", task);
+        runtime.initialize(task, "default", "auto-budget", revision(task), cny("20"));
+        long duration = Math.round(document.path("video").path("frameCount").asDouble() * 1000 / document.path("video").path("fps").asInt());
+        var request = new AutomaticProductionRequest(confirmed.get("session_id").toString(), confirmed.get("confirmed_result_id").toString(),
+                mapper.findDraftVideo(task, "default").map(DraftVideoRecord::versionId).orElse(null), document.path("storyboardId").asText(), contentHash, duration);
+        var run = automaticPlans.start(task, "default", "automatic-fixed", revision(task), request, cny("0"));
+        document.put("runId", run.runId()).put("attemptId", "source"); document.remove("inputHash");
+        document.put("inputHash", nativeSha(sorted.writeValueAsBytes(json.convertValue(document, Map.class))));
+        var job = new FixedProjectJob(run.runId(), task, "default", "source", document.toString()); fixedJobsToClean.add(job); return job;
+    }
+
     private FixedProjectWorker fixedWorker(FixedProjectJobFiles files,
             com.link.linkagent.creator.creation.render.FixedProjectRenderService renderer,
             com.link.linkagent.creator.creation.service.GeneratedDraftService drafts) {
@@ -1612,7 +1788,7 @@ class MediaVersionPersistenceIntegrationTest {
         var json = new ObjectMapper();
         java.nio.file.Path source = java.nio.file.Path.of(System.getenv("LINKAGENT_RENDERER_SAMPLE_ROOT"));
         var document = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(source.resolve("input.json").toFile());
-        String task = task(); var job = queuedFixedJob(task, document);
+        String task = task(); var job = queuedAutomaticJob(task, document);
         String attemptId = job.sourceAttemptId();
         java.nio.file.Path attempt = java.nio.file.Files.createDirectories(root.resolve(job.runId()).resolve(attemptId));
         for (var asset : document.path("assets")) {
@@ -1652,6 +1828,10 @@ class MediaVersionPersistenceIntegrationTest {
                 var registered = generatedMapper.registered(task, "default", job.runId()).orElseThrow();
                 var draft = mapper.findDraftVideoByVersion(task, "default", registered.versionId()).orElseThrow();
                 assertThat(draft.status()).isEqualTo("UPLOADED");
+                var automaticSteps = automaticMapper.steps(task, "default", job.runId());
+                assertThat(automaticSteps).hasSize(6).allMatch(step -> "COMPLETED".equals(step.stepStatus()) && step.evidenceJson() != null);
+                assertThat(automaticSteps).filteredOn(step -> !"APPROVED".equals(step.stepCode()))
+                        .allMatch(step -> step.leaseGeneration() == 1 && registered.attemptId().equals(step.attemptId()));
                 assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).hasSize(8);
                 var waiting = runtimeMapper.run(task, "default", job.runId()).orElseThrow();
                 assertThat(waiting.leaseGeneration()).isEqualTo(1); assertThat(waiting.completedAt()).isNull();
@@ -1681,7 +1861,7 @@ class MediaVersionPersistenceIntegrationTest {
                 new MediaDeletionService(mapper, processing, reviews, storage).deleteMedia("default", task, draft.versionId());
                 assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).isEmpty();
                 assertThat(mapper.findVersionContext(task, "default", draft.versionId())).isPresent();
-                System.out.println("S3C_NATIVE_WORKER_RESTART_PROBE_DELETE_OK durationMs=" + observedDuration + " files=8 generation=2");
+                System.out.println("S3D_NATIVE_AUTO_BLUEPRINT_STORAGE_RECOVERY_OK durationMs=" + observedDuration + " files=8 autoSteps=6 generation=2");
             }
         }
     }
@@ -1691,7 +1871,7 @@ class MediaVersionPersistenceIntegrationTest {
     void scheduledWorkerCancellationStopsActualMediaProcesses(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
         var json = new ObjectMapper(); var source = java.nio.file.Path.of(System.getenv("LINKAGENT_RENDERER_SAMPLE_ROOT"));
         var document = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(source.resolve("input.json").toFile());
-        var job = queuedFixedJob(task(), document);
+        var job = queuedAutomaticJob(task(), document);
         var prepared = java.nio.file.Files.createDirectories(root.resolve(job.runId()).resolve(job.sourceAttemptId()));
         for (var asset : document.path("assets")) {
             String name = asset.path("path").asText(); var destination = prepared.resolve(name).normalize();
@@ -1721,8 +1901,9 @@ class MediaVersionPersistenceIntegrationTest {
             assertThat(observed).noneMatch(ProcessHandle::isAlive);
             assertThat(generatedMapper.registered(job.taskId(), "default", job.runId())).isEmpty();
             assertThat(mapper.findDraftVideo(job.taskId(), "default")).isEmpty();
+            assertThat(automaticMapper.steps(job.taskId(), "default", job.runId())).filteredOn(step -> "COMPLETED".equals(step.stepStatus())).hasSize(1);
             verifyNoInteractions(storage);
-            System.out.println("S3C_NATIVE_SCHEDULED_CANCEL_OK stoppedMediaProcesses=" + observed.size());
+            System.out.println("S3D_NATIVE_CANCEL_WITHOUT_FAKE_STEPS_OK stoppedMediaProcesses=" + observed.size());
         }
     }
 

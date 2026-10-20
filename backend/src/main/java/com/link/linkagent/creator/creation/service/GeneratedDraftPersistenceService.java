@@ -20,12 +20,15 @@ public class GeneratedDraftPersistenceService {
     private final CreationRuntimeMapper runtime;
     private final GeneratedDraftMapper mapper;
     private final ObjectMapper json;
+    private final CreationRuntimeService execution;
+    private final AutomaticProductionPlanService automatic;
     private static final Set<String> FILES = Set.of("video.mp4", "subtitles.srt", "cover.png", "frame-start.png",
             "frame-middle.png", "frame-end.png", "render.log", "manifest.json");
 
     public GeneratedDraftPersistenceService(MediaUploadMapper media, CreationRuntimeMapper runtime,
-            GeneratedDraftMapper mapper, ObjectMapper json) {
+            GeneratedDraftMapper mapper, ObjectMapper json, CreationRuntimeService execution, AutomaticProductionPlanService automatic) {
         this.media = media; this.runtime = runtime; this.mapper = mapper; this.json = json;
+        this.execution = execution; this.automatic = automatic;
     }
 
     public GeneratedDraftAttempt prepare(GeneratedDraftLease lease, String attemptId, String inputHash,
@@ -67,6 +70,7 @@ public class GeneratedDraftPersistenceService {
         if ("REGISTERED".equals(attempt.status()))
             return media.findDraftVideoByVersion(lease.taskId(), lease.ownerId(), attempt.versionId()).orElseThrow();
         requireBase(lease, input);
+        automatic.requireStoredProof(lease, attemptId);
         String snapshot = media.findGeneratedProductionContext(lease.taskId(), lease.ownerId(), input.publishingSessionId(),
                 input.publishingResultId(), input.productionPlanId(), true, false)
                 .orElseThrow(() -> conflict("真实发布确认或制作蓝图尚未完成，不能登记系统成片"));
@@ -93,6 +97,15 @@ public class GeneratedDraftPersistenceService {
 
     /** 每次存储调用前检查；这里只做短事务，不把网络包在行锁中。 */
     public void checkLive(GeneratedDraftLease lease) { requireLive(lease); }
+
+    /** 调用方已完成本地文件与清单验收，才允许采纳自动步骤证据。 */
+    public void recordValidatedRender(GeneratedDraftLease lease, String attemptId, String projectJson) {
+        automatic.recordRendered(lease, attemptId, projectJson);
+    }
+
+    public void confirmStored(GeneratedDraftLease lease, String attemptId) {
+        automatic.recordStored(lease, attemptId);
+    }
 
     /** 开始耗时渲染前拒绝失效的制作依据，登记时仍会再次复核。 */
     public void validateBeforeRender(GeneratedDraftLease lease) {
@@ -129,20 +142,7 @@ public class GeneratedDraftPersistenceService {
     }
 
     private GeneratedDraftInput requireLive(GeneratedDraftLease lease) {
-        id(lease.runId()); id(lease.worker());
-        media.lockMediaTask(lease.taskId(), lease.ownerId()).orElseThrow(() -> conflict("创作任务不存在"));
-        media.lockTaskDraftVersions(lease.taskId(), lease.ownerId());
-        var workspace = runtime.workspace(lease.taskId(), lease.ownerId()).orElseThrow(() -> conflict("制作工作区不存在"));
-        var run = runtime.run(lease.taskId(), lease.ownerId(), lease.runId()).orElseThrow(() -> conflict("制作运行不存在"));
-        if (!lease.runId().equals(workspace.activeRunId()) || !"FULL".equals(run.kind())
-                || runtime.liveLease(lease.taskId(), lease.ownerId(), lease.runId(), lease.worker(), lease.generation(), "RUNNING") != 1)
-            throw conflict("制作已取消、执行租约失效或运行不支持系统成片");
-        var approval = runtime.approval(lease.taskId(), lease.ownerId(), run.approvalId()).orElseThrow();
-        if (!"PRODUCTION".equals(approval.approvalKind()) || !"ACTIVE".equals(approval.status())
-                || !run.inputFingerprint().equals(hash(canonical(json, run.requestJson())))
-                || !approval.inputFingerprint().equals(run.inputFingerprint())) throw conflict("整片授权已失效");
-        if (media.countPublishingFacts(lease.taskId(), lease.ownerId()) > 0) throw conflict("任务已经进入发布后流程");
-        return productionInput(json, run.requestJson());
+        return execution.requireProductionLease(lease);
     }
 
     private void requireBase(GeneratedDraftLease lease, GeneratedDraftInput input) {

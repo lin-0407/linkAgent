@@ -53,6 +53,7 @@ public class GeneratedDraftService {
         var attempt = persistence.prepare(lease, request.attemptId(), request.inputHash(),
                 renderContentHash(json, verified.projectJson()), request.storyboardId(), storageProperties.getBucket(), files);
         if ("REGISTERED".equals(attempt.status())) return persistence.register(lease, attempt.attemptId());
+        persistence.recordValidatedRender(lease, attempt.attemptId(), verified.projectJson());
         for (var object : persistence.objects(attempt)) {
             check.run();
             Path source = artifacts.files().get(object.name()).path();
@@ -79,6 +80,7 @@ public class GeneratedDraftService {
         }
         // 上传成功仅是里程碑，后续必须真实执行探测、媒体预处理和完整试映。
         check.run();
+        persistence.confirmStored(lease, attempt.attemptId());
         return persistence.register(lease, attempt.attemptId());
     }
 

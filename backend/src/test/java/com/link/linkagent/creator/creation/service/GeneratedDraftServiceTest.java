@@ -53,6 +53,7 @@ class GeneratedDraftServiceTest {
         when(storage.headObject(anyString(), anyString())).thenReturn(new StoredObjectMetadata(8, "test/type", "etag"));
         assertThatThrownBy(() -> service.registerGeneratedDraft(lease, request, () -> false)).hasMessageContaining("长度");
         verify(persistence, never()).register(any(), any());
+        verify(persistence, never()).confirmStored(any(), any());
     }
 
     @Test void rejectsSameLengthRemoteCorruption() throws Exception {
@@ -60,6 +61,7 @@ class GeneratedDraftServiceTest {
                 .when(storage).downloadObject(anyString(), anyString(), any(Path.class));
         assertThatThrownBy(() -> service.registerGeneratedDraft(lease, request, () -> false)).hasMessageContaining("内容校验");
         verify(persistence, never()).register(any(), any());
+        verify(persistence, never()).confirmStored(any(), any());
         try (var files = Files.list(root)) { assertThat(files.filter(path -> path.getFileName().toString().startsWith("object-check-")).toList()).isEmpty(); }
     }
 
@@ -69,6 +71,7 @@ class GeneratedDraftServiceTest {
         assertThatThrownBy(() -> service.registerGeneratedDraft(lease, request, cancelled::get)).hasMessageContaining("取消");
         verify(storage, times(1)).putObject(anyString(), anyString(), any(), anyString());
         verify(persistence, never()).register(any(), any());
+        verify(persistence, never()).confirmStored(any(), any());
     }
 
     @Test void storageFailureLeavesJournalWithoutRegisteringVideo() {
@@ -76,6 +79,7 @@ class GeneratedDraftServiceTest {
         assertThatThrownBy(() -> service.registerGeneratedDraft(lease, request, () -> false)).isInstanceOf(MediaStorageException.class);
         verify(persistence).prepare(any(), anyString(), anyString(), anyString(), anyString(), anyString(), anyList());
         verify(persistence, never()).register(any(), any());
+        verify(persistence, never()).confirmStored(any(), any());
         verify(storage, never()).deleteObject(anyString(), anyString());
     }
 
@@ -85,6 +89,11 @@ class GeneratedDraftServiceTest {
         verify(storage, times(8)).headObject(anyString(), anyString());
         verify(storage, times(8)).downloadObject(anyString(), anyString(), any());
         verify(persistence).register(lease, "attempt");
+        var ordered = inOrder(storage, persistence);
+        ordered.verify(persistence).recordValidatedRender(eq(lease), eq("attempt"), anyString());
+        ordered.verify(storage, times(8)).downloadObject(anyString(), anyString(), any());
+        ordered.verify(persistence).confirmStored(lease, "attempt");
+        ordered.verify(persistence).register(lease, "attempt");
     }
 
     @Test void registeredReplayDoesNotRequireLocalArtifactsOrStorage() {

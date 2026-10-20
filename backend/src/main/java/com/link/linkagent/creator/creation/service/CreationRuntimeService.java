@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.creation.mapper.CreationRuntimeMapper;
 import com.link.linkagent.creator.creation.mapper.CreationWorkspaceMapper;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.*;
+import com.link.linkagent.creator.creation.model.GeneratedDraftInput;
+import com.link.linkagent.creator.creation.model.GeneratedDraftLease;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
@@ -184,6 +186,24 @@ public class CreationRuntimeService {
         mapper.insertRun(value);
         if (mapper.activate(taskId, ownerId, value.runId(), expectedRevision) != 1) throw conflict("工作区已变化");
         return run(taskId, ownerId, value.runId());
+    }
+
+    /** 自动步骤与成片写入共用同一执行权检查，不能仅凭进程内的运行状态采纳结果。 */
+    public GeneratedDraftInput requireProductionLease(GeneratedDraftLease lease) {
+        id(lease.runId()); id(lease.worker());
+        media.lockMediaTask(lease.taskId(), lease.ownerId()).orElseThrow(() -> conflict("创作任务不存在"));
+        media.lockTaskDraftVersions(lease.taskId(), lease.ownerId());
+        var current = mapper.workspace(lease.taskId(), lease.ownerId()).orElseThrow(() -> conflict("制作工作区不存在"));
+        var run = mapper.run(lease.taskId(), lease.ownerId(), lease.runId()).orElseThrow(() -> conflict("制作运行不存在"));
+        if (!lease.runId().equals(current.activeRunId()) || !"FULL".equals(run.kind())
+                || mapper.liveLease(lease.taskId(), lease.ownerId(), lease.runId(), lease.worker(), lease.generation(), "RUNNING") != 1)
+            throw conflict("制作已取消、执行租约失效或运行不支持系统成片");
+        var approval = mapper.approval(lease.taskId(), lease.ownerId(), run.approvalId()).orElseThrow();
+        if (!"PRODUCTION".equals(approval.approvalKind()) || !"ACTIVE".equals(approval.status())
+                || !run.inputFingerprint().equals(hash(canonical(json, run.requestJson())))
+                || !approval.inputFingerprint().equals(run.inputFingerprint())) throw conflict("整片授权已失效");
+        if (media.countPublishingFacts(lease.taskId(), lease.ownerId()) > 0) throw conflict("任务已经进入发布后流程");
+        return productionInput(json, run.requestJson());
     }
 
     public Optional<Run> claim(String taskId, String ownerId, String runId, String worker, int leaseSeconds) {

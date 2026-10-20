@@ -1692,6 +1692,24 @@ CREATE TABLE IF NOT EXISTS creator_creation_cost_entry
     KEY idx_creation_cost_run (run_id, status)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '制作费用预留及未知用量保留';
 
+CREATE TABLE IF NOT EXISTS creator_creation_auto_step
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '本次完整制作运行',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    production_plan_id VARCHAR(64) NOT NULL COMMENT '本运行专属的系统制作蓝图',
+    step_code VARCHAR(32) NOT NULL COMMENT '代码定义的固定制作阶段，不包含平台试映或实际发布',
+    step_id VARCHAR(64) NOT NULL COMMENT '原制作步骤表的精确身份，不能绑定人工步骤',
+    evidence_json JSON DEFAULT NULL COMMENT '实际完成依据及不可变产物引用，未执行时为空',
+    lease_generation BIGINT DEFAULT NULL COMMENT '写入产物证据的执行代数，授权证据不依赖执行租约',
+    attempt_id VARCHAR(64) DEFAULT NULL COMMENT '产生实际文件的尝试身份',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '自动步骤绑定时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近证据变化时间',
+    PRIMARY KEY (run_id,step_code),
+    UNIQUE KEY uk_auto_production_step (step_id),
+    KEY idx_auto_step_plan (task_id,owner_id,production_plan_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='自动蓝图步骤归属与真实产物证据';
+
 CREATE TABLE IF NOT EXISTS creator_creation_fixed_job
 (
     run_id VARCHAR(64) PRIMARY KEY COMMENT '已受理整片运行，只有附加真实工程后才由固定执行器领取',
