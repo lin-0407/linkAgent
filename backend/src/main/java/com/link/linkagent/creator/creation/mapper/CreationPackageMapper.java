@@ -15,17 +15,17 @@ public interface CreationPackageMapper {
 
     /**
      * 已 READY 的包不因重复扫描重建；只有未完成的构建才允许新代数接手。
-     * 这样恢复和并发扫描都不会重复上传同一版本。
+     * 这样恢复和并发扫描都不会重复上传同一版本。使用行别名而不是已弃用的 VALUES()。
      */
     @Insert("""
             INSERT INTO creator_creation_package (run_id, task_id, owner_id, version_id, processing_job_id,
                 preflight_review_id, status, manifest_json, lease_generation)
             VALUES (#{runId}, #{taskId}, #{ownerId}, #{versionId}, #{processingJobId}, #{preflightReviewId},
-                'BUILDING', '{}', #{leaseGeneration})
+                'BUILDING', '{}', #{leaseGeneration}) AS fresh
             ON DUPLICATE KEY UPDATE
-                status=IF(status='READY','READY','BUILDING'),
-                failure_code=IF(status='READY',failure_code,NULL),
-                lease_generation=IF(status='READY',lease_generation,VALUES(lease_generation))
+                status=IF(creator_creation_package.status='READY','READY','BUILDING'),
+                failure_code=IF(creator_creation_package.status='READY',creator_creation_package.failure_code,NULL),
+                lease_generation=IF(creator_creation_package.status='READY',creator_creation_package.lease_generation,fresh.lease_generation)
             """)
     int begin(CreationPackageRecord value);
 

@@ -1390,6 +1390,33 @@ class MediaVersionPersistenceIntegrationTest {
         assertThat(runtime.snapshot(task, "default").budget().reservedCny()).isEqualByComparingTo("0");
     }
 
+    @Test void packageBeginKeepsReadyFactsAndOnlyReopensUnfinishedBuilds() {
+        String task = task();
+        var first = new com.link.linkagent.creator.creation.model.CreationPackageRecord("pkg-run-" + task,
+                task, "default", "pkg-version-" + task, "job", "review", "BUILDING", null, null, null, null,
+                "{}", 1, null);
+        assertThat(creationPackages.begin(first)).isEqualTo(1);
+        // 未完成构建允许新代数接手（MySQL 对 ODKU 更新计为 2，不按行数判断业务结果）
+        var takeover = new com.link.linkagent.creator.creation.model.CreationPackageRecord(first.runId(), task,
+                "default", first.versionId(), "job", "review", "BUILDING", null, null, null, null, "{}", 2, null);
+        creationPackages.begin(takeover);
+        assertThat(creationPackages.find(first.runId()).orElseThrow().leaseGeneration()).isEqualTo(2);
+        // READY 之后重复受理不再重建，也不改写已登记的对象事实
+        var ready = new com.link.linkagent.creator.creation.model.CreationPackageRecord(first.runId(), task,
+                "default", first.versionId(), "job", "review", "BUILDING", "bucket",
+                "users/default/tasks/" + task + "/versions/" + first.versionId() + "/package/publish-package.zip",
+                2048L, "f".repeat(64), "{\"k\":1}", 2, null);
+        assertThat(creationPackages.ready(ready)).isEqualTo(1);
+        var rebuild = new com.link.linkagent.creator.creation.model.CreationPackageRecord(first.runId(), task,
+                "default", first.versionId(), "job", "review", "BUILDING", null, null, null, null, "{}", 3, null);
+        creationPackages.begin(rebuild);
+        var after = creationPackages.find(first.runId()).orElseThrow();
+        assertThat(after.status()).isEqualTo("READY");
+        assertThat(after.leaseGeneration()).isEqualTo(2);
+        assertThat(after.objectKey()).isEqualTo(ready.objectKey());
+        assertThat(after.bytes()).isEqualTo(2048L);
+    }
+
     @Test void fullRunRequiresRealConfirmationEvenIfPlanningWasSkipped() {
         String task = task(); runtime.initialize(task, "default", "budget", -1, cny("20"));
         String input = "{\"publishingSessionId\":\"missing\",\"publishingResultId\":\"missing\",\"productionPlanId\":\"missing\",\"baseVersionId\":null,\"storyboardId\":\"board\",\"renderContentHash\":\"" + "c".repeat(64) + "\"}";
