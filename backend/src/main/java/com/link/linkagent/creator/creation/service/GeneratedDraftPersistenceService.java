@@ -94,6 +94,25 @@ public class GeneratedDraftPersistenceService {
     /** 每次存储调用前检查；这里只做短事务，不把网络包在行锁中。 */
     public void checkLive(GeneratedDraftLease lease) { requireLive(lease); }
 
+    /** 开始耗时渲染前拒绝失效的制作依据，登记时仍会再次复核。 */
+    public void validateBeforeRender(GeneratedDraftLease lease) {
+        var input = requireLive(lease);
+        requireBase(lease, input);
+        if (media.findGeneratedProductionContext(lease.taskId(), lease.ownerId(), input.publishingSessionId(),
+                input.publishingResultId(), input.productionPlanId(), false, true).isEmpty()) throw conflict("制作依据已失效");
+    }
+
+    /** 接管已登记的运行时直接读取版本事实，不要求原工作目录仍然存在。 */
+    public Optional<DraftVideoRecord> registeredResult(GeneratedDraftLease lease) {
+        requireLive(lease);
+        return mapper.registered(lease.taskId(), lease.ownerId(), lease.runId()).map(attempt -> {
+            var draft = media.findDraftVideoByVersion(lease.taskId(), lease.ownerId(), attempt.versionId())
+                    .orElseThrow(() -> conflict("已登记版本不存在"));
+            if (draft.mediaDeletedAt() != null) throw conflict("已登记媒体已删除，不能恢复制作");
+            return draft;
+        });
+    }
+
     /** 已登记结果可跨租约恢复；这是读取事实，不再次切换指针或依赖本地临时目录。 */
     public Optional<DraftVideoRecord> restoreRegistered(GeneratedDraftLease lease, String attemptId, String inputHash) {
         requireLive(lease);

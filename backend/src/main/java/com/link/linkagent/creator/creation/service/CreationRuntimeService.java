@@ -72,7 +72,7 @@ public class CreationRuntimeService {
                     value.budgetLimitCny().subtract(totals.occupied()).max(BigDecimal.ZERO),
                     blocked(totals) || totals.occupied().compareTo(value.budgetLimitCny()) >= 0);
         }
-        // 执行器未接入前，初始化预算不代表可以自动制作，也不代表授权扣费。
+        // 内部固定工程执行器不代表公开制作链路已开放，预算初始化也不授权扣费。
         return new Snapshot(budget != null, value.workspaceRevision(), budget, active, false, "CREATION_RUNTIME_ONLY");
     }
 

@@ -14,6 +14,11 @@ import com.link.linkagent.creator.bilibili.model.BilibiliVideoRecord;
 import com.link.linkagent.creator.creation.mapper.CreationWorkspaceMapper;
 import com.link.linkagent.creator.creation.mapper.CreationRuntimeMapper;
 import com.link.linkagent.creator.creation.mapper.GeneratedDraftMapper;
+import com.link.linkagent.creator.creation.mapper.FixedProjectJobMapper;
+import com.link.linkagent.creator.creation.service.FixedProjectJobPersistenceService;
+import com.link.linkagent.creator.creation.service.FixedProjectJobFiles;
+import com.link.linkagent.creator.creation.service.FixedProjectWorker;
+import com.link.linkagent.creator.creation.service.CreationWorkerProperties;
 import com.link.linkagent.creator.creation.service.GeneratedDraftPersistenceService;
 import com.link.linkagent.creator.creation.model.*;
 import com.link.linkagent.creator.creation.service.CreationRuntimeService;
@@ -114,6 +119,9 @@ class MediaVersionPersistenceIntegrationTest {
     static CreationRuntimeService runtime;
     static GeneratedDraftPersistenceService generated;
     static GeneratedDraftMapper generatedMapper;
+    static FixedProjectJobMapper fixedJobMapper;
+    static FixedProjectJobPersistenceService fixedJobs;
+    final List<FixedProjectJob> fixedJobsToClean = new ArrayList<>();
 
     @BeforeAll
     static void setup() throws Exception {
@@ -133,6 +141,7 @@ class MediaVersionPersistenceIntegrationTest {
         configuration.addMapper(CreationWorkspaceMapper.class);
         configuration.addMapper(CreationRuntimeMapper.class);
         configuration.addMapper(GeneratedDraftMapper.class);
+        configuration.addMapper(FixedProjectJobMapper.class);
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setConfiguration(configuration);
@@ -165,6 +174,10 @@ class MediaVersionPersistenceIntegrationTest {
         var generatedProxy = new ProxyFactory(new GeneratedDraftPersistenceService(mapper, runtimeMapper, generatedMapper, new ObjectMapper()));
         generatedProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         generated = (GeneratedDraftPersistenceService) generatedProxy.getProxy();
+        fixedJobMapper = session.getMapper(FixedProjectJobMapper.class);
+        var fixedProxy = new ProxyFactory(new FixedProjectJobPersistenceService(mapper, runtimeMapper, fixedJobMapper, new ObjectMapper()));
+        fixedProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+        fixedJobs = (FixedProjectJobPersistenceService) fixedProxy.getProxy();
         var selectionProxy = new ProxyFactory(new CreationWorkspacePersistenceService(mapper, workspaceMapper, readyGate));
         selectionProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         selections = (CreationWorkspacePersistenceService) selectionProxy.getProxy();
@@ -1417,35 +1430,206 @@ class MediaVersionPersistenceIntegrationTest {
     }
 
     @Test
+    void fixedProjectAttachmentIsDurableIdempotentAndRejectsDifferentContent() throws Exception {
+        var job = queuedFixedJob(task(), fixedDocument());
+        var saved = fixedJobs.attach(job);
+        assertThat(fixedJobs.attach(job)).isEqualTo(saved);
+        assertThat(fixedJobMapper.find(job.taskId(), "default", job.runId())).contains(saved);
+        var changed = (com.fasterxml.jackson.databind.node.ObjectNode) new ObjectMapper().readTree(job.projectJson());
+        changed.put("seed", 9);
+        assertThatThrownBy(() -> fixedJobs.attach(new FixedProjectJob(job.runId(), job.taskId(), "default", job.sourceAttemptId(), changed.toString())))
+                .hasMessageContaining("冻结其他工程");
+        assertThat(runtimeMapper.run(job.taskId(), "default", job.runId()).orElseThrow().status()).isEqualTo("QUEUED");
+    }
+
+    @Test
+    void fixedProjectCannotAttachWhenContentDisagreesWithProductionApproval() throws Exception {
+        var job = queuedFixedJob(task(), fixedDocument());
+        var changed = (com.fasterxml.jackson.databind.node.ObjectNode) new ObjectMapper().readTree(job.projectJson());
+        changed.put("seed", 8);
+        assertThatThrownBy(() -> fixedJobs.attach(new FixedProjectJob(job.runId(), job.taskId(), "default", "source", changed.toString())))
+                .hasMessageContaining("授权不一致");
+        assertThat(fixedJobMapper.find(job.taskId(), "default", job.runId())).isEmpty();
+    }
+
+    @Test
+    void fixedProjectCannotBeAttachedAfterFirstClaim() throws Exception {
+        var job = queuedFixedJob(task(), fixedDocument());
+        runtime.claim(job.taskId(), "default", job.runId(), "already-started", 5).orElseThrow();
+        assertThatThrownBy(() -> fixedJobs.attach(job)).hasMessageContaining("尚未领取");
+    }
+
+    @Test
+    void onlyExplicitlyAttachedAndStillActiveFixedProjectsAreCandidates() throws Exception {
+        var absent = queuedFixedJob(task(), fixedDocument());
+        var available = queuedFixedJob(task(), fixedDocument()); fixedJobs.attach(available);
+        assertThat(fixedJobMapper.candidates()).extracting(FixedProjectJob::runId).contains(available.runId()).doesNotContain(absent.runId());
+        runtime.cancel(available.taskId(), "default", available.runId());
+        assertThat(fixedJobMapper.candidates()).extracting(FixedProjectJob::runId).doesNotContain(available.runId());
+    }
+
+    @Test
+    void twoWorkersCannotRenderSameQueuedProjectTwice() throws Exception {
+        var job = queuedFixedJob(task(), fixedDocument()); fixedJobs.attach(job);
+        var files = mock(FixedProjectJobFiles.class);
+        var renderer = mock(com.link.linkagent.creator.creation.render.FixedProjectRenderService.class);
+        var drafts = mock(com.link.linkagent.creator.creation.service.GeneratedDraftService.class);
+        when(files.prepare(any(), any(), any())).thenReturn(new com.link.linkagent.creator.creation.render.FixedProjectRenderService.Request(
+                java.nio.file.Path.of("not-read"), job.runId(), "attempt", "board", "a".repeat(64)));
+        when(renderer.render(any(), any())).thenThrow(new com.link.linkagent.creator.creation.render.RenderExecutionException("CONTROLLED_TEST_FAILURE", "仅验证领取"));
+        try (var first = fixedWorker(files, renderer, drafts); var second = fixedWorker(files, renderer, drafts);
+             var callers = Executors.newFixedThreadPool(2)) {
+            Future<?> one = callers.submit(first::poll), two = callers.submit(second::poll); one.get(3, TimeUnit.SECONDS); two.get(3, TimeUnit.SECONDS);
+            awaitFixedStatus(job, "FAILED", 5);
+        }
+        verify(renderer, times(1)).render(any(), any()); verifyNoInteractions(drafts);
+        assertThat(runtimeMapper.run(job.taskId(), "default", job.runId()).orElseThrow().attemptCount()).isEqualTo(1);
+        assertThat(runtime.snapshot(job.taskId(), "default").activeRun()).isNull();
+    }
+
+    @Test
+    void cancelledDependencyIsAcknowledgedWithoutTouchingSourceFiles() throws Exception {
+        var job = queuedFixedJob(task(), fixedDocument()); fixedJobs.attach(job);
+        var claimed = runtime.claim(job.taskId(), "default", job.runId(), "before-wait", 5).orElseThrow();
+        runtime.waitForDependency(job.taskId(), "default", job.runId(), "before-wait", claimed.leaseGeneration(), "exact-version");
+        runtime.cancel(job.taskId(), "default", job.runId());
+        var files = mock(FixedProjectJobFiles.class); var renderer = mock(com.link.linkagent.creator.creation.render.FixedProjectRenderService.class);
+        var drafts = mock(com.link.linkagent.creator.creation.service.GeneratedDraftService.class);
+        try (var worker = fixedWorker(files, renderer, drafts)) { worker.poll(); awaitFixedStatus(job, "CANCELLED", 5); }
+        verifyNoInteractions(files, renderer, drafts);
+    }
+
+    @Test
+    void registeredCrashRecoveryKeepsOneVersionWithoutOriginalInputDirectory() throws Exception {
+        var job = queuedFixedJob(task(), fixedDocument()); fixedJobs.attach(job);
+        var claimed = runtime.claim(job.taskId(), "default", job.runId(), "crashed-after-register", 5).orElseThrow();
+        var lease = new GeneratedDraftLease(job.taskId(), "default", job.runId(), "crashed-after-register", claimed.leaseGeneration());
+        String contentHash = new ObjectMapper().readTree(claimed.requestJson()).path("renderContentHash").asText();
+        generated.prepare(lease, "before-crash", "a".repeat(64), contentHash, "board", "fixture-bucket", generatedFiles());
+        var draft = generated.register(lease, "before-crash");
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=DATE_SUB(CURRENT_TIMESTAMP(6),INTERVAL 1 SECOND) WHERE run_id=?", job.runId());
+        var files = mock(FixedProjectJobFiles.class); var renderer = mock(com.link.linkagent.creator.creation.render.FixedProjectRenderService.class);
+        var drafts = mock(com.link.linkagent.creator.creation.service.GeneratedDraftService.class);
+        try (var worker = fixedWorker(files, renderer, drafts)) { worker.poll(); awaitFixedStatus(job, "WAITING_DEPENDENCY", 5); }
+        var restored = runtimeMapper.run(job.taskId(), "default", job.runId()).orElseThrow();
+        assertThat(restored.leaseGeneration()).isEqualTo(2); assertThat(restored.dependencyId()).isEqualTo(draft.versionId());
+        assertThat(mapper.findMediaWorkspace(job.taskId(), "default").orElseThrow().nextVersionNo()).isEqualTo(2);
+        verifyNoInteractions(files, renderer, drafts);
+    }
+
+    @Test
+    void repeatedCrashesStopAtConfiguredAttemptLimit() throws Exception {
+        var job = queuedFixedJob(task(), fixedDocument()); fixedJobs.attach(job);
+        for (int index = 0; index < 3; index++) {
+            runtime.claim(job.taskId(), "default", job.runId(), "crashed-" + index, 5).orElseThrow();
+            jdbc.update("UPDATE creator_creation_run SET lease_expires_at=DATE_SUB(CURRENT_TIMESTAMP(6),INTERVAL 1 SECOND) WHERE run_id=?", job.runId());
+        }
+        var files = mock(FixedProjectJobFiles.class); var renderer = mock(com.link.linkagent.creator.creation.render.FixedProjectRenderService.class);
+        var drafts = mock(com.link.linkagent.creator.creation.service.GeneratedDraftService.class);
+        try (var worker = fixedWorker(files, renderer, drafts)) { worker.poll(); awaitFixedStatus(job, "FAILED", 5); }
+        assertThat(runtimeMapper.run(job.taskId(), "default", job.runId()).orElseThrow().errorCode()).isEqualTo("ATTEMPTS_EXHAUSTED");
+        verifyNoInteractions(files, renderer, drafts);
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void closeFixedJobFixtures() {
+        for (var job : fixedJobsToClean) {
+            var run = runtimeMapper.run(job.taskId(), "default", job.runId()).orElseThrow();
+            if (!List.of("FAILED", "CANCELLED", "COMPLETED").contains(run.status())) {
+                runtime.cancel(job.taskId(), "default", job.runId());
+                if ("CANCEL_REQUESTED".equals(runtimeMapper.run(job.taskId(), "default", job.runId()).orElseThrow().status())) {
+                    jdbc.update("UPDATE creator_creation_run SET lease_expires_at=NULL WHERE run_id=?", job.runId());
+                    var cleanup = runtime.claim(job.taskId(), "default", job.runId(), "fixed-test-cleanup", 5).orElseThrow();
+                    runtime.acknowledgeCancellation(job.taskId(), "default", job.runId(), "fixed-test-cleanup", cleanup.leaseGeneration());
+                }
+            }
+        }
+    }
+
+    // 这些简化工程仅用于 SQL 与租约检查，可播放媒体在下面的真实渲染测试中单独验证。
+    private com.fasterxml.jackson.databind.node.ObjectNode fixedDocument() throws Exception {
+        return (com.fasterxml.jackson.databind.node.ObjectNode) new ObjectMapper().readTree("""
+                {"schemaVersion":1,"storyboardId":"board","seed":7,"assets":[],"video":{"width":1280,"height":720,"fps":24,"frameCount":48}}
+                """);
+    }
+
+    private FixedProjectJob queuedFixedJob(String task, com.fasterxml.jackson.databind.node.ObjectNode document) throws Exception {
+        var json = new ObjectMapper(); var sorted = json.copy().enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+        var content = document.deepCopy(); content.remove(List.of("runId", "attemptId", "inputHash"));
+        String contentHash = nativeSha(sorted.writeValueAsBytes(json.convertValue(content, Map.class)));
+        var input = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(fullInput(task, contentHash));
+        input.put("storyboardId", document.path("storyboardId").asText());
+        runtime.initialize(task, "default", "fixed-budget", revision(task), cny("20"));
+        var run = runtime.startProduction(task, "default", "fixed-run", revision(task), input.toString(), cny("0"));
+        document.put("runId", run.runId()).put("attemptId", "source"); document.remove("inputHash");
+        document.put("inputHash", nativeSha(sorted.writeValueAsBytes(json.convertValue(document, Map.class))));
+        var job = new FixedProjectJob(run.runId(), task, "default", "source", document.toString()); fixedJobsToClean.add(job); return job;
+    }
+
+    private FixedProjectWorker fixedWorker(FixedProjectJobFiles files,
+            com.link.linkagent.creator.creation.render.FixedProjectRenderService renderer,
+            com.link.linkagent.creator.creation.service.GeneratedDraftService drafts) {
+        var properties = new CreationWorkerProperties(); properties.setEnabled(true); properties.setLeaseSeconds(5); properties.setHeartbeatSeconds(1);
+        return new FixedProjectWorker(properties, fixedJobMapper, runtime, files, renderer, drafts, generated);
+    }
+
+    @org.springframework.context.annotation.Configuration(proxyBeanMethods=false)
+    @org.springframework.scheduling.annotation.EnableScheduling
+    static class FixedWorkerScheduling { }
+
+    private org.springframework.context.annotation.AnnotationConfigApplicationContext scheduledFixedWorker(FixedProjectJobFiles files,
+            com.link.linkagent.creator.creation.render.FixedProjectRenderService renderer,
+            com.link.linkagent.creator.creation.service.GeneratedDraftService drafts) {
+        var context = new org.springframework.context.annotation.AnnotationConfigApplicationContext();
+        context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("fixed-worker-test",
+                Map.of("creator.media.enabled", "true", "creator.creation.renderer.enabled", "true",
+                        "creator.creation.worker.enabled", "true", "creator.creation.worker.poll-interval-ms", "100")));
+        var properties = new CreationWorkerProperties(); properties.setEnabled(true); properties.setLeaseSeconds(5); properties.setHeartbeatSeconds(1);
+        context.registerBean(CreationWorkerProperties.class, () -> properties);
+        context.registerBean(FixedProjectJobMapper.class, () -> fixedJobMapper);
+        context.registerBean(CreationRuntimeService.class, () -> runtime);
+        context.registerBean(FixedProjectJobFiles.class, () -> files);
+        context.registerBean(com.link.linkagent.creator.creation.render.FixedProjectRenderService.class, () -> renderer);
+        context.registerBean(com.link.linkagent.creator.creation.service.GeneratedDraftService.class, () -> drafts);
+        context.registerBean(GeneratedDraftPersistenceService.class, () -> generated);
+        context.register(FixedWorkerScheduling.class, FixedProjectWorker.class); context.refresh(); return context;
+    }
+
+    private void awaitFixedStatus(FixedProjectJob job, String status, int seconds) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+        while (System.nanoTime() < deadline) {
+            var run = runtimeMapper.run(job.taskId(), "default", job.runId()).orElseThrow();
+            if (status.equals(run.status())) return;
+            if ("FAILED".equals(run.status())) throw new AssertionError("固定工程失败：" + run.errorCode());
+            Thread.sleep(25);
+        }
+        throw new AssertionError("固定工程未到达预期状态：" + status);
+    }
+
+    @Test
     @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named="LINKAGENT_GENERATED_NATIVE", matches="true")
     void realRenderedVideoSurvivesPrivateStorageRegistrationProbeAndDeletion(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
         var json = new ObjectMapper();
         java.nio.file.Path source = java.nio.file.Path.of(System.getenv("LINKAGENT_RENDERER_SAMPLE_ROOT"));
         var document = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(source.resolve("input.json").toFile());
-        var content = document.deepCopy(); content.remove(List.of("runId", "attemptId", "inputHash"));
-        var sorted = json.copy().enable(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
-        String contentHash = nativeSha(sorted.writeValueAsBytes(json.convertValue(content, Map.class)));
-        String task = task();
-        var input = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(fullInput(task, contentHash));
-        input.put("storyboardId", document.path("storyboardId").asText());
-        var lease = fullLease(task, json.writeValueAsString(input));
-        String attemptId = "actual-storage-attempt";
-        java.nio.file.Path attempt = java.nio.file.Files.createDirectories(root.resolve(lease.runId()).resolve(attemptId));
+        String task = task(); var job = queuedFixedJob(task, document);
+        String attemptId = job.sourceAttemptId();
+        java.nio.file.Path attempt = java.nio.file.Files.createDirectories(root.resolve(job.runId()).resolve(attemptId));
         for (var asset : document.path("assets")) {
             String name = asset.path("path").asText(); java.nio.file.Path target = attempt.resolve(name).normalize();
             assertThat(target.startsWith(attempt)).isTrue();
             java.nio.file.Files.createDirectories(target.getParent()); java.nio.file.Files.copy(source.resolve(name), target);
         }
-        document.put("runId", lease.runId()).put("attemptId", attemptId); document.remove("inputHash");
-        String inputHash = nativeSha(sorted.writeValueAsBytes(json.convertValue(document, Map.class)));
-        document.put("inputHash", inputHash); java.nio.file.Path inputFile = attempt.resolve("input.json"); json.writeValue(inputFile.toFile(), document);
+        String inputHash = document.path("inputHash").asText();
+        java.nio.file.Path inputFile = attempt.resolve("input.json"); json.writeValue(inputFile.toFile(), document);
         var rendererProperties = new com.link.linkagent.creator.creation.render.FixedProjectRendererProperties();
         rendererProperties.setEnabled(true); rendererProperties.setPythonPath("python"); rendererProperties.setModuleRoot("/opt/renderer");
         rendererProperties.setWorkRoot(root.toString()); rendererProperties.setTimeout(Duration.ofSeconds(120));
         var renderer = new com.link.linkagent.creator.creation.render.FixedProjectRenderService(rendererProperties, json);
-        var request = new com.link.linkagent.creator.creation.render.FixedProjectRenderService.Request(inputFile, lease.runId(), attemptId,
+        var request = new com.link.linkagent.creator.creation.render.FixedProjectRenderService.Request(inputFile, job.runId(), attemptId,
                 document.path("storyboardId").asText(), inputHash);
-        renderer.render(request, () -> false);
+        var jobFiles = new FixedProjectJobFiles(rendererProperties, json);
+        fixedJobs.attach(jobFiles.freeze(task, "default", request));
         try (var store = new GenericContainer<>("rustfs/rustfs:latest").withEnv("RUSTFS_ACCESS_KEY", "isolated-generated")
                 .withEnv("RUSTFS_SECRET_KEY", "isolated-generated-secret").withCommand("rustfs", "/data")
                 .withCreateContainerCmdModifier(cmd -> cmd.withUser("0")).withExposedPorts(9000)
@@ -1461,26 +1645,84 @@ class MediaVersionPersistenceIntegrationTest {
                 client.createBucket(b -> b.bucket(properties.getBucket()));
                 var storage = new com.link.linkagent.creator.media.storage.S3ObjectStorageService(client, presigner, presigner, properties);
                 var service = new com.link.linkagent.creator.creation.service.GeneratedDraftService(renderer, generated, storage, properties, json);
-                var draft = service.registerGeneratedDraft(lease, request, () -> false);
+                try (var context = scheduledFixedWorker(jobFiles, renderer, service)) {
+                    awaitFixedStatus(job, "WAITING_DEPENDENCY", 150);
+                    assertThat(context.getBean(FixedProjectWorker.class)).isNotNull();
+                }
+                var registered = generatedMapper.registered(task, "default", job.runId()).orElseThrow();
+                var draft = mapper.findDraftVideoByVersion(task, "default", registered.versionId()).orElseThrow();
                 assertThat(draft.status()).isEqualTo("UPLOADED");
                 assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).hasSize(8);
-                assertThat(service.registerGeneratedDraft(lease, request, () -> false).versionId()).isEqualTo(draft.versionId());
+                var waiting = runtimeMapper.run(task, "default", job.runId()).orElseThrow();
+                assertThat(waiting.leaseGeneration()).isEqualTo(1); assertThat(waiting.completedAt()).isNull();
+                assertThat(waiting.dependencyId()).isEqualTo(draft.versionId());
+                // 移走本测试创建的完整工作目录，接管仍须从登记事实恢复同一版本。
+                java.nio.file.Files.move(root.resolve(job.runId()), root.resolve("removed-workdir"));
+                runtime.wake(task, "default", job.runId(), waiting.runRevision());
+                try (var worker = fixedWorker(jobFiles, renderer, service)) { worker.poll(); awaitFixedStatus(job, "WAITING_DEPENDENCY", 5); }
+                assertThat(runtimeMapper.run(task, "default", job.runId()).orElseThrow().leaseGeneration()).isEqualTo(2);
+                assertThat(mapper.findMediaWorkspace(task, "default").orElseThrow().nextVersionNo()).isEqualTo(2);
+                assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).hasSize(8);
+                assertThat(runtime.snapshot(task, "default").executionAvailable()).isFalse();
                 var mediaProperties = new CreatorMediaProperties(); mediaProperties.setEnabled(true);
                 var ffprobe = new com.link.linkagent.creator.media.probe.service.FfprobeMediaProbeService(mediaProperties, json);
+                long observedDuration = 0;
                 try {
                     var probe = new com.link.linkagent.creator.media.probe.service.DraftVideoProbeService(mediaProperties, storage, ffprobe, mapper,
                             new DraftVideoProbeRecoveryService(mediaProperties, mapper));
                     var probed = probe.probeDraftVideo("default", task, draft.versionId());
+                    observedDuration = probed.durationMs();
                     assertThat(probed.durationMs()).isBetween(84100L, 84240L);
                     assertThat(probed.status()).isEqualTo("READY_FOR_REVIEW");
                     assertThat(readyGate.inspectPostPublishReadiness(task, "default", "发布").ready()).isFalse();
                 } finally { org.springframework.test.util.ReflectionTestUtils.invokeMethod(ffprobe, "closeOutputReaderExecutor"); }
-                runtime.cancel(task, "default", lease.runId()); runtime.acknowledgeCancellation(task, "default", lease.runId(), lease.worker(), lease.generation());
+                runtime.cancel(task, "default", job.runId());
+                try (var worker = fixedWorker(jobFiles, renderer, service)) { worker.poll(); awaitFixedStatus(job, "CANCELLED", 5); }
                 new MediaDeletionService(mapper, processing, reviews, storage).deleteMedia("default", task, draft.versionId());
                 assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).isEmpty();
                 assertThat(mapper.findVersionContext(task, "default", draft.versionId())).isPresent();
-                System.out.println("S3B_NATIVE_STORAGE_PROBE_DELETE_OK durationMs=84167 files=8");
+                System.out.println("S3C_NATIVE_WORKER_RESTART_PROBE_DELETE_OK durationMs=" + observedDuration + " files=8 generation=2");
             }
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named="LINKAGENT_GENERATED_NATIVE", matches="true")
+    void scheduledWorkerCancellationStopsActualMediaProcesses(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
+        var json = new ObjectMapper(); var source = java.nio.file.Path.of(System.getenv("LINKAGENT_RENDERER_SAMPLE_ROOT"));
+        var document = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(source.resolve("input.json").toFile());
+        var job = queuedFixedJob(task(), document);
+        var prepared = java.nio.file.Files.createDirectories(root.resolve(job.runId()).resolve(job.sourceAttemptId()));
+        for (var asset : document.path("assets")) {
+            String name = asset.path("path").asText(); var destination = prepared.resolve(name).normalize();
+            assertThat(destination.startsWith(prepared)).isTrue(); java.nio.file.Files.createDirectories(destination.getParent());
+            java.nio.file.Files.copy(source.resolve(name), destination);
+        }
+        var inputFile = prepared.resolve("input.json"); json.writeValue(inputFile.toFile(), document);
+        var properties = new com.link.linkagent.creator.creation.render.FixedProjectRendererProperties();
+        properties.setEnabled(true); properties.setPythonPath("python"); properties.setWorkRoot(root.toString()); properties.setModuleRoot("/opt/renderer");
+        properties.setTimeout(Duration.ofSeconds(120));
+        var renderer = new com.link.linkagent.creator.creation.render.FixedProjectRenderService(properties, json);
+        var files = new FixedProjectJobFiles(properties, json);
+        fixedJobs.attach(files.freeze(job.taskId(), "default", new com.link.linkagent.creator.creation.render.FixedProjectRenderService.Request(
+                inputFile, job.runId(), job.sourceAttemptId(), document.path("storyboardId").asText(), document.path("inputHash").asText())));
+        var storage = mock(ObjectStorageService.class);
+        var drafts = new com.link.linkagent.creator.creation.service.GeneratedDraftService(renderer, generated, storage, new ObjectStorageProperties(), json);
+        try (var context = scheduledFixedWorker(files, renderer, drafts)) {
+            List<ProcessHandle> observed = List.of(); long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+            while (System.nanoTime() < deadline) {
+                observed = ProcessHandle.current().descendants().filter(process -> process.info().commandLine().orElse("").contains(job.runId())).toList();
+                if (observed.stream().anyMatch(process -> process.info().command().orElse("").contains("ffmpeg"))) break;
+                Thread.sleep(25);
+            }
+            assertThat(observed).anyMatch(process -> process.info().command().orElse("").contains("ffmpeg"));
+            runtime.cancel(job.taskId(), "default", job.runId()); awaitFixedStatus(job, "CANCELLED", 12);
+            for (var process : observed) if (process.isAlive()) process.onExit().get(5, TimeUnit.SECONDS);
+            assertThat(observed).noneMatch(ProcessHandle::isAlive);
+            assertThat(generatedMapper.registered(job.taskId(), "default", job.runId())).isEmpty();
+            assertThat(mapper.findDraftVideo(job.taskId(), "default")).isEmpty();
+            verifyNoInteractions(storage);
+            System.out.println("S3C_NATIVE_SCHEDULED_CANCEL_OK stoppedMediaProcesses=" + observed.size());
         }
     }
 

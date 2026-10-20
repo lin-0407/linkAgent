@@ -37,6 +37,15 @@ final class CreationInputRules {
     static String canonical(ObjectMapper mapper, String value) {
         return canonical(mapper, value, 65536);
     }
+    static String renderDocument(ObjectMapper mapper, String value) {
+        return canonical(mapper, value, 256 * 1024);
+    }
+    static String renderInputHash(ObjectMapper mapper, ObjectNode document) {
+        try {
+            ObjectNode content = document.deepCopy(); content.remove("inputHash");
+            return hash(renderDocument(mapper, mapper.writeValueAsString(content)));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) { throw conflict("工程内容无效"); }
+    }
     private static String canonical(ObjectMapper mapper, String value, int maxBytes) {
         try {
             if (value == null || value.getBytes(StandardCharsets.UTF_8).length > maxBytes) throw conflict("输入内容过大或为空");

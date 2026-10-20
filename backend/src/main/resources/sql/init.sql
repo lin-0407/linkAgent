@@ -1692,6 +1692,17 @@ CREATE TABLE IF NOT EXISTS creator_creation_cost_entry
     KEY idx_creation_cost_run (run_id, status)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '制作费用预留及未知用量保留';
 
+CREATE TABLE IF NOT EXISTS creator_creation_fixed_job
+(
+    run_id VARCHAR(64) PRIMARY KEY COMMENT '已受理整片运行，只有附加真实工程后才由固定执行器领取',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    source_attempt_id VARCHAR(64) NOT NULL COMMENT '工作目录内已准备的源工程目录身份',
+    project_json LONGTEXT NOT NULL COMMENT '冻结的受控渲染输入，资产使用相对路径和内容摘要，不含密钥',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '工程冻结时间',
+    KEY idx_fixed_job_task (task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='固定工程执行输入，重启后不依赖内存任务队列';
+
 CREATE TABLE IF NOT EXISTS creator_creation_render_attempt
 (
     run_id VARCHAR(64) NOT NULL COMMENT '明确的整片制作运行',

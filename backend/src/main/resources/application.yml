@@ -218,6 +218,14 @@ mybatis:
     map-underscore-to-camel-case: true
 
 creator:
+  creation:
+    worker:
+      # 仅运行后端已冻结的固定工程，公开自动制作入口仍未开放。
+      enabled: ${CREATOR_CREATION_WORKER_ENABLED:false}
+      poll-interval-ms: ${CREATOR_CREATION_WORKER_POLL_INTERVAL_MS:2000}
+      lease-seconds: ${CREATOR_CREATION_WORKER_LEASE_SECONDS:30}
+      heartbeat-seconds: ${CREATOR_CREATION_WORKER_HEARTBEAT_SECONDS:5}
+      max-attempts: ${CREATOR_CREATION_WORKER_MAX_ATTEMPTS:3}
   # ========== 阶段 7 P0：私有媒体能力 ==========
   # 注意：媒体能力默认关闭。只有 OSS 和后续视频分析 Provider 配置完成后才显式开启，
   # 避免未配置对象存储时暴露不可用的大文件上传入口。
