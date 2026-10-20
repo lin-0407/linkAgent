@@ -34,7 +34,7 @@ class FixedProjectWorkerTest {
         when(run.taskId()).thenReturn("task"); when(run.ownerId()).thenReturn("default"); when(run.runId()).thenReturn("run");
         when(run.leaseGeneration()).thenReturn(1L); when(run.attemptCount()).thenReturn(1); when(run.status()).thenReturn("RUNNING");
         when(jobs.candidates()).thenReturn(List.of(job));
-        when(runtime.claim(eq("task"), eq("default"), eq("run"), anyString(), eq(5))).thenReturn(Optional.of(run));
+        when(runtime.claimFixed(eq("task"), eq("default"), eq("run"), anyString(), eq(5))).thenReturn(Optional.of(run));
         when(runtime.heartbeat(eq("task"), eq("default"), eq("run"), anyString(), eq(1L), eq(5))).thenReturn(true);
         when(runtime.getRun("task", "default", "run")).thenReturn(view("RUNNING"));
         when(files.prepare(eq(job), eq(run), any())).thenReturn(request);

@@ -29,9 +29,12 @@ public interface CreationMediaMapper {
 
     /** 只允许从当前阶段前进一步，重复扫描或旧执行者不能把已推进的闭环改回去。 */
     @Update("""
-            UPDATE creator_creation_media_link SET stage=#{stage}, processing_job_id=#{jobId},
-                preflight_review_id=#{reviewId}, failure_code=#{failureCode}, lease_generation=#{generation}
-            WHERE run_id=#{runId} AND stage=#{expected}
+            UPDATE creator_creation_media_link l JOIN creator_creation_run r ON r.run_id=l.run_id
+                AND r.task_id=l.task_id AND r.owner_id=l.owner_id
+            SET l.stage=#{stage}, l.processing_job_id=#{jobId}, l.preflight_review_id=#{reviewId},
+                l.failure_code=#{failureCode}, l.lease_generation=#{generation}
+            WHERE l.run_id=#{runId} AND l.stage=#{expected} AND r.status='RUNNING'
+                AND r.lease_generation=#{generation} AND r.lease_expires_at>CURRENT_TIMESTAMP(6)
             """)
     int advance(@Param("runId") String runId, @Param("expected") String expected, @Param("stage") String stage,
                 @Param("jobId") String jobId, @Param("reviewId") String reviewId,
@@ -42,8 +45,13 @@ public interface CreationMediaMapper {
                 l.preflight_review_id, l.stage, l.lease_generation, l.failure_code
             FROM creator_creation_media_link l
             JOIN creator_creation_run r ON r.run_id=l.run_id AND r.task_id=l.task_id AND r.owner_id=l.owner_id
-            WHERE l.stage IN ('MEDIA_PENDING','MEDIA_RUNNING','PREFLIGHT_PENDING','PREFLIGHT_RUNNING','PACKAGE_PENDING')
-                AND r.status IN ('WAITING_DEPENDENCY','CANCEL_REQUESTED')
+            JOIN creator_creation_workspace w ON w.task_id=r.task_id AND w.owner_id=r.owner_id
+                AND w.active_run_id=r.run_id AND w.is_deleted=0
+            JOIN creator_task t ON t.task_id=r.task_id AND t.user_id=r.owner_id AND t.is_deleted=0
+            WHERE (r.status='CANCEL_REQUESTED' AND l.stage NOT IN ('COMPLETED','CANCELLED'))
+                OR (l.stage IN ('MEDIA_PENDING','MEDIA_RUNNING','PREFLIGHT_RUNNING','PACKAGE_PENDING','PACKAGE_READY')
+                    AND (r.status IN ('WAITING_DEPENDENCY','QUEUED') OR (r.status='RUNNING'
+                        AND (r.lease_expires_at IS NULL OR r.lease_expires_at<=CURRENT_TIMESTAMP(6)))))
             ORDER BY l.update_time LIMIT 20
             """)
     List<CreationMediaLink> candidates();

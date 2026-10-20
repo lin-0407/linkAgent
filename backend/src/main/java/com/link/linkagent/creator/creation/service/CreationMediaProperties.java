@@ -13,6 +13,7 @@ public class CreationMediaProperties {
     private long retryIntervalMs = 30000;
     private int leaseSeconds = 60;
     private int heartbeatSeconds = 15;
+    /** 同一阶段含首次在内的领取上限；成功推进阶段后重新计数，不能使用整片累计次数。 */
     private int maxAttempts = 3;
     private int frameIntervalSeconds = 10;
     private String resolution = "P720";

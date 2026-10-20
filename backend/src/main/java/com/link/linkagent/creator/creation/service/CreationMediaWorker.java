@@ -56,6 +56,7 @@ public class CreationMediaWorker implements AutoCloseable {
     private final MediaProcessingService processing;
     private final PreflightReviewService preflight;
     private final CreationPackageService packageService;
+    private final CreationMediaService mediaService;
     private final AtomicBoolean busy = new AtomicBoolean(), stopping = new AtomicBoolean();
     private final ExecutorService executor = Executors.newSingleThreadExecutor(
             Thread.ofPlatform().name("creation-media-worker").daemon(true).factory());
@@ -65,11 +66,13 @@ public class CreationMediaWorker implements AutoCloseable {
     public CreationMediaWorker(CreationMediaProperties properties, CreationMediaMapper links,
                                CreationPackageMapper packages, GeneratedDraftMapper drafts,
                                CreationRuntimeService runtime, MediaProcessingService processing,
-                               PreflightReviewService preflight, CreationPackageService packageService) {
+                               PreflightReviewService preflight, CreationPackageService packageService,
+                               CreationMediaService mediaService) {
         properties.validate();
         this.properties = properties; this.links = links; this.packages = packages; this.drafts = drafts;
         this.runtime = runtime; this.processing = processing; this.preflight = preflight;
         this.packageService = packageService;
+        this.mediaService = mediaService;
     }
 
     @Scheduled(fixedDelayString = "${creator.creation.media.poll-interval-ms:5000}")
@@ -99,7 +102,7 @@ public class CreationMediaWorker implements AutoCloseable {
     private boolean ready(CreationMediaLink link) {
         var run = runtime.getRun(link.taskId(), link.ownerId(), link.runId());
         if ("CANCEL_REQUESTED".equals(run.status())) return true;
-        if (!"WAITING_DEPENDENCY".equals(run.status())) return false;
+        if (!java.util.Set.of("WAITING_DEPENDENCY", "QUEUED", "RUNNING").contains(run.status())) return false;
         return switch (link.stage()) {
             case MEDIA_PENDING, PACKAGE_PENDING, PACKAGE_READY -> true;
             case MEDIA_RUNNING -> processingState(link)
@@ -118,12 +121,16 @@ public class CreationMediaWorker implements AutoCloseable {
         try {
             var run = runtime.getRun(link.taskId(), link.ownerId(), link.runId());
             if ("CANCEL_REQUESTED".equals(run.status())) { cancel(link, generation); return; }
-            if (!"WAITING_DEPENDENCY".equals(run.status())) return;
-            if (run.attemptCount() > properties.getMaxAttempts()) { hold(link, "MEDIA_ATTEMPTS_EXHAUSTED"); return; }
+            if (!java.util.Set.of("WAITING_DEPENDENCY", "QUEUED", "RUNNING").contains(run.status())) return;
+            // claim 同时增加 attempt_count 和 lease_generation；成功阶段记录当时的代数作为新基线。
+            // 因此差值只累计本阶段未推进的领取，重启不清零，正常跨阶段也不消耗重试额度。
+            if ((long) run.attemptCount() - link.leaseGeneration() >= properties.getMaxAttempts()) {
+                hold(link, "MEDIA_ATTEMPTS_EXHAUSTED"); return;
+            }
             switch (link.stage()) {
                 case MEDIA_PENDING -> startProcessing(link, generation);
                 case MEDIA_RUNNING -> advanceFromProcessing(link, generation);
-                case PREFLIGHT_RUNNING -> advanceFromReview(link, generation, interrupted);
+                case PREFLIGHT_RUNNING -> advanceFromReview(link, generation);
                 case PACKAGE_PENDING -> buildPackage(link, claim(link).orElse(null), generation, interrupted);
                 case PACKAGE_READY -> complete(link, generation);
                 default -> { }
@@ -142,11 +149,8 @@ public class CreationMediaWorker implements AutoCloseable {
         if (lease == null) return;
         generation.set(lease.generation());
         try {
-            var job = processing.createJob(link.ownerId(), link.taskId(), link.versionId(), options(),
-                    new CreationMediaAcceptance(runtime, drafts, lease));
-            links.advance(link.runId(), MEDIA_PENDING, MEDIA_RUNNING, job.jobId(), null, null, lease.generation());
-            runtime.waitForDependency(link.taskId(), link.ownerId(), link.runId(), workerId,
-                    lease.generation(), job.jobId());
+            mediaService.acceptProcessing(lease, link, () -> processing.createJob(link.ownerId(), link.taskId(),
+                    link.versionId(), options(), new CreationMediaAcceptance(runtime, drafts, lease)).jobId());
         } catch (RuntimeException exception) {
             failClaimed(link, lease, exception, "MEDIA_PROCESSING_FAILED");
         }
@@ -161,19 +165,15 @@ public class CreationMediaWorker implements AutoCloseable {
         if (lease == null) return;
         generation.set(lease.generation());
         try {
-            var review = preflight.create(link.ownerId(), link.taskId(), "creation-" + link.runId(),
+            mediaService.acceptReview(lease, link, () -> preflight.create(link.ownerId(), link.taskId(), "creation-" + link.runId(),
                     new CreatePreflightReviewRequest(link.versionId(), true,
-                            "自动制作：核对成片是否可进入试映"), new CreationMediaAcceptance(runtime, drafts, lease));
-            links.advance(link.runId(), MEDIA_RUNNING, PREFLIGHT_RUNNING, job.jobId(), review.reviewId(), null,
-                    lease.generation());
-            runtime.waitForDependency(link.taskId(), link.ownerId(), link.runId(), workerId,
-                    lease.generation(), review.reviewId());
+                            "自动制作：核对成片是否可进入试映"), new CreationMediaAcceptance(runtime, drafts, lease)).reviewId());
         } catch (RuntimeException exception) {
             failClaimed(link, lease, exception, "PREFLIGHT_START_FAILED");
         }
     }
 
-    private void advanceFromReview(CreationMediaLink link, AtomicLong generation, AtomicBoolean interrupted) {
+    private void advanceFromReview(CreationMediaLink link, AtomicLong generation) {
         var review = preflight.get(link.ownerId(), link.taskId(), link.preflightReviewId());
         if ("FAILED".equals(review.status())) { hold(link, "PREFLIGHT_FAILED"); return; }
         if (!"COMPLETED".equals(review.status())) return;
@@ -182,15 +182,13 @@ public class CreationMediaWorker implements AutoCloseable {
         if (lease == null) return;
         generation.set(lease.generation());
         try {
-            if (links.advance(link.runId(), PREFLIGHT_RUNNING, PACKAGE_PENDING, link.processingJobId(),
-                    link.preflightReviewId(), null, lease.generation()) != 1) return;
+            // 发布包独立领取，首次构建也计入该阶段上限；完成试映的领取不算一次构建尝试。
+            mediaService.advanceAndWait(lease, link, PACKAGE_PENDING, link.processingJobId(),
+                    link.preflightReviewId(), PACKAGE_PENDING);
         } catch (RuntimeException exception) {
             failClaimed(link, lease, exception, "PACKAGE_START_FAILED");
             return;
         }
-        buildPackage(new CreationMediaLink(link.runId(), link.taskId(), link.ownerId(), link.versionId(),
-                link.processingJobId(), link.preflightReviewId(), PACKAGE_PENDING, lease.generation(), null),
-                lease, generation, interrupted);
     }
 
     private void buildPackage(CreationMediaLink link, GeneratedDraftLease lease, AtomicLong generation,
@@ -199,11 +197,8 @@ public class CreationMediaWorker implements AutoCloseable {
         generation.set(lease.generation());
         try {
             CreationPackageRecord ready = packageService.ensure(lease, link, interrupted::get);
-            if (links.advance(link.runId(), PACKAGE_PENDING, PACKAGE_READY, ready.processingJobId(),
-                    ready.preflightReviewId(), null, lease.generation()) != 1) return;
-            // 释放租约，下一步只做完成校验；包本身已经 READY，不会重复构建。
-            runtime.waitForDependency(link.taskId(), link.ownerId(), link.runId(), workerId,
-                    lease.generation(), "PACKAGE_READY");
+            mediaService.advanceAndWait(lease, link, PACKAGE_READY, ready.processingJobId(),
+                    ready.preflightReviewId(), PACKAGE_READY);
         } catch (RuntimeException exception) {
             failClaimed(link, lease, exception, "PACKAGE_BUILD_FAILED");
         }
@@ -247,7 +242,7 @@ public class CreationMediaWorker implements AutoCloseable {
             var run = runtime.getRun(link.taskId(), link.ownerId(), link.runId());
             if ("WAITING_DEPENDENCY".equals(run.status())) {
                 runtime.wake(link.taskId(), link.ownerId(), link.runId(), run.runRevision());
-            } else if (!"CANCEL_REQUESTED".equals(run.status())) {
+            } else if (!java.util.Set.of("CANCEL_REQUESTED", "QUEUED", "RUNNING").contains(run.status())) {
                 return Optional.empty();
             }
             return runtime.claim(link.taskId(), link.ownerId(), link.runId(), workerId, properties.getLeaseSeconds())
@@ -280,9 +275,7 @@ public class CreationMediaWorker implements AutoCloseable {
 
     private void holdWithLease(CreationMediaLink link, GeneratedDraftLease lease, String code) {
         try {
-            runtime.holdForUser(link.taskId(), link.ownerId(), link.runId(), workerId, lease.generation(), code);
-            links.advance(link.runId(), link.stage(), "FAILED", link.processingJobId(), link.preflightReviewId(),
-                    code, lease.generation());
+            mediaService.hold(lease, link, code);
         } catch (RuntimeException exception) {
             log.info("媒体闭环保留运行失败 runId={} code={}", link.runId(), code);
         }
@@ -319,7 +312,8 @@ public class CreationMediaWorker implements AutoCloseable {
         if (interrupted.get() || stopping.get() || generation.get() == 0) return;
         try {
             if (!runtime.heartbeat(link.taskId(), link.ownerId(), link.runId(), workerId, generation.get(),
-                    properties.getLeaseSeconds())) interrupted.set(true);
+                    properties.getLeaseSeconds()) || !"RUNNING".equals(
+                    runtime.getRun(link.taskId(), link.ownerId(), link.runId()).status())) interrupted.set(true);
         } catch (RuntimeException exception) {
             // 无法证明仍持有活租约就停止本次推进，不在断库时继续上传或登记。
             interrupted.set(true);

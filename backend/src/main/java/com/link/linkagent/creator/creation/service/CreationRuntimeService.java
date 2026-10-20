@@ -212,6 +212,13 @@ public class CreationRuntimeService {
         return productionInput(json, run.requestJson());
     }
 
+    /** 固定工程候选可能已过期；同一任务锁下重新检查交接，不能抢回媒体阶段的运行。 */
+    public Optional<Run> claimFixed(String taskId, String ownerId, String runId, String worker, int leaseSeconds) {
+        lock(taskId, ownerId);
+        if (mediaLinks.find(runId).isPresent()) return Optional.empty();
+        return claim(taskId, ownerId, runId, worker, leaseSeconds);
+    }
+
     public Optional<Run> claim(String taskId, String ownerId, String runId, String worker, int leaseSeconds) {
         lock(taskId, ownerId); id(worker); leaseSeconds(leaseSeconds);
         active(taskId, ownerId, runId);
@@ -376,6 +383,15 @@ public class CreationRuntimeService {
         if (!Set.of("RUNNING", "WAITING_DEPENDENCY", "CANCEL_REQUESTED").contains(run.status()))
             throw conflict("运行已结束，不能登记新的物理发送");
         return mapper.sent(taskId, ownerId, chargeKey) == 1;
+    }
+
+    /** 账务适配器复查已冻结价格时仍要核对任务和运行归属，不允许借调用标识读取其他运行费用。 */
+    @Transactional(readOnly = true)
+    public Optional<Charge> findCharge(String taskId, String ownerId, String runId, String chargeKey) {
+        requireTask(taskId, ownerId); run(taskId, ownerId, runId); key(chargeKey);
+        var existing = mapper.charge(taskId, ownerId, chargeKey);
+        if (existing.isPresent() && !runId.equals(existing.get().runId())) throw conflict("调用费用不属于当前制作运行");
+        return existing;
     }
 
     public Charge settle(String taskId, String ownerId, String chargeKey, BigDecimal actual, String kind, String evidenceRef) {

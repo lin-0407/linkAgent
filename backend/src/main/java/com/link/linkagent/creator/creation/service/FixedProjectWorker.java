@@ -49,7 +49,7 @@ public class FixedProjectWorker implements AutoCloseable {
         try {
             for (var job : jobs.candidates()) {
                 if (stopping.get()) return;
-                var claimed = runtime.claim(job.taskId(), job.ownerId(), job.runId(), workerId, properties.getLeaseSeconds());
+                var claimed = runtime.claimFixed(job.taskId(), job.ownerId(), job.runId(), workerId, properties.getLeaseSeconds());
                 if (claimed.isEmpty()) continue;
                 executor.submit(() -> {
                     try { execute(job, claimed.get()); }

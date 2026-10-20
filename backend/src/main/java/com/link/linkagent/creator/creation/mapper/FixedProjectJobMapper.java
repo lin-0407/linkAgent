@@ -29,7 +29,8 @@ public interface FixedProjectJobMapper {
             JOIN creator_creation_workspace w ON w.task_id=r.task_id AND w.owner_id=r.owner_id
                 AND w.active_run_id=r.run_id AND w.is_deleted=0
             JOIN creator_task t ON t.task_id=r.task_id AND t.user_id=r.owner_id AND t.is_deleted=0
-            WHERE r.kind='FULL' AND (r.status='QUEUED' OR
+            WHERE r.kind='FULL' AND NOT EXISTS (SELECT 1 FROM creator_creation_media_link l WHERE l.run_id=r.run_id)
+                AND (r.status='QUEUED' OR
                 (r.status IN ('RUNNING','CANCEL_REQUESTED') AND
                     (r.lease_expires_at IS NULL OR r.lease_expires_at<=CURRENT_TIMESTAMP(6))))
             ORDER BY IF(r.status='CANCEL_REQUESTED',0,1),r.id LIMIT 8

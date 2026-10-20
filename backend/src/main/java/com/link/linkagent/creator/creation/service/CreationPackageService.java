@@ -224,6 +224,12 @@ public class CreationPackageService {
         catch (IOException exception) { throw conflict("成片制作上下文无法解析"); }
         var titles = new StringBuilder();
         var plan = snapshot.path("publishingPlan").path("titles");
+        // 统一 SQL 将 TEXT 候选标题冻结为 JSON 字符串，导出时须读取其中的真实数组。
+        if (plan.isTextual()) {
+            try { plan = json.readTree(plan.textValue()); }
+            catch (IOException exception) { throw conflict("冻结发布方案的候选标题无法解析"); }
+            if (plan == null || !plan.isArray()) throw conflict("冻结发布方案的候选标题必须为数组");
+        }
         if (plan.isArray()) {
             for (JsonNode title : plan) titles.append("- ").append(title.asText()).append('\n');
         }

@@ -1417,6 +1417,242 @@ class MediaVersionPersistenceIntegrationTest {
         assertThat(after.bytes()).isEqualTo(2048L);
     }
 
+    @Test void realMediaWorkerCompletesAllStagesAndRestoresReadyPackage() throws Exception {
+        var fixture = mediaFixture(cny("0"));
+        try (var worker = fixture.worker()) {
+            fixture.until(worker, "PACKAGE_READY");
+            assertThat(mediaLinks.candidates()).extracting(CreationMediaLink::runId).contains(fixture.lease.runId());
+            assertThat(runtime.getRun(fixture.task, "default", fixture.lease.runId()).attemptCount()).isGreaterThan(3);
+        }
+        // 新 worker 必须从真实候选 SQL 找到已 READY 的包，不能由测试直接喂入候选。
+        try (var restored = fixture.worker()) { fixture.until(restored, "COMPLETED"); }
+        var done = runtimeMapper.run(fixture.task, "default", fixture.lease.runId()).orElseThrow();
+        assertThat(done.status()).isEqualTo("COMPLETED");
+        assertThat(done.attemptCount()).isEqualTo(6);
+        assertThat(runtimeMapper.workspace(fixture.task, "default").orElseThrow().activeRunId()).isNull();
+        assertThat(count("creator_media_processing_job", fixture.task)).isEqualTo(1);
+        assertThat(count("creator_preflight_review", fixture.task)).isEqualTo(1);
+        assertThat(fixture.packageUploads).hasValue(1);
+        byte[] archive = fixture.storageBytes.get(creationPackages.find(fixture.lease.runId()).orElseThrow().objectKey());
+        var entries = new java.util.HashMap<String, String>();
+        try (var zip = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(archive))) {
+            for (var entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry())
+                entries.put(entry.getName(), new String(zip.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+        }
+        assertThat(entries).hasSize(10);
+        assertThat(entries.get("publishing.md")).contains("数据库冻结的真实标题", "数据库冻结的简介");
+        assertThat(entries.get("package-manifest.json")).contains("\"published\":false");
+        System.out.println("S3_REPAIR_REAL_DB_WORKER_COMPLETED attempts=" + done.attemptCount() + " zipEntries=" + entries.size());
+    }
+
+    @Test void sameStageFailuresStayBoundedAcrossWorkerRestartAndCanBeCancelled() throws Exception {
+        var fixture = mediaFixture(cny("0"));
+        doThrow(new IllegalStateException("隔离测试的临时受理故障"))
+                .when(fixture.processingService).createJob(any(), any(), any(), any(), any());
+        try (var worker = fixture.worker()) { fixture.until(worker, "FAILED"); }
+        verify(fixture.processingService, times(3)).createJob(any(), any(), any(), any(), any());
+        var held = runtime.getRun(fixture.task, "default", fixture.lease.runId());
+        assertThat(held.status()).isEqualTo("WAITING_DEPENDENCY");
+        assertThat(held.errorCode()).isEqualTo("MEDIA_ATTEMPTS_EXHAUSTED");
+        try (var restored = fixture.worker()) {
+            for (int i = 0; i < 3; i++) restored.poll();
+            verify(fixture.processingService, times(3)).createJob(any(), any(), any(), any(), any());
+            runtime.cancel(fixture.task, "default", fixture.lease.runId());
+            fixture.until(restored, "CANCELLED");
+        }
+        assertThat(runtime.getRun(fixture.task, "default", fixture.lease.runId()).status()).isEqualTo("CANCELLED");
+    }
+
+    @Test void successfulStageResetsRetryAllowanceForTheNextStage() throws Exception {
+        var fixture = mediaFixture(cny("0"));
+        var processingCalls = new java.util.concurrent.atomic.AtomicInteger();
+        var reviewCalls = new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(call -> {
+            if (processingCalls.incrementAndGet() <= 2) throw new IllegalStateException("预处理受理暂不可用");
+            return fixture.acceptProcessing(call.getArgument(4));
+        }).when(fixture.processingService).createJob(any(), any(), any(), any(), any());
+        doAnswer(call -> {
+            if (reviewCalls.incrementAndGet() <= 2) throw new IllegalStateException("试映受理暂不可用");
+            return fixture.acceptReview(call.getArgument(4));
+        }).when(fixture.preflightService).create(any(), any(), any(), any(), any());
+        try (var worker = fixture.worker()) { fixture.until(worker, "COMPLETED"); }
+        assertThat(processingCalls).hasValue(3); assertThat(reviewCalls).hasValue(3);
+        assertThat(runtime.getRun(fixture.task, "default", fixture.lease.runId()).attemptCount()).isEqualTo(10);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"QUEUED", "EXPIRED", "LIVE"})
+    void mediaWorkerOwnsRecoveryAndFixedWorkerCannotTakeTheRunBack(String state) throws Exception {
+        var fixture = mediaFixture(cny("0"));
+        var job = new FixedProjectJob(fixture.lease.runId(), fixture.task, "default", "fixture", "{}");
+        fixedJobMapper.insert(job); fixedJobsToClean.add(job);
+        var waiting = runtime.getRun(fixture.task, "default", fixture.lease.runId());
+        runtime.wake(fixture.task, "default", fixture.lease.runId(), waiting.runRevision());
+        if (!"QUEUED".equals(state)) {
+            runtime.claim(fixture.task, "default", fixture.lease.runId(), "lost-media-worker", 600).orElseThrow();
+            if ("EXPIRED".equals(state)) jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(6)) WHERE run_id=?", fixture.lease.runId());
+        }
+        assertThat(fixedJobMapper.candidates()).extracting(FixedProjectJob::runId).doesNotContain(fixture.lease.runId());
+        assertThat(runtime.claimFixed(fixture.task, "default", fixture.lease.runId(), "stale-fixed-candidate", 30)).isEmpty();
+        try (var worker = fixture.worker()) {
+            if ("LIVE".equals(state)) {
+                assertThat(mediaLinks.candidates()).extracting(CreationMediaLink::runId).doesNotContain(fixture.lease.runId());
+                worker.poll(); verify(fixture.processingService, never()).createJob(any(), any(), any(), any(), any());
+                runtime.cancel(fixture.task, "default", fixture.lease.runId());
+                jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(6)) WHERE run_id=?", fixture.lease.runId());
+                fixture.until(worker, "CANCELLED");
+            } else fixture.until(worker, "COMPLETED");
+        }
+    }
+
+    @Test void staleMediaStageAdvanceCannotPolluteThePersistedRetryBaseline() throws Exception {
+        var fixture = mediaFixture(cny("0"));
+        var expected = mediaLinks.find(fixture.lease.runId()).orElseThrow();
+        runtime.wake(fixture.task, "default", fixture.lease.runId(), runtime.getRun(fixture.task, "default", fixture.lease.runId()).runRevision());
+        var old = runtime.claim(fixture.task, "default", fixture.lease.runId(), "old-media", 30).orElseThrow();
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(6)) WHERE run_id=?", fixture.lease.runId());
+        var current = runtime.claim(fixture.task, "default", fixture.lease.runId(), "new-media", 30).orElseThrow();
+        assertThat(mediaLinks.advance(fixture.lease.runId(), "MEDIA_PENDING", "MEDIA_RUNNING", "old-job", null, null, old.leaseGeneration())).isZero();
+        var stale = new GeneratedDraftLease(fixture.task, "default", fixture.lease.runId(), "old-media", old.leaseGeneration());
+        assertThatThrownBy(() -> creationMedia.advanceAndWait(stale, expected, "MEDIA_RUNNING", "old-job", null, "old-job"))
+                .isInstanceOf(ResponseStatusException.class);
+        assertThat(mediaLinks.find(fixture.lease.runId()).orElseThrow()).isEqualTo(expected);
+        var lease = new GeneratedDraftLease(fixture.task, "default", fixture.lease.runId(), "new-media", current.leaseGeneration());
+        creationMedia.hold(lease, expected, "ISOLATED_HOLD");
+        runtime.cancel(fixture.task, "default", fixture.lease.runId());
+        try (var worker = fixture.worker()) { fixture.until(worker, "CANCELLED"); }
+    }
+
+    @Test void dependencyBillingReusesPersistedRateAfterServiceRestartAndRejectsCrossRun() throws Exception {
+        var fixture = mediaFixture(cny("5"));
+        jdbc.update("UPDATE creator_creation_media_link SET preflight_review_id=? WHERE run_id=?", "bill-" + fixture.task, fixture.lease.runId());
+        var props = new com.link.linkagent.creator.creation.service.CreationBillingProperties();
+        var billing = new com.link.linkagent.creator.creation.service.CreationMediaBilling(mediaLinks, runtime, props, new ObjectMapper());
+        String reviewId = "bill-" + fixture.task;
+        assertThat(billing.reserve(reviewId, "MEDIA_ASR", "frozen-rate", cny("0.01"), "real-db-price").markSent()).isTrue();
+        props.setUsdToCny(cny("8.00"));
+        var restored = new com.link.linkagent.creator.creation.service.CreationMediaBilling(mediaLinks, runtime, props, new ObjectMapper());
+        assertThat(restored.reserve(reviewId, "MEDIA_ASR", "frozen-rate", cny("0.01"), "real-db-price").markSent()).isFalse();
+        restored.settle(reviewId, "frozen-rate", cny("0.02"), "same-call");
+        props.setUsdToCny(cny("9.00")); restored.settle(reviewId, "frozen-rate", cny("0.02"), "same-call");
+        var charge = runtime.findCharge(fixture.task, "default", fixture.lease.runId(), "frozen-rate").orElseThrow();
+        assertThat(charge.knownCostCny()).isEqualByComparingTo("0.144000");
+        assertThat(charge.priceSnapshotJson()).contains("7.20");
+        assertThat(runtime.snapshot(fixture.task, "default").budget().knownCny()).isEqualByComparingTo("0.144000");
+        assertThatThrownBy(() -> runtime.findCharge(fixture.task, "default", "other-run", "frozen-rate"))
+                .isInstanceOf(ResponseStatusException.class);
+        runtime.cancel(fixture.task, "default", fixture.lease.runId());
+        try (var worker = fixture.worker()) { fixture.until(worker, "CANCELLED"); }
+    }
+
+    @Test void childAcceptanceAndStageRollbackTogetherWhenLeaseExpiresInsideTheTransaction() throws Exception {
+        var fixture = mediaFixture(cny("0"));
+        var expected = mediaLinks.find(fixture.lease.runId()).orElseThrow();
+        runtime.wake(fixture.task, "default", fixture.lease.runId(), runtime.getRun(fixture.task, "default", fixture.lease.runId()).runRevision());
+        var claimed = runtime.claim(fixture.task, "default", fixture.lease.runId(), "expiry-media", 30).orElseThrow();
+        var lease = new GeneratedDraftLease(fixture.task, "default", fixture.lease.runId(), "expiry-media", claimed.leaseGeneration());
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,1,CURRENT_TIMESTAMP(6)) WHERE run_id=?", fixture.lease.runId());
+        assertThatThrownBy(() -> creationMedia.acceptProcessing(lease, expected, () -> {
+            var reference = mock(MediaUploadRecord.class);
+            when(reference.taskId()).thenReturn(fixture.task); when(reference.versionId()).thenReturn(fixture.version);
+            String child = processingJob(reference, "QUEUED");
+            try { Thread.sleep(1500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+            return child;
+        })).isInstanceOf(ResponseStatusException.class);
+        assertThat(count("creator_media_processing_job", fixture.task)).isZero();
+        assertThat(mediaLinks.find(fixture.lease.runId()).orElseThrow()).isEqualTo(expected);
+        runtime.cancel(fixture.task, "default", fixture.lease.runId());
+        try (var worker = fixture.worker()) { fixture.until(worker, "CANCELLED"); }
+    }
+
+    /** 仍执行真实候选 SQL，只把测试扫描范围限定在自己的运行，避免不同夹具相互推进。 */
+    private static com.link.linkagent.creator.creation.mapper.CreationMediaMapper scopedMediaCandidates(String runId) {
+        var scoped = mock(com.link.linkagent.creator.creation.mapper.CreationMediaMapper.class);
+        when(scoped.candidates()).thenAnswer(call -> mediaLinks.candidates().stream().filter(link -> runId.equals(link.runId())).toList());
+        return scoped;
+    }
+
+    /** 真实数据库驱动整个调度；子任务完成与对象存储是受控边界，不冒充供应商试映或可播放视频。 */
+    private static MediaLoopFixture mediaFixture(BigDecimal authorization) throws Exception {
+        String task = task(); String input = fullInput(task, "c".repeat(64));
+        jdbc.update("UPDATE creator_suggestion SET title_suggestions=?, description_suggestion=? WHERE task_id=?", "[\"数据库冻结的真实标题\"]", "数据库冻结的简介", task);
+        runtime.initialize(task, "default", "loop-budget", revision(task), cny("20"));
+        var queued = runtime.startProduction(task, "default", "loop", revision(task), input, authorization);
+        var run = runtime.claim(task, "default", queued.runId(), "loop-render", 600).orElseThrow();
+        var lease = new GeneratedDraftLease(task, "default", run.runId(), "loop-render", run.leaseGeneration());
+        var payloads = new java.util.HashMap<String, byte[]>();
+        var files = new ArrayList<GeneratedDraftFile>();
+        for (var descriptor : generatedFiles()) {
+            byte[] content = ("隔离调度协议夹具-" + descriptor.name()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            payloads.put(descriptor.name(), content);
+            files.add(new GeneratedDraftFile(descriptor.name(), descriptor.contentType(), content.length, nativeSha(content)));
+        }
+        var attempt = generated.prepare(lease, "loop-attempt", "a".repeat(64), "c".repeat(64), "board", "bucket", files);
+        var draft = generated.register(lease, attempt.attemptId());
+        creationMedia.begin(lease, draft.versionId());
+        return new MediaLoopFixture(task, lease, draft.versionId(), payloads);
+    }
+
+    private static final class MediaLoopFixture {
+        final String task, version; final GeneratedDraftLease lease;
+        final MediaProcessingService processingService = mock(MediaProcessingService.class);
+        final PreflightReviewService preflightService = mock(PreflightReviewService.class);
+        final ObjectStorageService storage = mock(ObjectStorageService.class);
+        final Map<String, byte[]> storageBytes = new java.util.concurrent.ConcurrentHashMap<>();
+        final java.util.concurrent.atomic.AtomicInteger packageUploads = new java.util.concurrent.atomic.AtomicInteger();
+        final com.link.linkagent.creator.creation.service.CreationPackageService packageService;
+        String jobId, reviewId;
+
+        MediaLoopFixture(String task, GeneratedDraftLease lease, String version, Map<String, byte[]> source) throws Exception {
+            this.task=task; this.lease=lease; this.version=version;
+            doAnswer(call -> { java.nio.file.Files.write(call.getArgument(2), source.get(((String)call.getArgument(1)).replaceAll(".*/", ""))); return null; })
+                    .when(storage).downloadObject(anyString(), anyString(), any());
+            doAnswer(call -> { storageBytes.put(call.getArgument(1), java.nio.file.Files.readAllBytes(call.getArgument(2))); packageUploads.incrementAndGet(); return null; })
+                    .when(storage).putObject(anyString(), anyString(), any(), anyString());
+            when(storage.headObject(anyString(), anyString())).thenAnswer(call -> new StoredObjectMetadata(storageBytes.get(call.getArgument(1)).length, "application/zip", "isolated-etag"));
+            doAnswer(call -> acceptProcessing(call.getArgument(4))).when(processingService).createJob(any(), any(), any(), any(), any());
+            when(processingService.getCurrentJob(any(), any(), any())).thenAnswer(call -> jobResponse());
+            doAnswer(call -> acceptReview(call.getArgument(4))).when(preflightService).create(any(), any(), any(), any(), any());
+            when(preflightService.get(any(), any(), any())).thenAnswer(call -> reviewResponse());
+            packageService = new com.link.linkagent.creator.creation.service.CreationPackageService(creationPackages, generatedMapper, mapper, storage, preflightService, runtime, new ObjectMapper());
+        }
+
+        private com.link.linkagent.creator.media.upload.model.MediaUploadRecord reference() {
+            var reference = mock(com.link.linkagent.creator.media.upload.model.MediaUploadRecord.class);
+            when(reference.taskId()).thenReturn(task); when(reference.versionId()).thenReturn(version); return reference;
+        }
+        com.link.linkagent.creator.media.processing.model.MediaProcessingJobResponse acceptProcessing(com.link.linkagent.creator.media.access.InternalMediaAcceptance acceptance) {
+            acceptance.verify(task, "default", version);
+            jobId = processingJob(reference(), "COMPLETED"); return jobResponse();
+        }
+        com.link.linkagent.creator.media.preflight.model.PreflightReviewResponse acceptReview(com.link.linkagent.creator.media.access.InternalMediaAcceptance acceptance) {
+            acceptance.verify(task, "default", version);
+            reviewId = review(reference(), jobId, "COMPLETED"); return reviewResponse();
+        }
+        private com.link.linkagent.creator.media.processing.model.MediaProcessingJobResponse jobResponse() {
+            var result = mock(com.link.linkagent.creator.media.processing.model.MediaProcessingJobResponse.class);
+            when(result.jobId()).thenReturn(jobId); when(result.status()).thenReturn("COMPLETED"); return result;
+        }
+        private com.link.linkagent.creator.media.preflight.model.PreflightReviewResponse reviewResponse() {
+            var result = mock(com.link.linkagent.creator.media.preflight.model.PreflightReviewResponse.class);
+            when(result.reviewId()).thenReturn(reviewId); when(result.status()).thenReturn("COMPLETED");
+            when(result.taskId()).thenReturn(task); when(result.versionId()).thenReturn(version); return result;
+        }
+        com.link.linkagent.creator.creation.service.CreationMediaWorker worker() {
+            var properties = new com.link.linkagent.creator.creation.service.CreationMediaProperties(); properties.setEnabled(true);
+            return new com.link.linkagent.creator.creation.service.CreationMediaWorker(properties, scopedMediaCandidates(lease.runId()), creationPackages, generatedMapper, runtime, processingService, preflightService, packageService, creationMedia);
+        }
+        void until(com.link.linkagent.creator.creation.service.CreationMediaWorker worker, String stage) throws Exception {
+            long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+            while (System.nanoTime()<deadline) {
+                var actual=mediaLinks.find(lease.runId()).orElseThrow();
+                if (stage.equals(actual.stage())) return;
+                worker.poll(); Thread.sleep(25);
+            }
+            assertThat(mediaLinks.find(lease.runId()).orElseThrow().stage()).as("媒体阶段").isEqualTo(stage);
+        }
+    }
+
     @Test void fullRunRequiresRealConfirmationEvenIfPlanningWasSkipped() {
         String task = task(); runtime.initialize(task, "default", "budget", -1, cny("20"));
         String input = "{\"publishingSessionId\":\"missing\",\"publishingResultId\":\"missing\",\"productionPlanId\":\"missing\",\"baseVersionId\":null,\"storyboardId\":\"board\",\"renderContentHash\":\"" + "c".repeat(64) + "\"}";
@@ -2086,6 +2322,7 @@ class MediaVersionPersistenceIntegrationTest {
         context.registerBean(com.link.linkagent.creator.creation.service.GeneratedDraftService.class, () -> drafts);
         context.registerBean(GeneratedDraftPersistenceService.class, () -> generated);
         context.registerBean(GeneratedDraftProbeService.class, () -> probe);
+        context.registerBean(com.link.linkagent.creator.creation.service.CreationMediaService.class, () -> creationMedia);
         context.register(FixedWorkerScheduling.class, FixedProjectWorker.class); context.refresh(); return context;
     }
 
@@ -2180,7 +2417,24 @@ class MediaVersionPersistenceIntegrationTest {
                 // 移走本测试创建的完整工作目录，接管仍须从登记事实恢复同一版本。
                 java.nio.file.Files.move(root.resolve(job.runId()), root.resolve("removed-workdir"));
                 runtime.wake(task, "default", job.runId(), waiting.runRevision());
-                try (var worker = fixedWorker(jobFiles, renderer, service,autoProbe)) { worker.poll(); awaitFixedStatus(job, "WAITING_DEPENDENCY", 5); }
+                // 已交接的运行由真实媒体 worker 接回；子任务受理用受控边界，不发出供应商请求。
+                var downstream = mock(MediaProcessingService.class);
+                var accepted = mock(com.link.linkagent.creator.media.processing.model.MediaProcessingJobResponse.class);
+                when(accepted.jobId()).thenReturn("native-processing-" + job.runId());
+                when(accepted.status()).thenReturn("QUEUED");
+                doAnswer(call -> {
+                    ((com.link.linkagent.creator.media.access.InternalMediaAcceptance) call.getArgument(4))
+                            .verify(task, "default", draft.versionId());
+                    return accepted;
+                }).when(downstream).createJob(any(), any(), any(), any(), any());
+                when(downstream.getCurrentJob(any(), any(), any())).thenReturn(accepted);
+                var recoveryMediaProperties = new com.link.linkagent.creator.creation.service.CreationMediaProperties();
+                recoveryMediaProperties.setEnabled(true);
+                try (var worker = new com.link.linkagent.creator.creation.service.CreationMediaWorker(recoveryMediaProperties,
+                        scopedMediaCandidates(job.runId()), creationPackages, generatedMapper, runtime, downstream, mock(PreflightReviewService.class),
+                        mock(com.link.linkagent.creator.creation.service.CreationPackageService.class), creationMedia)) {
+                    worker.poll(); awaitFixedStatus(job, "WAITING_DEPENDENCY", 5);
+                }
                 assertThat(runtimeMapper.run(task, "default", job.runId()).orElseThrow().leaseGeneration()).isEqualTo(2);
                 assertThat(mapper.findMediaWorkspace(task, "default").orElseThrow().nextVersionNo()).isEqualTo(2);
                 assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).hasSize(8);
@@ -2189,11 +2443,15 @@ class MediaVersionPersistenceIntegrationTest {
                 verify(storage,times(1)).presignGetObject(eq(draft.bucketName()),eq(draft.objectKey()),any());
                 assertThat(readyGate.inspectPostPublishReadiness(task, "default", "发布").ready()).isFalse();
                 runtime.cancel(task, "default", job.runId());
-                try (var worker = fixedWorker(jobFiles, renderer, service)) { worker.poll(); awaitFixedStatus(job, "CANCELLED", 5); }
+                try (var worker = new com.link.linkagent.creator.creation.service.CreationMediaWorker(recoveryMediaProperties,
+                        scopedMediaCandidates(job.runId()), creationPackages, generatedMapper, runtime, downstream, mock(PreflightReviewService.class),
+                        mock(com.link.linkagent.creator.creation.service.CreationPackageService.class), creationMedia)) {
+                    worker.poll(); awaitFixedStatus(job, "CANCELLED", 5);
+                }
                 new MediaDeletionService(mapper, processing, reviews, storage).deleteMedia("default", task, draft.versionId());
                 assertThat(client.listObjectsV2(b -> b.bucket(properties.getBucket())).contents()).isEmpty();
                 assertThat(mapper.findVersionContext(task, "default", draft.versionId())).isPresent();
-                System.out.println("S3E_NATIVE_AUTOPROBE_STORAGE_RECOVERY_OK schemaVersion=" + schemaVersion + " durationMs=" + observedDuration + " files=8 autoSteps=6 generation=2 sourceProbeCalls=1");
+                System.out.println("S3_REPAIR_NATIVE_HANDOFF_RECOVERY_OK schemaVersion=" + schemaVersion + " durationMs=" + observedDuration + " files=8 autoSteps=6 generation=2 sourceProbeCalls=1");
                 } finally { org.springframework.test.util.ReflectionTestUtils.invokeMethod(ffprobe,"closeOutputReaderExecutor"); }
             }
         }

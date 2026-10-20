@@ -8,13 +8,13 @@ import java.math.BigDecimal;
 /**
  * 制作费用台账的计价口径。
  * <p>
- * 媒体供应商按美元计价，制作预算按人民币记账，因此必须显式配置折算率并写进价格快照；
+ * 媒体供应商按美元计价，制作预算按人民币记账，因此使用部署的记账折算估值并写进价格快照；
  * 这里的数值是记账口径，不是实时汇率，也不代表供应商最终账单。
  */
 @Component
 @ConfigurationProperties(prefix = "creator.creation.billing")
 public class CreationBillingProperties {
-    /** 美元到人民币的记账折算率；调整只影响之后预留与结算，历史流水保留当时的快照。 */
+    /** 新调用的记账折算率估值；默认值不是实时汇率，旧调用的预留和结算只使用其持久化快照。 */
     private BigDecimal usdToCny = new BigDecimal("7.20");
     /** 单次重点片段复核的保守上界，用于发送前预留。 */
     private BigDecimal segmentReviewUsdUpperBound = new BigDecimal("0.05");
@@ -22,7 +22,7 @@ public class CreationBillingProperties {
     private BigDecimal videoUsdUpperBound = new BigDecimal("0.30");
     /** 单次观众试映的保守上界，用于发送前预留。 */
     private BigDecimal textScreeningUsdUpperBound = new BigDecimal("0.05");
-    /** 文本模型输入单价上界，仅用于把已知 token 换算成可核对的实际费用。 */
+    /** 文本模型输入单价上界，仅用于按已知 token 估算费用，不代表供应商账单。 */
     private BigDecimal textInputUsdPerMillionTokens = new BigDecimal("0.20");
     /** 文本模型输出单价上界。 */
     private BigDecimal textOutputUsdPerMillionTokens = new BigDecimal("0.80");
