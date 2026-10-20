@@ -1825,6 +1825,60 @@ CREATE TABLE IF NOT EXISTS creator_draft_video
 --        与本地 upload_session_id 一一对应但分属不同系统
 --     5. expires_at 在 abandonedTtl（默认24h）后过期，超时由读取时被动检查并标记
 -- ------------------------------------------------------------
+-- 素材独立于完整成片；声明摘要必须在后台读取真实文件后复核，不能据此直接置为可用。
+CREATE TABLE IF NOT EXISTS creator_creation_asset
+(
+    asset_id            VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '素材独立标识',
+    task_id             VARCHAR(64) NOT NULL COMMENT '所属创作任务',
+    owner_id            VARCHAR(64) NOT NULL COMMENT '自托管工作台归属',
+    idempotency_key     VARCHAR(128) NOT NULL COMMENT '同任务上传幂等键',
+    kind                VARCHAR(32) NOT NULL COMMENT '图片、旁白录音、音乐或视频片段',
+    file_name           VARCHAR(255) NOT NULL COMMENT '原始展示文件名，不作为对象路径',
+    content_type        VARCHAR(100) NOT NULL COMMENT '上传声明类型，不能替代真实解码',
+    expected_bytes      BIGINT NOT NULL COMMENT '声明字节数，合并后核对',
+    expected_sha256     CHAR(64) NOT NULL COMMENT '客户端完整文件摘要，后台重新计算核对',
+    bucket_name         VARCHAR(255) NOT NULL COMMENT '持久化私有存储桶',
+    source_key          VARCHAR(1024) NOT NULL COMMENT '服务端生成的原始素材对象键',
+    storage_upload_id   VARCHAR(512) DEFAULT NULL COMMENT '分片上传句柄',
+    status              VARCHAR(32) NOT NULL COMMENT '创建、上传、合并、准备、可用、失败或取消',
+    failed_stage        VARCHAR(32) DEFAULT NULL COMMENT '失败时的阶段，用于显式恢复',
+    failure_code        VARCHAR(64) DEFAULT NULL COMMENT '不含私有路径或签名的失败原因',
+    failure_message     VARCHAR(500) DEFAULT NULL COMMENT '受控中文失败说明，不拼接底层异常或私有路径',
+    lease_token         VARCHAR(64) DEFAULT NULL COMMENT '本次后台操作的围栏令牌',
+    lease_expires_at    DATETIME(6) DEFAULT NULL COMMENT '数据库时钟租约，过期方可接管',
+    source_sha256       CHAR(64) DEFAULT NULL COMMENT '真实读取后复核的源摘要',
+    metadata_json       JSON DEFAULT NULL COMMENT '原始与规范化媒体事实',
+    objects_json        JSON DEFAULT NULL COMMENT '派生文件键、字节数与摘要',
+    cleanup_pending     TINYINT NOT NULL DEFAULT 0 COMMENT '取消清理：零为完成，一为首次待办，二为等待写入屏障后的再次核对',
+    create_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    update_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    UNIQUE KEY uk_creation_asset_idempotency (task_id,owner_id,idempotency_key),
+    KEY idx_creation_asset_task (task_id,owner_id,create_time),
+    KEY idx_creation_asset_work (status,lease_expires_at,update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户素材与独立上传准备状态';
+
+CREATE TABLE IF NOT EXISTS creator_creation_asset_object
+(
+    asset_id       VARCHAR(64) NOT NULL COMMENT '所属素材',
+    lease_token    VARCHAR(64) NOT NULL COMMENT '登记文件的执行代令牌',
+    role           VARCHAR(32) NOT NULL COMMENT '规范化文件或缩略图',
+    object_key     VARCHAR(1024) NOT NULL COMMENT '上传前登记的派生对象键，异常退出后仍可回收',
+    cleanup_done   TINYINT NOT NULL DEFAULT 0 COMMENT '非当前可用结果的对象是否已经清理',
+    cleanup_after  DATETIME(6) NOT NULL COMMENT '等待有界写入收尾后方可确认删除',
+    create_time    DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '登记时间',
+    PRIMARY KEY (asset_id,lease_token,role),
+    KEY idx_creation_asset_object_cleanup (cleanup_done,create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='素材派生对象的持久化清理依据';
+
+CREATE TABLE IF NOT EXISTS creator_creation_asset_part
+(
+    asset_id       VARCHAR(64) NOT NULL COMMENT '所属素材',
+    part_number    INT NOT NULL COMMENT '从一开始的分片编号',
+    etag           VARCHAR(255) NOT NULL COMMENT '存储返回的不透明分片凭据',
+    part_size      BIGINT NOT NULL COMMENT '客户端登记并经服务端范围校验的分片字节数',
+    PRIMARY KEY (asset_id,part_number)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='素材上传断点恢复分片';
+
 CREATE TABLE IF NOT EXISTS creator_media_upload
 (
     id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',

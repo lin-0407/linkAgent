@@ -62,6 +62,21 @@ public class S3ObjectStorageService implements ObjectStorageService {
     // 对象存储配置（Bucket、Region 等）
     private final ObjectStorageProperties properties;
 
+    @Override
+    public List<MultipartUploadHandle> listMultipartUploads(String bucketName,String objectKey) {
+        try {
+            var found=new java.util.ArrayList<MultipartUploadHandle>();
+            var request=software.amazon.awssdk.services.s3.model.ListMultipartUploadsRequest.builder()
+                    .bucket(bucketName).prefix(objectKey).maxUploads(100)
+                    .overrideConfiguration(operationTimeout(Duration.ofSeconds(120))).build();
+            for(var page:s3Client.listMultipartUploadsPaginator(request)) {
+                for(var upload:page.uploads()) if(objectKey.equals(upload.key())) found.add(new MultipartUploadHandle(upload.uploadId()));
+                if(found.size()>100) throw new MediaStorageException("素材残留上传过多，请先处理存储",null);
+            }
+            return List.copyOf(found);
+        } catch(SdkException ex) {throw storageFailure("恢复素材分片上传失败",ex);}
+    }
+
     public S3ObjectStorageService(S3Client s3Client,
                                    @Qualifier("mediaS3Presigner") S3Presigner uploadPartPresigner,
                                    @Qualifier("mediaProviderS3Presigner") S3Presigner providerReadPresigner,
@@ -85,6 +100,11 @@ public class S3ObjectStorageService implements ObjectStorageService {
      */
     @Override
     public MultipartUploadHandle createMultipartUpload(String objectKey, String contentType) {
+        return createMultipartUpload(objectKey,contentType,null);
+    }
+
+    @Override
+    public MultipartUploadHandle createMultipartUpload(String objectKey,String contentType,Duration timeout) {
         try {
             // 构建 S3 CreateMultipartUpload 请求
             CreateMultipartUploadResponse response = s3Client.createMultipartUpload(
@@ -92,6 +112,7 @@ public class S3ObjectStorageService implements ObjectStorageService {
                             .bucket(properties.getBucket())   // 桶名从配置读取
                             .key(objectKey)                   // 后端生成的对象键
                             .contentType(contentType)          // 声明媒体类型
+                            .overrideConfiguration(operationTimeout(timeout))
                             .build()
             );
             // 只返回 Upload ID，其余 SDK 响应字段不暴露给业务层
@@ -212,6 +233,11 @@ public class S3ObjectStorageService implements ObjectStorageService {
     public void completeMultipartUpload(String objectKey,
                                         String uploadId,
                                         List<CompletedUploadPart> parts) {
+        completeMultipartUpload(objectKey,uploadId,parts,null);
+    }
+
+    @Override
+    public void completeMultipartUpload(String objectKey,String uploadId,List<CompletedUploadPart> parts,Duration timeout) {
         try {
             // 将业务层的 CompletedUploadPart 转换为 AWS SDK 的 CompletedPart
             List<CompletedPart> completedParts = parts.stream()
@@ -229,6 +255,7 @@ public class S3ObjectStorageService implements ObjectStorageService {
                             .uploadId(uploadId)
                             // 包装已完成分片列表
                             .multipartUpload(CompletedMultipartUpload.builder().parts(completedParts).build())
+                            .overrideConfiguration(operationTimeout(timeout))
                             .build()
             );
         } catch (SdkException exception) {
@@ -300,11 +327,17 @@ public class S3ObjectStorageService implements ObjectStorageService {
      */
     @Override
     public void downloadObject(String bucketName, String objectKey, Path targetFile) {
+        downloadObject(bucketName,objectKey,targetFile,null);
+    }
+
+    @Override
+    public void downloadObject(String bucketName,String objectKey,Path targetFile,Duration timeout) {
         try {
             s3Client.getObject(
                     GetObjectRequest.builder()
                             .bucket(bucketName)
                             .key(objectKey)
+                              .overrideConfiguration(operationTimeout(timeout))
                             .build(),
                     ResponseTransformer.toFile(targetFile)
             );
@@ -315,18 +348,29 @@ public class S3ObjectStorageService implements ObjectStorageService {
 
     @Override
     public void putObject(String bucketName, String objectKey, Path sourceFile, String contentType) {
+        putObject(bucketName,objectKey,sourceFile,contentType,null);
+    }
+
+    @Override
+    public void putObject(String bucketName,String objectKey,Path sourceFile,String contentType,Duration timeout) {
         try {
             s3Client.putObject(
                     PutObjectRequest.builder()
                             .bucket(bucketName)
                             .key(objectKey)
                             .contentType(contentType)
+                              .overrideConfiguration(operationTimeout(timeout))
                             .build(),
                     RequestBody.fromFile(sourceFile)
             );
         } catch (SdkException exception) {
             throw storageFailure("上传派生媒体失败", exception);
         }
+    }
+
+    private software.amazon.awssdk.awscore.AwsRequestOverrideConfiguration operationTimeout(Duration timeout) {
+        return timeout==null ? null : software.amazon.awssdk.awscore.AwsRequestOverrideConfiguration.builder()
+                .apiCallTimeout(timeout).apiCallAttemptTimeout(timeout).build();
     }
 
     @Override

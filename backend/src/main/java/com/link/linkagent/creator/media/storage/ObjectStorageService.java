@@ -34,6 +34,14 @@ public interface ObjectStorageService {
      */
     MultipartUploadHandle createMultipartUpload(String objectKey, String contentType);
 
+    /** 仅恢复服务端生成的准确对象键，回收创建成功但句柄响应丢失的分片上传。 */
+    List<MultipartUploadHandle> listMultipartUploads(String bucketName,String objectKey);
+
+    /** 素材后台使用有界请求，取消清理可以据此等待写入收尾；原成片调用保持原参数。 */
+    default MultipartUploadHandle createMultipartUpload(String objectKey,String contentType,Duration timeout) {
+        return createMultipartUpload(objectKey,contentType);
+    }
+
     /**
      * 为指定分片生成短时预签名 PUT URL。
      * <p>
@@ -80,10 +88,18 @@ public interface ObjectStorageService {
      */
     void downloadObject(String bucketName, String objectKey, Path targetFile);
 
+    default void downloadObject(String bucketName,String objectKey,Path targetFile,Duration timeout) {
+        downloadObject(bucketName,objectKey,targetFile);
+    }
+
     /**
      * 将 FFmpeg 生成的派生文件上传到私有对象存储。
      */
     void putObject(String bucketName, String objectKey, Path sourceFile, String contentType);
+
+    default void putObject(String bucketName,String objectKey,Path sourceFile,String contentType,Duration timeout) {
+        putObject(bucketName,objectKey,sourceFile,contentType);
+    }
 
     /**
      * 提交所有分片 ETag，完成 Multipart Upload。
@@ -97,6 +113,10 @@ public interface ObjectStorageService {
     void completeMultipartUpload(String objectKey,
                                  String uploadId,
                                  List<CompletedUploadPart> parts);
+
+    default void completeMultipartUpload(String objectKey,String uploadId,List<CompletedUploadPart> parts,Duration timeout) {
+        completeMultipartUpload(objectKey,uploadId,parts);
+    }
 
     /**
      * 取消分片上传，释放对象存储上所有已上传但未合并的分片。

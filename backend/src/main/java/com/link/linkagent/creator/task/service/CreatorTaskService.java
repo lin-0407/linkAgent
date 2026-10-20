@@ -225,7 +225,7 @@ public class CreatorTaskService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
         // 任务一旦隐藏，执行器便无法续租或补记费用，必须先让运行和已发调用有序收尾。
         if (creatorTaskMapper.countDeletionBlockers(safeTaskId, taskRecord.getUserId()) > 0) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "任务仍有制作运行或待结算费用，请完成取消和费用核对后再删除");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "任务仍有未收尾素材、制作运行或待结算费用，请先完成取消、素材清理和费用核对");
         }
         int deleted = creatorTaskMapper.deleteTask(taskRecord.getTaskId(), CreatorTaskStatus.ARCHIVED.name());
         if (deleted == 0) {

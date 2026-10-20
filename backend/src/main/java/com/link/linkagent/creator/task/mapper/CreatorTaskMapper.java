@@ -62,6 +62,8 @@ public interface CreatorTaskMapper {
                 AND status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED'))
             + (SELECT COUNT(*) FROM creator_creation_cost_entry WHERE task_id=#{taskId} AND owner_id=#{ownerId}
                 AND status IN ('RESERVED','UNKNOWN'))
+            + (SELECT COUNT(*) FROM creator_creation_asset WHERE task_id=#{taskId} AND owner_id=#{ownerId}
+                AND (status NOT IN ('READY','CANCELLED') OR cleanup_pending>0))
             """)
     int countDeletionBlockers(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
 
