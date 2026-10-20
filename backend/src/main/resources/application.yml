@@ -226,6 +226,28 @@ creator:
       lease-seconds: ${CREATOR_CREATION_WORKER_LEASE_SECONDS:30}
       heartbeat-seconds: ${CREATOR_CREATION_WORKER_HEARTBEAT_SECONDS:5}
       max-attempts: ${CREATOR_CREATION_WORKER_MAX_ATTEMPTS:3}
+    # 整片媒体闭环：成片登记后自动进入预处理与完整试映，并生成最小发布包。
+    # 与媒体总开关、固定工程执行器同时开启才生效；未开启时运行停留在等待依赖。
+    media:
+      enabled: ${CREATOR_CREATION_MEDIA_ENABLED:false}
+      poll-interval-ms: ${CREATOR_CREATION_MEDIA_POLL_INTERVAL_MS:5000}
+      lease-seconds: ${CREATOR_CREATION_MEDIA_LEASE_SECONDS:60}
+      heartbeat-seconds: ${CREATOR_CREATION_MEDIA_HEARTBEAT_SECONDS:15}
+      max-attempts: ${CREATOR_CREATION_MEDIA_MAX_ATTEMPTS:3}
+      # 自动工程的媒体处理档位；与人工入口分别配置，避免相互影响。
+      frame-interval-seconds: ${CREATOR_CREATION_MEDIA_FRAME_INTERVAL_SECONDS:10}
+      resolution: ${CREATOR_CREATION_MEDIA_RESOLUTION:P720}
+      model-plan: ${CREATOR_CREATION_MEDIA_MODEL_PLAN:FLASH_PLUS_REVIEW}
+      include-asr: ${CREATOR_CREATION_MEDIA_INCLUDE_ASR:true}
+    # 制作费用台账的计价口径。台账按人民币记账，媒体供应商按美元计价，
+    # 折算率和美元上界是记账口径而非实时汇率，均写入每次预留的价格快照。
+    billing:
+      usd-to-cny: ${CREATOR_CREATION_USD_TO_CNY:7.20}
+      segment-review-usd-upper-bound: ${CREATOR_CREATION_SEGMENT_REVIEW_USD_UPPER_BOUND:0.05}
+      video-usd-upper-bound: ${CREATOR_CREATION_VIDEO_USD_UPPER_BOUND:0.30}
+      text-screening-usd-upper-bound: ${CREATOR_CREATION_TEXT_SCREENING_USD_UPPER_BOUND:0.05}
+      text-input-usd-per-million-tokens: ${CREATOR_CREATION_TEXT_INPUT_USD_PER_MILLION_TOKENS:0.20}
+      text-output-usd-per-million-tokens: ${CREATOR_CREATION_TEXT_OUTPUT_USD_PER_MILLION_TOKENS:0.80}
   # ========== 阶段 7 P0：私有媒体能力 ==========
   # 注意：媒体能力默认关闭。只有 OSS 和后续视频分析 Provider 配置完成后才显式开启，
   # 避免未配置对象存储时暴露不可用的大文件上传入口。

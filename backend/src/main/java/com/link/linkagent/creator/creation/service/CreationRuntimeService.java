@@ -1,6 +1,8 @@
 package com.link.linkagent.creator.creation.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.creation.mapper.CreationMediaMapper;
+import com.link.linkagent.creator.creation.mapper.CreationPackageMapper;
 import com.link.linkagent.creator.creation.mapper.CreationRuntimeMapper;
 import com.link.linkagent.creator.creation.mapper.CreationWorkspaceMapper;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.*;
@@ -26,11 +28,15 @@ public class CreationRuntimeService {
     private final MediaUploadMapper media;
     private final CreationRuntimeMapper mapper;
     private final CreationWorkspaceMapper workspace;
+    private final CreationMediaMapper mediaLinks;
+    private final CreationPackageMapper packages;
     private final ObjectMapper json;
 
     public CreationRuntimeService(MediaUploadMapper media, CreationRuntimeMapper mapper,
-                                  CreationWorkspaceMapper workspace, ObjectMapper json) {
+                                  CreationWorkspaceMapper workspace, CreationMediaMapper mediaLinks,
+                                  CreationPackageMapper packages, ObjectMapper json) {
         this.media = media; this.mapper = mapper; this.workspace = workspace; this.json = json;
+        this.mediaLinks = mediaLinks; this.packages = packages;
     }
 
     public Snapshot initialize(String taskId, String ownerId, String key, long expectedRevision, BigDecimal amount) {
@@ -224,7 +230,7 @@ public class CreationRuntimeService {
         lock(taskId, ownerId); run(taskId, ownerId, runId);
         mapper.cancel(taskId, ownerId, runId);
         var current = run(taskId, ownerId, runId);
-        if ("CANCELLED".equals(current.status())) close(taskId, ownerId, runId);
+        if ("CANCELLED".equals(current.status())) close(taskId, ownerId, runId, "CANCELLED");
         return RunView.from(current);
     }
 
@@ -238,6 +244,34 @@ public class CreationRuntimeService {
         if (mapper.pendingReservations(taskId, ownerId, runId) > 0) throw conflict("请先结算或标记调用费用状态");
         return finish(taskId, ownerId, runId, worker, generation, "RUNNING", "COMPLETED", null,
                 canonical(json, resultJson), null);
+    }
+
+    /**
+     * 整片完成入口：只认精确版本的 READY 发布包。
+     * 媒体处理、完整试映与包对象的事实由调用方先行校验，这里再次要求包与闭环版本一致，
+     * 防止用其他版本或其他运行的包结束当前运行。
+     */
+    public Run completeProduction(String taskId, String ownerId, String runId, String worker, long generation,
+                                  String resultJson) {
+        lock(taskId, ownerId);
+        var current = run(taskId, ownerId, runId);
+        if (!"FULL".equals(current.kind())) throw conflict("只有整片运行使用发布包完成入口");
+        var link = mediaLinks.find(runId).orElseThrow(() -> conflict("整片运行尚未进入媒体处理闭环"));
+        var pkg = packages.find(runId).orElseThrow(() -> conflict("最小发布包尚未生成"));
+        if (!"READY".equals(pkg.status()) || !link.versionId().equals(pkg.versionId())
+                || pkg.objectKey() == null || pkg.bytes() == null || pkg.sha256() == null)
+            throw conflict("最小发布包尚未通过对象校验");
+        if (mapper.pendingReservations(taskId, ownerId, runId) > 0) throw conflict("请先结算或标记调用费用状态");
+        // 导出不等同于已发布；结果里必须保留这一事实。
+        return finish(taskId, ownerId, runId, worker, generation, "RUNNING", "COMPLETED", null,
+                canonical(json, resultJson), null);
+    }
+
+    /** 依赖无法自动推进时保留活动运行，交给作者决定重试或取消；不会自动继续付费。 */
+    public void holdForUser(String taskId, String ownerId, String runId, String worker, long generation, String errorCode) {
+        lock(taskId, ownerId); id(worker); id(errorCode);
+        if (mapper.holdForUser(taskId, ownerId, runId, worker, generation, "MEDIA_NEED_ATTENTION", errorCode) != 1)
+            throw conflict("运行已取消、租约已过期或已被其他执行器接管");
     }
 
     public Run fail(String taskId, String ownerId, String runId, String worker, long generation, String errorCode) {
@@ -259,7 +293,7 @@ public class CreationRuntimeService {
         lock(taskId, ownerId); id(worker); active(taskId, ownerId, runId);
         if (mapper.finish(taskId, ownerId, runId, worker, generation, expectedState, state, dependency, result, error) != 1)
             throw conflict("运行已取消、租约已过期或已被其他执行器接管");
-        if (!"WAITING_DEPENDENCY".equals(state)) close(taskId, ownerId, runId);
+        if (!"WAITING_DEPENDENCY".equals(state)) close(taskId, ownerId, runId, state);
         return run(taskId, ownerId, runId);
     }
 
@@ -298,6 +332,52 @@ public class CreationRuntimeService {
         return mapper.sent(taskId, ownerId, chargeKey) == 1;
     }
 
+    /**
+     * 依赖阶段（媒体处理、完整试映）的付费调用没有执行租约，但仍必须在发送前预留。
+     * 校验活动运行、授权和预算，租约代数沿用该运行最后一次真实执行的代数；
+     * 运行已结束或已进入发布后流程时不允许新增付费调用。
+     */
+    public Charge reserveDependency(String taskId, String ownerId, String runId, String chargeKey,
+                                    String capability, BigDecimal amount, String priceJson) {
+        lock(taskId, ownerId); key(chargeKey); id(capability);
+        amount = money(amount, false); String price = canonical(json, priceJson);
+        var previous = mapper.charge(taskId, ownerId, chargeKey);
+        if (previous.isPresent()) {
+            var charge = previous.get();
+            if (!runId.equals(charge.runId()) || !capability.equals(charge.capability())
+                    || amount.compareTo(charge.reservedCny()) != 0 || !price.equals(charge.priceSnapshotJson()))
+                throw conflict("调用标识已经用于其他费用预留");
+            return charge;
+        }
+        var current = active(taskId, ownerId, runId);
+        var run = run(taskId, ownerId, runId);
+        if (!Set.of("RUNNING", "WAITING_DEPENDENCY", "CANCEL_REQUESTED").contains(run.status()))
+            throw conflict("运行已结束，不能发起新的付费调用");
+        var approval = approval(taskId, ownerId, run.approvalId());
+        if (!"ACTIVE".equals(approval.status())) throw conflict("费用授权已撤销");
+        var totals = mapper.totals(taskId, ownerId);
+        if (blocked(totals)) throw conflict("存在待核实或超出预留的费用，暂停新增付费调用");
+        if (totals.occupied().add(amount).compareTo(current.budgetLimitCny()) > 0) throw conflict("任务剩余预算不足");
+        if (mapper.approvalTotals(taskId, ownerId, run.approvalId()).occupied().add(amount)
+                .compareTo(run.authorizationLimitCny()) > 0)
+            throw conflict("本次授权剩余金额不足，重试不会扩大授权");
+        var charge = new Charge(newId(), chargeKey, taskId, ownerId, runId, run.approvalId(), run.leaseGeneration(),
+                capability, amount, null, "RESERVED", null, null, price, null);
+        try { mapper.insertCharge(charge); }
+        catch (DuplicateKeyException exception) { throw conflict("调用标识已被占用"); }
+        return charge;
+    }
+
+    /** 依赖阶段没有活租约，发送标记只核对调用仍属于未结束的运行。 */
+    public boolean markSentDependency(String taskId, String ownerId, String chargeKey) {
+        lock(taskId, ownerId);
+        var charge = charge(taskId, ownerId, chargeKey);
+        var run = run(taskId, ownerId, charge.runId());
+        if (!Set.of("RUNNING", "WAITING_DEPENDENCY", "CANCEL_REQUESTED").contains(run.status()))
+            throw conflict("运行已结束，不能登记新的物理发送");
+        return mapper.sent(taskId, ownerId, chargeKey) == 1;
+    }
+
     public Charge settle(String taskId, String ownerId, String chargeKey, BigDecimal actual, String kind, String evidenceRef) {
         lock(taskId, ownerId); actual = money(actual, true); evidence(evidenceRef);
         if (kind == null || !Set.of("USAGE_ESTIMATE", "PROVIDER_REPORTED").contains(kind)) throw conflict("费用结算类型不正确");
@@ -328,10 +408,12 @@ public class CreationRuntimeService {
             cancel(taskId, ownerId, current.activeRunId());
     }
 
-    private void close(String taskId, String ownerId, String runId) {
+    private void close(String taskId, String ownerId, String runId, String state) {
         mapper.closeReservations(taskId, ownerId, runId);
         mapper.closeGeneratedProbe(taskId, ownerId, runId);
         mapper.retireUnfinishedAutomaticPlan(taskId, ownerId, runId);
+        // 媒体闭环随运行终态收口：完成保留 COMPLETED，其余终态标为取消，历史子任务事实不删除。
+        if ("COMPLETED".equals(state)) mediaLinks.complete(runId); else mediaLinks.close(runId);
         mapper.deactivate(taskId, ownerId, runId);
     }
     private void idle(String taskId, String ownerId, Workspace current) {

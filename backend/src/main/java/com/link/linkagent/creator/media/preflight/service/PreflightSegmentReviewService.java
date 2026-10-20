@@ -54,6 +54,7 @@ public class PreflightSegmentReviewService {
     private final ObjectMapper objectMapper;
     private final Supplier<String> callIdSupplier;
     private final Supplier<String> evidenceIdSupplier;
+    private final MediaCallChargeGate chargeGate;
 
     @Autowired
     public PreflightSegmentReviewService(CreatorMediaProperties properties,
@@ -61,9 +62,10 @@ public class PreflightSegmentReviewService {
                                          MediaProcessingMapper processingMapper,
                                          ObjectStorageService storage,
                                          VideoUnderstandingProvider provider,
-                                         ObjectMapper objectMapper) {
+                                         ObjectMapper objectMapper,
+                                         MediaCallChargeGate chargeGate) {
         this(properties, mapper, processingMapper, storage, provider, objectMapper,
-                () -> UUID.randomUUID().toString(), () -> UUID.randomUUID().toString());
+                () -> UUID.randomUUID().toString(), () -> UUID.randomUUID().toString(), chargeGate);
     }
 
     PreflightSegmentReviewService(CreatorMediaProperties properties,
@@ -74,6 +76,19 @@ public class PreflightSegmentReviewService {
                                   ObjectMapper objectMapper,
                                   Supplier<String> callIdSupplier,
                                   Supplier<String> evidenceIdSupplier) {
+        this(properties, mapper, processingMapper, storage, provider, objectMapper,
+                callIdSupplier, evidenceIdSupplier, MediaCallChargeGate.NOOP);
+    }
+
+    PreflightSegmentReviewService(CreatorMediaProperties properties,
+                                  PreflightReviewMapper mapper,
+                                  MediaProcessingMapper processingMapper,
+                                  ObjectStorageService storage,
+                                  VideoUnderstandingProvider provider,
+                                  ObjectMapper objectMapper,
+                                  Supplier<String> callIdSupplier,
+                                  Supplier<String> evidenceIdSupplier,
+                                  MediaCallChargeGate chargeGate) {
         this.properties = properties;
         this.mapper = mapper;
         this.processingMapper = processingMapper;
@@ -82,6 +97,7 @@ public class PreflightSegmentReviewService {
         this.objectMapper = objectMapper;
         this.callIdSupplier = callIdSupplier;
         this.evidenceIdSupplier = evidenceIdSupplier;
+        this.chargeGate = chargeGate;
     }
 
     public Result review(PreflightReviewRecord review, PreflightStepRecord step) {
@@ -121,6 +137,8 @@ public class PreflightSegmentReviewService {
                 String objectKey = temporaryObjectKey(review, issue);
                 String callId = callIdSupplier.get();
                 boolean uploaded = false;
+                boolean sent = false;
+                String chargeKey = "segment-" + review.reviewId() + "-" + callId;
                 try {
                     cutClip(previewFile, clip, range);
                     storage.putObject(preview.bucketName(), objectKey, clip, "video/mp4");
@@ -132,8 +150,14 @@ public class PreflightSegmentReviewService {
                             requestFingerprint, null) != 1) {
                         throw new SegmentReviewException("重点片段复核调用记录创建失败");
                     }
+                    // 每个片段都是独立物理调用，先按保守上界预留再发送。
+                    var charge = chargeGate.reserve(review.reviewId(), "MEDIA_SEGMENT", chargeKey,
+                            chargeGate.upperBound("MEDIA_SEGMENT"),
+                            "重点片段复核 " + properties.getPreflight().getSegmentReviewModel());
                     String videoUrl = storage.presignGetObject(
                             preview.bucketName(), objectKey, properties.getProcessing().getProviderReadTtl()).url();
+                    if (!charge.markSent()) throw new SegmentReviewException("重点片段复核调用已发送，不能重复提交");
+                    sent = true;
                     VideoUnderstandingProvider.AnalysisResult providerResult = provider.analyze(
                             videoUrl,
                             buildPrompt(issue, range, mapper.listEvidence(review.reviewId())),
@@ -144,10 +168,14 @@ public class PreflightSegmentReviewService {
                     persistReview(review, step, issue, range, parsed);
                     BigDecimal cost = actualCost(providerResult.inputTokens(), providerResult.outputTokens());
                     mapper.completeVideoCall(callId, providerResult.inputTokens(), providerResult.outputTokens(), cost, 1);
+                    if (cost == null) chargeGate.unknown(review.reviewId(), chargeKey);
+                    else chargeGate.settle(review.reviewId(), chargeKey, cost, "segment-" + callId);
                     totalCost = totalCost.add(cost == null ? BigDecimal.ZERO : cost);
                     reviewedCount++;
                 } catch (RuntimeException | IOException exception) {
                     mapper.failVideoCall(callId, "SEGMENT_REVIEW_FAILED", truncate(exception.getMessage()));
+                    // 只有发出过请求才可能是未知费用；未发送的预留随运行收尾释放。
+                    if (sent) chargeGate.unknown(review.reviewId(), chargeKey);
                     failedCount++;
                     log.warn("重点片段复核降级 reviewId={} issueId={}", review.reviewId(), issue.issueId(), exception);
                 } finally {

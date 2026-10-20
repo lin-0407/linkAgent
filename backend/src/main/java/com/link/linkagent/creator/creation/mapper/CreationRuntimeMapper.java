@@ -155,4 +155,20 @@ public interface CreationRuntimeMapper {
                 AND lease_owner=#{worker} AND lease_generation=#{generation} AND lease_expires_at>CURRENT_TIMESTAMP(6)
             """)
     int artifactReady(com.link.linkagent.creator.creation.model.GeneratedDraftLease lease);
+
+    /**
+     * 依赖已落库但无法继续自动推进时，保留活动运行和已登记成片，只把阶段标成待用户处理。
+     * 不写成 FAILED，避免把“需要作者决定重试或取消”误报成制作失败。
+     */
+    @Update("""
+            UPDATE creator_creation_run SET status='WAITING_DEPENDENCY', stage='MEDIA_BLOCKED',
+                dependency_id=#{dependency}, error_code=#{code}, lease_owner=NULL, lease_expires_at=NULL,
+                run_revision=run_revision+1, completed_at=NULL
+            WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND run_id=#{runId} AND status='RUNNING'
+                AND lease_owner=#{worker} AND lease_generation=#{generation} AND lease_expires_at>CURRENT_TIMESTAMP(6)
+            """)
+    int holdForUser(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+                    @Param("runId") String runId, @Param("worker") String worker,
+                    @Param("generation") long generation, @Param("dependency") String dependency,
+                    @Param("code") String code);
 }

@@ -3,6 +3,7 @@ package com.link.linkagent.creator.media.preflight.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
+import com.link.linkagent.creator.media.access.InternalMediaAcceptance;
 import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
 import com.link.linkagent.creator.media.preflight.model.CreatePreflightReviewRequest;
 import com.link.linkagent.creator.media.preflight.model.EditTaskRecord;
@@ -71,10 +72,28 @@ public class PreflightReviewService {
                                           String taskId,
                                           String idempotencyKey,
                                           CreatePreflightReviewRequest request) {
+        return create(ownerId, taskId, idempotencyKey, request, null);
+    }
+
+    /**
+     * 内部受理：整片运行持有执行租约时创建完整试映。
+     * 只放宽“有活动制作运行即拒绝”这一条，成片必须已通过探测、预处理必须已完成等前置条件保持不变。
+     * 提交给云端 Provider 的告知义务由整片制作授权覆盖，不接受匿名内部调用。
+     */
+    @Transactional
+    public PreflightReviewResponse create(String ownerId,
+                                          String taskId,
+                                          String idempotencyKey,
+                                          CreatePreflightReviewRequest request,
+                                          InternalMediaAcceptance acceptance) {
         lockTask(taskId, ownerId);
         mapper.lockDraftVersion(taskId, ownerId, request.versionId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
-        ensureNoCreationRun(taskId, ownerId);
+        if (acceptance == null) {
+            ensureNoCreationRun(taskId, ownerId);
+        } else {
+            acceptance.verify(taskId, ownerId, request.versionId());
+        }
         PreflightReviewRecord idempotent = mapper.findByIdempotency(taskId, ownerId, idempotencyKey)
                 .orElse(null);
         if (idempotent != null) {

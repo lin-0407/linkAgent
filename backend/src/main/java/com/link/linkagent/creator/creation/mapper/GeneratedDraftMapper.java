@@ -33,6 +33,11 @@ public interface GeneratedDraftMapper {
             """)
     int insertContext(VideoVersionContextRecord context);
 
+    /** 发布包只使用登记时冻结的上下文，不重新读取可能已被覆盖的发布方案。 */
+    @Select("SELECT snapshot_json FROM creator_video_version_context WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND version_id=#{versionId}")
+    Optional<String> contextSnapshot(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+            @Param("versionId") String versionId);
+
     // 接管只能替换读取到的那一次探测，旧进程即使返回也不能覆盖新 token。
     @Update("""
             UPDATE creator_draft_video SET status='PROBING',probe_attempt_id=#{nextToken},

@@ -24,6 +24,7 @@ class FixedProjectWorkerTest {
     final GeneratedDraftService drafts = mock(GeneratedDraftService.class);
     final GeneratedDraftPersistenceService persistence = mock(GeneratedDraftPersistenceService.class);
     final GeneratedDraftProbeService probe = mock(GeneratedDraftProbeService.class);
+    final CreationMediaService media = mock(CreationMediaService.class);
     final Run run = mock(Run.class);
     final FixedProjectJob job = new FixedProjectJob("run", "task", "default", "source", "{}");
     final FixedProjectRenderService.Request request = new FixedProjectRenderService.Request(Path.of("input.json"), "run", "attempt", "board", "a".repeat(64));
@@ -66,11 +67,12 @@ class FixedProjectWorkerTest {
         when(run.attemptCount()).thenReturn(8);
         var draft = mock(DraftVideoRecord.class); when(draft.versionId()).thenReturn("version");
         when(persistence.registeredResult(any())).thenReturn(Optional.of(draft)); CountDownLatch ended = new CountDownLatch(1);
-        when(runtime.waitForDependency(eq("task"), eq("default"), eq("run"), anyString(), eq(1L), eq("version")))
-                .thenAnswer(call -> { ended.countDown(); return run; });
+        doAnswer(call -> { ended.countDown(); return null; })
+                .when(media).begin(any(), eq("version"));
         try (var worker = worker()) { worker.poll(); assertThat(ended.await(3, TimeUnit.SECONDS)).isTrue(); }
         verifyNoInteractions(files, renderer, drafts);
         verify(probe).probe(any(), eq("version"), any());
+        verify(media).begin(any(), eq("version"));
         verify(runtime, never()).complete(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString());
     }
 
@@ -83,6 +85,7 @@ class FixedProjectWorkerTest {
                 .thenAnswer(call -> { ended.countDown(); return run; });
         try (var worker = worker()) { worker.poll(); assertThat(ended.await(3, TimeUnit.SECONDS)).isTrue(); }
         verifyNoInteractions(files, renderer, drafts);
+        verifyNoInteractions(media);
         verify(runtime, never()).waitForDependency(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString());
     }
 
@@ -119,6 +122,6 @@ class FixedProjectWorkerTest {
         assertThatThrownBy(this::worker).isInstanceOf(IllegalStateException.class);
     }
 
-    private FixedProjectWorker worker() { return new FixedProjectWorker(properties, jobs, runtime, files, renderer, drafts, persistence, probe); }
+    private FixedProjectWorker worker() { return new FixedProjectWorker(properties, jobs, runtime, files, renderer, drafts, persistence, probe, media); }
     private RunView view(String state) { return new RunView("run", "FULL", state, state, null, 1, 1, null, null, null); }
 }

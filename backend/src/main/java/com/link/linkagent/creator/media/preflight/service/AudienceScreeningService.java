@@ -37,13 +37,23 @@ public class AudienceScreeningService {
     private final PreflightReviewMapper mapper;
     private final LLMService llmService;
     private final ObjectMapper objectMapper;
+    private final MediaCallChargeGate chargeGate;
 
     public AudienceScreeningService(PreflightReviewMapper mapper,
                                     LLMService llmService,
                                     ObjectMapper objectMapper) {
+        this(mapper, llmService, objectMapper, MediaCallChargeGate.NOOP);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AudienceScreeningService(PreflightReviewMapper mapper,
+                                    LLMService llmService,
+                                    ObjectMapper objectMapper,
+                                    MediaCallChargeGate chargeGate) {
         this.mapper = mapper;
         this.llmService = llmService;
         this.objectMapper = objectMapper;
+        this.chargeGate = chargeGate;
     }
 
     public Result screen(PreflightReviewRecord review, PreflightStepRecord step) {
@@ -57,8 +67,15 @@ public class AudienceScreeningService {
                 step.stepId(), fingerprint) != 1) {
             throw new AudienceScreeningException("观众试映调用记录创建失败");
         }
+        // 文本模型没有供应商账单，先按保守上界预留，拿到真实 token 后按配置单价结算。
+        String chargeKey = "text-" + review.reviewId() + "-" + callId;
+        boolean sent = false;
         // Worker 没有 HTTP 请求上下文，需显式把文本用量归到当前创作任务。
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(review.taskId(), "AI观众试映")) {
+            var charge = chargeGate.reserve(review.reviewId(), "MEDIA_TEXT_SCREENING", chargeKey,
+                    chargeGate.upperBound("MEDIA_TEXT_SCREENING"), "观众试映 " + PROMPT_VERSION);
+            if (!charge.markSent()) throw new AudienceScreeningException("观众试映调用已发送，不能重复提交");
+            sent = true;
             StructuredCallResult<AudienceOutput> call = llmService.chatStructuredWithUsage(
                     systemPrompt(), userPrompt(review, issues, evidence), AudienceOutput.class);
             List<ValidatedPersona> personas = validate(call.entity(), issues, evidence);
@@ -67,9 +84,15 @@ public class AudienceScreeningService {
                     personas.size()) != 1) {
                 throw new AudienceScreeningException("观众试映用量保存失败");
             }
+            BigDecimal cost = chargeGate.estimateTextCost(
+                    call.promptTokens() == null ? null : call.promptTokens().longValue(),
+                    call.completionTokens() == null ? null : call.completionTokens().longValue());
+            if (cost == null) chargeGate.unknown(review.reviewId(), chargeKey);
+            else chargeGate.settle(review.reviewId(), chargeKey, cost, "text-" + callId);
             return new Result(personas.size(), call.promptTokens(), call.completionTokens());
         } catch (RuntimeException exception) {
             mapper.failTextScreeningCall(callId, "AUDIENCE_SCREENING_FAILED", truncate(exception.getMessage()));
+            if (sent) chargeGate.unknown(review.reviewId(), chargeKey);
             throw exception instanceof AudienceScreeningException
                     ? exception : new AudienceScreeningException("三类观众试映生成失败", exception);
         }

@@ -33,17 +33,29 @@ public class PreflightAsrService {
     private final ObjectStorageService storage;
     private final SpeechRecognitionProvider provider;
     private final ObjectMapper objectMapper;
+    private final MediaCallChargeGate chargeGate;
 
     public PreflightAsrService(CreatorMediaProperties properties,
                                PreflightReviewMapper mapper,
                                ObjectStorageService storage,
                                SpeechRecognitionProvider provider,
                                ObjectMapper objectMapper) {
+        this(properties, mapper, storage, provider, objectMapper, MediaCallChargeGate.NOOP);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PreflightAsrService(CreatorMediaProperties properties,
+                               PreflightReviewMapper mapper,
+                               ObjectStorageService storage,
+                               SpeechRecognitionProvider provider,
+                               ObjectMapper objectMapper,
+                               MediaCallChargeGate chargeGate) {
         this.properties = properties;
         this.mapper = mapper;
         this.storage = storage;
         this.provider = provider;
         this.objectMapper = objectMapper;
+        this.chargeGate = chargeGate;
     }
 
     public String ensureSubmitted(PreflightReviewRecord review,
@@ -59,8 +71,17 @@ public class PreflightAsrService {
         if (mapper.startStep(review.reviewId(), "TRANSCRIBE") != 1) {
             throw new IllegalStateException("ASR 步骤状态已变化");
         }
+        // 预留必须早于物理请求：提交后即使进程崩溃，也能按这笔预留核对真实调用。
+        long seconds = audioAsset.durationMs() == null ? 0L : Math.max(1L, (audioAsset.durationMs() + 999L) / 1000L);
+        var handle = chargeGate.reserve(review.reviewId(), "MEDIA_ASR", chargeKey(review, step),
+                properties.getProcessing().getAsrUsdPerSecond().multiply(BigDecimal.valueOf(seconds)),
+                "ASR 音频 " + seconds + " 秒");
         PresignedObjectRead read = storage.presignAsrGetObject(
                 audioAsset.bucketName(), audioAsset.objectKey(), properties.getProcessing().getProviderReadTtl());
+        // 同一调用标识只允许发送一次；已发送但未保存任务 ID 的情况不能再次提交。
+        if (!handle.markSent()) {
+            throw new AmbiguousSubmissionException("ASR 已发送但结果未确认，为避免重复计费已停止自动重试");
+        }
         String providerTaskId = provider.submit(read.url());
         saveSubmission(review, step, providerTaskId);
         return providerTaskId;
@@ -119,6 +140,9 @@ public class PreflightAsrService {
         }
         mapper.completeAsrCall(review.reviewId(), step.providerTaskId(),
                 usageSeconds == null ? null : usageSeconds * 1000L, actualCost);
+        if (actualCost == null) chargeGate.unknown(review.reviewId(), chargeKey(review, step));
+        else chargeGate.settle(review.reviewId(), chargeKey(review, step), actualCost,
+                "asr-" + step.stepId());
         return count;
     }
 
@@ -141,6 +165,14 @@ public class PreflightAsrService {
         }
         mapper.completeAsrCall(review.reviewId(), step.providerTaskId(),
                 usageSeconds == null ? null : usageSeconds * 1000L, actualCost);
+        if (actualCost == null) chargeGate.unknown(review.reviewId(), chargeKey(review, step));
+        else chargeGate.settle(review.reviewId(), chargeKey(review, step), actualCost,
+                "asr-" + step.stepId());
+    }
+
+    /** 同一次试映同一步骤只允许一笔 ASR 费用，恢复和重放沿用同一标识。 */
+    private static String chargeKey(PreflightReviewRecord review, PreflightStepRecord step) {
+        return "asr-" + review.reviewId() + "-" + step.stepId();
     }
 
     private String json(Object value) {

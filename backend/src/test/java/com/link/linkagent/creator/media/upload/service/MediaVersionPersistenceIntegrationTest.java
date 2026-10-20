@@ -132,6 +132,9 @@ class MediaVersionPersistenceIntegrationTest {
     static com.link.linkagent.creator.task.service.CreatorTaskService taskService;
     static ProductionPlanMapper productionMapper;
     static GeneratedDraftProbePersistenceService generatedProbes;
+    static com.link.linkagent.creator.creation.mapper.CreationMediaMapper mediaLinks;
+    static com.link.linkagent.creator.creation.mapper.CreationPackageMapper creationPackages;
+    static com.link.linkagent.creator.creation.service.CreationMediaService creationMedia;
     final List<FixedProjectJob> fixedJobsToClean = new ArrayList<>();
 
     @BeforeAll
@@ -154,6 +157,8 @@ class MediaVersionPersistenceIntegrationTest {
         configuration.addMapper(GeneratedDraftMapper.class);
         configuration.addMapper(FixedProjectJobMapper.class);
         configuration.addMapper(AutomaticProductionMapper.class);
+        configuration.addMapper(com.link.linkagent.creator.creation.mapper.CreationMediaMapper.class);
+        configuration.addMapper(com.link.linkagent.creator.creation.mapper.CreationPackageMapper.class);
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setConfiguration(configuration);
@@ -183,10 +188,17 @@ class MediaVersionPersistenceIntegrationTest {
                 mock(DraftVideoProbeRecoveryService.class));
         workspaceMapper = session.getMapper(CreationWorkspaceMapper.class);
         runtimeMapper = session.getMapper(CreationRuntimeMapper.class);
-        var runtimeProxy = new ProxyFactory(new CreationRuntimeService(mapper, runtimeMapper, workspaceMapper, new ObjectMapper()));
+        mediaLinks = session.getMapper(com.link.linkagent.creator.creation.mapper.CreationMediaMapper.class);
+        creationPackages = session.getMapper(com.link.linkagent.creator.creation.mapper.CreationPackageMapper.class);
+        var runtimeProxy = new ProxyFactory(new CreationRuntimeService(mapper, runtimeMapper, workspaceMapper,
+                mediaLinks, creationPackages, new ObjectMapper()));
         runtimeProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         runtime = (CreationRuntimeService) runtimeProxy.getProxy();
         generatedMapper = session.getMapper(GeneratedDraftMapper.class);
+        var mediaProxy = new ProxyFactory(new com.link.linkagent.creator.creation.service.CreationMediaService(
+                mediaLinks, generatedMapper, runtime));
+        mediaProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
+        creationMedia = (com.link.linkagent.creator.creation.service.CreationMediaService) mediaProxy.getProxy();
         fixedJobMapper = session.getMapper(FixedProjectJobMapper.class);
         automaticMapper = session.getMapper(AutomaticProductionMapper.class);
         var automaticProxy = new ProxyFactory(new AutomaticProductionPlanService(mapper, session.getMapper(ProductionPlanMapper.class),
@@ -1323,6 +1335,61 @@ class MediaVersionPersistenceIntegrationTest {
         assertThat(count("creator_draft_video", task)).isEqualTo(2);
     }
 
+    @Test void creationMediaLinkKeepsOneVersionPerRunAndRefusesCompletionWithoutPackage() {
+        String task = task(); readyVideo(task, "before-media");
+        var lease = fullLease(task, fullInput(task, "c".repeat(64)));
+        var attempt = prepareGenerated(lease, "attempt-media");
+        var draft = generated.register(lease, attempt.attemptId());
+        creationMedia.begin(lease, draft.versionId());
+        var link = mediaLinks.find(lease.runId()).orElseThrow();
+        assertThat(link.stage()).isEqualTo("MEDIA_PENDING");
+        assertThat(link.versionId()).isEqualTo(draft.versionId());
+        var waiting = runtimeMapper.run(task, "default", lease.runId()).orElseThrow();
+        assertThat(waiting.status()).isEqualTo("WAITING_DEPENDENCY");
+        assertThat(waiting.dependencyId()).isEqualTo(draft.versionId());
+        // 旧租约已经随等待依赖释放，不能再用它冒充本次执行。
+        assertThatThrownBy(() -> creationMedia.begin(lease, "not-this-run"))
+                .hasMessageContaining("租约失效");
+        // 没有通过对象校验的发布包不能结束整片运行。
+        assertThatThrownBy(() -> runtime.completeProduction(task, "default", lease.runId(), lease.worker(),
+                lease.generation(), "{\"done\":true}")).hasMessageContaining("最小发布包");
+        // 重新领取后，其他版本仍然不能冒充本次运行的媒体闭环。
+        runtime.wake(task, "default", lease.runId(), waiting.runRevision());
+        var again = runtime.claim(task, "default", lease.runId(), "media-test", 30).orElseThrow();
+        var renewed = new GeneratedDraftLease(task, "default", lease.runId(), "media-test", again.leaseGeneration());
+        assertThatThrownBy(() -> creationMedia.begin(renewed, "not-this-run"))
+                .hasMessageContaining("媒体处理版本不属于本次运行");
+        creationMedia.begin(renewed, draft.versionId());
+        assertThat(count("creator_creation_media_link", task)).isEqualTo(1);
+        assertThat(mediaLinks.find(lease.runId()).orElseThrow().stage()).isEqualTo("MEDIA_PENDING");
+    }
+
+    @Test void dependencyChargesAreReservedSentAndSettledExactlyOnce() {
+        String task = task(); readyVideo(task, "before-charge");
+        // 依赖阶段的付费调用必须是本次真实授权的范围，这里给整片运行 5 元授权。
+        runtime.initialize(task, "default", "budget-charge", revision(task), cny("20"));
+        var queued = runtime.startProduction(task, "default", "full-charge", revision(task),
+                fullInput(task, "c".repeat(64)), cny("5"));
+        var claimed = runtime.claim(task, "default", queued.runId(), "media-test", 600).orElseThrow();
+        var lease = new GeneratedDraftLease(task, "default", claimed.runId(), "media-test",
+                claimed.leaseGeneration());
+        var attempt = prepareGenerated(lease, "attempt-charge");
+        var draft = generated.register(lease, attempt.attemptId());
+        creationMedia.begin(lease, draft.versionId());
+        var charge = runtime.reserveDependency(task, "default", lease.runId(), "asr-charge-1", "MEDIA_ASR",
+                cny("0.01"), "{\"basis\":\"test\"}");
+        assertThat(charge.status()).isEqualTo("RESERVED");
+        assertThat(runtime.reserveDependency(task, "default", lease.runId(), "asr-charge-1", "MEDIA_ASR",
+                cny("0.01"), "{\"basis\":\"test\"}").entryId()).isEqualTo(charge.entryId());
+        assertThatThrownBy(() -> runtime.reserveDependency(task, "default", lease.runId(), "asr-charge-1",
+                "MEDIA_ASR", cny("0.02"), "{\"basis\":\"test\"}")).hasMessageContaining("其他费用预留");
+        assertThat(runtime.markSentDependency(task, "default", "asr-charge-1")).isTrue();
+        assertThat(runtime.markSentDependency(task, "default", "asr-charge-1")).isFalse();
+        runtime.settle(task, "default", "asr-charge-1", cny("0.007"), "USAGE_ESTIMATE", "usage:1");
+        assertThat(runtime.snapshot(task, "default").budget().knownCny()).isEqualByComparingTo("0.007000");
+        assertThat(runtime.snapshot(task, "default").budget().reservedCny()).isEqualByComparingTo("0");
+    }
+
     @Test void fullRunRequiresRealConfirmationEvenIfPlanningWasSkipped() {
         String task = task(); runtime.initialize(task, "default", "budget", -1, cny("20"));
         String input = "{\"publishingSessionId\":\"missing\",\"publishingResultId\":\"missing\",\"productionPlanId\":\"missing\",\"baseVersionId\":null,\"storyboardId\":\"board\",\"renderContentHash\":\"" + "c".repeat(64) + "\"}";
@@ -1963,7 +2030,7 @@ class MediaVersionPersistenceIntegrationTest {
             com.link.linkagent.creator.creation.render.FixedProjectRenderService renderer,
             com.link.linkagent.creator.creation.service.GeneratedDraftService drafts,GeneratedDraftProbeService probe) {
         var properties = new CreationWorkerProperties(); properties.setEnabled(true); properties.setLeaseSeconds(5); properties.setHeartbeatSeconds(1);
-        return new FixedProjectWorker(properties, fixedJobMapper, runtime, files, renderer, drafts, generated,probe);
+        return new FixedProjectWorker(properties, fixedJobMapper, runtime, files, renderer, drafts, generated, probe, creationMedia);
     }
 
     @org.springframework.context.annotation.Configuration(proxyBeanMethods=false)

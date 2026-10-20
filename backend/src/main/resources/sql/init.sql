@@ -2860,3 +2860,48 @@ CREATE TABLE IF NOT EXISTS creator_assistant_plan (
     create_time DATETIME(6) NOT NULL COMMENT '创建时间',
     KEY idx_assistant_plan_status (status,create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台助手连续操作计划';
+
+-- 整片运行进入真实媒体处理与完整试映的唯一闭环记录。
+-- 一条运行最多一个精确成片版本；子任务标识落库后，重启只恢复不重复创建，重复受理不会二次付费。
+CREATE TABLE IF NOT EXISTS creator_creation_media_link
+(
+    run_id              VARCHAR(64) NOT NULL COMMENT '已登记系统成片的整片运行',
+    task_id             VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id            VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    version_id          VARCHAR(64) NOT NULL COMMENT '本运行 REGISTERED 的唯一成片版本',
+    stage               VARCHAR(32) NOT NULL COMMENT '阶段：MEDIA_PENDING、MEDIA_RUNNING、PREFLIGHT_PENDING、PREFLIGHT_RUNNING、PACKAGE_PENDING、COMPLETED、FAILED、CANCELLED',
+    processing_job_id   VARCHAR(64) DEFAULT NULL COMMENT '内部受理的媒体预处理任务，恢复时按此精确复用',
+    preflight_review_id VARCHAR(64) DEFAULT NULL COMMENT '内部受理的完整试映任务，恢复时按此精确复用',
+    lease_generation    BIGINT      NOT NULL COMMENT '创建闭环时的执行代数，旧代数不能续写新结果',
+    failure_code        VARCHAR(64) DEFAULT NULL COMMENT '受控失败原因，不保存供应商原文',
+    create_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '进入媒体闭环时间',
+    update_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近阶段变化',
+    PRIMARY KEY (run_id),
+    UNIQUE KEY uk_creation_media_version (version_id),
+    KEY idx_creation_media_stage (stage, update_time),
+    KEY idx_creation_media_task (task_id, owner_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '整片运行媒体处理与完整试映闭环';
+
+-- 仅由真实对象校验通过的发布包生成记录，可幂等恢复；导出不等同于已发布。
+CREATE TABLE IF NOT EXISTS creator_creation_package
+(
+    run_id              VARCHAR(64) NOT NULL COMMENT '整片运行',
+    task_id             VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id            VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    version_id          VARCHAR(64) NOT NULL COMMENT '打包的精确成片版本',
+    processing_job_id   VARCHAR(64) NOT NULL COMMENT '生成该包的媒体预处理任务',
+    preflight_review_id VARCHAR(64) NOT NULL COMMENT '生成该包的完整试映任务',
+    status              VARCHAR(24) NOT NULL COMMENT 'BUILDING、READY、FAILED',
+    bucket_name         VARCHAR(255) DEFAULT NULL COMMENT '实际保存发布包的私有桶',
+    object_key          VARCHAR(1000) DEFAULT NULL COMMENT '发布包对象键，READY 前为空',
+    bytes               BIGINT DEFAULT NULL COMMENT '对象实际字节数，来自上传后 HEAD 校验',
+    sha256              CHAR(64) DEFAULT NULL COMMENT '本地发布包内容摘要',
+    manifest_json       LONGTEXT NOT NULL COMMENT '冻结的版本、文案、来源与文件清单',
+    lease_generation    BIGINT NOT NULL COMMENT '构建时的执行代数，失租结果不能登记',
+    failure_code        VARCHAR(64) DEFAULT NULL COMMENT '受控失败原因',
+    create_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '开始构建时间',
+    update_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近状态变化',
+    PRIMARY KEY (run_id),
+    UNIQUE KEY uk_creation_package_version (version_id),
+    KEY idx_creation_package_task (task_id, owner_id, status)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '最小真实发布包';
