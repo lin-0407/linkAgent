@@ -38,7 +38,14 @@ public class StoryboardPersistence {
     public Brief saveBrief(String task,String owner,String key,BriefInput input) {
         codec.valid(input);lock(task,owner);String hash=codec.hash(input);var old=mapper.briefByKey(task,owner,key);
         if(old.isPresent()){same(hash,old.get().requestHash());return old.get();}
-        idle(task,owner,input.expectedWorkspaceRevision());snapshotAssets(task,owner,input.assetIds());
+        idle(task,owner,input.expectedWorkspaceRevision());var selected=snapshotAssets(task,owner,input.assetIds());
+        if(input.backgroundMusic()!=null){
+            var music=input.backgroundMusic();
+            if(selected.stream().noneMatch(a->a.assetId().equals(music.assetId()) && "MUSIC".equals(a.kind())))
+                throw conflict("背景音乐须选择本简报内已准备完成的音乐素材");
+            if(music.sourceOutMs()<=music.sourceInMs() || (long)music.fadeInMs()+music.fadeOutMs()>music.sourceOutMs()-music.sourceInMs())
+                throw conflict("背景音乐截取范围或淡入淡出时长无效");
+        }
         var document=json.valueToTree(input);((com.fasterxml.jackson.databind.node.ObjectNode)document).remove("expectedWorkspaceRevision");
         var source=json.createObjectNode();var materials=source.putArray("materials");
         for(var m:tasks.listMaterialsByTaskId(task)) if(m.getContent()!=null && !m.getContent().isBlank())
@@ -49,7 +56,13 @@ public class StoryboardPersistence {
         mapper.insertBrief(brief);bump(task,owner,input.expectedWorkspaceRevision());return mapper.brief(task,owner,brief.briefId()).orElseThrow();
     }
     public Board save(String task,String owner,String key,Save input) {
-        codec.valid(input);lock(task,owner);String hash=codec.hash(input);var old=mapper.boardByKey(task,owner,key);
+        return saveWithRequestHash(task,owner,key,input,codec.hash(input));
+    }
+    /** 字幕原文与转换后 cue 各有身份，保留原请求摘要才能拒绝同键换文件。 */
+    public Board saveWithRequestHash(String task,String owner,String key,Save input,String hash) {
+        codec.valid(input);
+        if(hash==null || !hash.matches("[0-9a-f]{64}"))throw conflict("故事板请求摘要无效");
+        lock(task,owner);var old=mapper.boardByKey(task,owner,key);
         if(old.isPresent()){same(hash,old.get().requestHash());return old.get();}
         idle(task,owner,input.expectedWorkspaceRevision());var brief=brief(task,owner,input.briefId());
         if(mapper.briefRevision(task,owner)!=brief.revision())throw conflict("当前简报已更新，请明确使用新简报保存工程");

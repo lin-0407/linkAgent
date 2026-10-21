@@ -114,8 +114,9 @@ class Project:
 
     @property
     def expects_audio(self):
-        return any(scene["voice"] is not None or scene.get("clip", {}).get("audioMode", "MUTE") != "MUTE"
-                   for scene in self.document["scenes"])
+        return self.document.get("backgroundMusic") is not None or any(
+            scene["voice"] is not None or scene.get("clip", {}).get("audioMode", "MUTE") != "MUTE"
+            for scene in self.document["scenes"])
 
 
 def load_project(input_path, work_root):
@@ -130,9 +131,10 @@ def load_project(input_path, work_root):
     except (ValueError, RecursionError) as error:
         raise RenderError("INVALID_INPUT", "JSON 无效或层级过深") from error
     fields(document, ("schemaVersion", "runId", "attemptId", "storyboardId", "seed", "inputHash",
-                      "video", "assets", "scenes", "subtitles"))
+                      "video", "assets", "scenes", "subtitles"), ("backgroundMusic",))
     require(type(document["schemaVersion"]) is int and document["schemaVersion"] in (1, 2), "不支持此工程版本")
     version = document["schemaVersion"]
+    require(version == 2 or "backgroundMusic" not in document, "V1 不接受背景音乐字段")
     for name in ("runId", "attemptId", "storyboardId"):
         identifier(document[name])
     integer(document["seed"], 0, 2**31 - 1)
@@ -150,6 +152,20 @@ def load_project(input_path, work_root):
     count = integer(video["frameCount"], fps, fps * 180)
     require(video["codec"] == "h264" and video["audioSampleRate"] == 48000
             and video["fontId"] == "cjk_sans", "不支持的编码或字体配置")
+    music = document.get("backgroundMusic")
+    music_id = None
+    if music is not None:
+        fields(music, ("assetId", "sourceStartMs", "sourceEndMs", "gainDb", "fadeInMs", "fadeOutMs", "ducking"))
+        music_id = identifier(music["assetId"])
+        begin, finish = integer(music["sourceStartMs"], 0, 1200000), integer(music["sourceEndMs"], 1, 1200000)
+        require(finish > begin and abs((finish - begin) * fps - count * 1000) <= 1000,
+                "音乐选区时长须对应整片，最多允许一帧误差，不循环或变速补齐")
+        require(type(music["gainDb"]) in (int, float) and math.isfinite(music["gainDb"])
+                and -36 <= music["gainDb"] <= 0, "音乐音量超出范围")
+        integer(music["fadeInMs"], 0, 10000); integer(music["fadeOutMs"], 0, 10000)
+        require(music["fadeInMs"] + music["fadeOutMs"] <= finish - begin,
+                "音乐淡入淡出总时长不能超过选区")
+        require(type(music["ducking"]) is bool, "音乐压低开关必须为布尔值")
     require(type(document["assets"]) is list and 0 < len(document["assets"]) <= 64, "资产数量不正确")
     assets, audio_info, video_assets = {}, {}, set()
     total_size = 0
@@ -165,19 +181,27 @@ def load_project(input_path, work_root):
         require(file.is_file(), "本地资产不存在", "ASSET_MISSING")
         size = file.stat().st_size
         total_size += size
-        require(0 < size <= 32 * 1024**2 and total_size <= 256 * 1024**2, "资产文件超出大小限制")
+        require(0 < size <= (64 if key == music_id else 32) * 1024**2
+                and total_size <= 256 * 1024**2, "资产文件超出大小限制")
         require(type(asset["sha256"]) is str and re.fullmatch("[0-9a-f]{64}", asset["sha256"]), "资产摘要格式不正确")
         require(digest(file) == asset["sha256"], "资产摘要不匹配", "ASSET_HASH_MISMATCH")
         mime = asset["mime"]
+        require(key != music_id or mime == "audio/wav", "背景音乐须引用真实 PCM16 WAV")
         if mime == "audio/wav":
             require(file.suffix.lower() == ".wav", "音频扩展名与类型不匹配")
             try:
                 with wave.open(str(file), "rb") as audio:
                     rate, channels, samples = audio.getframerate(), audio.getnchannels(), audio.getnframes()
                     require(audio.getsampwidth() == 2 and audio.getcomptype() == "NONE"
-                            and channels in (1, 2) and 8000 <= rate <= 48000 and 0 < samples <= rate * 30,
-                            "音频须为不超过 30 秒的 16 位 PCM WAV")
-                    require(len(audio.readframes(samples)) == samples * channels * 2, "音频数据被截断")
+                            and channels in (1, 2) and 8000 <= rate <= 48000
+                            and 0 < samples <= rate * (1200 if key == music_id else 30),
+                            "音频须为时长受控的 16 位 PCM WAV，旁白不超过 30 秒")
+                    # 长音乐只逐块验收真实字节，不能把整段源 WAV 一次载入内存。
+                    remaining = samples
+                    while remaining:
+                        chunk_frames = min(remaining, 8192)
+                        require(len(audio.readframes(chunk_frames)) == chunk_frames * channels * 2, "音频数据被截断")
+                        remaining -= chunk_frames
                     audio_info[key] = (rate, channels, samples)
             except (wave.Error, EOFError) as error:
                 raise RenderError("INVALID_AUDIO", "音频格式无法读取") from error
@@ -195,6 +219,11 @@ def load_project(input_path, work_root):
             except (OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
                 raise RenderError("INVALID_IMAGE", "图片无法安全解码") from error
         assets[key] = file
+    if music is not None:
+        require(music_id in audio_info, "背景音乐音频资产不存在")
+        rate, _, samples = audio_info[music_id]
+        require(music["sourceEndMs"] * rate <= samples * 1000,
+                "音乐选区超过源音频实际范围，不能循环或补时", "MUSIC_OUT_OF_RANGE")
     scenes, cursor, scene_ids, voice_windows = document["scenes"], 0, set(), {}
     require(type(scenes) is list and 0 < len(scenes) <= 48, "场景数量不正确")
     for scene in scenes:
@@ -247,11 +276,13 @@ def load_project(input_path, work_root):
             continue
         fields(voice, ("assetId", "offsetMs", "gainDb"))
         identifier(voice["assetId"])
+        require(voice["assetId"] != music_id, "背景音乐素材不能同时作为旁白")
         require(voice["assetId"] in audio_info, "旁白音频资产不存在")
         integer(voice["offsetMs"], 0, 30000)
         gain = voice["gainDb"]
         require(type(gain) in (int, float) and math.isfinite(gain) and -24 <= gain <= 0, "音频增益超出范围")
         rate, _, samples = audio_info[voice["assetId"]]
+        require(samples <= rate * 30, "旁白不得复用超过 30 秒的音乐源", "AUDIO_OVERFLOW")
         voice_start = start * 1000 / fps + voice["offsetMs"]
         voice_end = voice_start + samples * 1000 / rate
         require(voice_end <= end * 1000 / fps + 0.001, "实测旁白超出场景，不能截断或偷偷加速", "AUDIO_OVERFLOW")

@@ -10,6 +10,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import java.nio.file.*;
+import java.io.RandomAccessFile;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static com.link.linkagent.creator.creation.service.CreationInputRules.*;
@@ -102,6 +105,47 @@ class FixedProjectJobFilesTest {
         Path outside = root.resolve("elsewhere.json"); Files.copy(request.input(), outside);
         assertThatThrownBy(() -> files.freeze("task", "default", new FixedProjectRenderService.Request(outside,
                 "run", "source", "board", request.inputHash()))).isInstanceOf(RenderExecutionException.class);
+    }
+
+    @Test void selectedBackgroundWavBeyondThirtyTwoMibSurvivesLeaseRecoveryCopy() throws Exception {
+        Path music = largeMusic(32L * 1024 * 1024 + 1);
+        var job = files.freeze("task", "default", write());
+        var request = files.prepare(job, run(1), () -> false);
+        Path copied = request.input().getParent().resolve("assets/music.wav");
+        assertThat(Files.size(copied)).isEqualTo(Files.size(music));
+        assertThat(fileDigest(copied)).isEqualTo(fileDigest(music));
+        assertThat(renderContentHash(json, Files.readString(request.input()))).isEqualTo(renderContentHash(json, job.projectJson()));
+    }
+
+    @ParameterizedTest @ValueSource(strings={"voice", "unselected", "v1", "wrong-mime", "over-sixty-four"})
+    void musicDeclarationCannotEnlargeOtherRolesOrExceedMusicCap(String role) throws Exception {
+        largeMusic((role.equals("over-sixty-four") ? 64L : 32L) * 1024 * 1024 + 1);
+        switch (role) {
+            case "voice" -> document.putArray("scenes").addObject().putObject("voice").put("assetId", "music");
+            case "unselected" -> document.remove("backgroundMusic");
+            case "v1" -> document.put("schemaVersion", 1);
+            case "wrong-mime" -> ((ObjectNode)document.path("assets").get(0)).put("mime", "video/mp4");
+            default -> { }
+        }
+        var job = files.freeze("task", "default", write());
+        assertThatThrownBy(() -> files.prepare(job, run(1), () -> false)).isInstanceOfSatisfying(RenderExecutionException.class,
+                error -> assertThat(error.code()).isEqualTo("INVALID_INPUT"));
+    }
+
+    private Path largeMusic(long bytes) throws Exception {
+        // 大文件夹具只验证恢复复制的角色与上限，真实音乐由原生渲染套件验证。
+        Path music = source.resolve("assets/music.wav");
+        try (var file = new RandomAccessFile(music.toFile(), "rw")) { file.setLength(bytes); }
+        document.put("schemaVersion", 2);
+        document.putArray("assets").addObject().put("id", "music").put("path", "assets/music.wav").put("mime", "audio/wav").put("sha256", fileDigest(music));
+        document.putObject("backgroundMusic").put("assetId", "music").put("sourceStartMs", 0).put("sourceEndMs", 2000)
+                .put("gainDb", -12).put("fadeInMs", 0).put("fadeOutMs", 0).put("ducking", true);
+        return music;
+    }
+    private String fileDigest(Path file) throws Exception {
+        var digest = MessageDigest.getInstance("SHA-256");
+        try (var input = Files.newInputStream(file)) { byte[] buffer = new byte[65536]; int count; while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count); }
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     private FixedProjectRenderService.Request write() throws Exception {

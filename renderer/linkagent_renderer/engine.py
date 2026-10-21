@@ -17,6 +17,7 @@ from . import VERSION
 from .contract import RenderError, contained, digest, load_project, require
 from .visuals import Visuals
 from .clips import ClipFrames, inspect_clips, original_audio
+from .music import BackgroundMusic
 
 
 class Control:
@@ -90,7 +91,7 @@ def timestamp(milliseconds):
 
 def write_audio(project, output, control, clips, ffmpeg):
     peak, squares, samples_count = 0.0, 0.0, 0
-    with wave.open(str(output), "wb") as destination:
+    with wave.open(str(output), "wb") as destination, BackgroundMusic(project) as music:
         destination.setparams((2, 2, 48000, 0, "NONE", "not compressed"))
         for scene in project.document["scenes"]:
             control.check()
@@ -113,8 +114,9 @@ def write_audio(project, output, control, clips, ffmpeg):
                 require(offset + len(converted) <= len(mixed), "旁白音轨量化后超出场景", "AUDIO_OVERFLOW")
                 converted *= 10 ** (voice["gainDb"] / 20) * 0.85
                 mixed[offset: offset + len(converted)] += converted
+            mixed = music.mix(mixed, start_sample, control.check)
             current_peak = float(np.max(np.abs(mixed)))
-            require(current_peak <= 0.95, "旁白超过编码峰值范围", "AUDIO_CLIPPING")
+            require(current_peak <= 0.95, "混合音轨超过编码峰值范围", "AUDIO_CLIPPING")
             peak = max(peak, current_peak)
             squares += float(np.sum(mixed.astype(np.float64) ** 2)); samples_count += mixed.size
             destination.writeframes((mixed * 32767).astype("<i2").tobytes())

@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.link.linkagent.creator.creation.render.*;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
 import com.link.linkagent.creator.media.storage.*;
+import com.link.linkagent.creator.creation.service.FixedProjectJobFiles;
+import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Run;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -16,6 +18,8 @@ import javax.imageio.ImageIO;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.nio.file.*;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.*;
@@ -98,6 +102,99 @@ class StoryboardCompilerNativeTest {
         assertThat(manifest.path("media").path("fullDecodePassed").asBoolean()).isTrue();
         assertThat(Files.readString(output.files().get("subtitles.srt").path())).isBlank();
         files.discard(request);
+    }
+
+    @Test void actualBackgroundMusicSurvivesRecoveryAndDucksUnderOriginalAndUserRecording() throws Exception {
+        // 此处混合声音是编译器技术夹具，不替代公开简报 SOURCE/USER_NARRATION 的互斥业务校验。
+        Path source = Files.createDirectory(root.resolve("bgm-source"));
+        Path clip = source.resolve("clip.mp4"), voice = source.resolve("voice.wav"), music = source.resolve("music.wav");
+        command("ffmpeg", "-v", "error", "-nostdin", "-threads", "2", "-f", "lavfi", "-i", "color=c=navy:size=240x160:rate=30:duration=1.2",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1.2", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-threads", "2",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", "-shortest", "-y", clip.toString());
+        command("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000:duration=0.9", "-c:a", "pcm_s16le", "-ac", "2", "-y", voice.toString());
+        command("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000:duration=6", "-c:a", "pcm_s16le", "-ac", "2", "-y", music.toString());
+        Asset video = asset("clip", "VIDEO_CLIP", "video/mp4", clip), narration = asset("voice", "NARRATION", "audio/wav", voice), bgm = asset("music", "MUSIC", "audio/wav", music);
+        List<Asset> assets = List.of(video, narration, bgm);
+        var scenes = List.of(StoryboardCompilerTest.scene("solo", "TITLE_CARD", 1000, null, null, null, "NO_DIALOGUE", null, List.of()),
+                StoryboardCompilerTest.scene("original", "VIDEO_CLIP", 1000, "clip", 0L, 1000L, "ORIGINAL", null, List.of()),
+                StoryboardCompilerTest.scene("recording", "TITLE_CARD", 1000, null, null, null, "NARRATION", "voice", List.of(new Cue(0, 900, "用户给定真实音轨时间"))),
+                StoryboardCompilerTest.scene("ending", "TITLE_CARD", 1000, null, null, null, "NO_DIALOGUE", null, List.of()));
+        ObjectNode brief = json.createObjectNode().put("targetDurationMs", 4000).put("dialogueMode", "USER_NARRATION");
+        brief.putObject("backgroundMusic").put("assetId", "music").put("sourceInMs", 1000).put("sourceOutMs", 5000)
+                .put("gainDb", -12).put("fadeInMs", 100).put("fadeOutMs", 100).put("ducking", true);
+        var project = new StoryboardCompiler(json).compile("bgm-board", brief, new Candidate(scenes), assets, "bgm-run", "source-attempt");
+        var storage = mock(ObjectStorageService.class); Map<String, Path> objects = Map.of(video.objectKey(), clip, narration.objectKey(), voice, bgm.objectKey(), music);
+        when(storage.headObject(eq("persisted-native-bucket"), anyString())).thenAnswer(i -> new StoredObjectMetadata(Files.size(objects.get(i.getArgument(1, String.class))), "application/octet-stream", "etag"));
+        doAnswer(i -> { Files.copy(objects.get(i.getArgument(1, String.class)), i.getArgument(2, Path.class)); return null; }).when(storage)
+                .downloadObject(eq("persisted-native-bucket"), anyString(), any(Path.class), any());
+        var properties = new FixedProjectRendererProperties(); properties.setEnabled(true); properties.setWorkRoot(root.resolve("bgm-work").toString());
+        properties.setModuleRoot(System.getenv("LINKAGENT_RENDERER_MODULE_ROOT")); properties.setPythonPath("python");
+        var files = new StoryboardProjectFiles(properties, storage, json); var sourceRequest = files.materialize(project, assets, () -> false);
+        var recovery = new FixedProjectJobFiles(properties, json); var job = recovery.freeze("native-task", "default", sourceRequest);
+        Run run = mock(Run.class); when(run.runId()).thenReturn("bgm-run"); when(run.taskId()).thenReturn("native-task"); when(run.ownerId()).thenReturn("default"); when(run.leaseGeneration()).thenReturn(1L);
+        var request = recovery.prepare(job, run, () -> false);
+        var output = new FixedProjectRenderService(properties, json).render(request, () -> false);
+        assertThat(output.durationMs()).isEqualTo(4000); assertThat(output.frameCount()).isEqualTo(120);
+        Path decoded = root.resolve("bgm-decoded.pcm");
+        command("ffmpeg", "-v", "error", "-nostdin", "-i", output.files().get("video.mp4").path().toString(), "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "s16le", "-y", decoded.toString());
+        byte[] audio = Files.readAllBytes(decoded);
+        double soloMusic = amplitude(audio, .4, .7, 220), originalMusic = amplitude(audio, 1.4, 1.7, 220), narrationMusic = amplitude(audio, 2.4, 2.7, 220);
+        assertThat(soloMusic).isGreaterThan(.005);
+        assertThat(originalMusic).isGreaterThan(.001).isLessThan(soloMusic * .8);
+        assertThat(narrationMusic).isGreaterThan(.001).isLessThan(soloMusic * .8);
+        assertThat(amplitude(audio, 1.4, 1.7, 440)).isGreaterThan(.02);
+        assertThat(amplitude(audio, 2.4, 2.7, 660)).isGreaterThan(.02);
+        assertThat(amplitude(audio, 3.5, 3.8, 220)).isGreaterThan(soloMusic * .8);
+        assertThat(json.readTree(output.files().get("manifest.json").path().toFile()).path("media").path("fullDecodePassed").asBoolean()).isTrue();
+        System.out.println("S4_BGM_NATIVE_OK frames=120 music=" + soloMusic + " originalDucked=" + originalMusic + " recordingDucked=" + narrationMusic + " providerCalled=false");
+        files.discard(sourceRequest);
+    }
+
+    @Test void noDialogueWithOnlyMusicPassesRealRenderingAndRecoveredArtifactVerification() throws Exception {
+        Path musicFile = root.resolve("music-only.wav");
+        command("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000:duration=2",
+                "-c:a", "pcm_s16le", "-ac", "2", "-y", musicFile.toString());
+        Asset music = asset("music", "MUSIC", "audio/wav", musicFile);
+        var brief = json.createObjectNode().put("targetDurationMs", 1000).put("dialogueMode", "NO_DIALOGUE");
+        brief.putObject("backgroundMusic").put("assetId", "music").put("sourceInMs", 250).put("sourceOutMs", 1250)
+                .put("gainDb", -12).put("fadeInMs", 100).put("fadeOutMs", 100).put("ducking", false);
+        var candidate = new Candidate(List.of(StoryboardCompilerTest.scene("title", "TITLE_CARD", 1000, null, null, null, "NO_DIALOGUE", null, List.of())));
+        var project = new StoryboardCompiler(json).compile("only-music-board", brief, candidate, List.of(music), "only-music-run", "source-attempt");
+        assertThat(project.path("assets")).hasSize(1);
+        assertThat(project.path("scenes").get(0).path("voice").isNull()).isTrue();
+        assertThat(project.path("scenes").get(0).has("clip")).isFalse();
+        var storage = mock(ObjectStorageService.class);
+        when(storage.headObject(music.bucketName(), music.objectKey())).thenReturn(new StoredObjectMetadata(music.bytes(), "audio/wav", "etag"));
+        doAnswer(i -> { Files.copy(musicFile, i.getArgument(2, Path.class)); return null; }).when(storage)
+                .downloadObject(eq(music.bucketName()), eq(music.objectKey()), any(Path.class), any());
+        var properties = new FixedProjectRendererProperties(); properties.setEnabled(true); properties.setWorkRoot(root.resolve("only-music-work").toString());
+        properties.setModuleRoot(System.getenv("LINKAGENT_RENDERER_MODULE_ROOT")); properties.setPythonPath("python");
+        var files = new StoryboardProjectFiles(properties, storage, json);
+        var source = files.materialize(project, List.of(music), () -> false);
+        var recovery = new FixedProjectJobFiles(properties, json); var job = recovery.freeze("native-task", "default", source);
+        Run run = mock(Run.class); when(run.runId()).thenReturn("only-music-run"); when(run.taskId()).thenReturn("native-task"); when(run.ownerId()).thenReturn("default"); when(run.leaseGeneration()).thenReturn(1L);
+        var request = recovery.prepare(job, run, () -> false); var renderer = new FixedProjectRenderService(properties, json);
+        var output = renderer.render(request, () -> false);
+        assertThat(output.durationMs()).isEqualTo(1000); assertThat(output.frameCount()).isEqualTo(30);
+        var manifest = json.readTree(output.files().get("manifest.json").path().toFile());
+        assertThat(manifest.path("media").path("decodedPeak").asDouble()).isGreaterThan(.005);
+        assertThat(manifest.path("media").path("fullDecodePassed").asBoolean()).isTrue();
+        var verified = renderer.verifyExisting(request, () -> false);
+        assertThat(verified.artifacts().inputHash()).isEqualTo(request.inputHash());
+        assertThat(verified.artifacts().files()).hasSize(8);
+        assertThat(Files.readString(output.files().get("subtitles.srt").path())).isBlank();
+        System.out.println("S4_BGM_ONLY_NATIVE_OK frames=30 dialogue=NO_DIALOGUE voice=false clip=false artifactVerified=true providerCalled=false");
+        files.discard(source);
+    }
+
+    private double amplitude(byte[] pcm, double startSeconds, double endSeconds, int frequency) {
+        int start = (int)Math.round(startSeconds * 48000), end = (int)Math.round(endSeconds * 48000);
+        var samples = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN); double sine = 0, cosine = 0;
+        for (int index = start; index < end; index++) {
+            double value = samples.getShort(index * 2) / 32768.0, phase = 2 * Math.PI * frequency * index / 48000;
+            sine += value * Math.sin(phase); cosine += value * Math.cos(phase);
+        }
+        return 2 * Math.hypot(sine, cosine) / (end - start);
     }
     private Asset asset(String id, String kind, String mime, Path file) throws Exception {
         String probe = command("ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", file.toString());

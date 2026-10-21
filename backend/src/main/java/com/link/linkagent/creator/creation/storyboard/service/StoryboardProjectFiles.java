@@ -105,8 +105,14 @@ public class StoryboardProjectFiles {
                     continue;
                 }
                 Asset asset = assets.get(id);
+                // 只有明确被全片选作背景音乐的 MUSIC 工作文件可使用 64 MiB，上限不外溢到录音或画面。
+                boolean music = id.equals(project.path("backgroundMusic").path("assetId").asText())
+                        && asset != null && "MUSIC".equals(asset.kind()) && "audio/wav".equals(mime);
+                if (music) for (var scene : project.path("scenes")) if (id.equals(scene.path("voice").path("assetId").asText())
+                        || id.equals(scene.path("clip").path("assetId").asText()) || id.equals(scene.path("imageAssetId").asText())) music = false;
+                long limit = (music ? 64L : 32L) * 1024 * 1024;
                 if (asset == null || !mime.equals(asset.contentType()) || !sha256.equals(asset.sha256())
-                        || asset.bytes() <= 0 || asset.bytes() > 32L * 1024 * 1024
+                        || asset.bytes() <= 0 || asset.bytes() > limit
                         || asset.bucketName() == null || asset.bucketName().isBlank() || asset.objectKey() == null || asset.objectKey().isBlank())
                     throw failure("INVALID_INPUT", "工程素材与已冻结私有对象不一致");
                 total += asset.bytes();

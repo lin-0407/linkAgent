@@ -15,6 +15,9 @@ import com.link.linkagent.creator.creation.storyboard.service.StoryboardCodec;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardPersistence;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardTextGenerator;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardWorker;
+import com.link.linkagent.creator.creation.storyboard.service.StoryboardAudioService;
+import com.link.linkagent.creator.creation.storyboard.service.StoryboardCompiler;
+import com.link.linkagent.creator.creation.storyboard.model.StoryboardAudioModels.SubtitleImport;
 import com.link.linkagent.creator.media.config.ObjectStorageProperties;
 import com.link.linkagent.creator.media.storage.ObjectStorageService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
@@ -188,6 +191,103 @@ class StoryboardPersistenceIntegrationTest {
         }
         assertThat(count("creator_creation_brief", task)).isEqualTo(1);
         assertThat(revision(task)).isEqualTo(1);
+    }
+
+    @Test
+    void absentMusicKeepsLegacyBriefRequestHashAndReplayCompatible() throws Exception {
+        String task=task("default");var input=brief(0,List.of());
+        var legacy=JSON.valueToTree(input).deepCopy();((com.fasterxml.jackson.databind.node.ObjectNode)legacy).remove("backgroundMusic");
+        String oldHash=codec.hash(legacy);
+        var saved=persistence.saveBrief(task,"default","legacy-no-music",input);
+        assertThat(saved.requestHash()).isEqualTo(oldHash);
+        assertThat(codec.read(saved.documentJson()).has("backgroundMusic")).isFalse();
+        assertThat(persistence.saveBrief(task,"default","legacy-no-music",input).briefId()).isEqualTo(saved.briefId());
+        assertThat(revision(task)).isEqualTo(1);
+    }
+
+    @Test
+    void musicMustBeSelectedReadyMusicAndFreezesWithHistoricalReferences() {
+        String task=task("default");String wrong=asset(task,"default","图片.png","a");
+        String music=audioAsset(task,"MUSIC",8000,"b");
+        var settings=new BackgroundMusic(music,1000,6000,cny("-18"),500,500,true);
+        conflict(()->persistence.saveBrief(task,"default","missing-selection",new BriefInput(0L,"音乐演示","用户材料","新手",5000,"NO_DIALOGUE","USER_PROVIDED",List.of(),"",settings)));
+        conflict(()->persistence.saveBrief(task,"default","wrong-kind",new BriefInput(0L,"音乐演示","用户材料","新手",5000,"NO_DIALOGUE","USER_PROVIDED",List.of(wrong),"",new BackgroundMusic(wrong,0,5000,cny("-18"),0,0,false))));
+        conflict(()->persistence.saveBrief(task,"default","wrong-range",new BriefInput(0L,"音乐演示","用户材料","新手",5000,"NO_DIALOGUE","USER_PROVIDED",List.of(music),"",new BackgroundMusic(music,6000,1000,cny("-18"),0,0,false))));
+        assertThat(count("creator_creation_brief",task)).isZero();assertThat(revision(task)).isZero();
+        var brief=persistence.saveBrief(task,"default","music-brief",new BriefInput(0L,"音乐演示","用户材料","新手",5000,"NO_DIALOGUE","USER_PROVIDED",List.of(music),"",settings));
+        var board=persistence.save(task,"default","music-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var compiler=new StoryboardCompiler(JSON);
+        var checked=compiler.check(board.storyboardId(),codec.read(brief.documentJson()),codec.candidate(codec.read(board.documentJson()).path("candidate")),persistence.frozen(board));
+        assertThat(checked.renderable()).isTrue();
+        assertThat(mapper.references(task,"default",music,0,20)).extracting(StoryboardMapper.Reference::storyboardId).containsExactly(board.storyboardId());
+        assertThat(codec.read(brief.documentJson()).path("backgroundMusic").path("sourceInMs").asLong()).isEqualTo(1000);
+        assertThat(count("creator_creation_run",task)).isZero();assertThat(count("creator_creation_cost_entry",task)).isZero();
+    }
+
+    @Test
+    void importedSrtCreatesImmutableChildAndOriginalRequestIdempotencyWithoutPaidRun() {
+        String task=task("default");String voice=audioAsset(task,"NARRATION",3000,"c");
+        var brief=persistence.saveBrief(task,"default","voice-brief",new BriefInput(0L,"录音字幕","用户自己的录音","新手",5000,"USER_NARRATION","USER_PROVIDED",List.of(voice),""));
+        var original=new Candidate(List.of(new Scene("opening","TITLE_CARD","用户录音",List.of(),"录音文稿",5000,null,null,null,"CONTAIN","NARRATION",voice,List.of(),List.of("brief:user"))));
+        var parent=persistence.save(task,"default","voice-board",new Save(revision(task),brief.briefId(),null,original));
+        var audio=new StoryboardAudioService(mapper,persistence,codec,new StoryboardCompiler(JSON),media,JSON);
+        String srt="\uFEFF1\r\n00:00:00,100 --> 00:00:02,900\r\n用户提供的真实时间码\r\n";
+        var input=new SubtitleImport(revision(task),"opening",srt);long before=revision(task);
+        var child=audio.importSubtitles(task,"default","user-srt",parent.storyboardId(),input);
+        assertThat(child.parentStoryboardId()).isEqualTo(parent.storyboardId());assertThat(child.runId()).isNull();
+        assertThat(codec.read(child.documentJson()).path("subtitleTimingSource").asText()).isEqualTo("USER_PROVIDED");
+        assertThat(codec.candidate(codec.read(parent.documentJson()).path("candidate")).scenes().getFirst().cues()).isEmpty();
+        assertThat(codec.candidate(codec.read(child.documentJson()).path("candidate")).scenes().getFirst().cues()).containsExactly(new Cue(100,2900,"用户提供的真实时间码"));
+        assertThat(revision(task)).isEqualTo(before+1);
+        assertThat(audio.importSubtitles(task,"default","user-srt",parent.storyboardId(),input).storyboardId()).isEqualTo(child.storyboardId());
+        conflict(()->audio.importSubtitles(task,"default","user-srt",parent.storyboardId(),new SubtitleImport(input.expectedWorkspaceRevision(),"opening",srt.replace("\r\n","\n"))));
+        conflict(()->audio.importSubtitles(task,"default","stale-import",parent.storyboardId(),input));
+        conflict(()->audio.importSubtitles(task,"default","past-audio",child.storyboardId(),new SubtitleImport(revision(task),"opening","1\n00:00:00,100 --> 00:00:03,100\n超出实际录音")));
+        assertThat(count("creator_creation_storyboard",task)).isEqualTo(2);assertThat(count("creator_creation_run",task)).isZero();
+        assertThat(count("creator_creation_cost_entry",task)).isZero();assertThat(revision(task)).isEqualTo(before+1);
+    }
+
+    @Test
+    void timingSuggestionsUseStoredAudioFactsAndNeverApplyChanges() {
+        String task=task("default");String voice=audioAsset(task,"NARRATION",3000,"d");
+        var brief=persistence.saveBrief(task,"default","brief",new BriefInput(0L,"时长建议","完整保留录音","新手",2000,"USER_NARRATION","USER_PROVIDED",List.of(voice),""));
+        var candidate=new Candidate(List.of(new Scene("opening","TITLE_CARD","录音过长",List.of(),"录音文稿",2000,null,null,null,"CONTAIN","NARRATION",voice,List.of(),List.of("brief:user"))));
+        var board=persistence.save(task,"default","board",new Save(revision(task),brief.briefId(),null,candidate));
+        long before=revision(task);var audio=new StoryboardAudioService(mapper,persistence,codec,new StoryboardCompiler(JSON),media,JSON);
+        var report=audio.timing(task,"default",board.storyboardId());
+        assertThat(report.requiresUserDecision()).isTrue();assertThat(report.scenes().getFirst().audioDurationMs()).isEqualTo(3000L);
+        assertThat(report.proposals()).anySatisfy(p->{assertThat(p.code()).isEqualTo("EXTEND_SCENE");assertThat(p.proposedDurationMs()).isEqualTo(3000L);});
+        assertThat(revision(task)).isEqualTo(before);assertThat(count("creator_creation_storyboard",task)).isEqualTo(1);
+        assertThat(mapper.board(task,"default",board.storyboardId()).orElseThrow().documentJson()).isEqualTo(board.documentJson());
+        assertThat(count("creator_creation_run",task)).isZero();
+    }
+
+    @Test
+    void insufficientMusicProducesReadOnlyTimingProposalInsteadOfLooping() {
+        String task=task("default");String music=audioAsset(task,"MUSIC",2000,"e");
+        var settings=new BackgroundMusic(music,0,5000,cny("-18"),0,0,false);
+        var brief=persistence.saveBrief(task,"default","music-too-short",new BriefInput(0L,"音乐时长不足","用户素材","新手",5000,"NO_DIALOGUE","USER_PROVIDED",List.of(music),"",settings));
+        var board=persistence.save(task,"default","board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var audio=new StoryboardAudioService(mapper,persistence,codec,new StoryboardCompiler(JSON),media,JSON);long before=revision(task);
+        var report=audio.timing(task,"default",board.storyboardId());
+        assertThat(report.requiresUserDecision()).isTrue();assertThat(report.proposals()).extracting(p->p.code()).contains("BGM_OUT_OF_RANGE");
+        assertThat(revision(task)).isEqualTo(before);assertThat(count("creator_creation_storyboard",task)).isEqualTo(1);
+        assertThat(codec.read(persistence.brief(task,"default",brief.briefId()).documentJson()).path("backgroundMusic").path("sourceOutMs").asLong()).isEqualTo(5000);
+    }
+
+    @Test
+    void extendingNarrationNeedsEnoughRealVideoInsteadOfImpossibleDurationAdvice() {
+        String task=task("default");String voice=audioAsset(task,"NARRATION",3000,"f");String video=asset(task,"default","short.mp4","1");
+        var metadata=JSON.createObjectNode();metadata.putObject("normalized").putArray("streams").addObject()
+                .put("codec_type","video").put("duration",2).put("start_time",0);
+        jdbc.update("UPDATE creator_creation_asset SET kind='VIDEO_CLIP',metadata_json=? WHERE asset_id=?",codec.write(metadata),video);
+        var brief=persistence.saveBrief(task,"default","brief",new BriefInput(0L,"短视频配录音","保留完整录音","新手",2000,"USER_NARRATION","USER_PROVIDED",List.of(voice,video),""));
+        var candidate=new Candidate(List.of(new Scene("opening","VIDEO_CLIP","短素材",List.of(),"录音文稿",2000,video,0L,2000L,"CONTAIN","NARRATION",voice,List.of(),List.of("brief:user"))));
+        var board=persistence.save(task,"default","board",new Save(revision(task),brief.briefId(),null,candidate));long before=revision(task);
+        var audio=new StoryboardAudioService(mapper,persistence,codec,new StoryboardCompiler(JSON),media,JSON);
+        var report=audio.timing(task,"default",board.storyboardId());
+        assertThat(report.proposals()).extracting(p->p.code()).contains("SUPPLY_MORE_VIDEO","RECORD_AGAIN").doesNotContain("EXTEND_SCENE");
+        assertThat(revision(task)).isEqualTo(before);assertThat(count("creator_creation_storyboard",task)).isEqualTo(1);
     }
 
     @Test
@@ -768,6 +868,17 @@ class StoryboardPersistenceIntegrationTest {
                 VALUES (?,?,?,?,'IMAGE',?,'image/png',123,?,'isolated-storyboard',?,'READY',?,
                   '{"width":640,"height":360,"format":"png"}',?)
                 """, id, task, owner, "asset-" + id, fileName, hashCharacter.repeat(64), key + "/original.png", hashCharacter.repeat(64), objects);
+        return id;
+    }
+
+    private static String audioAsset(String task,String kind,long durationMs,String hashCharacter) {
+        String id=asset(task,"default","fixture.wav",hashCharacter);String key="fixtures/"+id+"/normalized.wav";
+        var metadata=JSON.createObjectNode();var normalized=metadata.putObject("normalized");
+        normalized.putObject("format").put("duration",durationMs/1000.0);
+        normalized.putArray("streams").addObject().put("codec_type","audio").put("codec_name","pcm_s16le")
+                .put("sample_rate",48000).put("channels",2).put("duration",durationMs/1000.0).put("start_time",0);
+        String objects=codec.write(List.of(new StoredFile("NORMALIZED",key,"audio/wav",durationMs*192+44,hashCharacter.repeat(64))));
+        jdbc.update("UPDATE creator_creation_asset SET kind=?,content_type='audio/wav',metadata_json=?,objects_json=? WHERE asset_id=?",kind,codec.write(metadata),objects,id);
         return id;
     }
 

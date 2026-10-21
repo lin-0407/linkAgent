@@ -82,14 +82,15 @@ public class FixedProjectJobFiles {
                 if (!original.startsWith(source) || !Files.isRegularFile(original, LinkOption.NOFOLLOW_LINKS)
                         || !original.toRealPath().equals(original)) throw failure("ASSET_MISSING", "源资产不存在或路径无效");
                 long size = Files.size(original); total += size;
-                if (size <= 0 || size > 32L * 1024 * 1024 || total > 256L * 1024 * 1024)
+                long limit = backgroundMusicOnly(project, asset) ? 64L * 1024 * 1024 : 32L * 1024 * 1024;
+                if (size <= 0 || size > limit || total > 256L * 1024 * 1024)
                     throw failure("INVALID_INPUT", "工程资产超过大小限制");
                 String expected = asset.path("sha256").asText();
                 if (!expected.matches("[0-9a-f]{64}")) throw failure("INVALID_INPUT", "工程资产摘要无效");
                 if (copied.add(name)) {
                     Files.createDirectories(destination.getParent());
                     if (!destination.getParent().toRealPath().equals(destination.getParent())) throw failure("INVALID_INPUT", "尝试目录路径无效");
-                    copy(original, destination, expected, cancelled);
+                    copy(original, destination, expected, limit, cancelled);
                 } else if (!expected.equals(digest(destination, cancelled))) throw failure("ASSET_HASH_MISMATCH", "重复资产声明不一致");
             }
             project.put("runId", run.runId()).put("attemptId", attemptId);
@@ -112,13 +113,23 @@ public class FixedProjectJobFiles {
         return source;
     }
 
-    private void copy(Path source, Path target, String expected, BooleanSupplier cancelled) throws IOException {
+    private boolean backgroundMusicOnly(ObjectNode project, com.fasterxml.jackson.databind.JsonNode asset) {
+        String assetId = asset.path("id").asText();
+        if (project.path("schemaVersion").asInt() != 2 || assetId.isBlank() || !"audio/wav".equals(asset.path("mime").asText())
+                || !assetId.equals(project.path("backgroundMusic").path("assetId").asText())) return false;
+        // 冻结工程没有业务 kind 字段，仅对独占背景角色放宽，不能借该声明扩大旁白或视频资产限制。
+        for (var scene : project.path("scenes")) if (assetId.equals(scene.path("voice").path("assetId").asText())
+                || assetId.equals(scene.path("clip").path("assetId").asText()) || assetId.equals(scene.path("imageAssetId").asText())) return false;
+        return true;
+    }
+
+    private void copy(Path source, Path target, String expected, long limit, BooleanSupplier cancelled) throws IOException {
         try (var input = Files.newInputStream(source); var output = Files.newOutputStream(target,
                 StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
             byte[] buffer = new byte[65536]; int count; long length = 0;
             while ((count = input.read(buffer)) != -1) {
                 check(cancelled); length += count;
-                if (length > 32L * 1024 * 1024) throw failure("INVALID_INPUT", "复制期间源资产超过大小限制");
+                if (length > limit) throw failure("INVALID_INPUT", "复制期间源资产超过大小限制");
                 output.write(buffer, 0, count);
             }
         }

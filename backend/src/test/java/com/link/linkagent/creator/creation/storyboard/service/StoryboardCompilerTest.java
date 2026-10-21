@@ -129,6 +129,111 @@ class StoryboardCompilerTest {
         assertThat(compiler.check(brief(2000), candidate, List.of(badVoice)).problems()).extracting(Problem::code).contains("NARRATION_FORMAT_INVALID");
     }
 
+    @Test void selectedMusicIsFrozenInProjectAndChangesContentHashWithoutInventingVoice() {
+        var candidate = silent(2000); var music = music(4, 1000);
+        var plain = compiler.compile("board", brief(2000), candidate, List.of(music), "run", "attempt");
+        var withNull = brief(2000); withNull.putNull("backgroundMusic");
+        assertThat(compiler.compile("board", withNull, candidate, List.of(music), "run", "attempt")).isEqualTo(plain);
+        ObjectNode selected = musicBrief(2000, 1000, 3000);
+        var result = compiler.compile("board", selected, candidate, List.of(music), "run", "attempt");
+        assertThat(result.path("backgroundMusic").path("sourceStartMs").asLong()).isEqualTo(1000);
+        assertThat(result.path("backgroundMusic").path("sourceEndMs").asLong()).isEqualTo(3000);
+        assertThat(result.path("backgroundMusic").path("gainDb").decimalValue()).isEqualByComparingTo("-12");
+        assertThat(result.path("backgroundMusic").path("ducking").asBoolean()).isTrue();
+        assertThat(result.path("assets")).hasSize(1);
+        assertThat(result.path("assets").get(0).path("id").asText()).isEqualTo("music");
+        assertThat(result.path("scenes").get(0).path("voice").isNull()).isTrue();
+        assertThat(result.path("subtitles")).isEmpty();
+        assertThat(CreationInputRules.renderContentHash(json, result.toString())).isNotEqualTo(CreationInputRules.renderContentHash(json, plain.toString()));
+        ((ObjectNode)selected.path("backgroundMusic")).put("gainDb", -18);
+        var quieter = compiler.compile("board", selected, candidate, List.of(music), "run", "attempt");
+        assertThat(CreationInputRules.renderContentHash(json, quieter.toString())).isNotEqualTo(CreationInputRules.renderContentHash(json, result.toString()));
+    }
+
+    @Test void musicMustBeReadyMusicRoleAndCannotBorrowNarration() {
+        var selected = musicBrief(2000, 0, 2000);
+        assertThat(compiler.check(selected, silent(2000), List.of()).problems()).extracting(Problem::code).contains("BGM_MISSING");
+        var voice = voice(4);
+        var wrongRole = new Asset("music", voice.kind(), voice.bucketName(), voice.objectKey(), voice.sha256(), voice.bytes(), voice.contentType(), voice.metadata());
+        assertThat(compiler.check(selected, silent(2000), List.of(wrongRole)).problems()).extracting(Problem::code).contains("BGM_MISSING");
+    }
+
+    @Test void musicNeedsActualNormalizedPcmStereoAndReliableDuration() {
+        var music = music(4, 1000);
+        ObjectNode metadata = music.metadata().deepCopy();
+        ((ObjectNode)metadata.path("normalized").path("streams").get(0)).put("codec_name", "aac");
+        var wrongCodec = new Asset(music.assetId(), music.kind(), music.bucketName(), music.objectKey(), music.sha256(), music.bytes(), music.contentType(), metadata);
+        assertThat(compiler.check(musicBrief(2000, 0, 2000), silent(2000), List.of(wrongCodec)).problems()).extracting(Problem::code).contains("BGM_FORMAT_INVALID");
+        var noMetadata = new Asset(music.assetId(), music.kind(), music.bucketName(), music.objectKey(), music.sha256(), music.bytes(), music.contentType(), null);
+        assertThat(compiler.check(musicBrief(2000, 0, 2000), silent(2000), List.of(noMetadata)).problems()).extracting(Problem::code).contains("BGM_FORMAT_INVALID");
+        ((ObjectNode)metadata.path("normalized").path("streams").get(0)).put("codec_name", "pcm_s16le").put("channels", 1);
+        assertThat(compiler.check(musicBrief(2000, 0, 2000), silent(2000), List.of(wrongCodec)).problems()).extracting(Problem::code).contains("BGM_FORMAT_INVALID");
+    }
+
+    @Test void musicIsNeverLoopedSpedUpOrExtendedToMeetDuration() {
+        assertThat(compiler.check(musicBrief(2000, 0, 1500), silent(2000), List.of(music(4, 1000))).problems())
+                .extracting(Problem::code).contains("BGM_DURATION_MISMATCH");
+        assertThat(compiler.check(musicBrief(2000, 3000, 5000), silent(2000), List.of(music(4, 1000))).problems())
+                .extracting(Problem::code).contains("BGM_OUT_OF_RANGE");
+        var withinFrame = musicBrief(2000, 0, 2033);
+        assertThat(compiler.check(withinFrame, silent(2000), List.of(music(4, 1000))).renderable()).isTrue();
+        ((ObjectNode)withinFrame.path("backgroundMusic")).put("sourceOutMs", 2034);
+        assertThat(compiler.check(withinFrame, silent(2000), List.of(music(4, 1000))).problems()).extracting(Problem::code).contains("BGM_DURATION_MISMATCH");
+    }
+
+    @Test void shorterOfStreamAndContainerDurationProtectsMusicTail() {
+        var music = music(4, 1000);
+        ((ObjectNode)music.metadata().path("normalized").path("format")).put("duration", 2);
+        assertThat(compiler.check(musicBrief(2000, 1000, 3000), silent(2000), List.of(music)).problems()).extracting(Problem::code).contains("BGM_OUT_OF_RANGE");
+    }
+
+    @ParameterizedTest @ValueSource(strings={"gain", "fade", "ducking", "fractional-range", "negative-range"})
+    void invalidMusicMixAndRangesAreExplicitProblems(String invalid) {
+        var selected = musicBrief(2000, 0, 2000); var config = (ObjectNode)selected.path("backgroundMusic");
+        switch (invalid) {
+            case "gain" -> config.put("gainDb", .1);
+            case "fade" -> config.put("fadeInMs", 1500).put("fadeOutMs", 501);
+            case "ducking" -> config.remove("ducking");
+            case "fractional-range" -> config.put("sourceInMs", .1);
+            default -> config.put("sourceInMs", -1);
+        }
+        assertThat(compiler.check(selected, silent(2000), List.of(music(4, 1000))).renderable()).isFalse();
+    }
+
+    @Test void musicAloneCanUseSixtyFourMibAndStillCountsTowardGlobalLimit() {
+        assertThat(compiler.check(musicBrief(2000, 0, 2000), silent(2000), List.of(music(4, 64L * 1024 * 1024))).renderable()).isTrue();
+        assertThat(compiler.check(musicBrief(2000, 0, 2000), silent(2000), List.of(music(4, 64L * 1024 * 1024 + 1))).problems())
+                .extracting(Problem::code).contains("ASSET_RENDER_LIMIT");
+        var assets = new ArrayList<Asset>(); assets.add(music(7, 64L * 1024 * 1024)); var scenes = new ArrayList<Scene>();
+        for (int index = 0; index < 7; index++) {
+            String id = "image-" + index; var image = image();
+            assets.add(new Asset(id, "IMAGE", image.bucketName(), image.objectKey(), image.sha256(), 32L * 1024 * 1024, image.contentType(), image.metadata()));
+            scenes.add(scene("scene-" + index, "IMAGE_CARD", 1000, id, null, null, "NO_DIALOGUE", null, List.of()));
+        }
+        assertThat(compiler.check(musicBrief(7000, 0, 7000), new Candidate(scenes), assets).problems()).extracting(Problem::code).contains("ASSET_TOTAL_LIMIT");
+    }
+
+    @ParameterizedTest @ValueSource(strings={"fadeInMs", "fadeOutMs"})
+    void everyMusicFadeHasItsOwnTenSecondLimitEvenWhenWholeRangeIsLonger(String field) {
+        var selected = musicBrief(30000, 0, 30000);
+        var music = (ObjectNode)selected.path("backgroundMusic");
+        music.put("fadeInMs", 0).put("fadeOutMs", 0).put(field, 10000);
+        assertThat(compiler.check(selected, silent(30000), List.of(music(30, 1000))).renderable()).isTrue();
+        music.put(field, 10001);
+        assertThat(compiler.check(selected, silent(30000), List.of(music(30, 1000))).problems())
+                .extracting(Problem::code).contains("BGM_MIX_INVALID");
+    }
+
+    Candidate silent(long duration) { return new Candidate(List.of(scene("silent", "TITLE_CARD", duration, null, null, null, "NO_DIALOGUE", null, List.of()))); }
+    ObjectNode musicBrief(long duration, long start, long end) {
+        var brief = brief(duration); brief.putObject("backgroundMusic").put("assetId", "music").put("sourceInMs", start).put("sourceOutMs", end)
+                .put("gainDb", -12).put("fadeInMs", 100).put("fadeOutMs", 200).put("ducking", true); return brief;
+    }
+    Asset music(double seconds, long bytes) {
+        var voice = voice(seconds);
+        return new Asset("music", "MUSIC", voice.bucketName(), "normalized/music.wav", "d".repeat(64), bytes, "audio/wav", voice.metadata());
+    }
+
     static Scene scene(String id, String layout, long duration, String visual, Long begin, Long end, String audio, String voice, List<Cue> cues) {
         return new Scene(id, layout, "用户主题", List.of(), "", duration, visual, begin, end, "CONTAIN", audio, voice, cues, List.of());
     }

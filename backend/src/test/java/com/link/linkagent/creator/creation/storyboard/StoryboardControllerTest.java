@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.creation.storyboard.controller.StoryboardController;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardService;
+import com.link.linkagent.creator.creation.storyboard.service.StoryboardAudioService;
+import com.link.linkagent.creator.creation.storyboard.model.StoryboardAudioModels.*;
 import org.junit.jupiter.api.*;
 import org.springframework.test.web.servlet.*;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -14,8 +16,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 class StoryboardControllerTest {
-    StoryboardService service;MockMvc mvc;LocalValidatorFactoryBean validator;
-    @BeforeEach void setup(){service=mock(StoryboardService.class);validator=new LocalValidatorFactoryBean();validator.afterPropertiesSet();mvc=MockMvcBuilders.standaloneSetup(new StoryboardController(service)).setValidator(validator).build();}
+    StoryboardService service;StoryboardAudioService audio;MockMvc mvc;LocalValidatorFactoryBean validator;
+    @BeforeEach void setup(){service=mock(StoryboardService.class);audio=mock(StoryboardAudioService.class);validator=new LocalValidatorFactoryBean();validator.afterPropertiesSet();mvc=MockMvcBuilders.standaloneSetup(new StoryboardController(service,audio)).setValidator(validator).build();}
     @AfterEach void close(){validator.close();}
     @Test void preparationNeedsExplicitBudgetAndReturnsAcceptedWithoutOpeningFullRun() throws Exception {
         when(service.generate(anyString(),anyString(),anyString(),any())).thenReturn(Map.of("fullProductionAvailable",false));
@@ -51,5 +53,21 @@ class StoryboardControllerTest {
             mvc.perform(post("/api/creator/tasks/task-1/creation/storyboards").header("Idempotency-Key","bad").contentType("application/json").content(body.toString())).andExpect(status().isBadRequest());
         }
         verifyNoInteractions(service);
+    }
+    @Test void subtitleImportNeedsRevisionAndReturnsNewBoardWhileTimingIsReadOnly() throws Exception {
+        var saved=mock(Board.class);when(saved.storyboardId()).thenReturn("board-2");
+        when(audio.importSubtitles(anyString(),anyString(),anyString(),anyString(),any())).thenReturn(saved);
+        mvc.perform(post("/api/creator/tasks/task-1/creation/storyboards/board-1/subtitles:import")
+                .header("Idempotency-Key","srt-1").contentType("application/json")
+                .content("{\"expectedWorkspaceRevision\":2,\"sceneId\":\"opening\",\"srt\":\"1\\n00:00:00,100 --> 00:00:00,900\\n用户字幕\"}"))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"));
+        verify(service).board("task-1","default","board-2");
+        mvc.perform(get("/api/creator/tasks/task-1/creation/storyboards/board-1/timing"))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"));
+        verify(audio).timing("task-1","default","board-1");
+        mvc.perform(post("/api/creator/tasks/task-1/creation/storyboards/board-1/subtitles:import")
+                .header("Idempotency-Key","bad").contentType("application/json")
+                .content("{\"sceneId\":\"opening\",\"srt\":\"字幕\"}")).andExpect(status().isBadRequest());
+        verify(audio,times(1)).importSubtitles(anyString(),anyString(),anyString(),anyString(),any());
     }
 }

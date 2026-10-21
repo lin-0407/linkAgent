@@ -1,6 +1,6 @@
 # LinkAgent 离线渲染器
 
-固定工程媒体生成模块。接收后端解析好的本地工程与资产，生成完整 MP4、独立 SRT、封面、实际成片首中尾抽帧和 `manifest.json`。V1 支持图片与 WAV，V2 已增加视频片段、截取、完整显示/裁切、原声与旁白混音。模块不生成脚本、不调用模型或 TTS、不连接业务数据库和 OSS；本地检查不替代发布前完整试映。
+固定工程媒体生成模块。接收后端解析好的本地工程与资产，生成完整 MP4、独立 SRT、封面、实际成片首中尾抽帧和 `manifest.json`。V1 支持图片与 WAV，V2 已增加视频片段、截取、完整显示/裁切、原声与旁白混音；0.3.0 增加受控单路背景音乐。模块不生成脚本、不调用模型或 TTS、不连接业务数据库和 OSS；本地检查不替代发布前完整试映。
 
 ## 环境与调用
 
@@ -11,7 +11,7 @@ docker build -t linkagent-renderer:local renderer
 docker run --rm --network none --memory 512m --cpus 2 --pids-limit 64 --read-only --tmpfs /tmp:rw,size=64m --mount type=bind,source=E:/linkAgent/linkAgent/export/renderer-s2-20261020,target=/work linkagent-renderer:local render --input /work/rest/input.json --work-root /work --output-dir /work/rest/attempt-1 --timeout-seconds 600
 ```
 
-原生命令为 `python -m linkagent_renderer render --input ... --work-root ... --output-dir ... --font ...`，在 `renderer` 目录运行或安装对应包路径。解释器、二进制路径和字体文件都是部署者配置，不能来自模型字段。Java 已有内部固定工程调度、自动蓝图与产物注册；公开制作入口仍关闭，尚未部署到作者服务。此次 V2 没有对外业务 HTTP API 或 Schema 变更。
+原生命令为 `python -m linkagent_renderer render --input ... --work-root ... --output-dir ... --font ...`，在 `renderer` 目录运行或安装对应包路径。解释器、二进制路径和字体文件都是部署者配置，不能来自模型字段。Java 已有内部固定工程调度、自动蓝图与产物注册；通用公开整片制作入口仍关闭，尚未部署到作者服务。渲染器不直接开放业务 HTTP；简报、音乐设置、字幕导入与时长建议由 Java 后端受理。
 
 工作根目录必须存在，输入和资产解析后须位于该根目录，输出须为全新尝试目录。拒绝覆盖旧输出和越界链接；成功前不生成 `manifest.json`。进程取消只终止本次创建的编码/探测子进程。
 
@@ -60,7 +60,11 @@ docker run --rm --network none --memory 512m --cpus 2 --pids-limit 64 --read-onl
 
 V2 的 `voice=null` 表示没有旁白，原声字幕引用片段资产，旁白字幕继续引用 WAV。全片明确静音才允许零峰值输出；仍输出 AAC 音轨。没有对白可使用空字幕数组，不生成占位文字。源音轨延迟不被抹掉，所截区间没有原声或原声 cue 越出实际音轨范围时拒绝。
 
-支持本地 H.264/HEVC、单视频流、至多一条音轨；源画面及像素比例规范化的中间画面均至多 800 万像素、帧率至多 60fps、源时长至多 30 分钟，仍受单资产 32MiB、总量 256MiB 限制。HDR、异常元数据和不支持编码需先规范化。本步不包含 BGM、素材上传或 ASR。
+支持本地 H.264/HEVC、单视频流、至多一条音轨；源画面及像素比例规范化的中间画面均至多 800 万像素、帧率至多 60fps、源时长至多 30 分钟，仍受单资产 32MiB、总量 256MiB 限制。HDR、异常元数据和不支持编码需先规范化。素材上传和 ASR 由后端业务服务负责。
+
+0.3.0 起 V2 可选顶层 `backgroundMusic`（省略或 null 表示无配乐），字段为 `assetId/sourceStartMs/sourceEndMs/gainDb/fadeInMs/fadeOutMs/ducking`。音乐必须为独占该角色的真实 PCM16 WAV，单文件上限 64MiB、源时长上限 20 分钟；其他资产仍为 32MiB、旁白仍最多 30 秒、合计仍为 256MiB。V1 拒绝音乐字段。选区须真实存在，长度对应整片且最多一帧误差；只读所选范围，不循环或变速，量化容差尾部可以静音。
+
+音乐音量为 −36 至 0dB；淡入淡出各为 0–10000ms，合计不能超过选区。开启压低时，依据实际主音轨的 RMS 能量压低音乐约12dB，进入约20ms、恢复约180ms；不声称识别了人声。只加配乐不生成对白字幕，音乐不足给业务检查问题；混音继续做真实峰值、削波及整片解码验收，不自动削波或限幅掩盖过大音量。后端接口及范围见[音乐字幕说明](../docs/reference/音乐字幕与时长建议接口说明.md)。
 
 视频片段标题仅作元数据，不参与可见文字排版或字体覆盖检查，真实字幕仍严格校验。CONTAIN 按实际像素比例直接计算目标框内尺寸；COVER 先在源内裁切再缩放，不构建可能因极端长宽比或旋转 SAR 膨胀的完整中间帧。
 

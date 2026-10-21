@@ -101,6 +101,31 @@ class RenderArtifactVerifierTest {
         manifest.put("inputSchemaVersion", 2); assertRejected();
     }
 
+    @Test void backgroundMusicWithoutVoiceOrOriginalIsAudibleAndPassesArtifactVerification() throws Exception {
+        ((ObjectNode) input).put("schemaVersion", 2);
+        ((ObjectNode) input).putArray("scenes").addObject().put("layout", "TITLE_CARD").putNull("voice");
+        ((ObjectNode) input).putObject("backgroundMusic").put("assetId", "music");
+        manifest.put("inputSchemaVersion", 2);
+        assertThat(verify().files()).hasSize(8);
+    }
+
+    @Test void selectedBackgroundMusicCannotPassWithUnexpectedlySilentAudio() {
+        ((ObjectNode) input).put("schemaVersion", 2);
+        ((ObjectNode) input).putArray("scenes").addObject().put("layout", "TITLE_CARD").putNull("voice");
+        ((ObjectNode) input).putObject("backgroundMusic").put("assetId", "music");
+        manifest.put("inputSchemaVersion", 2);
+        for (String field : List.of("decodedPeak", "decodedRms", "sourcePeak", "sourceRms")) media().put(field, 0);
+        assertRejected();
+    }
+
+    @Test void nullBackgroundMusicPreservesExplicitSilentArtifactAcceptance() throws Exception {
+        ((ObjectNode) input).put("schemaVersion", 2).putNull("backgroundMusic");
+        ((ObjectNode) input).putArray("scenes").addObject().put("layout", "TITLE_CARD").putNull("voice");
+        manifest.put("inputSchemaVersion", 2);
+        for (String field : List.of("decodedPeak", "decodedRms", "sourcePeak", "sourceRms")) media().put(field, 0);
+        assertThat(verify().files()).hasSize(8);
+    }
+
     @Test void rejectsSymlinkedArtifactEvenIfHashMatches() throws Exception {
         Path outside = Files.createTempFile(root.getParent(), "render-external-", ".mp4");
         try {

@@ -108,6 +108,8 @@ final class RenderArtifactVerifier {
 
     private boolean explicitlySilent(JsonNode input) {
         if (input.path("schemaVersion").asInt() != 2 || !input.path("scenes").isArray() || input.path("scenes").isEmpty()) return false;
+        // 无对白仍可播放用户明确选择的背景音乐，不能按场景 voice 为空误判为整片静音。
+        if (input.hasNonNull("backgroundMusic")) return false;
         // 静音必须来自每个场景的明确选择，不能靠清单中的一个标记放宽所有音轨检查。
         for (JsonNode scene : input.path("scenes")) {
             if (!scene.has("voice") || !scene.path("voice").isNull()) return false;

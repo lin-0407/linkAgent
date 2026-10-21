@@ -9,6 +9,9 @@ import com.link.linkagent.creator.media.storage.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.*;
+import java.io.RandomAccessFile;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.*;
@@ -111,6 +114,51 @@ class StoryboardProjectFilesTest {
         var request = new com.link.linkagent.creator.creation.render.FixedProjectRenderService.Request(outside, "run", "attempt", "board", "a".repeat(64));
         assertThatThrownBy(() -> files().discard(request)).hasMessageContaining("路径");
         assertThat(outside).exists();
+    }
+
+    @Test void selectedMusicCanDownloadBeyondThirtyTwoMibAndStillVerifiesEntireFrozenFile() throws Exception {
+        // 稀疏字节夹具只验证文件上限与完整复制，不把这份夹具当成可解码音乐。
+        Path fixture = root.resolve("music-fixture.wav");
+        try (var file = new RandomAccessFile(fixture.toFile(), "rw")) { file.setLength(32L * 1024 * 1024 + 1); }
+        String digest = digest(fixture); var asset = music(Files.size(fixture), digest);
+        var project = musicProject(asset);
+        when(storage.headObject(asset.bucketName(), asset.objectKey())).thenReturn(new StoredObjectMetadata(asset.bytes(), "audio/wav", "etag"));
+        doAnswer(i -> { Files.copy(fixture, i.getArgument(2, Path.class)); return null; }).when(storage).downloadObject(any(), any(), any(), any());
+        var request = files().materialize(project, List.of(asset), () -> false);
+        Path result = request.input().getParent().resolve("assets/music.wav");
+        assertThat(Files.size(result)).isEqualTo(asset.bytes()); assertThat(digest(result)).isEqualTo(digest);
+        files().discard(request); assertThat(fixture).exists();
+    }
+
+    @Test void backgroundNameCannotRaiseNarrationLimitAndMusicCannotExceedSixtyFourMib() {
+        var music = music(32L * 1024 * 1024 + 1, "d".repeat(64));
+        var project = musicProject(music);
+        var wrongKind = new Asset(music.assetId(), "NARRATION", music.bucketName(), music.objectKey(), music.sha256(), music.bytes(), music.contentType(), music.metadata());
+        assertThatThrownBy(() -> files().materialize(project, List.of(wrongKind), () -> false)).hasMessageContaining("冻结私有对象");
+        var tooLarge = music(64L * 1024 * 1024 + 1, "d".repeat(64));
+        ((ObjectNode)project.path("assets").get(0)).put("sha256", tooLarge.sha256()); resign(project);
+        assertThatThrownBy(() -> files().materialize(project, List.of(tooLarge), () -> false)).hasMessageContaining("冻结私有对象");
+        verifyNoInteractions(storage);
+    }
+
+    private ObjectNode musicProject(Asset asset) {
+        var candidate = new Candidate(List.of(StoryboardCompilerTest.scene("silent", "TITLE_CARD", 1000, null, null, null, "NO_DIALOGUE", null, List.of())));
+        var brief = json.createObjectNode().put("targetDurationMs", 1000).put("dialogueMode", "NO_DIALOGUE");
+        brief.putObject("backgroundMusic").put("assetId", "music").put("sourceInMs", 0).put("sourceOutMs", 1000)
+                .put("gainDb", -12).put("fadeInMs", 0).put("fadeOutMs", 0).put("ducking", false);
+        // 超限场景从合法工程改声明，文件边界必须独立拒绝，不能依赖编译器的前置检查。
+        var accepted = music(Math.min(asset.bytes(), 64L * 1024 * 1024), asset.sha256());
+        return new StoryboardCompiler(json).compile("board", brief, candidate, List.of(accepted), "run", "attempt");
+    }
+    private Asset music(long size, String digest) {
+        ObjectNode metadata = json.createObjectNode(); var normalized = metadata.putObject("normalized"); normalized.putObject("format").put("duration", 2);
+        normalized.putArray("streams").addObject().put("codec_type", "audio").put("codec_name", "pcm_s16le").put("sample_rate", "48000").put("channels", 2).put("duration", 2);
+        return new Asset("music", "MUSIC", "historical-private-bucket", "frozen/normalized/music.wav", digest, size, "audio/wav", metadata);
+    }
+    private String digest(Path file) throws Exception {
+        var digest = MessageDigest.getInstance("SHA-256");
+        try (var input = Files.newInputStream(file)) { byte[] buffer = new byte[65536]; int count; while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count); }
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     private Asset image() {

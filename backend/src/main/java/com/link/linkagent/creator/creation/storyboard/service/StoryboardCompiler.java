@@ -19,7 +19,7 @@ public class StoryboardCompiler {
     // 只满足渲染器的非空资产契约，不会作为任何场景画面或配音使用。
     static final byte[] PLACEHOLDER = Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
     private static final int FPS = 30;
-    private static final long SINGLE_LIMIT = 32L * 1024 * 1024, TOTAL_LIMIT = 256L * 1024 * 1024;
+    private static final long SINGLE_LIMIT = 32L * 1024 * 1024, MUSIC_LIMIT = 64L * 1024 * 1024, TOTAL_LIMIT = 256L * 1024 * 1024;
     private final ObjectMapper json;
 
     public StoryboardCompiler(ObjectMapper json) { this.json = json; }
@@ -34,7 +34,7 @@ public class StoryboardCompiler {
         long duration = candidate == null || candidate.scenes() == null ? 0 : candidate.scenes().stream()
                 .filter(Objects::nonNull).mapToLong(s -> frames(s.durationMs())).sum() * 1000 / FPS;
         if (!issues.isEmpty()) return new Check(false, List.copyOf(issues), duration, null);
-        ObjectNode document = build(storyboardId, candidate, assets, "check-run", "check-attempt");
+        ObjectNode document = build(storyboardId, brief, candidate, assets, "check-run", "check-attempt");
         String hash = CreationInputRules.renderContentHash(json, document.toString());
         return new Check(true, List.of(), Math.round(document.path("video").path("frameCount").asLong() * 1000.0 / FPS), hash);
     }
@@ -45,7 +45,7 @@ public class StoryboardCompiler {
         List<Problem> issues = inspect(brief, candidate, assets);
         if (!issues.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "故事板尚不可渲染：" + issues.getFirst().message());
-        return build(storyboardId, candidate, assets, runId, attemptId);
+        return build(storyboardId, brief, candidate, assets, runId, attemptId);
     }
 
     private List<Problem> inspect(JsonNode brief, Candidate candidate, List<Asset> supplied) {
@@ -163,17 +163,53 @@ public class StoryboardCompiler {
         if (frameCount < FPS || frameCount > FPS * 180 || Math.abs(frameCount * 1000.0 / FPS - target) > 1000.0 / FPS + .000001)
             add(issues, null, "TARGET_DURATION_MISMATCH", "场景总时长必须与用户目标时长一致，最多允许一帧量化误差");
         if (cues > 200) add(issues, null, "CUES_LIMIT", "整片最多支持 200 条真实字幕");
+        String musicId = inspectMusic(brief.path("backgroundMusic"), assets, usedAssets, frameCount, issues);
         long total = 0;
         for (String id : usedAssets) {
             Asset asset = assets.get(id);
             if (PLACEHOLDER_ID.equals(id)) add(issues, null, "ASSET_ID_RESERVED", "该素材身份为内部无画面占位保留标识");
             total += asset.bytes();
-            if (!identifier(id) || asset.bytes() <= 0 || asset.bytes() > SINGLE_LIMIT || asset.sha256() == null || !asset.sha256().matches("[0-9a-f]{64}")
+            long limit = id.equals(musicId) && "MUSIC".equals(asset.kind()) ? MUSIC_LIMIT : SINGLE_LIMIT;
+            if (!identifier(id) || asset.bytes() <= 0 || asset.bytes() > limit || asset.sha256() == null || !asset.sha256().matches("[0-9a-f]{64}")
                     || asset.bucketName() == null || asset.bucketName().isBlank() || asset.objectKey() == null || asset.objectKey().isBlank())
-                add(issues, null, "ASSET_RENDER_LIMIT", "引用素材须有可靠摘要且单个不超过 32 MiB，请先裁剪或压缩后重新导入");
+                add(issues, null, "ASSET_RENDER_LIMIT", "引用素材须有可靠摘要；背景音乐不超过 64 MiB，其他素材不超过 32 MiB，请先裁剪或压缩后重新导入");
         }
         if (total > TOTAL_LIMIT) add(issues, null, "ASSET_TOTAL_LIMIT", "本工程引用素材合计超过 256 MiB");
         return issues;
+    }
+
+    private String inspectMusic(JsonNode music, Map<String, Asset> assets, Set<String> used, long frames, List<Problem> issues) {
+        if (music.isMissingNode() || music.isNull()) return null;
+        String id = music.path("assetId").asText();
+        Asset asset = assets.get(id);
+        if (!music.isObject() || !identifier(id) || asset == null || !"MUSIC".equals(asset.kind()) || !"audio/wav".equals(asset.contentType())) {
+            add(issues, null, "BGM_MISSING", "背景音乐须引用已冻结的 MUSIC 类型 WAV 素材"); return id;
+        }
+        used.add(id);
+        JsonNode track = stream(asset, "audio");
+        double trackDuration = streamDuration(asset, "audio"), formatDuration = asset.metadata() == null ? 0
+                : number(asset.metadata().path("normalized").path("format").path("duration"), 0);
+        // WAV 的 ffprobe 时长可能只在 format 中；两个来源同时存在时取较短值，避免越过真实尾部。
+        double actualDuration = trackDuration > 0 && formatDuration > 0 ? Math.min(trackDuration, formatDuration)
+                : Math.max(trackDuration, formatDuration);
+        if (!"pcm_s16le".equals(track.path("codec_name").asText()) || track.path("channels").asInt() != 2
+                || track.path("sample_rate").asInt() != 48000 || actualDuration <= 0 || actualDuration > 1200.001)
+            add(issues, null, "BGM_FORMAT_INVALID", "背景音乐需要真实 48 kHz 立体声 PCM16 WAV 及可靠时长");
+        JsonNode start = music.path("sourceInMs"), end = music.path("sourceOutMs");
+        boolean range = start.isIntegralNumber() && start.canConvertToLong() && end.isIntegralNumber() && end.canConvertToLong()
+                && start.asLong() >= 0 && end.asLong() > start.asLong() && end.asLong() <= 1200000;
+        if (!range || Math.abs((end.asLong() - start.asLong()) - frames * 1000.0 / FPS) > 1000.0 / FPS + .000001)
+            add(issues, null, "BGM_DURATION_MISMATCH", "背景音乐区间须与全片帧长一致，最多一帧误差，不会自动循环、变速或补齐");
+        if (range && end.asLong() > actualDuration * 1000 + .001)
+            add(issues, null, "BGM_OUT_OF_RANGE", "背景音乐区间超过素材实际时长");
+        JsonNode gain = music.path("gainDb"), fadeIn = music.path("fadeInMs"), fadeOut = music.path("fadeOutMs");
+        if (!gain.isNumber() || !Double.isFinite(gain.asDouble()) || gain.asDouble() < -36 || gain.asDouble() > 0
+                || !fadeIn.isIntegralNumber() || !fadeIn.canConvertToInt() || fadeIn.asInt() < 0 || fadeIn.asInt() > 10000
+                || !fadeOut.isIntegralNumber() || !fadeOut.canConvertToInt() || fadeOut.asInt() < 0 || fadeOut.asInt() > 10000
+                || (long)fadeIn.asInt() + fadeOut.asInt() > (range ? end.asLong() - start.asLong() : 0)
+                || !music.path("ducking").isBoolean())
+            add(issues, null, "BGM_MIX_INVALID", "背景音乐音量须为 -36 至 0 dB，单项淡入淡出不超过 10 秒且总长不得超过区间，压低设置须明确");
+        return id;
     }
 
     private void validateVisual(Asset asset, boolean video, String sid, List<Problem> issues) {
@@ -186,7 +222,7 @@ public class StoryboardCompiler {
             add(issues, sid, "VIDEO_METADATA_INVALID", "视频缺少可靠实际时长");
     }
 
-    private ObjectNode build(String storyboardId, Candidate candidate, List<Asset> supplied, String runId, String attemptId) {
+    private ObjectNode build(String storyboardId, JsonNode brief, Candidate candidate, List<Asset> supplied, String runId, String attemptId) {
         ObjectNode document = json.createObjectNode();
         document.put("schemaVersion", 2).put("runId", runId).put("attemptId", attemptId).put("storyboardId", storyboardId).put("seed", 7);
         ObjectNode video = document.putObject("video");
@@ -220,6 +256,16 @@ public class StoryboardCompiler {
                     .put("startMs", startMs + cue.startMs()).put("endMs", startMs + cue.endMs()).put("text", cue.text())
                     .put("audioAssetId", "NARRATION".equals(scene.audioMode()) ? scene.narrationAssetId() : scene.visualAssetId());
             cursor = end;
+        }
+        JsonNode music = brief.path("backgroundMusic");
+        if (music.isObject()) {
+            String musicId = music.path("assetId").asText(); used.add(musicId);
+            document.putObject("backgroundMusic").put("assetId", musicId)
+                    .put("sourceStartMs", music.path("sourceInMs").asLong()).put("sourceEndMs", music.path("sourceOutMs").asLong())
+                    .set("gainDb", music.path("gainDb"));
+            ObjectNode outputMusic = (ObjectNode)document.path("backgroundMusic");
+            outputMusic.put("fadeInMs", music.path("fadeInMs").asInt()).put("fadeOutMs", music.path("fadeOutMs").asInt())
+                    .put("ducking", music.path("ducking").asBoolean());
         }
         for (String id : used) {
             Asset asset = available.get(id);
