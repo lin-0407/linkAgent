@@ -26,13 +26,19 @@ public class StoryboardCodec {
     public static String digest(String value) {try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}catch(Exception ex){throw new IllegalStateException(ex);}}
     public void valid(Object value) {if(value==null || !validator.validate(value).isEmpty())throw conflict("故事板字段、数量或文本超出允许范围");}
     public Candidate candidate(JsonNode root) {var result=decode(root,Candidate.class);valid(result);return result;}
-    public void policy(Brief brief,Candidate candidate,boolean generated) {
+    public void policy(Brief brief,Candidate candidate,boolean generated) { policy(brief,candidate,generated,Set.of()); }
+    /** 生成的配音素材不在简报选择范围内，只有本运行实际产出并明确用于 TTS 场景时才能引用。 */
+    public void policy(Brief brief,Candidate candidate,boolean generated,Set<String> generatedVoiceAssets) {
         valid(candidate);var doc=read(brief.documentJson());Set<String> assets=new HashSet<>();doc.path("assetIds").forEach(n->assets.add(n.asText()));
         Set<String> sources=new HashSet<>(Set.of("brief:user"));read(brief.sourceJson()).path("materials").forEach(n->sources.add(n.path("sourceId").asText()));
         Set<String> ids=new HashSet<>();String mode=doc.path("dialogueMode").asText();
         for(var s:candidate.scenes()) {
             if(!ids.add(s.id()))throw conflict("场景身份重复");
-            if(s.visualAssetId()!=null && !assets.contains(s.visualAssetId()) || s.narrationAssetId()!=null && !assets.contains(s.narrationAssetId()))throw conflict("故事板引用了简报范围外素材");
+            boolean voiceGenerated=s.narrationAssetId()!=null && generatedVoiceAssets.contains(s.narrationAssetId());
+            if(s.visualAssetId()!=null && !assets.contains(s.visualAssetId())
+                    || s.narrationAssetId()!=null && !assets.contains(s.narrationAssetId()) && !voiceGenerated)
+                throw conflict("故事板引用了简报范围外素材");
+            if(voiceGenerated && !"TTS".equals(s.audioMode()))throw conflict("生成的配音只能用于 TTS 场景，不能替换用户录音或原声");
             if(!sources.containsAll(s.sourceRefs()) || ("USER_PROVIDED".equals(doc.path("contentKind").asText()) && s.sourceRefs().isEmpty()))throw conflict("事实场景需要引用本简报真实输入来源");
             if(generated && !s.cues().isEmpty())throw conflict("模型不能生成未经音频对齐的字幕时间");
             String required=switch(mode){case "USER_NARRATION"->"NARRATION";case "SOURCE"->"ORIGINAL";case "TTS"->"TTS";default->"NO_DIALOGUE";};

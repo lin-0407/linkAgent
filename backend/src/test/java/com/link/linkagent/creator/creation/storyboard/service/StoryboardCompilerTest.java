@@ -33,14 +33,17 @@ class StoryboardCompilerTest {
     void unavailableCapabilitiesRemainExplicitProblemsAndCompileRefuses(String feature) {
         var candidate = new Candidate(List.of(scene("s1", feature.equals("AI_VIDEO") ? feature : "TITLE_CARD", 2000,
                 null, null, null, feature.equals("TTS") ? feature : "NO_DIALOGUE", null, List.of())));
-        assertThat(compiler.check(brief(2000), candidate, List.of()).problems()).extracting(Problem::code).contains(feature + "_NOT_CONFIGURED");
+        // TTS 不再整体拒绝，但缺少真实生成音频时仍然不可渲染；AI 视频仍无供应商。
+        assertThat(compiler.check(brief(2000), candidate, List.of()).problems()).extracting(Problem::code)
+                .contains("TTS".equals(feature) ? "TTS_AUDIO_MISSING" : "AI_VIDEO_NOT_CONFIGURED");
         assertThatThrownBy(() -> compiler.compile("board", brief(2000), candidate, List.of(), "run", "attempt")).hasMessageContaining("故事板尚不可渲染");
     }
 
     @Test void selectedTtsCannotBecomeSilentlyReadyByChangingScenesToMute() {
         ObjectNode brief = brief(2000); brief.put("dialogueMode", "TTS");
         var candidate = new Candidate(List.of(scene("s1", "TITLE_CARD", 2000, null, null, null, "NO_DIALOGUE", null, List.of())));
-        assertThat(compiler.check(brief, candidate, List.of()).problems()).extracting(Problem::code).contains("TTS_NOT_CONFIGURED");
+        assertThat(compiler.check(brief, candidate, List.of()).problems()).extracting(Problem::code)
+                .contains("DIALOGUE_CHOICE_CONFLICT");
     }
 
     @Test void selectedNoDialogueCannotAcquireNarration() {
@@ -224,7 +227,43 @@ class StoryboardCompilerTest {
                 .extracting(Problem::code).contains("BGM_MIX_INVALID");
     }
 
+    @Test void ttsAudioMustMatchCurrentScriptAndCarryRealSubtitleTimes() {
+        String text = "用户确认的配音文稿";
+        var generate = brief(2000).put("dialogueMode", "TTS");
+        var withCues = new Candidate(List.of(new Scene("s1", "TITLE_CARD", "开场", List.of(), text, 2000,
+                null, null, null, "CONTAIN", "TTS", "voice", List.of(new Cue(0, 1200, text)), List.of())));
+        var generated = ttsVoice(text, 1.5);
+        assertThat(compiler.check(generate, withCues, List.of(generated)).problems()).isEmpty();
+
+        var changed = new Candidate(List.of(new Scene("s1", "TITLE_CARD", "开场", List.of(), text + "改过", 2000,
+                null, null, null, "CONTAIN", "TTS", "voice", List.of(new Cue(0, 1200, text)), List.of())));
+        assertThat(compiler.check(generate, changed, List.of(generated)).problems()).extracting(Problem::code)
+                .contains("TTS_TEXT_MISMATCH");
+
+        var noCues = new Candidate(List.of(new Scene("s1", "TITLE_CARD", "开场", List.of(), text, 2000,
+                null, null, null, "CONTAIN", "TTS", "voice", List.of(), List.of())));
+        assertThat(compiler.check(generate, noCues, List.of(generated)).problems()).extracting(Problem::code)
+                .contains("TTS_CUES_MISSING");
+    }
+
+    @Test void generatedVoiceCannotReplaceUserRecording() {
+        String text = "用户自己的录音";
+        var userNarration = brief(2000).put("dialogueMode", "USER_NARRATION");
+        var scene = new Candidate(List.of(new Scene("s1", "TITLE_CARD", "开场", List.of(), text, 2000,
+                null, null, null, "CONTAIN", "NARRATION", "voice", List.of(new Cue(0, 900, text)), List.of())));
+        assertThat(compiler.check(userNarration, scene, List.of(ttsVoice(text, 1.0))).problems())
+                .extracting(Problem::code).contains("NARRATION_ASSET_GENERATED");
+    }
+
     Candidate silent(long duration) { return new Candidate(List.of(scene("silent", "TITLE_CARD", duration, null, null, null, "NO_DIALOGUE", null, List.of()))); }
+    Asset ttsVoice(String text, double seconds) {
+        var voice = voice(seconds);
+        ObjectNode metadata = voice.metadata().deepCopy();
+        metadata.putObject("generated").put("kind", "TTS").put("provider", "dashscope")
+                .put("textSha256", StoryboardCodec.digest(text));
+        return new Asset(voice.assetId(), voice.kind(), voice.bucketName(), voice.objectKey(), voice.sha256(),
+                voice.bytes(), voice.contentType(), metadata);
+    }
     ObjectNode musicBrief(long duration, long start, long end) {
         var brief = brief(duration); brief.putObject("backgroundMusic").put("assetId", "music").put("sourceInMs", start).put("sourceOutMs", end)
                 .put("gainDb", -12).put("fadeInMs", 100).put("fadeOutMs", 200).put("ducking", true); return brief;

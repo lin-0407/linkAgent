@@ -78,31 +78,16 @@ public class StoryboardAudioService {
                 if(begin>=0 && end>begin && Math.abs((end-begin)-duration)>1.000001)
                     own.add(proposal(scene,"ADJUST_CLIP_RANGE","重新选择与场景帧长一致的视频区间，不会循环或变速补齐",sceneMs));
             }
-            if("NARRATION".equals(scene.audioMode())) {
+            if("NARRATION".equals(scene.audioMode()) || "TTS".equals(scene.audioMode())) {
+                boolean tts="TTS".equals(scene.audioMode());
                 var voice=assets.get(scene.narrationAssetId());double actual=narrationDuration(voice);
                 if(actual<=0) {
-                    source="MISSING";own.add(proposal(scene,"SUPPLY_RECORDING","请提供本场景真实录音，再根据实际时长安排时间线",null));
+                    source=tts?"NOT_GENERATED":"MISSING";
+                    own.add(proposal(scene,tts?"PREPARE_REAL_AUDIO":"SUPPLY_RECORDING",
+                            tts?"配音尚未生成；有真实音频后才能给出时长建议":"请提供本场景真实录音，再根据实际时长安排时间线",null));
                 } else {
                     source="NORMALIZED_MEDIA";audioMs=Math.round(actual);
-                    if(actual>30000.001)own.add(proposal(scene,"SPLIT_OR_RECORD_AGAIN","录音超过单场景 30 秒，请拆分录音与场景，或重新录制",null));
-                    if(actual>duration+.001) {
-                        long extended=(long)Math.ceil(Math.ceil(actual*FPS/1000.0)*1000/FPS);
-                        if(extended<=30000) {
-                            if("VIDEO_CLIP".equals(scene.layout())) {
-                                double available=number(stream(assets.get(scene.visualAssetId()),"video").path("duration"),0)*1000;
-                                long begin=scene.sourceInMs()==null?-1:scene.sourceInMs();
-                                if(begin>=0 && begin+extended<=available+.001)
-                                    own.add(proposal(scene,"EXTEND_SCENE","延长场景时须同步延长所选视频区间，并重新确认全片目标时长",extended));
-                                else own.add(proposal(scene,"SUPPLY_MORE_VIDEO","完整录音需要更长画面，请补充视频或换用图片后再延长场景；不能循环或定格补齐",extended));
-                            } else own.add(proposal(scene,"EXTEND_SCENE","延长场景并重新确认全片目标时长，完整保留这段录音",extended));
-                        }
-                        own.add(proposal(scene,"RECORD_AGAIN","保持场景长度，重新录制不超过场景时长的录音",sceneMs));
-                    } else if(duration-actual>1000.0/FPS) {
-                        long shortened=(long)Math.ceil(Math.ceil(actual*FPS/1000.0)*1000/FPS);
-                        own.add(proposal(scene,"SHORTEN_SCENE","VIDEO_CLIP".equals(scene.layout())
-                                ?"可缩短场景并同步调整视频选区，重新确认总时长；也可明确保留录音后的画面留白"
-                                :"可缩短场景并重新确认总时长，也可明确保留录音后的画面留白",shortened));
-                    }
+                    audioProposals(scene,actual,duration,assets,own,sceneMs,tts);
                 }
             } else if("ORIGINAL".equals(scene.audioMode())) {
                 var visual=assets.get(scene.visualAssetId());JsonNode track=stream(visual,"audio"),video=stream(visual,"video");
@@ -127,9 +112,43 @@ public class StoryboardAudioService {
         if(Math.abs(totalFrames*1000.0/FPS-target)>1000.0/FPS+.000001)
             proposals.add(new TimingProposal(null,"CONFIRM_TOTAL_DURATION","场景总帧长与简报目标不一致，请选择调整场景或创建新简报确认总时长",total));
         // 音乐与对白共用全片时间线；不足时提出问题，不用循环或读取选区外音频补时。
-        compiler.check(boardId,document,candidate,frozen).problems().stream().filter(p->p.code().startsWith("BGM_"))
-                .forEach(p->proposals.add(new TimingProposal(null,p.code(),p.message()+"；请重新选择音乐区间、补充素材或明确调整全片时长",null)));
+        compiler.check(boardId,document,candidate,frozen).problems().stream()
+                .filter(p->p.code().startsWith("BGM_") || "TTS_TEXT_MISMATCH".equals(p.code()) || "TTS_TEXT_MISSING".equals(p.code()))
+                .forEach(p->{
+                    boolean bgm=p.code().startsWith("BGM_");
+                    proposals.add(new TimingProposal(bgm?null:p.sceneId(),p.code(),
+                            bgm?p.message()+"；请重新选择音乐区间、补充素材或明确调整全片时长":p.message(),null));
+                });
         return new TimingReport(boardId,brief.briefId(),target,total,total-target,List.copyOf(result),List.copyOf(proposals),!proposals.isEmpty());
+    }
+
+    /** 真实音频与场景帧长的差异只给提案；配音用重新生成或调整场景解决，不把文字长度当音频时长。 */
+    private void audioProposals(Scene scene,double actual,double duration,Map<String,Asset> assets,List<TimingProposal> own,long sceneMs,boolean tts) {
+        if(actual>30000.001)own.add(proposal(scene,"SPLIT_OR_RECORD_AGAIN",tts
+                ?"配音超过单场景 30 秒，请拆分场景或缩短文稿后重新生成"
+                :"录音超过单场景 30 秒，请拆分录音与场景，或重新录制",null));
+        if(actual>duration+.001) {
+            long extended=(long)Math.ceil(Math.ceil(actual*FPS/1000.0)*1000/FPS);
+            if(extended<=30000) {
+                if("VIDEO_CLIP".equals(scene.layout())) {
+                    double available=number(stream(assets.get(scene.visualAssetId()),"video").path("duration"),0)*1000;
+                    long begin=scene.sourceInMs()==null?-1:scene.sourceInMs();
+                    if(begin>=0 && begin+extended<=available+.001)
+                        own.add(proposal(scene,"EXTEND_SCENE","延长场景时须同步延长所选视频区间，并重新确认全片目标时长",extended));
+                    else own.add(proposal(scene,"SUPPLY_MORE_VIDEO","完整音频需要更长画面，请补充视频或换用图片后再延长场景；不能循环或定格补齐",extended));
+                } else own.add(proposal(scene,"EXTEND_SCENE",tts
+                        ?"延长场景并重新确认全片目标时长，完整保留这段配音"
+                        :"延长场景并重新确认全片目标时长，完整保留这段录音",extended));
+            }
+            own.add(proposal(scene,"RECORD_AGAIN",tts
+                    ?"保持场景长度，缩短文稿后重新生成配音"
+                    :"保持场景长度，重新录制不超过场景时长的录音",sceneMs));
+        } else if(duration-actual>1000.0/FPS) {
+            long shortened=(long)Math.ceil(Math.ceil(actual*FPS/1000.0)*1000/FPS);
+            own.add(proposal(scene,"SHORTEN_SCENE","VIDEO_CLIP".equals(scene.layout())
+                    ?"可缩短场景并同步调整视频选区，重新确认总时长；也可明确保留音频后的画面留白"
+                    :"可缩短场景并重新确认总时长，也可明确保留音频后的画面留白",shortened));
+        }
     }
 
     private List<Cue> parse(String srt) {

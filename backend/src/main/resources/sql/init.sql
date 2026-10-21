@@ -1882,6 +1882,57 @@ CREATE TABLE IF NOT EXISTS creator_creation_storyboard_job
     KEY idx_storyboard_job_task(task_id,owner_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='故事板生成的准备运行归属';
 
+-- 配音准备沿用准备运行和费用台账，只记录本运行实际处理的场景，不新建第二套执行状态机。
+CREATE TABLE IF NOT EXISTS creator_creation_voice_job
+(
+    run_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '沿用准备运行及预算，不另建执行状态机',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '发起配音时的不可变简报',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '发起配音的故事板版本，不被本运行覆盖',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '配音受理幂等键，同键不同请求必须拒绝',
+    request_hash CHAR(64) NOT NULL COMMENT '受理参数摘要',
+    storyboard_result_id VARCHAR(64) DEFAULT NULL COMMENT '字幕对齐后保存的新故事板版本，待作者处理时为空',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '受理时间',
+    UNIQUE KEY uk_voice_job_key(task_id,owner_id,idempotency_key),
+    KEY idx_voice_job_task(task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配音准备的运行归属';
+
+-- 每个场景独立记录供应商身份、参数、文稿摘要、真实音频事实和转写对齐结果。
+-- 文稿摘要用于阻止改词后继续沿用旧配音；音频摘要与时长来自实际文件，不按字数推算。
+CREATE TABLE IF NOT EXISTS creator_creation_voice
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '生成的准备运行',
+    scene_id VARCHAR(64) NOT NULL COMMENT '故事板场景身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '不可变简报',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '来源故事板版本',
+    position INT NOT NULL COMMENT '场景在故事板中的顺序，执行和展示都不重排',
+    status VARCHAR(32) NOT NULL DEFAULT 'QUEUED' COMMENT '排队、合成、已合成、转写、已对齐、待作者确认、失败或取消',
+    text_content TEXT NOT NULL COMMENT '用户确认的场景文稿，供应商返回不能改写该事实',
+    text_sha256 CHAR(64) NOT NULL COMMENT '文稿摘要，改词后必须重新生成配音',
+    characters INT NOT NULL COMMENT '提交给供应商的字符数，也是合成的计费依据',
+    scene_duration_ms BIGINT NOT NULL COMMENT '发起时的场景帧长，用于判断音频是否放得下',
+    provider VARCHAR(64) DEFAULT NULL COMMENT '实际调用的语音合成供应商标识',
+    model VARCHAR(128) DEFAULT NULL COMMENT '实际请求的合成模型',
+    voice_id VARCHAR(128) DEFAULT NULL COMMENT '实际请求的音色',
+    provider_request_id VARCHAR(128) DEFAULT NULL COMMENT '合成响应标识，仅用于核对本次调用',
+    provider_task_id VARCHAR(128) DEFAULT NULL COMMENT '转写任务标识，重启后据此续查而不是重复提交',
+    audio_asset_id VARCHAR(64) DEFAULT NULL COMMENT '生成的真实配音素材',
+    audio_sha256 CHAR(64) DEFAULT NULL COMMENT '规范化音频完整摘要',
+    audio_bytes BIGINT DEFAULT NULL COMMENT '规范化音频字节数',
+    audio_duration_ms BIGINT DEFAULT NULL COMMENT '规范化音频实际时长',
+    transcript_json JSON DEFAULT NULL COMMENT '转写段落，仅保存受控时间与文本',
+    match_ratio DECIMAL(6,5) DEFAULT NULL COMMENT '文稿与转写文本的确定性比对结果，不是模型评分',
+    proposal_json JSON DEFAULT NULL COMMENT '需要作者选择的时长或文稿处理提案',
+    error_code VARCHAR(64) DEFAULT NULL COMMENT '受控失败原因，不保存供应商敏感正文',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近变化时间',
+    PRIMARY KEY(run_id,scene_id),
+    KEY idx_voice_task(task_id,owner_id,status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='场景配音、真实音频事实与转写对齐';
+
 -- 素材独立于完整成片；声明摘要必须在后台读取真实文件后复核，不能据此直接置为可用。
 CREATE TABLE IF NOT EXISTS creator_creation_asset
 (

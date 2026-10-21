@@ -155,9 +155,17 @@ public class CreationRuntimeService {
         lock(taskId, ownerId); media.lockTaskDraftVersions(taskId, ownerId);
         var original = run(taskId, ownerId, originalRunId);
         if ("FULL".equals(original.kind())) throw conflict("整片运行重试需要新制作计划，当前尚未接入");
+        // 配音准备另有场景任务关联，直接重试会产生无人消费的排队运行；重新提交配音请求会另行授权。
+        if ("VOICE".equals(purpose(original.requestJson())))
+            throw conflict("配音准备运行不能直接重试，请重新提交配音请求并明确本次费用上限");
         if (!Set.of("FAILED", "CANCELLED").contains(original.status())) throw conflict("仅失败或已取消的运行可以重试");
         return startLocked(taskId, ownerId, original.kind(), key, expectedRevision, original.approvalId(),
                 original.requestJson(), original.runId());
+    }
+
+    private String purpose(String requestJson) {
+        try { return json.readTree(requestJson).path("purpose").asText(""); }
+        catch (com.fasterxml.jackson.core.JsonProcessingException exception) { return ""; }
     }
 
     private Run startLocked(String taskId, String ownerId, String kind, String key, long expectedRevision,
@@ -337,6 +345,26 @@ public class CreationRuntimeService {
         if (charge.leaseGeneration() != generation) throw conflict("费用预留不属于当前执行尝试");
         live(taskId, ownerId, charge.runId(), worker, generation);
         return mapper.sent(taskId, ownerId, chargeKey) == 1;
+    }
+
+    /**
+     * 接管执行会把未发送的预留释放为 RELEASED；确认从未发送后，按当前执行代重新占用同一调用标识。
+     * 已发送的调用只能结算或标记未知，不能借这个入口重发。
+     */
+    public Charge rearm(String taskId, String ownerId, String runId, String worker, long generation, String chargeKey) {
+        lock(taskId, ownerId); id(worker);
+        var charge = charge(taskId, ownerId, chargeKey);
+        if (!runId.equals(charge.runId())) throw conflict("费用预留不属于当前制作运行");
+        if (charge.sentAt() != null) throw conflict("已发送的调用不能重新预留");
+        live(taskId, ownerId, runId, worker, generation);
+        if (mapper.rearm(taskId, ownerId, chargeKey, generation) != 1) throw conflict("该调用预留不能重新占用");
+        return charge(taskId, ownerId, chargeKey);
+    }
+
+    /** 运行收尾前释放从未发送的预留；已发送调用必须先结算或标记未知。 */
+    public void releaseUnsent(String taskId, String ownerId, String runId) {
+        lock(taskId, ownerId); run(taskId, ownerId, runId);
+        mapper.closeReservations(taskId, ownerId, runId);
     }
 
     /**

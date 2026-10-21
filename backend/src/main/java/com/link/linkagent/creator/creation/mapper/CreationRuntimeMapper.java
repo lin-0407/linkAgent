@@ -102,6 +102,11 @@ public interface CreationRuntimeMapper {
     int insertCharge(Charge charge);
     @Update("UPDATE creator_creation_cost_entry SET sent_at=CURRENT_TIMESTAMP(6) WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND charge_key=#{key} AND status='RESERVED' AND sent_at IS NULL")
     int sent(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("key") String key);
+    /** 领取新执行代时会释放未发送的预留；证明从未发送后，同一调用标识按当前执行代重新占用。 */
+    @Update("UPDATE creator_creation_cost_entry SET status='RESERVED', evidence_ref=NULL, lease_generation=#{generation} "
+            + "WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND charge_key=#{key} AND status='RELEASED' AND sent_at IS NULL")
+    int rearm(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("key") String key,
+              @Param("generation") long generation);
     @Update("UPDATE creator_creation_cost_entry SET status='SETTLED', known_cost_cny=#{actual}, settlement_kind=#{kind}, evidence_ref=#{evidence} WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND charge_key=#{key} AND status IN ('RESERVED','UNKNOWN') AND sent_at IS NOT NULL")
     int settle(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("key") String key,
                @Param("actual") BigDecimal actual, @Param("kind") String kind, @Param("evidence") String evidence);

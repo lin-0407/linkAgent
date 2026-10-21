@@ -54,7 +54,7 @@ public class StoryboardCompiler {
                 || brief.path("targetDurationMs").asLong() < 1000 || brief.path("targetDurationMs").asLong() > 180000) {
             add(issues, null, "BRIEF_INVALID", "简报必须明确 1 至 180 秒的目标时长"); return issues;
         }
-        if ("TTS".equals(brief.path("dialogueMode").asText())) add(issues, null, "TTS_NOT_CONFIGURED", "尚未接入配音供应商，请提供实际录音或明确选择其他对白方案");
+        // 简报选择 TTS 时不再整体拒绝；每个场景在下方场景循环里必须具备真实生成的配音音频。
         if (candidate == null || candidate.scenes() == null || candidate.scenes().isEmpty() || candidate.scenes().size() > 48) {
             add(issues, null, "SCENES_INVALID", "故事板需要 1 至 48 个场景"); return issues;
         }
@@ -108,9 +108,9 @@ public class StoryboardCompiler {
             }
             String audio = Objects.toString(scene.audioMode(), "");
             if (!Set.of("NO_DIALOGUE", "ORIGINAL", "NARRATION", "TTS").contains(audio)) add(issues, sid, "AUDIO_MODE_INVALID", "声音方案无效");
-            if ("TTS".equals(audio)) add(issues, sid, "TTS_NOT_CONFIGURED", "此场景仍需真实配音，不能用静音或测试音代替");
-            if ("NO_DIALOGUE".equals(brief.path("dialogueMode").asText()) && !"NO_DIALOGUE".equals(audio))
-                add(issues, sid, "DIALOGUE_CHOICE_CONFLICT", "简报选择无对白，场景声音方案与该选择不同");
+            if (("NO_DIALOGUE".equals(brief.path("dialogueMode").asText()) && !"NO_DIALOGUE".equals(audio))
+                    || ("TTS".equals(brief.path("dialogueMode").asText()) && !"TTS".equals(audio)))
+                add(issues, sid, "DIALOGUE_CHOICE_CONFLICT", "场景声音方案与简报选择不一致，不能自动替换用户选择");
             double audioDuration = 0, audioStart = 0;
             if ("ORIGINAL".equals(audio)) {
                 if (!video || visual == null) add(issues, sid, "ORIGINAL_AUDIO_INVALID", "原声仅用于真实视频片段");
@@ -131,6 +131,9 @@ public class StoryboardCompiler {
                     add(issues, sid, "NARRATION_MISSING", "旁白场景需要已准备完成的用户录音 WAV");
                 else {
                     usedAssets.add(voice.assetId());
+                    // 用户录音不能被系统生成的配音悄悄替换；生成音频只允许出现在 TTS 场景。
+                    if ("TTS".equals(generatedKind(voice)))
+                        add(issues, sid, "NARRATION_ASSET_GENERATED", "用户录音场景不能引用系统生成的配音音频");
                     JsonNode track = stream(voice, "audio");
                     audioDuration = Math.max(streamDuration(voice, "audio"), voice.metadata() == null ? 0 : number(voice.metadata().path("normalized").path("format").path("duration"), 0)) * 1000;
                     if (!"pcm_s16le".equals(track.path("codec_name").asText()) || track.path("channels").asInt() < 1
@@ -140,6 +143,29 @@ public class StoryboardCompiler {
                     if (audioDuration > duration + .001) add(issues, sid, "AUDIO_OVERFLOW", "实际录音超出场景，不会截断或加速，请调整场景时长或重新录音");
                 }
                 if (scene.cues() == null || scene.cues().isEmpty()) add(issues, sid, "NARRATION_CUES_MISSING", "旁白需要用户确认的相对录音字幕时间，不能由脚本文字伪造对齐");
+            } else if ("TTS".equals(audio)) {
+                Asset voice = assets.get(scene.narrationAssetId());
+                if (scene.narration() == null || scene.narration().isBlank())
+                    add(issues, sid, "TTS_TEXT_MISSING", "配音场景需要用户确认的场景文稿");
+                if (voice == null || !"NARRATION".equals(voice.kind()) || !"audio/wav".equals(voice.contentType()))
+                    add(issues, sid, "TTS_AUDIO_MISSING", "配音场景需要已生成并保存的真实配音音频，不能用静音或测试音代替");
+                else {
+                    usedAssets.add(voice.assetId());
+                    JsonNode generated = voice.metadata() == null ? json.missingNode() : voice.metadata().path("generated");
+                    // 文稿摘要绑定音频与文字，改词后必须重新生成，不能沿用旧配音。
+                    if (!"TTS".equals(generated.path("kind").asText()) || !StoryboardCodec.digest(Objects.toString(scene.narration(), ""))
+                            .equals(generated.path("textSha256").asText()))
+                        add(issues, sid, "TTS_TEXT_MISMATCH", "配音音频不对应当前场景文稿，修改文稿后必须重新生成");
+                    JsonNode track = stream(voice, "audio");
+                    audioDuration = Math.max(streamDuration(voice, "audio"), voice.metadata() == null ? 0 : number(voice.metadata().path("normalized").path("format").path("duration"), 0)) * 1000;
+                    if (!"pcm_s16le".equals(track.path("codec_name").asText()) || track.path("channels").asInt() < 1
+                            || track.path("channels").asInt() > 2 || track.path("sample_rate").asInt() < 8000 || track.path("sample_rate").asInt() > 48000
+                            || !Double.isFinite(audioDuration) || audioDuration <= 0 || audioDuration > 30000.001)
+                        add(issues, sid, "TTS_AUDIO_INVALID", "配音音频需要不超过 30 秒的真实 PCM16 WAV 及可靠时长");
+                    if (audioDuration > duration + .001) add(issues, sid, "AUDIO_OVERFLOW", "实际配音超出场景，不会截断或加速，请调整场景时长或缩短文稿后重新生成");
+                }
+                // 字幕时间来自对实际音频的转写，缺失时不能按字数估算。
+                if (scene.cues() == null || scene.cues().isEmpty()) add(issues, sid, "TTS_CUES_MISSING", "配音场景需要来自实际音频的字幕时间");
             } else if (scene.narrationAssetId() != null) add(issues, sid, "NARRATION_UNUSED", "当前声音方案不接受旁白录音");
             if (scene.cues() == null) add(issues, sid, "CUES_INVALID", "字幕列表不能为空值");
             else {
@@ -153,7 +179,7 @@ public class StoryboardCompiler {
                             || globalStart + cue.startMs() < Math.floor(actualSceneStart + audioStart)
                             || globalStart + cue.endMs() > Math.ceil(actualSceneStart + audioDuration)
                             || globalStart + cue.endMs() > frameCount * 1000.0 / FPS
-                            || !("ORIGINAL".equals(audio) || "NARRATION".equals(audio)))
+                            || !("ORIGINAL".equals(audio) || "NARRATION".equals(audio) || "TTS".equals(audio)))
                         add(issues, sid, "CUE_OUT_OF_RANGE", "字幕须按顺序绑定当前真实音轨范围，不能重叠或超出场景");
                     if (cue != null) previous = cue.endMs();
                 }
@@ -247,14 +273,14 @@ public class StoryboardCompiler {
                         .put("sourceEndMs", scene.sourceOutMs()).put("fit", scene.fit())
                         .put("audioMode", "ORIGINAL".equals(scene.audioMode()) ? "ORIGINAL" : "MUTE").put("gainDb", 0);
             }
-            if ("NARRATION".equals(scene.audioMode())) {
+            if ("NARRATION".equals(scene.audioMode()) || "TTS".equals(scene.audioMode())) {
                 used.add(scene.narrationAssetId());
                 output.putObject("voice").put("assetId", scene.narrationAssetId()).put("offsetMs", 0).put("gainDb", 0);
             }
             long startMs = Math.round(cursor * 1000.0 / FPS);
             for (Cue cue : scene.cues()) subtitles.addObject().put("id", "cue-" + ++cueId).put("sceneId", scene.id())
                     .put("startMs", startMs + cue.startMs()).put("endMs", startMs + cue.endMs()).put("text", cue.text())
-                    .put("audioAssetId", "NARRATION".equals(scene.audioMode()) ? scene.narrationAssetId() : scene.visualAssetId());
+                    .put("audioAssetId", "NARRATION".equals(scene.audioMode()) || "TTS".equals(scene.audioMode()) ? scene.narrationAssetId() : scene.visualAssetId());
             cursor = end;
         }
         JsonNode music = brief.path("backgroundMusic");
@@ -292,6 +318,10 @@ public class StoryboardCompiler {
         return json.missingNode();
     }
     private double streamDuration(Asset asset, String kind) { return number(stream(asset, kind).path("duration"), 0); }
+    /** 只认系统登记的生成来源标记；用户上传素材没有该字段。 */
+    private static String generatedKind(Asset asset) {
+        return asset == null || asset.metadata() == null ? "" : asset.metadata().path("generated").path("kind").asText("");
+    }
     private static double number(JsonNode node, double fallback) {
         try { double value = Double.parseDouble(node.asText()); return Double.isFinite(value) ? value : fallback; }
         catch (RuntimeException exception) { return fallback; }

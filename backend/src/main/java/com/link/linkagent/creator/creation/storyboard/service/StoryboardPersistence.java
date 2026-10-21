@@ -121,8 +121,33 @@ public class StoryboardPersistence {
         runtime.complete(job.taskId(),job.ownerId(),job.runId(),lease.leaseOwner(),lease.leaseGeneration(),codec.write(Map.of("storyboardId",board.storyboardId(),"documentHash",board.documentHash())));
         return board;
     }
+    /**
+     * 配音运行保存字幕对齐后的新版本：只接受本运行实际生成的配音素材，失败时不覆盖父版本。
+     * 与准备运行一样，写入前再次核对活动运行和活租约，避免取消后的迟到结果生成新版本。
+     */
+    public Board saveVoice(String task,String owner,String key,String runId,String worker,long generation,
+            String briefId,String parentId,Candidate candidate,List<Asset> extra,Set<String> extraIds) {
+        lock(task,owner);
+        var replay=mapper.boardByKey(task,owner,key);
+        if(replay.isPresent())return replay.get();
+        var run=runs.run(task,owner,runId).orElseThrow(()->conflict("配音运行不存在"));
+        if(!"PREPARE".equals(run.kind()) || !runId.equals(runs.workspace(task,owner).orElseThrow().activeRunId())
+                || runs.liveLease(task,owner,runId,worker,generation,"RUNNING")!=1)
+            throw conflict("配音运行已取消、执行权失效或已被接管");
+        var brief=brief(task,owner,briefId);
+        if(brief.revision()!=mapper.briefRevision(task,owner))throw conflict("配音依据已变化，请重新生成");
+        if(parentId!=null)mapper.board(task,owner,parentId).orElseThrow(()->conflict("父故事板不属于本任务"));
+        var frozen=new ArrayList<>(snapshotAssets(task,owner,ids(brief)));
+        for(Asset asset:extra) if(frozen.stream().noneMatch(a->a.assetId().equals(asset.assetId()))) frozen.add(asset);
+        String hash=codec.hash(Map.of("runId",runId,"candidate",candidate,"parent",Objects.toString(parentId,"")));
+        return saveBoard(brief,candidate,List.copyOf(frozen),key,hash,parentId,runId,false,"ASR_ALIGNED",extraIds);
+    }
     private Board saveBoard(Brief brief,Candidate candidate,List<Asset> frozen,String key,String hash,String parent,String run,boolean generated) {
-        codec.policy(brief,candidate,generated);String boardId=id();var doc=json.createObjectNode().put("schemaVersion","storyboard.v1").put("storyboardId",boardId).put("briefId",brief.briefId()).put("briefRevision",brief.revision()).put("templateVersion","controlled.v1").put("subtitleTimingSource",generated?"NOT_PROVIDED":"USER_PROVIDED");doc.set("candidate",json.valueToTree(candidate));
+        return saveBoard(brief,candidate,frozen,key,hash,parent,run,generated,generated?"NOT_PROVIDED":"USER_PROVIDED",Set.of());
+    }
+    private Board saveBoard(Brief brief,Candidate candidate,List<Asset> frozen,String key,String hash,String parent,String run,
+            boolean generated,String timingSource,Set<String> generatedVoiceAssets) {
+        codec.policy(brief,candidate,generated,generatedVoiceAssets);String boardId=id();var doc=json.createObjectNode().put("schemaVersion","storyboard.v1").put("storyboardId",boardId).put("briefId",brief.briefId()).put("briefRevision",brief.revision()).put("templateVersion","controlled.v1").put("subtitleTimingSource",timingSource);doc.set("candidate",json.valueToTree(candidate));
         var board=new Board(boardId,brief.taskId(),brief.ownerId(),next(mapper.boardRevision(brief.taskId(),brief.ownerId())),brief.briefId(),parent,run,key,hash,codec.hash(doc),codec.write(doc),codec.write(frozen),null);
         mapper.insertBoard(board);for(var a:frozen)mapper.reference(boardId,a.assetId(),brief.taskId(),brief.ownerId());return mapper.board(brief.taskId(),brief.ownerId(),boardId).orElseThrow();
     }
