@@ -15,7 +15,7 @@ import java.util.Set;
 import com.link.linkagent.creator.creation.model.GeneratedDraftInput;
 
 /** 固定指纹与金额规则，避免 JSON 键顺序和浮点舍入改变幂等或预算含义。 */
-final class CreationInputRules {
+public final class CreationInputRules {
     private CreationInputRules() { }
     static BigDecimal money(BigDecimal value, boolean allowZero) {
         if (value == null || value.scale() > 6 || (long) value.precision() - value.scale() > 12
@@ -40,7 +40,7 @@ final class CreationInputRules {
     static String renderDocument(ObjectMapper mapper, String value) {
         return canonical(mapper, value, 256 * 1024);
     }
-    static String renderInputHash(ObjectMapper mapper, ObjectNode document) {
+    public static String renderInputHash(ObjectMapper mapper, ObjectNode document) {
         try {
             ObjectNode content = document.deepCopy(); content.remove("inputHash");
             return renderFingerprint(mapper, mapper.readTree(renderDocument(mapper, mapper.writeValueAsString(sorted(mapper, content, 0)))));
@@ -120,7 +120,7 @@ final class CreationInputRules {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) { throw conflict("整片制作依据无效"); }
     }
 
-    static String renderContentHash(ObjectMapper mapper, String document) {
+    public static String renderContentHash(ObjectMapper mapper, String document) {
         try {
             // 渲染工程沿用 S2 的 256KiB 上限，不能被运行控制请求的 64KiB 上限意外截断。
             ObjectNode content = (ObjectNode) mapper.readTree(canonical(mapper, document, 256 * 1024));

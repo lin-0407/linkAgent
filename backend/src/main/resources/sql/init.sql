@@ -1825,6 +1825,63 @@ CREATE TABLE IF NOT EXISTS creator_draft_video
 --        与本地 upload_session_id 一一对应但分属不同系统
 --     5. expires_at 在 abandonedTtl（默认24h）后过期，超时由读取时被动检查并标记
 -- ------------------------------------------------------------
+-- 简报与故事板不可变保存；候选工程不切换当前成片，也不代替制作授权。
+CREATE TABLE IF NOT EXISTS creator_creation_brief
+(
+    brief_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '简报版本标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    revision INT NOT NULL COMMENT '任务内递增简报版本',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '创建简报的幂等键',
+    request_hash CHAR(64) NOT NULL COMMENT '原始受理请求摘要',
+    document_json JSON NOT NULL COMMENT '本条视频的明确意图与素材选择',
+    source_json JSON NOT NULL COMMENT '保存时真实任务材料与发布依据，不引用后续可变结果',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '保存时间',
+    UNIQUE KEY uk_creation_brief_revision(task_id,owner_id,revision),
+    UNIQUE KEY uk_creation_brief_key(task_id,owner_id,idempotency_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='不可变视频任务简报';
+
+CREATE TABLE IF NOT EXISTS creator_creation_storyboard
+(
+    storyboard_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '故事板版本标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    revision INT NOT NULL COMMENT '任务内递增故事板版本',
+    brief_id VARCHAR(64) NOT NULL COMMENT '对应不可变简报',
+    parent_storyboard_id VARCHAR(64) DEFAULT NULL COMMENT '明确关联的父故事板，不覆盖父版本',
+    run_id VARCHAR(64) DEFAULT NULL COMMENT '真实准备运行，人工保存时为空',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '保存版本的幂等键',
+    request_hash CHAR(64) NOT NULL COMMENT '保存请求摘要',
+    document_hash CHAR(64) NOT NULL COMMENT '完整故事板内容摘要',
+    document_json JSON NOT NULL COMMENT '受控场景、文稿、实际素材引用与字幕来源',
+    asset_snapshot_json JSON NOT NULL COMMENT '精确原始素材与规范化文件摘要，不含短签',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '保存时间',
+    UNIQUE KEY uk_creation_storyboard_revision(task_id,owner_id,revision),
+    UNIQUE KEY uk_creation_storyboard_key(task_id,owner_id,idempotency_key),
+    UNIQUE KEY uk_creation_storyboard_run(run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='不可变视频故事板';
+
+CREATE TABLE IF NOT EXISTS creator_creation_storyboard_asset
+(
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '引用的历史故事板',
+    asset_id VARCHAR(64) NOT NULL COMMENT '输入素材身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    PRIMARY KEY(storyboard_id,asset_id),
+    KEY idx_storyboard_asset_reference(task_id,owner_id,asset_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='素材的历史工程引用';
+
+CREATE TABLE IF NOT EXISTS creator_creation_storyboard_job
+(
+    run_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '沿用准备运行及预算，不另建执行状态机',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '冻结的简报版本',
+    request_hash CHAR(64) NOT NULL COMMENT '受理参数摘要',
+    storyboard_id VARCHAR(64) DEFAULT NULL COMMENT '成功保存的候选故事板',
+    KEY idx_storyboard_job_task(task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='故事板生成的准备运行归属';
+
 -- 素材独立于完整成片；声明摘要必须在后台读取真实文件后复核，不能据此直接置为可用。
 CREATE TABLE IF NOT EXISTS creator_creation_asset
 (

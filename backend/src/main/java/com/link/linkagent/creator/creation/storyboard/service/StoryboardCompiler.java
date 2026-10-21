@@ -1,0 +1,258 @@
+package com.link.linkagent.creator.creation.storyboard.service;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.link.linkagent.creator.creation.service.CreationInputRules;
+import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.util.*;
+
+/** 把业务故事板变为固定 V2 工程，实际录音、素材区间和字幕必须由已有事实支撑。 */
+@Component
+public class StoryboardCompiler {
+    static final String PLACEHOLDER_ID = "system-static-placeholder";
+    // 只满足渲染器的非空资产契约，不会作为任何场景画面或配音使用。
+    static final byte[] PLACEHOLDER = Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+    private static final int FPS = 30;
+    private static final long SINGLE_LIMIT = 32L * 1024 * 1024, TOTAL_LIMIT = 256L * 1024 * 1024;
+    private final ObjectMapper json;
+
+    public StoryboardCompiler(ObjectMapper json) { this.json = json; }
+
+    public Check check(JsonNode brief, Candidate candidate, List<Asset> assets) {
+        return check("board-check", brief, candidate, assets);
+    }
+
+    public Check check(String storyboardId, JsonNode brief, Candidate candidate, List<Asset> assets) {
+        requireId(storyboardId);
+        List<Problem> issues = inspect(brief, candidate, assets);
+        long duration = candidate == null || candidate.scenes() == null ? 0 : candidate.scenes().stream()
+                .filter(Objects::nonNull).mapToLong(s -> frames(s.durationMs())).sum() * 1000 / FPS;
+        if (!issues.isEmpty()) return new Check(false, List.copyOf(issues), duration, null);
+        ObjectNode document = build(storyboardId, candidate, assets, "check-run", "check-attempt");
+        String hash = CreationInputRules.renderContentHash(json, document.toString());
+        return new Check(true, List.of(), Math.round(document.path("video").path("frameCount").asLong() * 1000.0 / FPS), hash);
+    }
+
+    public ObjectNode compile(String storyboardId, JsonNode brief, Candidate candidate, List<Asset> assets,
+                              String runId, String attemptId) {
+        requireId(storyboardId); requireId(runId); requireId(attemptId);
+        List<Problem> issues = inspect(brief, candidate, assets);
+        if (!issues.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "故事板尚不可渲染：" + issues.getFirst().message());
+        return build(storyboardId, candidate, assets, runId, attemptId);
+    }
+
+    private List<Problem> inspect(JsonNode brief, Candidate candidate, List<Asset> supplied) {
+        var issues = new ArrayList<Problem>();
+        if (brief == null || !brief.isObject() || !brief.path("targetDurationMs").canConvertToLong()
+                || brief.path("targetDurationMs").asLong() < 1000 || brief.path("targetDurationMs").asLong() > 180000) {
+            add(issues, null, "BRIEF_INVALID", "简报必须明确 1 至 180 秒的目标时长"); return issues;
+        }
+        if ("TTS".equals(brief.path("dialogueMode").asText())) add(issues, null, "TTS_NOT_CONFIGURED", "尚未接入配音供应商，请提供实际录音或明确选择其他对白方案");
+        if (candidate == null || candidate.scenes() == null || candidate.scenes().isEmpty() || candidate.scenes().size() > 48) {
+            add(issues, null, "SCENES_INVALID", "故事板需要 1 至 48 个场景"); return issues;
+        }
+        Map<String, Asset> assets = new HashMap<>();
+        if (supplied != null) for (Asset asset : supplied) {
+            if (asset == null || asset.assetId() == null || assets.putIfAbsent(asset.assetId(), asset) != null)
+                add(issues, null, "ASSET_INVALID", "素材快照为空或身份重复");
+        }
+        Set<String> sceneIds = new HashSet<>(), usedAssets = new LinkedHashSet<>();
+        long frameCount = 0, cues = 0;
+        for (Scene scene : candidate.scenes()) {
+            if (scene == null) { add(issues, null, "SCENE_INVALID", "场景不能为空"); continue; }
+            String sid = scene.id();
+            if (!identifier(sid) || !sceneIds.add(sid)) add(issues, sid, "SCENE_ID_INVALID", "场景身份无效或重复");
+            int count = frames(scene.durationMs());
+            if (scene.durationMs() < 1 || scene.durationMs() > 30000 || count < 1 || count > FPS * 30)
+                add(issues, sid, "SCENE_DURATION_INVALID", "场景须为 1 帧至 30 秒");
+            double duration = count * 1000.0 / FPS;
+            frameCount += count;
+            if (!text(scene.title(), 60) || scene.body() == null || scene.body().size() > 4
+                    || scene.body().stream().anyMatch(s -> !text(s, 90)))
+                add(issues, sid, "SCENE_TEXT_INVALID", "标题或正文为空、含控制字符或超出长度");
+            if (!Set.of("TITLE_CARD", "IMAGE_CARD", "SPLIT_CARD", "COMPARE_CARD", "VIDEO_CLIP", "AI_VIDEO").contains(Objects.toString(scene.layout(), "")))
+                add(issues, sid, "LAYOUT_INVALID", "场景布局不受支持");
+            if ("AI_VIDEO".equals(scene.layout())) add(issues, sid, "AI_VIDEO_NOT_CONFIGURED", "尚未接入 AI 视频供应商，请提供已有视频片段或其他画面");
+            boolean video = "VIDEO_CLIP".equals(scene.layout()), image = Set.of("IMAGE_CARD", "SPLIT_CARD").contains(Objects.toString(scene.layout(), ""));
+            Asset visual = null;
+            if (video || image) {
+                visual = assets.get(scene.visualAssetId());
+                if (visual == null) add(issues, sid, "VISUAL_MISSING", "场景引用的素材不在已冻结的 READY 素材中");
+                else {
+                    usedAssets.add(visual.assetId());
+                    if (!(video ? "VIDEO_CLIP" : "IMAGE").equals(visual.kind())) add(issues, sid, "VISUAL_KIND_INVALID", "画面素材类型与布局不符");
+                    validateVisual(visual, video, sid, issues);
+                }
+            } else if (scene.visualAssetId() != null || scene.sourceInMs() != null || scene.sourceOutMs() != null)
+                add(issues, sid, "VISUAL_UNUSED", "此布局不接受画面素材或视频区间");
+            if ("IMAGE_CARD".equals(scene.layout()) && scene.body() != null && !scene.body().isEmpty()
+                    || video && scene.body() != null && !scene.body().isEmpty())
+                add(issues, sid, "BODY_NOT_VISIBLE", "全图和视频场景不能叠加图文正文，请另建文字场景");
+            if ("COMPARE_CARD".equals(scene.layout()) && (scene.body() == null || scene.body().size() != 2))
+                add(issues, sid, "COMPARE_ITEMS_INVALID", "对比场景需要两个对比项");
+            if (!Set.of("CONTAIN", "COVER").contains(Objects.toString(scene.fit(), ""))) add(issues, sid, "FIT_INVALID", "画面适配方式无效");
+            if (!video && (scene.sourceInMs() != null || scene.sourceOutMs() != null)) add(issues, sid, "CLIP_RANGE_UNUSED", "图文场景不接受视频截取区间");
+            if (video) {
+                long begin = scene.sourceInMs() == null ? -1 : scene.sourceInMs(), finish = scene.sourceOutMs() == null ? -1 : scene.sourceOutMs();
+                if (begin < 0 || finish <= begin || finish > 1800000 || Math.abs((finish - begin) - duration) > 1.000001)
+                    add(issues, sid, "CLIP_DURATION_INVALID", "视频截取区间必须与量化后的场景时长相同，不会循环或变速补齐");
+                if (visual != null && finish > streamDuration(visual, "video") * 1000 + .001)
+                    add(issues, sid, "CLIP_OUT_OF_RANGE", "视频截取区间超过素材的实际画面时长");
+            }
+            String audio = Objects.toString(scene.audioMode(), "");
+            if (!Set.of("NO_DIALOGUE", "ORIGINAL", "NARRATION", "TTS").contains(audio)) add(issues, sid, "AUDIO_MODE_INVALID", "声音方案无效");
+            if ("TTS".equals(audio)) add(issues, sid, "TTS_NOT_CONFIGURED", "此场景仍需真实配音，不能用静音或测试音代替");
+            if ("NO_DIALOGUE".equals(brief.path("dialogueMode").asText()) && !"NO_DIALOGUE".equals(audio))
+                add(issues, sid, "DIALOGUE_CHOICE_CONFLICT", "简报选择无对白，场景声音方案与该选择不同");
+            double audioDuration = 0, audioStart = 0;
+            if ("ORIGINAL".equals(audio)) {
+                if (!video || visual == null) add(issues, sid, "ORIGINAL_AUDIO_INVALID", "原声仅用于真实视频片段");
+                else {
+                    JsonNode track = stream(visual, "audio"), picture = stream(visual, "video");
+                    double origin = number(picture.path("start_time"), 0), begin = (scene.sourceInMs() == null ? 0 : scene.sourceInMs()) / 1000.0 + origin;
+                    double end = (scene.sourceOutMs() == null ? 0 : scene.sourceOutMs()) / 1000.0 + origin;
+                    double trackStart = number(track.path("start_time"), 0), trackEnd = trackStart + number(track.path("duration"), 0);
+                    if (track.isMissingNode() || trackEnd <= begin || trackStart >= end)
+                        add(issues, sid, "CLIP_AUDIO_MISSING", "视频截取区间没有可保留的原声音轨");
+                    audioStart = Math.max(0, trackStart - begin) * 1000;
+                    audioDuration = Math.min(end - begin, trackEnd - begin) * 1000;
+                }
+                if (scene.narrationAssetId() != null) add(issues, sid, "AUDIO_CONFLICT", "原声场景不能同时绑定旁白");
+            } else if ("NARRATION".equals(audio)) {
+                Asset voice = assets.get(scene.narrationAssetId());
+                if (voice == null || !"NARRATION".equals(voice.kind()) || !"audio/wav".equals(voice.contentType()))
+                    add(issues, sid, "NARRATION_MISSING", "旁白场景需要已准备完成的用户录音 WAV");
+                else {
+                    usedAssets.add(voice.assetId());
+                    JsonNode track = stream(voice, "audio");
+                    audioDuration = Math.max(streamDuration(voice, "audio"), voice.metadata() == null ? 0 : number(voice.metadata().path("normalized").path("format").path("duration"), 0)) * 1000;
+                    if (!"pcm_s16le".equals(track.path("codec_name").asText()) || track.path("channels").asInt() < 1
+                            || track.path("channels").asInt() > 2 || track.path("sample_rate").asInt() < 8000 || track.path("sample_rate").asInt() > 48000
+                            || !Double.isFinite(audioDuration) || audioDuration <= 0 || audioDuration > 30000.001)
+                        add(issues, sid, "NARRATION_FORMAT_INVALID", "旁白需要不超过 30 秒的真实 PCM16 WAV 及可靠时长");
+                    if (audioDuration > duration + .001) add(issues, sid, "AUDIO_OVERFLOW", "实际录音超出场景，不会截断或加速，请调整场景时长或重新录音");
+                }
+                if (scene.cues() == null || scene.cues().isEmpty()) add(issues, sid, "NARRATION_CUES_MISSING", "旁白需要用户确认的相对录音字幕时间，不能由脚本文字伪造对齐");
+            } else if (scene.narrationAssetId() != null) add(issues, sid, "NARRATION_UNUSED", "当前声音方案不接受旁白录音");
+            if (scene.cues() == null) add(issues, sid, "CUES_INVALID", "字幕列表不能为空值");
+            else {
+                long previous = 0;
+                for (Cue cue : scene.cues()) {
+                    cues++;
+                    double globalStart = Math.round((frameCount - count) * 1000.0 / FPS);
+                    double actualSceneStart = (frameCount - count) * 1000.0 / FPS;
+                    if (cue == null || cue.startMs() < previous || cue.endMs() <= cue.startMs() || !text(cue.text(), 120)
+                            || cue.startMs() < Math.floor(audioStart) || cue.endMs() > Math.ceil(Math.min(audioDuration, duration))
+                            || globalStart + cue.startMs() < Math.floor(actualSceneStart + audioStart)
+                            || globalStart + cue.endMs() > Math.ceil(actualSceneStart + audioDuration)
+                            || globalStart + cue.endMs() > frameCount * 1000.0 / FPS
+                            || !("ORIGINAL".equals(audio) || "NARRATION".equals(audio)))
+                        add(issues, sid, "CUE_OUT_OF_RANGE", "字幕须按顺序绑定当前真实音轨范围，不能重叠或超出场景");
+                    if (cue != null) previous = cue.endMs();
+                }
+            }
+        }
+        long target = brief.path("targetDurationMs").asLong();
+        if (frameCount < FPS || frameCount > FPS * 180 || Math.abs(frameCount * 1000.0 / FPS - target) > 1000.0 / FPS + .000001)
+            add(issues, null, "TARGET_DURATION_MISMATCH", "场景总时长必须与用户目标时长一致，最多允许一帧量化误差");
+        if (cues > 200) add(issues, null, "CUES_LIMIT", "整片最多支持 200 条真实字幕");
+        long total = 0;
+        for (String id : usedAssets) {
+            Asset asset = assets.get(id);
+            if (PLACEHOLDER_ID.equals(id)) add(issues, null, "ASSET_ID_RESERVED", "该素材身份为内部无画面占位保留标识");
+            total += asset.bytes();
+            if (!identifier(id) || asset.bytes() <= 0 || asset.bytes() > SINGLE_LIMIT || asset.sha256() == null || !asset.sha256().matches("[0-9a-f]{64}")
+                    || asset.bucketName() == null || asset.bucketName().isBlank() || asset.objectKey() == null || asset.objectKey().isBlank())
+                add(issues, null, "ASSET_RENDER_LIMIT", "引用素材须有可靠摘要且单个不超过 32 MiB，请先裁剪或压缩后重新导入");
+        }
+        if (total > TOTAL_LIMIT) add(issues, null, "ASSET_TOTAL_LIMIT", "本工程引用素材合计超过 256 MiB");
+        return issues;
+    }
+
+    private void validateVisual(Asset asset, boolean video, String sid, List<Problem> issues) {
+        JsonNode picture = stream(asset, "video");
+        long width = picture.path("width").asLong(), height = picture.path("height").asLong();
+        if (width <= 0 || height <= 0 || width > 8000000 || height > 8000000 || width * height > 8000000 || !(video ? "video/mp4" : "image/png").equals(asset.contentType())
+                || !(video ? "h264" : "png").equals(picture.path("codec_name").asText()))
+            add(issues, sid, "VISUAL_METADATA_INVALID", "画面须引用已规范化且解码尺寸不超过 800 万像素的素材");
+        if (video && (streamDuration(asset, "video") <= 0 || streamDuration(asset, "video") > 1800))
+            add(issues, sid, "VIDEO_METADATA_INVALID", "视频缺少可靠实际时长");
+    }
+
+    private ObjectNode build(String storyboardId, Candidate candidate, List<Asset> supplied, String runId, String attemptId) {
+        ObjectNode document = json.createObjectNode();
+        document.put("schemaVersion", 2).put("runId", runId).put("attemptId", attemptId).put("storyboardId", storyboardId).put("seed", 7);
+        ObjectNode video = document.putObject("video");
+        video.put("width", 1280).put("height", 720).put("fps", FPS).put("frameCount", candidate.scenes().stream().mapToInt(s -> frames(s.durationMs())).sum())
+                .put("codec", "h264").put("audioSampleRate", 48000).put("fontId", "cjk_sans");
+        Map<String, Asset> available = new HashMap<>(); if (supplied != null) supplied.forEach(a -> available.put(a.assetId(), a));
+        ArrayNode assets = document.putArray("assets"), scenes = document.putArray("scenes"), subtitles = document.putArray("subtitles");
+        Set<String> used = new LinkedHashSet<>();
+        int cursor = 0, cueId = 0;
+        for (Scene scene : candidate.scenes()) {
+            int end = cursor + frames(scene.durationMs());
+            ObjectNode output = scenes.addObject();
+            output.put("id", scene.id()).put("startFrame", cursor).put("endFrame", end).put("layout", scene.layout())
+                    .put("background", "#102030").put("title", scene.title());
+            output.set("body", json.valueToTree(scene.body())); output.putNull("voice");
+            if (Set.of("IMAGE_CARD", "SPLIT_CARD").contains(scene.layout())) {
+                output.put("imageAssetId", scene.visualAssetId()); used.add(scene.visualAssetId());
+            }
+            if ("VIDEO_CLIP".equals(scene.layout())) {
+                used.add(scene.visualAssetId());
+                output.putObject("clip").put("assetId", scene.visualAssetId()).put("sourceStartMs", scene.sourceInMs())
+                        .put("sourceEndMs", scene.sourceOutMs()).put("fit", scene.fit())
+                        .put("audioMode", "ORIGINAL".equals(scene.audioMode()) ? "ORIGINAL" : "MUTE").put("gainDb", 0);
+            }
+            if ("NARRATION".equals(scene.audioMode())) {
+                used.add(scene.narrationAssetId());
+                output.putObject("voice").put("assetId", scene.narrationAssetId()).put("offsetMs", 0).put("gainDb", 0);
+            }
+            long startMs = Math.round(cursor * 1000.0 / FPS);
+            for (Cue cue : scene.cues()) subtitles.addObject().put("id", "cue-" + ++cueId).put("sceneId", scene.id())
+                    .put("startMs", startMs + cue.startMs()).put("endMs", startMs + cue.endMs()).put("text", cue.text())
+                    .put("audioAssetId", "NARRATION".equals(scene.audioMode()) ? scene.narrationAssetId() : scene.visualAssetId());
+            cursor = end;
+        }
+        for (String id : used) {
+            Asset asset = available.get(id);
+            assets.addObject().put("id", id).put("path", assetPath(id, asset.contentType())).put("mime", asset.contentType()).put("sha256", asset.sha256());
+        }
+        if (assets.isEmpty()) assets.addObject().put("id", PLACEHOLDER_ID).put("path", assetPath(PLACEHOLDER_ID, "image/png"))
+                .put("mime", "image/png").put("sha256", sha256(PLACEHOLDER));
+        document.put("inputHash", CreationInputRules.renderInputHash(json, document));
+        return document;
+    }
+
+    static String assetPath(String id, String mime) {
+        requireId(id);
+        String extension = switch (Objects.toString(mime, "")) { case "image/png" -> "png"; case "audio/wav" -> "wav"; case "video/mp4" -> "mp4"; default -> throw new ResponseStatusException(HttpStatus.CONFLICT, "规范化素材类型不受渲染器支持"); };
+        return "assets/" + id + "." + extension;
+    }
+    static String sha256(byte[] bytes) {
+        try { return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)); }
+        catch (java.security.NoSuchAlgorithmException exception) { throw new IllegalStateException(exception); }
+    }
+    private JsonNode stream(Asset asset, String kind) {
+        if (asset != null && asset.metadata() != null) for (JsonNode stream : asset.metadata().path("normalized").path("streams"))
+            if (kind.equals(stream.path("codec_type").asText()) && stream.path("disposition").path("attached_pic").asInt() != 1) return stream;
+        return json.missingNode();
+    }
+    private double streamDuration(Asset asset, String kind) { return number(stream(asset, kind).path("duration"), 0); }
+    private static double number(JsonNode node, double fallback) {
+        try { double value = Double.parseDouble(node.asText()); return Double.isFinite(value) ? value : fallback; }
+        catch (RuntimeException exception) { return fallback; }
+    }
+    private static int frames(long millis) { return (int)Math.round(millis * (double)FPS / 1000); }
+    private static boolean text(String value, int maximum) { return value != null && !value.isBlank() && value.length() <= maximum && value.codePoints().allMatch(c -> c >= 32 || c == '\n'); }
+    private static boolean identifier(String value) { return value != null && value.matches("[A-Za-z0-9_-]{1,64}"); }
+    private static void requireId(String value) { if (!identifier(value)) throw new ResponseStatusException(HttpStatus.CONFLICT, "工程身份无效"); }
+    private static void add(List<Problem> issues, String scene, String code, String message) { issues.add(new Problem(scene, code, message)); }
+}
