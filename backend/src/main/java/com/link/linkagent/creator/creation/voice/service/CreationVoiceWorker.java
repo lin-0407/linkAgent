@@ -255,6 +255,10 @@ public class CreationVoiceWorker implements AutoCloseable {
             // 明确的 4xx 拒绝可以确认没有生成音频，按 0 结算，不能把额度长期挂成未知。
             settle(run, key, BigDecimal.ZERO.setScale(6), "voice-tts-rejected-" + row.getSceneId());
             throw new VoiceFailure("VOICE_TTS_REJECTED");
+        } catch (com.link.linkagent.creator.creation.voice.provider.DashScopeCosyVoiceProvider.SynthesisNotConfiguredException absent) {
+            // 缺少部署凭据时请求没有发出，按 0 结算并停止本轮，避免把额度挂成未知。
+            settle(run, key, BigDecimal.ZERO.setScale(6), "voice-tts-not-configured-" + row.getSceneId());
+            throw new VoiceFailure("VOICE_PROVIDER_NOT_CONFIGURED");
         } catch (RuntimeException exception) {
             runtime.markUnknown(run.taskId(), run.ownerId(), key);
             throw new VoiceFailure("VOICE_TTS_RESULT_UNKNOWN");

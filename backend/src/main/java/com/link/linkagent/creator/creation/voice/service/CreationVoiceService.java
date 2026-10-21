@@ -56,7 +56,9 @@ public class CreationVoiceService {
         var context = context(task, owner, boardId);
         var blockers = new ArrayList<String>();
         var providerValue = providers.isEmpty() ? null : providers.getFirst();
-        if (!settings.configured() || providerValue == null)
+        boolean keyConfigured = mediaProperties.getPreflight().getDashScopeApiKey() != null
+                && !mediaProperties.getPreflight().getDashScopeApiKey().isBlank();
+        if (!settings.configured() || providerValue == null || !keyConfigured)
             blockers.add("配音供应商尚未配置：需要 creator.creation.voice.enabled=true、模型与音色，以及 DashScope 密钥");
         if (!"TTS".equals(context.dialogueMode()))
             blockers.add("本简报的声音选择不是 TTS，不能只对部分场景生成配音");
@@ -82,7 +84,7 @@ public class CreationVoiceService {
             totalCny = totalCny.add(toCny(ttsUsd)).add(toCny(asrUsd));
             scenes.add(new SceneEstimate(scene.id(), characters, StoryboardCodec.digest(text), scene.durationMs(), ttsUsd, asrUsd));
         }
-        return new Estimate(boardId, context.briefId(), settings.configured() && providerValue != null,
+        return new Estimate(boardId, context.briefId(), settings.configured() && providerValue != null && keyConfigured,
                 settings.getModel(), settings.getVoice(), mediaProperties.getPreflight().getAsrModel(),
                 context.scenes().size(), totalCharacters, billing.getUsdToCny(), totalCny, "CONFIGURED_ESTIMATE",
                 List.copyOf(scenes), List.copyOf(blockers));

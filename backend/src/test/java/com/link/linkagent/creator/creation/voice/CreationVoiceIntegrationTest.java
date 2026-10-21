@@ -157,6 +157,8 @@ class CreationVoiceIntegrationTest {
         settings.setTranscribePollInterval(Duration.ofMillis(10));
         settings.validate();
         mediaProperties = new CreatorMediaProperties();
+        // 供应商凭据在部署中配置；测试只验证受理与协议，不代表真实密钥可用。
+        mediaProperties.getPreflight().setDashScopeApiKey("test-key");
         prices = new CreationBillingProperties();
         provider = new StubProvider();
         asr = new StubAsr();
@@ -190,6 +192,23 @@ class CreationVoiceIntegrationTest {
 
     @AfterEach
     void closeWorker() { worker.close(); }
+
+    @Test
+    void missingDeploymentKeyIsReportedBeforeAnyRunOrCharge() {
+        var fixture = fixture("第一句配音文稿", 3000);
+        var withoutKey = new CreatorMediaProperties();
+        var serviceWithoutKey = new CreationVoiceService(boards, storyboards, codec, media, voicePersistence, runtime,
+                settings, prices, withoutKey, List.of(provider), JSON);
+        var estimate = serviceWithoutKey.estimate(fixture.task, "default", fixture.boardId);
+        assertThat(estimate.configured()).isFalse();
+        assertThat(estimate.blockers()).anyMatch(text -> text.contains("DashScope"));
+        assertThatThrownBy(() -> serviceWithoutKey.generate(fixture.task, "default", "voice-key", fixture.boardId,
+                new VoiceModels.Generate(fixture.revision, new BigDecimal("2"))))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        ex -> assertThat(ex.getStatusCode().value()).isEqualTo(409));
+        assertThat(count("creator_creation_run", fixture.task)).isZero();
+        assertThat(count("creator_creation_cost_entry", fixture.task)).isZero();
+    }
 
     @Test
     void estimateIsReadOnlyAndGenerateCreatesOneAuthorizedRun() {

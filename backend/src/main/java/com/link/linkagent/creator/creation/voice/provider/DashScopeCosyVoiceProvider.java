@@ -122,10 +122,11 @@ public class DashScopeCosyVoiceProvider implements SpeechSynthesisProvider {
     }
 
     private void ensureConfigured() {
+        // 缺少部署凭据时必须在发送前识别，不能先占额度再记成结果不明。
         if (preflight.getDashScopeApiKey() == null || preflight.getDashScopeApiKey().isBlank())
-            throw new SpeechSynthesisException("DASHSCOPE_API_KEY 未配置");
+            throw new SynthesisNotConfiguredException("DASHSCOPE_API_KEY 未配置");
         if (preflight.getDashScopeBaseUrl() == null || preflight.getDashScopeBaseUrl().isBlank())
-            throw new SpeechSynthesisException("DashScope Base URL 未配置");
+            throw new SynthesisNotConfiguredException("DashScope Base URL 未配置");
     }
 
     private String endpoint(String path) {
@@ -154,6 +155,11 @@ public class DashScopeCosyVoiceProvider implements SpeechSynthesisProvider {
 
     public static class SpeechSynthesisException extends RuntimeException {
         public SpeechSynthesisException(String message) { super(message); }
+    }
+
+    /** 部署凭据缺失：请求没有发出，也不能计入未知费用。 */
+    public static class SynthesisNotConfiguredException extends SpeechSynthesisException {
+        public SynthesisNotConfiguredException(String message) { super(message); }
     }
 
     /** 明确的 4xx 拒绝：可以确认没有生成音频，不能把额度长期挂成未知。 */
