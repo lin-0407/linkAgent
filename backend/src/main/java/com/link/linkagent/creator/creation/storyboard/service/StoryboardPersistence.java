@@ -137,27 +137,53 @@ public class StoryboardPersistence {
      */
     public Board saveVoice(String task,String owner,String key,String runId,String worker,long generation,
             String briefId,String parentId,Candidate candidate,List<Asset> extra,Set<String> extraIds) {
+        return saveGenerated(task,owner,key,runId,worker,generation,briefId,parentId,candidate,extra,extraIds,
+                "ASR_ALIGNED","配音");
+    }
+    /** AI 视频运行保存新版本：只接受本运行实际生成并核验过的片段，旧版本与用户素材保持不变。 */
+    public Board saveVideo(String task,String owner,String key,String runId,String worker,long generation,
+            String briefId,String parentId,Candidate candidate,List<Asset> extra,Set<String> extraIds) {
+        // 字幕来源沿用父版本，不能把 ASR 对齐的结果改写成用户提供。
+        return saveGenerated(task,owner,key,runId,worker,generation,briefId,parentId,candidate,extra,extraIds,
+                null,"AI 视频");
+    }
+    private Board saveGenerated(String task,String owner,String key,String runId,String worker,long generation,
+            String briefId,String parentId,Candidate candidate,List<Asset> extra,Set<String> extraIds,
+            String timingSource,String label) {
         lock(task,owner);
         var replay=mapper.boardByKey(task,owner,key);
         if(replay.isPresent())return replay.get();
-        var run=runs.run(task,owner,runId).orElseThrow(()->conflict("配音运行不存在"));
+        var run=runs.run(task,owner,runId).orElseThrow(()->conflict(label+"运行不存在"));
         if(!"PREPARE".equals(run.kind()) || !runId.equals(runs.workspace(task,owner).orElseThrow().activeRunId())
                 || runs.liveLease(task,owner,runId,worker,generation,"RUNNING")!=1)
-            throw conflict("配音运行已取消、执行权失效或已被接管");
+            throw conflict(label+"运行已取消、执行权失效或已被接管");
         var brief=brief(task,owner,briefId);
-        if(brief.revision()!=mapper.briefRevision(task,owner))throw conflict("配音依据已变化，请重新生成");
-        if(parentId!=null)mapper.board(task,owner,parentId).orElseThrow(()->conflict("父故事板不属于本任务"));
+        if(brief.revision()!=mapper.briefRevision(task,owner))throw conflict(label+"依据已变化，请重新生成");
+        Board parent=parentId==null?null:mapper.board(task,owner,parentId).orElseThrow(()->conflict("父故事板不属于本任务"));
+        // 新版本必须继承父版本实际引用的素材：配音片段、AI 片段或用户素材都不能因为一次局部生成而丢失。
         var frozen=new ArrayList<>(snapshotAssets(task,owner,ids(brief)));
+        if(parent!=null) for(Asset asset:frozen(parent)) if(frozen.stream().noneMatch(a->a.assetId().equals(asset.assetId()))) frozen.add(asset);
         for(Asset asset:extra) if(frozen.stream().noneMatch(a->a.assetId().equals(asset.assetId()))) frozen.add(asset);
+        String source=timingSource==null?parentTimingSource(parent):timingSource;
         String hash=codec.hash(Map.of("runId",runId,"candidate",candidate,"parent",Objects.toString(parentId,"")));
-        return saveBoard(brief,candidate,List.copyOf(frozen),key,hash,parentId,runId,false,"ASR_ALIGNED",extraIds);
+        return saveBoard(brief,candidate,List.copyOf(frozen),key,hash,parentId,runId,false,source,extraIds);
+    }
+    private String parentTimingSource(Board parent) {
+        if(parent==null)return "USER_PROVIDED";
+        String value=codec.read(parent.documentJson()).path("subtitleTimingSource").asText("");
+        return Set.of("USER_PROVIDED","ASR_ALIGNED","NOT_PROVIDED").contains(value)?value:"USER_PROVIDED";
     }
     private Board saveBoard(Brief brief,Candidate candidate,List<Asset> frozen,String key,String hash,String parent,String run,boolean generated) {
         return saveBoard(brief,candidate,frozen,key,hash,parent,run,generated,generated?"NOT_PROVIDED":"USER_PROVIDED",Set.of());
     }
     private Board saveBoard(Brief brief,Candidate candidate,List<Asset> frozen,String key,String hash,String parent,String run,
             boolean generated,String timingSource,Set<String> generatedVoiceAssets) {
-        codec.policy(brief,candidate,generated,generatedVoiceAssets);String boardId=id();var doc=json.createObjectNode().put("schemaVersion","storyboard.v1").put("storyboardId",boardId).put("briefId",brief.briefId()).put("briefRevision",brief.revision()).put("templateVersion","controlled.v1").put("subtitleTimingSource",timingSource);doc.set("candidate",json.valueToTree(candidate));
+        // 生成素材不再由调用方逐项声明：凡在冻结快照中带系统生成标记的素材都属本任务已验收产出，
+        // 用户上传没有 generated 元数据，不能借这个入口把自己上传的文件伪装成生成结果。
+        Set<String> generatedIds=new HashSet<>(generatedVoiceAssets);
+        for(Asset asset:frozen) if(asset.metadata()!=null
+                && !asset.metadata().path("generated").path("kind").asText("").isBlank()) generatedIds.add(asset.assetId());
+        codec.policy(brief,candidate,generated,generatedIds);String boardId=id();var doc=json.createObjectNode().put("schemaVersion","storyboard.v1").put("storyboardId",boardId).put("briefId",brief.briefId()).put("briefRevision",brief.revision()).put("templateVersion","controlled.v1").put("subtitleTimingSource",timingSource);doc.set("candidate",json.valueToTree(candidate));
         var board=new Board(boardId,brief.taskId(),brief.ownerId(),next(mapper.boardRevision(brief.taskId(),brief.ownerId())),brief.briefId(),parent,run,key,hash,codec.hash(doc),codec.write(doc),codec.write(frozen),null);
         mapper.insertBoard(board);for(var a:frozen)mapper.reference(boardId,a.assetId(),brief.taskId(),brief.ownerId());return mapper.board(brief.taskId(),brief.ownerId(),boardId).orElseThrow();
     }

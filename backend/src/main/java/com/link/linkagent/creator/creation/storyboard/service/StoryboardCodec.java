@@ -27,24 +27,27 @@ public class StoryboardCodec {
     public void valid(Object value) {if(value==null || !validator.validate(value).isEmpty())throw conflict("故事板字段、数量或文本超出允许范围");}
     public Candidate candidate(JsonNode root) {var result=decode(root,Candidate.class);valid(result);return result;}
     public void policy(Brief brief,Candidate candidate,boolean generated) { policy(brief,candidate,generated,Set.of()); }
-    /** 生成的配音素材不在简报选择范围内，只有本运行实际产出并明确用于 TTS 场景时才能引用。 */
-    public void policy(Brief brief,Candidate candidate,boolean generated,Set<String> generatedVoiceAssets) {
+    /** 生成的配音或视频素材不在简报选择范围内，只有本运行实际产出并用于对应来源时才可引用。 */
+    public void policy(Brief brief,Candidate candidate,boolean generated,Set<String> generatedAssets) {
         valid(candidate);var doc=read(brief.documentJson());Set<String> assets=new HashSet<>();doc.path("assetIds").forEach(n->assets.add(n.asText()));
         Set<String> sources=new HashSet<>(Set.of("brief:user"));read(brief.sourceJson()).path("materials").forEach(n->sources.add(n.path("sourceId").asText()));
         Set<String> ids=new HashSet<>();String mode=doc.path("dialogueMode").asText();
         for(var s:candidate.scenes()) {
             if(!ids.add(s.id()))throw conflict("场景身份重复");
-            boolean voiceGenerated=s.narrationAssetId()!=null && generatedVoiceAssets.contains(s.narrationAssetId());
-            if(s.visualAssetId()!=null && !assets.contains(s.visualAssetId())
+            boolean voiceGenerated=s.narrationAssetId()!=null && generatedAssets.contains(s.narrationAssetId());
+            boolean visualGenerated=s.visualAssetId()!=null && generatedAssets.contains(s.visualAssetId());
+            if(s.visualAssetId()!=null && !assets.contains(s.visualAssetId()) && !visualGenerated
                     || s.narrationAssetId()!=null && !assets.contains(s.narrationAssetId()) && !voiceGenerated)
                 throw conflict("故事板引用了简报范围外素材");
             if(voiceGenerated && !"TTS".equals(s.audioMode()))throw conflict("生成的配音只能用于 TTS 场景，不能替换用户录音或原声");
+            if(visualGenerated && !"AI_VIDEO".equals(s.layout()))throw conflict("生成的视频只能用于 AI 视频场景，不能替换用户素材");
             if(!sources.containsAll(s.sourceRefs()) || ("USER_PROVIDED".equals(doc.path("contentKind").asText()) && s.sourceRefs().isEmpty()))throw conflict("事实场景需要引用本简报真实输入来源");
             if(generated && !s.cues().isEmpty())throw conflict("模型不能生成未经音频对齐的字幕时间");
             String required=switch(mode){case "USER_NARRATION"->"NARRATION";case "SOURCE"->"ORIGINAL";case "TTS"->"TTS";default->"NO_DIALOGUE";};
-            if(!required.equals(s.audioMode()) && !("SOURCE".equals(mode) && "NO_DIALOGUE".equals(s.audioMode()) && !"VIDEO_CLIP".equals(s.layout())))throw conflict("场景声音选择与简报不一致，不能自动替换用户选择");
+            if(!required.equals(s.audioMode()) && !("SOURCE".equals(mode) && "NO_DIALOGUE".equals(s.audioMode())
+                    && !Set.of("VIDEO_CLIP","AI_VIDEO").contains(s.layout())))throw conflict("场景声音选择与简报不一致，不能自动替换用户选择");
             if("TTS".equals(s.audioMode()) && s.narration().isBlank())throw conflict("生成配音场景需要真实文稿");
-            for(String text:List.of(s.title(),s.narration())) if(text.codePoints().anyMatch(c->c<32 && c!='\n'))throw conflict("文字包含不支持的控制字符");
+            for(String text:List.of(s.title(),s.narration(),Objects.toString(s.visualPrompt(),""))) if(text.codePoints().anyMatch(c->c<32 && c!='\n'))throw conflict("文字包含不支持的控制字符");
         }
     }
     public static ResponseStatusException conflict(String message){return new ResponseStatusException(HttpStatus.CONFLICT,message);}

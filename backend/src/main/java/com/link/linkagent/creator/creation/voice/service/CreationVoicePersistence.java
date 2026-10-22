@@ -9,6 +9,7 @@ import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.Ass
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.Board;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.Candidate;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardPersistence;
+import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.creation.voice.mapper.CreationVoiceMapper;
 import com.link.linkagent.creator.creation.voice.model.CreationVoice;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -32,11 +33,13 @@ public class CreationVoicePersistence {
     private final CreationVoiceMapper mapper;
     private final CreationRuntimeService runtime;
     private final StoryboardPersistence storyboards;
+    private final MediaUploadMapper media;
     private final ObjectMapper json;
 
     public CreationVoicePersistence(CreationVoiceMapper mapper, CreationRuntimeService runtime,
-                                    StoryboardPersistence storyboards, ObjectMapper json) {
-        this.mapper = mapper; this.runtime = runtime; this.storyboards = storyboards; this.json = json;
+                                    StoryboardPersistence storyboards, MediaUploadMapper media, ObjectMapper json) {
+        this.mapper = mapper; this.runtime = runtime; this.storyboards = storyboards; this.media = media;
+        this.json = json;
     }
 
     public record Start(String runId, CreationVoiceMapper.Job job) { }
@@ -49,6 +52,8 @@ public class CreationVoicePersistence {
     public Start start(String task, String owner, String key, String scopedKey, String boardId, String briefId,
                        String requestHash, String requestJson, BigDecimal maxCost, long expectedRevision,
                        List<CreationVoice> rows) {
+        // 受理先锁任务行：并发同键请求在锁外都能通过预检，否则第二个请求会多建一个没有任务行的运行。
+        if (media.lockMediaTask(task, owner).isEmpty()) throw conflict("任务不存在");
         var existing = mapper.jobByKey(task, owner, key);
         if (existing.isPresent()) {
             if (!requestHash.equals(existing.get().requestHash())) throw conflict("同一幂等键对应不同配音请求");

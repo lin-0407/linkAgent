@@ -180,7 +180,7 @@ class CreationVoiceIntegrationTest {
                         tx(new CreationAssetPersistence(session.getMapper(CreationAssetMapper.class))),
                         storageProperties, storage, JSON),
                 codec, JSON, prices, generator));
-        voicePersistence = tx(new CreationVoicePersistence(voices, runtime, storyboards, JSON));
+        voicePersistence = tx(new CreationVoicePersistence(voices, runtime, storyboards, media, JSON));
         service = new CreationVoiceService(boards, storyboards, codec, media, voicePersistence, runtime,
                 settings, prices, mediaProperties, List.of(provider), JSON);
         var renderer = new FixedProjectRendererProperties();

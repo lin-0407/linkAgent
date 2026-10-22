@@ -480,7 +480,7 @@ public class CreationVoiceWorker implements AutoCloseable {
             extraIds.add(asset.getAssetId());
             scenes.add(new Scene(scene.id(), scene.layout(), scene.title(), scene.body(), scene.narration(),
                     scene.durationMs(), scene.visualAssetId(), scene.sourceInMs(), scene.sourceOutMs(), scene.fit(),
-                    scene.audioMode(), asset.getAssetId(), cues(row), scene.sourceRefs()));
+                    scene.audioMode(), asset.getAssetId(), cues(row), scene.sourceRefs(), scene.visualPrompt()));
         }
         Candidate candidate = new Candidate(List.copyOf(scenes));
         var brief = storyboards.brief(job.taskId(), job.ownerId(), job.briefId());

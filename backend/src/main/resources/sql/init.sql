@@ -1933,6 +1933,58 @@ CREATE TABLE IF NOT EXISTS creator_creation_voice
     KEY idx_voice_task(task_id,owner_id,status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='场景配音、真实音频事实与转写对齐';
 
+-- AI 视频生成沿用准备运行与预算，不另建执行状态机；任务标识与结果事实逐场景保存。
+CREATE TABLE IF NOT EXISTS creator_creation_video_job
+(
+    run_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '沿用准备运行及预算',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '发起生成时的不可变简报',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '来源故事板版本，不被本运行覆盖',
+    source_scope VARCHAR(16) NOT NULL COMMENT 'SELECTED 只处理已有 AI 场景，ALL 把全部场景切换为 AI 画面',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '受理幂等键，同键不同请求必须拒绝',
+    request_hash CHAR(64) NOT NULL COMMENT '受理参数摘要，包含提示词与时长',
+    storyboard_result_id VARCHAR(64) DEFAULT NULL COMMENT '生成完成后保存的新故事板版本',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '受理时间',
+    UNIQUE KEY uk_video_job_key(task_id,owner_id,idempotency_key),
+    KEY idx_video_job_task(task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 视频生成的运行归属';
+
+-- 每个场景保存提示词摘要、请求时长、供应商任务标识与真实片段事实。
+-- 提示词摘要用于阻止改词后继续沿用旧片段；片段摘要与尺寸来自实际文件，不按请求参数推算。
+CREATE TABLE IF NOT EXISTS creator_creation_video
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '生成的准备运行',
+    scene_id VARCHAR(64) NOT NULL COMMENT '故事板场景身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '不可变简报',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '来源故事板版本',
+    position INT NOT NULL COMMENT '场景在故事板中的顺序',
+    status VARCHAR(32) NOT NULL DEFAULT 'QUEUED' COMMENT '排队、提交、已提交、可用、待作者确认、失败或取消',
+    prompt_text TEXT NOT NULL COMMENT '本次实际提交给视频模型的完整提示词',
+    prompt_sha256 CHAR(64) NOT NULL COMMENT '提示词摘要，改词或改标题后必须重新生成',
+    scene_duration_ms BIGINT NOT NULL COMMENT '发起时的场景帧长，决定请求时长与裁切终点',
+    requested_seconds INT NOT NULL COMMENT '向供应商请求的生成秒数，是费用预留依据',
+    provider VARCHAR(64) DEFAULT NULL COMMENT '实际调用的视频供应商标识',
+    model VARCHAR(128) DEFAULT NULL COMMENT '实际请求的生成模型',
+    provider_task_id VARCHAR(128) DEFAULT NULL COMMENT '异步任务标识，重启后据此续查而不是重复提交',
+    provider_request_id VARCHAR(128) DEFAULT NULL COMMENT '提交响应标识，仅用于核对本次调用',
+    video_asset_id VARCHAR(64) DEFAULT NULL COMMENT '生成的真实视频素材',
+    video_sha256 CHAR(64) DEFAULT NULL COMMENT '规范化视频完整摘要',
+    video_bytes BIGINT DEFAULT NULL COMMENT '规范化视频字节数',
+    video_duration_ms BIGINT DEFAULT NULL COMMENT '规范化视频实际时长',
+    video_width INT DEFAULT NULL COMMENT '实际画面宽度',
+    video_height INT DEFAULT NULL COMMENT '实际画面高度',
+    proposal_json JSON DEFAULT NULL COMMENT '需要作者选择的时长或重做提案',
+    error_code VARCHAR(64) DEFAULT NULL COMMENT '受控失败原因，不保存供应商敏感正文',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近变化时间',
+    PRIMARY KEY(run_id,scene_id),
+    KEY idx_video_task(task_id,owner_id,status),
+    KEY idx_video_prompt(task_id,owner_id,prompt_sha256,status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 视频场景、异步任务与真实片段事实';
+
 -- 素材独立于完整成片；声明摘要必须在后台读取真实文件后复核，不能据此直接置为可用。
 CREATE TABLE IF NOT EXISTS creator_creation_asset
 (

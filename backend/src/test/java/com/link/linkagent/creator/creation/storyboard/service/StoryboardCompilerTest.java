@@ -33,9 +33,9 @@ class StoryboardCompilerTest {
     void unavailableCapabilitiesRemainExplicitProblemsAndCompileRefuses(String feature) {
         var candidate = new Candidate(List.of(scene("s1", feature.equals("AI_VIDEO") ? feature : "TITLE_CARD", 2000,
                 null, null, null, feature.equals("TTS") ? feature : "NO_DIALOGUE", null, List.of())));
-        // TTS 不再整体拒绝，但缺少真实生成音频时仍然不可渲染；AI 视频仍无供应商。
+        // 两种生成能力都不再整体拒绝；缺少本系统真实产出的音频或片段时仍然不可渲染。
         assertThat(compiler.check(brief(2000), candidate, List.of()).problems()).extracting(Problem::code)
-                .contains("TTS".equals(feature) ? "TTS_AUDIO_MISSING" : "AI_VIDEO_NOT_CONFIGURED");
+                .contains("TTS".equals(feature) ? "TTS_AUDIO_MISSING" : "AI_VIDEO_ASSET_MISSING");
         assertThatThrownBy(() -> compiler.compile("board", brief(2000), candidate, List.of(), "run", "attempt")).hasMessageContaining("故事板尚不可渲染");
     }
 
@@ -255,6 +255,30 @@ class StoryboardCompilerTest {
                 .extracting(Problem::code).contains("NARRATION_ASSET_GENERATED");
     }
 
+    @Test void aiVideoNeedsSystemGeneratedClipBoundToCurrentPrompt() {
+        var brief = brief(2000).put("dialogueMode", "NO_DIALOGUE");
+        var scene = new Scene("s1", "AI_VIDEO", "海边日落", List.of(), "", 2000, "ai", 0L, 2000L,
+                "COVER", "NO_DIALOGUE", null, List.of(), List.of(), "海边日落，缓慢推进");
+        var candidate = new Candidate(List.of(scene));
+        var generated = aiClip("海边日落，缓慢推进", 5);
+        var check = compiler.check(brief, candidate, List.of(generated));
+        assertThat(check.renderable()).isTrue();
+        var document = compiler.compile("board", brief, candidate, List.of(generated), "run", "attempt");
+        // 业务来源保留在故事板，渲染器只认片段布局。
+        assertThat(document.path("scenes").get(0).path("layout").asText()).isEqualTo("VIDEO_CLIP");
+        assertThat(document.path("scenes").get(0).path("clip").path("sourceEndMs").asLong()).isEqualTo(2000);
+
+        var changed = new Candidate(List.of(new Scene("s1", "AI_VIDEO", "海边日落", List.of(), "", 2000, "ai", 0L, 2000L,
+                "COVER", "NO_DIALOGUE", null, List.of(), List.of(), "改成城市夜景")));
+        assertThat(compiler.check(brief, changed, List.of(generated)).problems())
+                .extracting(Problem::code).contains("AI_VIDEO_PROMPT_MISMATCH");
+        // 用户上传的片段不能冒充 AI 生成结果。
+        var userClip = new Asset("ai", "VIDEO_CLIP", "private-historical", "normalized/clip.mp4", "c".repeat(64),
+                3000, "video/mp4", clip(5, false).metadata());
+        assertThat(compiler.check(brief, candidate, List.of(userClip)).problems())
+                .extracting(Problem::code).contains("AI_VIDEO_ASSET_INVALID");
+    }
+
     @Test void ambienceIsAnIndependentBedWithItsOwnVolumeAndNoDuckingField() {
         var document = compiler.compile("board", ambienceBrief(2000, 500, 2500), silent(2000),
                 List.of(music(4, 1000), ambience(4)), "run", "attempt");
@@ -351,6 +375,15 @@ class StoryboardCompilerTest {
     Asset image() {
         ObjectNode metadata = json.createObjectNode(); metadata.putObject("normalized").putArray("streams").addObject().put("codec_type", "video").put("codec_name", "png").put("width", 1280).put("height", 720);
         return new Asset("photo", "IMAGE", "private-historical", "normalized/photo.png", "b".repeat(64), 2000, "image/png", metadata);
+    }
+    Asset aiClip(String prompt, double seconds) {
+        var clip = clip(seconds, false);
+        ObjectNode metadata = clip.metadata().deepCopy();
+        metadata.putObject("generated").put("kind", "AI_VIDEO").put("provider", "compatible")
+                .put("model", "test-video").put("promptSha256", StoryboardCodec.digest(prompt))
+                .put("prompt", prompt).put("durationMs", Math.round(seconds * 1000));
+        return new Asset("ai", "VIDEO_CLIP", clip.bucketName(), "normalized/ai.mp4", "f".repeat(64),
+                clip.bytes(), clip.contentType(), metadata);
     }
     Asset clip(double seconds, boolean audio) {
         ObjectNode metadata = json.createObjectNode(); var streams = metadata.putObject("normalized").putArray("streams");

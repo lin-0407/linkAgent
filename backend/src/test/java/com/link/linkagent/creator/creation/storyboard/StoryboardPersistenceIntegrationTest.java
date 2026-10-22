@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.creation.storyboard;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.link.linkagent.creator.creation.asset.mapper.CreationAssetMapper;
 import com.link.linkagent.creator.creation.asset.model.AssetRequests.StoredFile;
 import com.link.linkagent.creator.creation.asset.service.CreationAssetPersistence;
@@ -949,6 +950,48 @@ class StoryboardPersistenceIntegrationTest {
         assertThat(saved.sourceInMs()).isEqualTo(1000);
         assertThat(saved.sourceOutMs()).isEqualTo(4000);
         assertThat(result.board().check().renderable()).isTrue();
+    }
+
+    @Test
+    void timelineApplyKeepsGeneratedAiVideoAssets() {
+        String task = task("default");
+        String prompt = "海边日落";
+        String video = generatedVideoAsset(task, 10000, prompt, "e");
+        String voice = audioAsset(task, "NARRATION", 3000, "f");
+        var brief = persistence.saveBrief(task, "default", "ai-timeline", new BriefInput(revision(task),
+                "AI 片段时间线", "用户材料", "新手", 2000, "USER_NARRATION", "USER_PROVIDED",
+                List.of(video, voice), "", null));
+        var scene = new Scene("scene-1", "AI_VIDEO", "日落", List.of(), "", 2000, video, 0L, 2000L,
+                "COVER", "NARRATION", voice, List.of(new Cue(0, 3000, "配音字幕")), List.of("brief:user"), prompt);
+        var board = persistence.save(task, "default", "ai-timeline-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(List.of(scene))));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+
+        var result = audio.applyTimeline(task, "default", "ai-timeline-key", board.storyboardId(),
+                new TimelineApply(revision(task), List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3000))));
+
+        var saved = codec.candidate(codec.read(mapper.board(task, "default", result.board().storyboardId())
+                .orElseThrow().documentJson()).path("candidate")).scenes().getFirst();
+        assertThat(saved.layout()).isEqualTo("AI_VIDEO");
+        assertThat(saved.visualPrompt()).isEqualTo(prompt);
+        assertThat(saved.sourceOutMs()).isEqualTo(3000);
+        assertThat(result.board().check().renderable()).isTrue();
+    }
+
+    private static String generatedVideoAsset(String task, long durationMs, String prompt, String hashCharacter) {
+        String id = videoAsset(task, durationMs, hashCharacter);
+        String raw = jdbc.queryForObject("SELECT metadata_json FROM creator_creation_asset WHERE asset_id=?",
+                String.class, id);
+        try {
+            ObjectNode metadata = (ObjectNode) JSON.readTree(raw);
+            metadata.putObject("generated").put("kind", "AI_VIDEO").put("provider", "compatible")
+                    .put("model", "test-video-1").put("promptSha256", StoryboardCodec.digest(prompt))
+                    .put("prompt", prompt).put("durationMs", durationMs);
+            jdbc.update("UPDATE creator_creation_asset SET metadata_json=? WHERE asset_id=?", codec.write(metadata), id);
+        } catch (Exception exception) {
+            throw new IllegalStateException(exception);
+        }
+        return id;
     }
 
     @Test

@@ -79,16 +79,19 @@ public class StoryboardCompiler {
                 add(issues, sid, "SCENE_TEXT_INVALID", "标题或正文为空、含控制字符或超出长度");
             if (!Set.of("TITLE_CARD", "IMAGE_CARD", "SPLIT_CARD", "COMPARE_CARD", "VIDEO_CLIP", "AI_VIDEO").contains(Objects.toString(scene.layout(), "")))
                 add(issues, sid, "LAYOUT_INVALID", "场景布局不受支持");
-            if ("AI_VIDEO".equals(scene.layout())) add(issues, sid, "AI_VIDEO_NOT_CONFIGURED", "尚未接入 AI 视频供应商，请提供已有视频片段或其他画面");
-            boolean video = "VIDEO_CLIP".equals(scene.layout()), image = Set.of("IMAGE_CARD", "SPLIT_CARD").contains(Objects.toString(scene.layout(), ""));
+            boolean aiVideo = "AI_VIDEO".equals(scene.layout());
+            // AI 画面在工程里仍按片段渲染，业务层保留 AI_VIDEO 来源以便核对提示词与生成事实。
+            boolean video = aiVideo || "VIDEO_CLIP".equals(scene.layout()), image = Set.of("IMAGE_CARD", "SPLIT_CARD").contains(Objects.toString(scene.layout(), ""));
             Asset visual = null;
             if (video || image) {
                 visual = assets.get(scene.visualAssetId());
-                if (visual == null) add(issues, sid, "VISUAL_MISSING", "场景引用的素材不在已冻结的 READY 素材中");
+                if (visual == null) add(issues, sid, aiVideo ? "AI_VIDEO_ASSET_MISSING" : "VISUAL_MISSING",
+                        aiVideo ? "AI 视频场景需要已生成并保存的真实片段，不能用图文或占位画面代替" : "场景引用的素材不在已冻结的 READY 素材中");
                 else {
                     usedAssets.add(visual.assetId());
                     if (!(video ? "VIDEO_CLIP" : "IMAGE").equals(visual.kind())) add(issues, sid, "VISUAL_KIND_INVALID", "画面素材类型与布局不符");
                     validateVisual(visual, video, sid, issues);
+                    if (aiVideo) validateGeneratedVideo(visual, scene, sid, issues);
                 }
             } else if (scene.visualAssetId() != null || scene.sourceInMs() != null || scene.sourceOutMs() != null)
                 add(issues, sid, "VISUAL_UNUSED", "此布局不接受画面素材或视频区间");
@@ -274,8 +277,16 @@ public class StoryboardCompiler {
         return id;
     }
 
-    private void validateVisual(Asset asset, boolean video, String sid, List<Problem> issues) {
-        JsonNode picture = stream(asset, "video");
+    /** AI 画面必须由本系统生成并核验，提示词摘要绑定当前场景文字，改词后旧片段不能继续使用。 */
+    private void validateGeneratedVideo(Asset asset, Scene scene, String sid, List<Problem> issues) {
+        JsonNode generated = asset.metadata() == null ? json.missingNode() : asset.metadata().path("generated");
+        if (!"AI_VIDEO".equals(generated.path("kind").asText()))
+            add(issues, sid, "AI_VIDEO_ASSET_INVALID", "AI 视频场景需要本系统生成并保存的真实片段，不能引用用户上传或占位视频");
+        else if (!StoryboardCodec.digest(scene.effectiveVisualPrompt()).equals(generated.path("promptSha256").asText()))
+            add(issues, sid, "AI_VIDEO_PROMPT_MISMATCH", "生成片段不对应当前场景提示词，修改标题、正文或提示词后必须重新生成");
+    }
+
+    private void validateVisual(Asset asset, boolean video, String sid, List<Problem> issues) {        JsonNode picture = stream(asset, "video");
         long width = picture.path("width").asLong(), height = picture.path("height").asLong();
         if (width <= 0 || height <= 0 || width > 8000000 || height > 8000000 || width * height > 8000000 || !(video ? "video/mp4" : "image/png").equals(asset.contentType())
                 || !(video ? "h264" : "png").equals(picture.path("codec_name").asText()))
@@ -297,13 +308,16 @@ public class StoryboardCompiler {
         for (Scene scene : candidate.scenes()) {
             int end = cursor + frames(scene.durationMs());
             ObjectNode output = scenes.addObject();
-            output.put("id", scene.id()).put("startFrame", cursor).put("endFrame", end).put("layout", scene.layout())
+            // 渲染器只认 VIDEO_CLIP；AI 来源在业务故事板与素材事实中保留。
+            boolean renderClip = "VIDEO_CLIP".equals(scene.layout()) || "AI_VIDEO".equals(scene.layout());
+            output.put("id", scene.id()).put("startFrame", cursor).put("endFrame", end)
+                    .put("layout", renderClip ? "VIDEO_CLIP" : scene.layout())
                     .put("background", "#102030").put("title", scene.title());
             output.set("body", json.valueToTree(scene.body())); output.putNull("voice");
             if (Set.of("IMAGE_CARD", "SPLIT_CARD").contains(scene.layout())) {
                 output.put("imageAssetId", scene.visualAssetId()); used.add(scene.visualAssetId());
             }
-            if ("VIDEO_CLIP".equals(scene.layout())) {
+            if (renderClip) {
                 used.add(scene.visualAssetId());
                 output.putObject("clip").put("assetId", scene.visualAssetId()).put("sourceStartMs", scene.sourceInMs())
                         .put("sourceEndMs", scene.sourceOutMs()).put("fit", scene.fit())

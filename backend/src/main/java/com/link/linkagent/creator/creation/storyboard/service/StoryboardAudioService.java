@@ -99,7 +99,7 @@ public class StoryboardAudioService {
             if(adjustment==null){scenes.add(scene);continue;}
             long quantized=Math.round(frames(adjustment.durationMs())*1000.0/FPS);
             Long in=scene.sourceInMs(),out=scene.sourceOutMs();
-            if("VIDEO_CLIP".equals(scene.layout())) {
+            if(Set.of("VIDEO_CLIP","AI_VIDEO").contains(scene.layout())) {
                 if(in==null || out==null)throw conflict("视频场景缺少原始截取区间，无法随场景时长同步延长");
                 out=in+quantized;
                 double available=number(stream(assets.get(scene.visualAssetId()),"video").path("duration"),0)*1000;
@@ -109,7 +109,7 @@ public class StoryboardAudioService {
             }
             scenes.add(new Scene(scene.id(),scene.layout(),scene.title(),scene.body(),scene.narration(),
                     adjustment.durationMs(),scene.visualAssetId(),in,out,scene.fit(),scene.audioMode(),
-                    scene.narrationAssetId(),scene.cues(),scene.sourceRefs()));
+                    scene.narrationAssetId(),scene.cues(),scene.sourceRefs(),scene.visualPrompt()));
         }
         long totalFrames=0;for(var scene:scenes)totalFrames+=frames(scene.durationMs());
         if(totalFrames<FPS || totalFrames>FPS*180)throw conflict("调整后的总时长必须在 1 至 180 秒之间");
@@ -226,7 +226,7 @@ public class StoryboardAudioService {
             long frames=Math.round(scene.durationMs()*FPS/1000.0);totalFrames+=frames;
             double duration=frames*1000.0/FPS;long sceneMs=Math.round(duration);Long audioMs=null;String source="NOT_REQUIRED";
             List<TimingProposal> own=new ArrayList<>();
-            if("VIDEO_CLIP".equals(scene.layout())) {
+            if(Set.of("VIDEO_CLIP","AI_VIDEO").contains(scene.layout())) {
                 var visual=assets.get(scene.visualAssetId());double actual=number(stream(visual,"video").path("duration"),0)*1000;
                 long begin=scene.sourceInMs()==null?-1:scene.sourceInMs(),end=scene.sourceOutMs()==null?-1:scene.sourceOutMs();
                 if(visual==null || !"VIDEO_CLIP".equals(visual.kind()) || actual<=0)
@@ -289,7 +289,7 @@ public class StoryboardAudioService {
         if(actual>duration+.001) {
             long extended=(long)Math.ceil(Math.ceil(actual*FPS/1000.0)*1000/FPS);
             if(extended<=30000) {
-                if("VIDEO_CLIP".equals(scene.layout())) {
+                if(Set.of("VIDEO_CLIP","AI_VIDEO").contains(scene.layout())) {
                     double available=number(stream(assets.get(scene.visualAssetId()),"video").path("duration"),0)*1000;
                     long begin=scene.sourceInMs()==null?-1:scene.sourceInMs();
                     if(begin>=0 && begin+extended<=available+.001)
@@ -338,7 +338,7 @@ public class StoryboardAudioService {
                 +Long.parseLong(m.group(offset+2))*1000+Long.parseLong(m.group(offset+3));
     }
     private Scene replaceCues(Scene s,List<Cue> cues) {
-        return new Scene(s.id(),s.layout(),s.title(),s.body(),s.narration(),s.durationMs(),s.visualAssetId(),s.sourceInMs(),s.sourceOutMs(),s.fit(),s.audioMode(),s.narrationAssetId(),cues,s.sourceRefs());
+        return new Scene(s.id(),s.layout(),s.title(),s.body(),s.narration(),s.durationMs(),s.visualAssetId(),s.sourceInMs(),s.sourceOutMs(),s.fit(),s.audioMode(),s.narrationAssetId(),cues,s.sourceRefs(),s.visualPrompt());
     }
     private Candidate candidate(Board board) {return codec.candidate(codec.read(board.documentJson()).path("candidate"));}
     private Board board(String task,String owner,String id) {return mapper.board(task,owner,id).orElseThrow(()->conflict("故事板不存在或不属于本任务"));}

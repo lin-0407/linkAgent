@@ -53,7 +53,27 @@ public final class StoryboardModels {
             @NotBlank @Pattern(regexp="NO_DIALOGUE|ORIGINAL|NARRATION|TTS") String audioMode,
             @Pattern(regexp="[A-Za-z0-9_-]{1,64}") String narrationAssetId,
             @NotNull @Size(max=100) List<@NotNull @Valid Cue> cues,
-            @NotNull @Size(max=16) List<@NotBlank @Size(max=128) String> sourceRefs) { }
+            @NotNull @Size(max=16) List<@NotBlank @Size(max=128) String> sourceRefs,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            @Size(max=600) String visualPrompt) {
+        public Scene(String id,String layout,String title,List<String> body,String narration,long durationMs,
+                String visualAssetId,Long sourceInMs,Long sourceOutMs,String fit,String audioMode,
+                String narrationAssetId,List<Cue> cues,List<String> sourceRefs) {
+            this(id,layout,title,body,narration,durationMs,visualAssetId,sourceInMs,sourceOutMs,fit,audioMode,
+                    narrationAssetId,cues,sourceRefs,null);
+        }
+        /**
+         * 实际提交给视频模型的提示词：显式填写优先，否则由标题与可见正文确定生成。
+         * 生成片段的摘要绑定这段文字，改标题或正文后旧片段自然失效，不能静默沿用。
+         */
+        public String effectiveVisualPrompt() {
+            if (visualPrompt != null && !visualPrompt.isBlank()) return visualPrompt.strip();
+            StringBuilder text = new StringBuilder(title == null ? "" : title.strip());
+            if (body != null) for (String item : body)
+                if (item != null && !item.isBlank()) text.append('\n').append(item.strip());
+            return text.toString();
+        }
+    }
     public record Candidate(@NotNull @Size(min=1,max=48) List<@NotNull @Valid Scene> scenes) { }
     public record Save(@NotNull @Min(0) Long expectedWorkspaceRevision,
             @NotBlank @Pattern(regexp="[A-Za-z0-9_-]{1,64}") String briefId,
