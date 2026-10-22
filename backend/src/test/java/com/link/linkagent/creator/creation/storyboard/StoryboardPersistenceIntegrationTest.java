@@ -1046,6 +1046,60 @@ class StoryboardPersistenceIntegrationTest {
         assertThat(result.board().check().problems()).allMatch(problem -> "scene-2".equals(problem.sceneId()));
     }
 
+    @Test
+    void ambienceIsStoredAsAnIndependentBedAndCannotReuseMusicSource() {
+        String task = task("default");
+        String music = audioAsset(task, "MUSIC", 8000, "b");
+        String bed = audioAsset(task, "MUSIC", 12000, "c");
+        var bgm = new BackgroundMusic(music, 1000, 6000, cny("-18"), 500, 500, true);
+        var ambience = new Ambience(bed, 0, 5000, cny("-24"), 200, 300);
+        var brief = persistence.saveBrief(task, "default", "ambience-brief", new BriefInput(revision(task),
+                "环境声演示", "用户材料", "新手", 5000, "NO_DIALOGUE", "USER_PROVIDED",
+                List.of(music, bed), "", bgm, ambience));
+        var document = codec.read(brief.documentJson());
+        assertThat(document.path("ambience").path("assetId").asText()).isEqualTo(bed);
+        assertThat(document.path("ambience").path("gainDb").asDouble()).isEqualTo(-24.0);
+        // 环境声没有压低开关，与背景音乐是两路独立音轨。
+        assertThat(document.path("ambience").has("ducking")).isFalse();
+        assertThat(document.path("backgroundMusic").path("assetId").asText()).isEqualTo(music);
+
+        long after = revision(task);
+        conflict(() -> persistence.saveBrief(task, "default", "ambience-same", new BriefInput(after,
+                "环境声演示", "用户材料", "新手", 5000, "NO_DIALOGUE", "USER_PROVIDED", List.of(music), "",
+                bgm, new Ambience(music, 0, 5000, cny("-24"), 0, 0))));
+        assertThat(count("creator_creation_brief", task)).isEqualTo(1);
+    }
+
+    @Test
+    void timelineApplyMovesAmbienceWithTheNewTotalDuration() {
+        String task = task("default");
+        String first = audioAsset(task, "NARRATION", 3060, "c");
+        String second = audioAsset(task, "NARRATION", 1000, "d");
+        String bed = audioAsset(task, "MUSIC", 12000, "e");
+        var ambience = new Ambience(bed, 500, 3500, cny("-24"), 200, 300);
+        var brief = persistence.saveBrief(task, "default", "ambience-timeline", new BriefInput(revision(task),
+                "环境声时间线", "用户材料", "新手", 3000, "USER_NARRATION", "USER_PROVIDED",
+                List.of(first, second, bed), "", null, ambience));
+        var scenes = List.of(
+                new Scene("scene-1", "TITLE_CARD", "开场", List.of("第一段"), "", 2000, null, null, null,
+                        "CONTAIN", "NARRATION", first, List.of(new Cue(0, 3060, "第一段字幕")), List.of("brief:user")),
+                new Scene("scene-2", "TITLE_CARD", "结尾", List.of("第二段"), "", 1000, null, null, null,
+                        "CONTAIN", "NARRATION", second, List.of(new Cue(0, 1000, "第二段字幕")), List.of("brief:user")));
+        var board = persistence.save(task, "default", "ambience-timeline-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(scenes)));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+
+        var result = audio.applyTimeline(task, "default", "ambience-timeline-key", board.storyboardId(),
+                new TimelineApply(revision(task), List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3067))));
+
+        assertThat(result.targetDurationMs()).isEqualTo(4067);
+        assertThat(result.notes()).anyMatch(text -> text.contains("环境声") && text.contains("4567ms"));
+        var savedBrief = mapper.brief(task, "default", result.board().briefId()).orElseThrow();
+        assertThat(codec.read(savedBrief.documentJson()).path("ambience").path("sourceOutMs").asLong())
+                .isEqualTo(4567);
+        assertThat(result.board().check().renderable()).isTrue();
+    }
+
     private StoryboardWorker worker() {
         return new StoryboardWorker(mapper, runtime, persistence, generator, codec, JSON);
     }

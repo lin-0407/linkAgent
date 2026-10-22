@@ -17,7 +17,7 @@ from . import VERSION
 from .contract import RenderError, contained, digest, load_project, require
 from .visuals import Visuals
 from .clips import ClipFrames, inspect_clips, original_audio
-from .music import BackgroundMusic
+from .music import Ambience, BackgroundMusic
 
 
 class Control:
@@ -91,7 +91,7 @@ def timestamp(milliseconds):
 
 def write_audio(project, output, control, clips, ffmpeg):
     peak, squares, samples_count = 0.0, 0.0, 0
-    with wave.open(str(output), "wb") as destination, BackgroundMusic(project) as music:
+    with wave.open(str(output), "wb") as destination, BackgroundMusic(project) as music, Ambience(project) as ambience:
         destination.setparams((2, 2, 48000, 0, "NONE", "not compressed"))
         for scene in project.document["scenes"]:
             control.check()
@@ -115,6 +115,8 @@ def write_audio(project, output, control, clips, ffmpeg):
                 converted *= 10 ** (voice["gainDb"] / 20) * 0.85
                 mixed[offset: offset + len(converted)] += converted
             mixed = music.mix(mixed, start_sample, control.check)
+            # 环境声在主音轨与背景音乐之后叠加，不做压低，只保留独立音量与淡入淡出。
+            mixed = ambience.mix(mixed, start_sample, control.check)
             current_peak = float(np.max(np.abs(mixed)))
             require(current_peak <= 0.95, "混合音轨超过编码峰值范围", "AUDIO_CLIPPING")
             peak = max(peak, current_peak)

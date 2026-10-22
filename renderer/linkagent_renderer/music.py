@@ -1,4 +1,4 @@
-"""只读取已确认的音乐区间；能量压低不声称识别了语音或完成 ASR。"""
+"""只读取已确认的音频区间；能量压低只作用于背景音乐，不声称识别了语音或完成 ASR。"""
 
 import math
 import wave
@@ -8,10 +8,13 @@ import numpy as np
 from .contract import require
 
 
-class BackgroundMusic:
-    def __init__(self, project):
+class AudioBed:
+    """背景音乐与环境声共用同一套区间读取，差异只在是否允许随主音轨压低。"""
+
+    def __init__(self, project, settings, duckable):
         self.project = project
-        self.settings = project.document.get("backgroundMusic")
+        self.settings = settings
+        self.duckable = duckable
         self.source = None
         self.duck_gain = 1.0
         self.total_samples = round(project.frame_count * 48000 / project.fps)
@@ -35,18 +38,18 @@ class BackgroundMusic:
         samples = len(main)
         positions = self.begin + (start_sample + np.arange(samples, dtype=np.float64)) * self.rate / 48000
         valid = positions < self.end
-        music = np.zeros((samples, 2), dtype=np.float32)
+        bed = np.zeros((samples, 2), dtype=np.float32)
         if np.any(valid):
             first = math.floor(positions[0])
             last = min(self.end, math.floor(positions[valid][-1]) + 2)
             self.source.setpos(first)
             raw = self.source.readframes(last - first)
             require(len(raw) == (last - first) * self.channels * 2,
-                    "音乐区间读取不完整", "INVALID_AUDIO")
+                    "音频区间读取不完整", "INVALID_AUDIO")
             values = np.frombuffer(raw, dtype="<i2").reshape((-1, self.channels)).astype(np.float32) / 32768
             axis = np.arange(first, last, dtype=np.float64)
             for channel in range(2):
-                music[valid, channel] = np.interp(positions[valid], axis, values[:, min(channel, self.channels - 1)])
+                bed[valid, channel] = np.interp(positions[valid], axis, values[:, min(channel, self.channels - 1)])
         # 仅量化容差内的尾部可静音；不读取 sourceEndMs 之外，不循环或拉伸选区。
         timeline = start_sample + np.arange(samples, dtype=np.float64)
         envelope = np.ones(samples, dtype=np.float64)
@@ -55,15 +58,16 @@ class BackgroundMusic:
             envelope *= np.minimum(1, timeline / fade_in)
         if fade_out:
             envelope *= np.clip((self.total_samples - 1 - timeline) / fade_out, 0, 1)
-        if self.settings["ducking"]:
+        # 只有背景音乐允许压低；环境声是空间铺底，不随对白起伏。
+        if self.duckable and self.settings.get("ducking"):
             envelope *= self.ducking(main, check)
-        music *= (envelope * 10 ** (self.settings["gainDb"] / 20) * .85)[:, None]
+        bed *= (envelope * 10 ** (self.settings["gainDb"] / 20) * .85)[:, None]
         check()
-        return main + music
+        return main + bed
 
     def ducking(self, main, check):
         envelope = np.empty(len(main), dtype=np.float64)
-        # 10 毫秒实测主音轨 RMS 门限约 -46 dBFS；音乐本身不能触发压低。
+        # 10 毫秒实测主音轨 RMS 门限约 -46 dBFS；背景音乐本身不能触发压低。
         # 20 毫秒进入、180 毫秒恢复，状态跨场景保留，避免镜头切换时跳变。
         for start in range(0, len(main), 480):
             check()
@@ -75,3 +79,13 @@ class BackgroundMusic:
             envelope[start:end] = target + (self.duck_gain - target) * decay
             self.duck_gain = float(envelope[end - 1])
         return envelope
+
+
+class BackgroundMusic(AudioBed):
+    def __init__(self, project):
+        super().__init__(project, project.document.get("backgroundMusic"), True)
+
+
+class Ambience(AudioBed):
+    def __init__(self, project):
+        super().__init__(project, project.document.get("ambience"), False)

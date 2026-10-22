@@ -283,5 +283,105 @@ class MusicNativeTest(MusicFixture, unittest.TestCase):
         self.assertGreater(tone(660), tone(1200) * 20)
 
 
+class AmbienceTest(MusicFixture, unittest.TestCase):
+    """环境声是独立铺底轨：自己的音量与淡入淡出，但不随对白压低。"""
+
+    def add_ambience(self, frequency=220, seconds=4, start=1000, end=3000, gain=-24, fade_in=0, fade_out=0):
+        write_wave(self.root / "ambience.wav", seconds, frequency)
+        self.document["assets"].append({"id": "ambience", "path": "ambience.wav", "mime": "audio/wav",
+                                        "sha256": digest(self.root / "ambience.wav")})
+        self.document["ambience"] = {"assetId": "ambience", "sourceStartMs": start, "sourceEndMs": end,
+                                     "gainDb": gain, "fadeInMs": fade_in, "fadeOutMs": fade_out}
+
+    @staticmethod
+    def tone(values, frequency, start, end):
+        data = values[round(start * 48000):round(end * 48000), 0]
+        # 归一化到每样本，避免不同时间窗长度直接比较时比值被样本数放大。
+        return abs(np.dot(data, np.exp(-2j * np.pi * frequency * np.arange(len(data)) / 48000))) / len(data)
+
+    def test_ambience_keeps_its_level_while_music_ducks_under_speech(self):
+        self.add_voice()
+        # 两路音轨都从 0 开始，才能比较同一时间窗里"有对白"与"无对白"的差别。
+        self.music.update(sourceStartMs=0, sourceEndMs=2000, ducking=True)
+        self.add_ambience(start=0, end=2000)
+        values, _ = self.audio()
+        # 0.2–0.4 秒无对白，0.8–1.2 秒有对白：环境声两段应一致，背景音乐应明显降低。
+        quiet, speaking = self.tone(values, 220, .2, .4), self.tone(values, 220, .8, 1.2)
+        self.assertGreater(quiet, 1e-4)
+        self.assertAlmostEqual(quiet, speaking, delta=quiet * .2)
+        # BGM 是 660 Hz、旁白是 440 Hz：只有 BGM 随对白降低，旁白本身不受影响。
+        self.assertLess(self.tone(values, 660, .8, 1.2), self.tone(values, 660, .2, .4) * .5)
+        self.assertGreater(self.tone(values, 440, .8, 1.2), 1e-3)
+
+    def test_ambience_alone_still_counts_as_a_real_audio_plan(self):
+        # 只有环境声时也必须被当成有声工程，不能被静音检查误判。
+        self.document.pop("backgroundMusic")
+        self.add_ambience(start=0, end=2000)
+        values, levels = self.audio()
+        self.assertGreater(levels["sourcePeak"], .002)
+        self.assertTrue(self.project().expects_audio)
+        self.assertEqual(96000, len(values))
+
+    def test_ambience_range_must_cover_the_whole_film(self):
+        self.add_ambience(end=1500)
+        self.assert_invalid("环境声选区时长")
+
+    def test_ambience_cannot_reuse_the_music_source(self):
+        self.document["ambience"] = {"assetId": "music", "sourceStartMs": 0, "sourceEndMs": 2000,
+                                     "gainDb": -24, "fadeInMs": 0, "fadeOutMs": 0}
+        self.assert_invalid("环境声不能与背景音乐使用同一素材")
+
+    def test_v1_rejects_ambience_and_unknown_fields_are_refused(self):
+        self.add_ambience()
+        self.document["schemaVersion"] = 1
+        self.assert_invalid("V1 不接受背景音乐或环境声字段")
+        self.document["schemaVersion"] = 2
+        self.document["ambience"]["ducking"] = False
+        self.assert_invalid("缺少字段或包含未支持字段")
+
+    def test_ambience_gain_and_fades_are_strict(self):
+        self.add_ambience()
+        self.project()
+        self.document["ambience"]["gainDb"] = 1
+        self.assert_invalid("环境声音量超出范围")
+        self.document["ambience"]["gainDb"] = -24
+        self.document["ambience"].update(fadeInMs=1500, fadeOutMs=501)
+        self.assert_invalid("环境声淡入淡出总时长不能超过选区")
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe") and FONT.is_file(), "需要 FFmpeg 与中文字体")
+class AmbienceNativeTest(MusicFixture, unittest.TestCase):
+    """环境声与背景音乐同时进入真实编码，解码后核对两路行为不同。"""
+
+    def run_render(self, name):
+        self.project()
+        return render(self.input, self.root, self.root / name, FONT, timeout=60)
+
+    def spectrum(self, name, start, length):
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(self.root / name / "video.mp4"),
+                              "-ss", str(start), "-t", str(length), "-vn", "-ar", "48000", "-ac", "1", "-f", "f32le", "pipe:1"],
+                             check=True, capture_output=True, timeout=15).stdout
+        values = np.frombuffer(raw, dtype="<f4")
+        spectrum = np.abs(np.fft.rfft(values * np.hanning(len(values))))
+        return lambda hz: float(spectrum[round(hz * len(values) / 48000)])
+
+    def test_real_ambience_survives_encoding_while_music_ducks(self):
+        write_wave(self.root / "ambience.wav", 4, 220)
+        self.document["assets"].append({"id": "ambience", "path": "ambience.wav", "mime": "audio/wav",
+                                        "sha256": digest(self.root / "ambience.wav")})
+        self.document["ambience"] = {"assetId": "ambience", "sourceStartMs": 0, "sourceEndMs": 2000,
+                                     "gainDb": -24, "fadeInMs": 0, "fadeOutMs": 0}
+        self.document["backgroundMusic"].update(sourceStartMs=0, sourceEndMs=2000, ducking=True)
+        self.add_voice()
+        result = self.run_render("ambience-mix")
+        self.assertEqual(2000, result["durationMs"])
+        self.assertTrue(result["media"]["fullDecodePassed"])
+        # 旁白占 0.5–1.5 秒，比较有对白与无对白两个窗口。
+        speaking, quiet = self.spectrum("ambience-mix", .6, .3), self.spectrum("ambience-mix", 1.6, .3)
+        self.assertGreater(speaking(220), quiet(220) * .7)
+        self.assertLess(speaking(220), quiet(220) * 1.3)
+        self.assertLess(speaking(660), quiet(660) * .6)
+
+
 if __name__ == "__main__":
     unittest.main()

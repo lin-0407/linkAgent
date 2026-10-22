@@ -190,12 +190,13 @@ public class StoryboardCompiler {
             add(issues, null, "TARGET_DURATION_MISMATCH", "场景总时长必须与用户目标时长一致，最多允许一帧量化误差");
         if (cues > 200) add(issues, null, "CUES_LIMIT", "整片最多支持 200 条真实字幕");
         String musicId = inspectMusic(brief.path("backgroundMusic"), assets, usedAssets, frameCount, issues);
+        String ambienceId = inspectAmbience(brief.path("ambience"), assets, usedAssets, frameCount, issues, musicId);
         long total = 0;
         for (String id : usedAssets) {
             Asset asset = assets.get(id);
             if (PLACEHOLDER_ID.equals(id)) add(issues, null, "ASSET_ID_RESERVED", "该素材身份为内部无画面占位保留标识");
             total += asset.bytes();
-            long limit = id.equals(musicId) && "MUSIC".equals(asset.kind()) ? MUSIC_LIMIT : SINGLE_LIMIT;
+            long limit = (id.equals(musicId) || id.equals(ambienceId)) && "MUSIC".equals(asset.kind()) ? MUSIC_LIMIT : SINGLE_LIMIT;
             if (!identifier(id) || asset.bytes() <= 0 || asset.bytes() > limit || asset.sha256() == null || !asset.sha256().matches("[0-9a-f]{64}")
                     || asset.bucketName() == null || asset.bucketName().isBlank() || asset.objectKey() == null || asset.objectKey().isBlank())
                 add(issues, null, "ASSET_RENDER_LIMIT", "引用素材须有可靠摘要；背景音乐不超过 64 MiB，其他素材不超过 32 MiB，请先裁剪或压缩后重新导入");
@@ -235,6 +236,41 @@ public class StoryboardCompiler {
                 || (long)fadeIn.asInt() + fadeOut.asInt() > (range ? end.asLong() - start.asLong() : 0)
                 || !music.path("ducking").isBoolean())
             add(issues, null, "BGM_MIX_INVALID", "背景音乐音量须为 -36 至 0 dB，单项淡入淡出不超过 10 秒且总长不得超过区间，压低设置须明确");
+        return id;
+    }
+
+    /** 环境声只做独立音量铺底，不带压低开关；与背景音乐共用素材类型但必须是不同素材。 */
+    private String inspectAmbience(JsonNode ambience, Map<String, Asset> assets, Set<String> used, long frames,
+            List<Problem> issues, String musicId) {
+        if (ambience.isMissingNode() || ambience.isNull()) return null;
+        String id = ambience.path("assetId").asText();
+        Asset asset = assets.get(id);
+        if (!ambience.isObject() || !identifier(id) || asset == null || !"MUSIC".equals(asset.kind()) || !"audio/wav".equals(asset.contentType())) {
+            add(issues, null, "AMB_MISSING", "环境声须引用已冻结的长音频 WAV 素材，不能与背景音乐混用同一素材"); return id;
+        }
+        if (id.equals(musicId)) add(issues, null, "AMB_DUPLICATE_SOURCE", "环境声与背景音乐不能引用同一素材");
+        used.add(id);
+        JsonNode track = stream(asset, "audio");
+        double trackDuration = streamDuration(asset, "audio"), formatDuration = asset.metadata() == null ? 0
+                : number(asset.metadata().path("normalized").path("format").path("duration"), 0);
+        double actualDuration = trackDuration > 0 && formatDuration > 0 ? Math.min(trackDuration, formatDuration)
+                : Math.max(trackDuration, formatDuration);
+        if (!"pcm_s16le".equals(track.path("codec_name").asText()) || track.path("channels").asInt() != 2
+                || track.path("sample_rate").asInt() != 48000 || actualDuration <= 0 || actualDuration > 1200.001)
+            add(issues, null, "AMB_FORMAT_INVALID", "环境声需要真实 48 kHz 立体声 PCM16 WAV 及可靠时长");
+        JsonNode start = ambience.path("sourceInMs"), end = ambience.path("sourceOutMs");
+        boolean range = start.isIntegralNumber() && start.canConvertToLong() && end.isIntegralNumber() && end.canConvertToLong()
+                && start.asLong() >= 0 && end.asLong() > start.asLong() && end.asLong() <= 1200000;
+        if (!range || Math.abs((end.asLong() - start.asLong()) - frames * 1000.0 / FPS) > 1000.0 / FPS + .000001)
+            add(issues, null, "AMB_DURATION_MISMATCH", "环境声区间须与全片帧长一致，最多一帧误差，不会自动循环、变速或补齐");
+        if (range && end.asLong() > actualDuration * 1000 + .001)
+            add(issues, null, "AMB_OUT_OF_RANGE", "环境声区间超过素材实际时长");
+        JsonNode gain = ambience.path("gainDb"), fadeIn = ambience.path("fadeInMs"), fadeOut = ambience.path("fadeOutMs");
+        if (!gain.isNumber() || !Double.isFinite(gain.asDouble()) || gain.asDouble() < -36 || gain.asDouble() > 0
+                || !fadeIn.isIntegralNumber() || !fadeIn.canConvertToInt() || fadeIn.asInt() < 0 || fadeIn.asInt() > 10000
+                || !fadeOut.isIntegralNumber() || !fadeOut.canConvertToInt() || fadeOut.asInt() < 0 || fadeOut.asInt() > 10000
+                || (long)fadeIn.asInt() + fadeOut.asInt() > (range ? end.asLong() - start.asLong() : 0))
+            add(issues, null, "AMB_MIX_INVALID", "环境声音量须为 -36 至 0 dB，单项淡入淡出不超过 10 秒且总长不得超过区间");
         return id;
     }
 
@@ -292,6 +328,16 @@ public class StoryboardCompiler {
             ObjectNode outputMusic = (ObjectNode)document.path("backgroundMusic");
             outputMusic.put("fadeInMs", music.path("fadeInMs").asInt()).put("fadeOutMs", music.path("fadeOutMs").asInt())
                     .put("ducking", music.path("ducking").asBoolean());
+        }
+        JsonNode ambience = brief.path("ambience");
+        if (ambience.isObject()) {
+            String ambienceId = ambience.path("assetId").asText(); used.add(ambienceId);
+            document.putObject("ambience").put("assetId", ambienceId)
+                    .put("sourceStartMs", ambience.path("sourceInMs").asLong())
+                    .put("sourceEndMs", ambience.path("sourceOutMs").asLong())
+                    .put("gainDb", ambience.path("gainDb").asDouble())
+                    .put("fadeInMs", ambience.path("fadeInMs").asInt())
+                    .put("fadeOutMs", ambience.path("fadeOutMs").asInt());
         }
         for (String id : used) {
             Asset asset = available.get(id);

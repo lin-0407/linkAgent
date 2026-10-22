@@ -46,6 +46,16 @@ public class StoryboardPersistence {
             if(music.sourceOutMs()<=music.sourceInMs() || (long)music.fadeInMs()+music.fadeOutMs()>music.sourceOutMs()-music.sourceInMs())
                 throw conflict("背景音乐截取范围或淡入淡出时长无效");
         }
+        if(input.ambience()!=null){
+            var ambience=input.ambience();
+            if(selected.stream().noneMatch(a->a.assetId().equals(ambience.assetId()) && "MUSIC".equals(a.kind())))
+                throw conflict("环境声须选择本简报内已准备完成的长音频素材");
+            if(ambience.sourceOutMs()<=ambience.sourceInMs()
+                    || (long)ambience.fadeInMs()+ambience.fadeOutMs()>ambience.sourceOutMs()-ambience.sourceInMs())
+                throw conflict("环境声截取范围或淡入淡出时长无效");
+            if(input.backgroundMusic()!=null && input.backgroundMusic().assetId().equals(ambience.assetId()))
+                throw conflict("环境声与背景音乐不能引用同一素材，请分别选择");
+        }
         var document=json.valueToTree(input);((com.fasterxml.jackson.databind.node.ObjectNode)document).remove("expectedWorkspaceRevision");
         var source=json.createObjectNode();var materials=source.putArray("materials");
         for(var m:tasks.listMaterialsByTaskId(task)) if(m.getContent()!=null && !m.getContent().isBlank())

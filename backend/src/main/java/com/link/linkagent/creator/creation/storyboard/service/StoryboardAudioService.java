@@ -129,6 +129,18 @@ public class StoryboardAudioService {
                 throw conflict("背景音乐淡入淡出总长超过新的音乐区间");
             ((ObjectNode)music).put("sourceOutMs",end);
         }
+        JsonNode ambience=document.path("ambience");
+        if(ambience.isObject()) {
+            long start=ambience.path("sourceInMs").asLong(),end=start+target;
+            double available=audioDurationMs(assets.get(ambience.path("assetId").asText()));
+            if(available<=0)throw conflict("环境声素材缺少可靠时长，无法随总时长调整");
+            if(end>available+.001)
+                throw conflict("环境声区间需要重新选择：随总时长延展到 "+end+"ms 会超出素材实际时长");
+            if(end>1200000)throw conflict("环境声区间超过允许的最大 20 分钟");
+            if(ambience.path("fadeInMs").asLong()+ambience.path("fadeOutMs").asLong()>end-start)
+                throw conflict("环境声淡入淡出总长超过新的环境声区间");
+            ((ObjectNode)ambience).put("sourceOutMs",end);
+        }
         // 采纳必须不引入新问题；原有缺配音、缺字幕仍保留，由作者按其它提案继续补齐。
         var introduced=introducedProblems(boardId,brief,candidate,frozen,document,scenes);
         if(!introduced.isEmpty())
@@ -170,12 +182,10 @@ public class StoryboardAudioService {
                         applied.add(new AppliedAdjustment(scene.id(),scene.durationMs()>old.durationMs()
                                 ?"EXTEND_SCENE":"SHORTEN_SCENE",old.durationMs(),scene.durationMs()));
                 }
-                JsonNode oldMusic=codec.read(persistence.brief(task,owner,parent.briefId()).documentJson()).path("backgroundMusic");
-                JsonNode newMusic=codec.read(brief.documentJson()).path("backgroundMusic");
-                if(oldMusic.isObject() && newMusic.isObject()
-                        && oldMusic.path("sourceOutMs").asLong()!=newMusic.path("sourceOutMs").asLong())
-                    notes.add("背景音乐区间终点已随总时长从 "+oldMusic.path("sourceOutMs").asLong()
-                            +"ms 调整为 "+newMusic.path("sourceOutMs").asLong()+"ms");
+                JsonNode oldBrief=codec.read(persistence.brief(task,owner,parent.briefId()).documentJson());
+                JsonNode newBrief=codec.read(brief.documentJson());
+                notes.addAll(rangeNotes("背景音乐",oldBrief.path("backgroundMusic"),newBrief.path("backgroundMusic")));
+                notes.addAll(rangeNotes("环境声",oldBrief.path("ambience"),newBrief.path("ambience")));
             }
         }
         return new TimelineApplyResult(view(saved),brief.revision(),target,List.copyOf(applied),List.copyOf(notes));
@@ -187,6 +197,13 @@ public class StoryboardAudioService {
         return new BoardView(board.storyboardId(),board.revision(),board.briefId(),board.parentStoryboardId(),
                 board.runId(),board.documentHash(),document,
                 compiler.check(board.storyboardId(),codec.read(brief.documentJson()),candidate,persistence.frozen(board)));
+    }
+
+    private List<String> rangeNotes(String label,JsonNode before,JsonNode after) {
+        if(!before.isObject() || !after.isObject())return List.of();
+        long oldEnd=before.path("sourceOutMs").asLong(),newEnd=after.path("sourceOutMs").asLong();
+        if(oldEnd==newEnd)return List.of();
+        return List.of(label+" 区间终点已随总时长从 "+oldEnd+"ms 调整为 "+newEnd+"ms");
     }
 
     /** 决策依据来自真实媒体；这里只读已冻结素材的规范化探测结果，不重新解码。 */
@@ -254,11 +271,12 @@ public class StoryboardAudioService {
             proposals.add(new TimingProposal(null,"CONFIRM_TOTAL_DURATION","场景总帧长与简报目标不一致，请选择调整场景或创建新简报确认总时长",total));
         // 音乐与对白共用全片时间线；不足时提出问题，不用循环或读取选区外音频补时。
         compiler.check(boardId,document,candidate,frozen).problems().stream()
-                .filter(p->p.code().startsWith("BGM_") || "TTS_TEXT_MISMATCH".equals(p.code()) || "TTS_TEXT_MISSING".equals(p.code()))
+                .filter(p->p.code().startsWith("BGM_") || p.code().startsWith("AMB_")
+                        || "TTS_TEXT_MISMATCH".equals(p.code()) || "TTS_TEXT_MISSING".equals(p.code()))
                 .forEach(p->{
-                    boolean bgm=p.code().startsWith("BGM_");
-                    proposals.add(new TimingProposal(bgm?null:p.sceneId(),p.code(),
-                            bgm?p.message()+"；请重新选择音乐区间、补充素材或明确调整全片时长":p.message(),null));
+                    boolean bed=p.code().startsWith("BGM_") || p.code().startsWith("AMB_");
+                    proposals.add(new TimingProposal(bed?null:p.sceneId(),p.code(),
+                            bed?p.message()+"；请重新选择区间、补充素材或明确调整全片时长":p.message(),null));
                 });
         return new TimingReport(boardId,brief.briefId(),target,total,total-target,List.copyOf(result),List.copyOf(proposals),!proposals.isEmpty());
     }

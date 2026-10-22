@@ -255,6 +255,59 @@ class StoryboardCompilerTest {
                 .extracting(Problem::code).contains("NARRATION_ASSET_GENERATED");
     }
 
+    @Test void ambienceIsAnIndependentBedWithItsOwnVolumeAndNoDuckingField() {
+        var document = compiler.compile("board", ambienceBrief(2000, 500, 2500), silent(2000),
+                List.of(music(4, 1000), ambience(4)), "run", "attempt");
+        assertThat(document.path("ambience").path("assetId").asText()).isEqualTo("ambience");
+        assertThat(document.path("ambience").path("sourceStartMs").asLong()).isEqualTo(500);
+        assertThat(document.path("ambience").path("sourceEndMs").asLong()).isEqualTo(2500);
+        assertThat(document.path("ambience").path("gainDb").asDouble()).isEqualTo(-24.0);
+        // 环境声没有压低开关：它不是配乐，不随对白起伏。
+        assertThat(document.path("ambience").has("ducking")).isFalse();
+        assertThat(document.path("backgroundMusic").isMissingNode()).isTrue();
+        assertThat(document.path("assets")).hasSize(1);
+    }
+
+    @Test void ambienceMustMatchTheWholeFilmAndStayInsideRealSource() {
+        assertThat(compiler.check(ambienceBrief(2000, 0, 1000), silent(2000), List.of(ambience(4))).problems())
+                .extracting(Problem::code).contains("AMB_DURATION_MISMATCH");
+        assertThat(compiler.check(ambienceBrief(2000, 0, 2000), silent(2000), List.of(ambience(1.5))).problems())
+                .extracting(Problem::code).contains("AMB_OUT_OF_RANGE");
+        assertThat(compiler.check(ambienceBrief(2000, 0, 2000), silent(2000), List.of()).problems())
+                .extracting(Problem::code).contains("AMB_MISSING");
+        // 环境声必须是长音频素材，不能拿用户录音或图片顶替。
+        assertThat(compiler.check(ambienceBrief(2000, 0, 2000), silent(2000), List.of(voice(4))).problems())
+                .extracting(Problem::code).contains("AMB_MISSING");
+    }
+
+    @Test void ambienceAndBackgroundMusicCannotShareOneSource() {
+        var brief = ambienceBrief(2000, 0, 2000);
+        ((ObjectNode)brief.path("ambience")).put("assetId", "music");
+        brief.putObject("backgroundMusic").put("assetId", "music").put("sourceInMs", 0).put("sourceOutMs", 2000)
+                .put("gainDb", -12).put("fadeInMs", 0).put("fadeOutMs", 0).put("ducking", true);
+        assertThat(compiler.check(brief, silent(2000), List.of(music(4, 1000))).problems())
+                .extracting(Problem::code).contains("AMB_DUPLICATE_SOURCE");
+    }
+
+    @ParameterizedTest @ValueSource(strings={"gain", "fade", "fractional", "negative"})
+    void invalidAmbienceMixAndRangeAreExplicitProblems(String invalid) {
+        var brief = ambienceBrief(2000, 0, 2000); var ambience = (ObjectNode)brief.path("ambience");
+        switch (invalid) {
+            case "gain" -> ambience.put("gainDb", .5);
+            case "fade" -> ambience.put("fadeInMs", 1500).put("fadeOutMs", 501);
+            case "fractional" -> ambience.put("sourceInMs", .1);
+            default -> ambience.put("sourceInMs", -1);
+        }
+        assertThat(compiler.check(brief, silent(2000), List.of(ambience(4))).problems())
+                .extracting(Problem::code).contains("AMB_MIX_INVALID");
+    }
+
+    @Test void ambienceUsesTheSameSixtyFourMibLongAudioRole() {
+        assertThat(compiler.check(ambienceBrief(2000, 0, 2000), silent(2000), List.of(ambience(4, 64L * 1024 * 1024))).renderable()).isTrue();
+        assertThat(compiler.check(ambienceBrief(2000, 0, 2000), silent(2000), List.of(ambience(4, 64L * 1024 * 1024 + 1))).problems())
+                .extracting(Problem::code).contains("ASSET_RENDER_LIMIT");
+    }
+
     Candidate silent(long duration) { return new Candidate(List.of(scene("silent", "TITLE_CARD", duration, null, null, null, "NO_DIALOGUE", null, List.of()))); }
     Asset ttsVoice(String text, double seconds) {
         var voice = voice(seconds);
@@ -267,6 +320,18 @@ class StoryboardCompilerTest {
     ObjectNode musicBrief(long duration, long start, long end) {
         var brief = brief(duration); brief.putObject("backgroundMusic").put("assetId", "music").put("sourceInMs", start).put("sourceOutMs", end)
                 .put("gainDb", -12).put("fadeInMs", 100).put("fadeOutMs", 200).put("ducking", true); return brief;
+    }
+    ObjectNode ambienceBrief(long duration, long start, long end) {
+        var brief = brief(duration);
+        brief.putObject("ambience").put("assetId", "ambience").put("sourceInMs", start).put("sourceOutMs", end)
+                .put("gainDb", -24).put("fadeInMs", 100).put("fadeOutMs", 200);
+        return brief;
+    }
+    Asset ambience(double seconds) { return ambience(seconds, 4000); }
+    Asset ambience(double seconds, long bytes) {
+        var voice = voice(seconds);
+        return new Asset("ambience", "MUSIC", voice.bucketName(), "normalized/ambience.wav",
+                "e".repeat(64), bytes, "audio/wav", voice.metadata());
     }
     Asset music(double seconds, long bytes) {
         var voice = voice(seconds);

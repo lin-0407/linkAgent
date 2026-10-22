@@ -247,6 +247,60 @@ class StoryboardCompilerNativeTest {
         files.discard(request);
     }
 
+    @Test void realAmbienceKeepsItsLevelWhileMusicDucksUnderNarration() throws Exception {
+        Path source = Files.createDirectory(root.resolve("ambience-source"));
+        Path voice = source.resolve("voice.wav"), music = source.resolve("music.wav"), bed = source.resolve("ambience.wav");
+        command("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000:duration=0.9",
+                "-c:a", "pcm_s16le", "-ac", "2", "-y", voice.toString());
+        command("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=4",
+                "-c:a", "pcm_s16le", "-ac", "2", "-y", music.toString());
+        command("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000:duration=4",
+                "-c:a", "pcm_s16le", "-ac", "2", "-y", bed.toString());
+        Asset narration = asset("voice", "NARRATION", "audio/wav", voice), bgm = asset("music", "MUSIC", "audio/wav", music),
+                ambience = asset("ambience", "MUSIC", "audio/wav", bed);
+        List<Asset> assets = List.of(narration, bgm, ambience);
+        var scenes = List.of(StoryboardCompilerTest.scene("narrated", "TITLE_CARD", 3000, null, null, null,
+                "NARRATION", "voice", List.of(new Cue(0, 900, "环境声与压低对白测试"))));
+        ObjectNode brief = json.createObjectNode().put("targetDurationMs", 3000).put("dialogueMode", "USER_NARRATION");
+        brief.putObject("backgroundMusic").put("assetId", "music").put("sourceInMs", 0).put("sourceOutMs", 3000)
+                .put("gainDb", -6).put("fadeInMs", 0).put("fadeOutMs", 0).put("ducking", true);
+        brief.putObject("ambience").put("assetId", "ambience").put("sourceInMs", 0).put("sourceOutMs", 3000)
+                .put("gainDb", -24).put("fadeInMs", 0).put("fadeOutMs", 0);
+        var project = new StoryboardCompiler(json).compile("ambience-board", brief, new Candidate(scenes), assets,
+                "ambience-run", "source-attempt");
+        assertThat(project.path("ambience").path("gainDb").asDouble()).isEqualTo(-24.0);
+        assertThat(project.path("ambience").has("ducking")).isFalse();
+        var storage = mock(ObjectStorageService.class);
+        Map<String, Path> objects = Map.of(narration.objectKey(), voice, bgm.objectKey(), music, ambience.objectKey(), bed);
+        when(storage.headObject(eq("persisted-native-bucket"), anyString())).thenAnswer(i ->
+                new StoredObjectMetadata(Files.size(objects.get(i.getArgument(1, String.class))), "application/octet-stream", "etag"));
+        doAnswer(i -> { Files.copy(objects.get(i.getArgument(1, String.class)), i.getArgument(2, Path.class)); return null; })
+                .when(storage).downloadObject(eq("persisted-native-bucket"), anyString(), any(Path.class), any());
+        var properties = new FixedProjectRendererProperties(); properties.setEnabled(true);
+        properties.setWorkRoot(root.resolve("ambience-work").toString());
+        properties.setModuleRoot(System.getenv("LINKAGENT_RENDERER_MODULE_ROOT")); properties.setPythonPath("python");
+        var files = new StoryboardProjectFiles(properties, storage, json);
+        var request = files.materialize(project, assets, () -> false);
+        var output = new FixedProjectRenderService(properties, json).render(request, () -> false);
+        assertThat(output.durationMs()).isEqualTo(3000);
+        assertThat(output.frameCount()).isEqualTo(90);
+        Path decoded = root.resolve("ambience-decoded.pcm");
+        command("ffmpeg", "-v", "error", "-nostdin", "-i", output.files().get("video.mp4").path().toString(),
+                "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "s16le", "-y", decoded.toString());
+        byte[] audio = Files.readAllBytes(decoded);
+        // 0.1–0.4 秒有旁白，1.5–1.8 秒没有：环境声两段一致，背景音乐在后一段恢复。
+        double quietBed = amplitude(audio, .1, .4, 220), laterBed = amplitude(audio, 1.5, 1.8, 220);
+        assertThat(quietBed).isGreaterThan(.002);
+        assertThat(laterBed).isCloseTo(quietBed, org.assertj.core.data.Percentage.withPercentage(25));
+        assertThat(amplitude(audio, 1.5, 1.8, 440)).isGreaterThan(amplitude(audio, .1, .4, 440) * 1.5);
+        assertThat(amplitude(audio, .1, .4, 660)).isGreaterThan(.02);
+        assertThat(json.readTree(output.files().get("manifest.json").path().toFile())
+                .path("media").path("fullDecodePassed").asBoolean()).isTrue();
+        System.out.println("S4_AMBIENCE_NATIVE_OK frames=90 bedQuiet=" + quietBed + " bedLater=" + laterBed
+                + " musicRecovers=true providerCalled=false");
+        files.discard(request);
+    }
+
     private double amplitude(byte[] pcm, double startSeconds, double endSeconds, int frequency) {
         int start = (int)Math.round(startSeconds * 48000), end = (int)Math.round(endSeconds * 48000);
         var samples = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN); double sine = 0, cosine = 0;

@@ -114,9 +114,10 @@ class Project:
 
     @property
     def expects_audio(self):
-        return self.document.get("backgroundMusic") is not None or any(
-            scene["voice"] is not None or scene.get("clip", {}).get("audioMode", "MUTE") != "MUTE"
-            for scene in self.document["scenes"])
+        return (self.document.get("backgroundMusic") is not None
+                or self.document.get("ambience") is not None
+                or any(scene["voice"] is not None or scene.get("clip", {}).get("audioMode", "MUTE") != "MUTE"
+                       for scene in self.document["scenes"]))
 
 
 def load_project(input_path, work_root):
@@ -131,10 +132,11 @@ def load_project(input_path, work_root):
     except (ValueError, RecursionError) as error:
         raise RenderError("INVALID_INPUT", "JSON 无效或层级过深") from error
     fields(document, ("schemaVersion", "runId", "attemptId", "storyboardId", "seed", "inputHash",
-                      "video", "assets", "scenes", "subtitles"), ("backgroundMusic",))
+                      "video", "assets", "scenes", "subtitles"), ("backgroundMusic", "ambience"))
     require(type(document["schemaVersion"]) is int and document["schemaVersion"] in (1, 2), "不支持此工程版本")
     version = document["schemaVersion"]
-    require(version == 2 or "backgroundMusic" not in document, "V1 不接受背景音乐字段")
+    require(version == 2 or ("backgroundMusic" not in document and "ambience" not in document),
+            "V1 不接受背景音乐或环境声字段")
     for name in ("runId", "attemptId", "storyboardId"):
         identifier(document[name])
     integer(document["seed"], 0, 2**31 - 1)
@@ -166,6 +168,21 @@ def load_project(input_path, work_root):
         require(music["fadeInMs"] + music["fadeOutMs"] <= finish - begin,
                 "音乐淡入淡出总时长不能超过选区")
         require(type(music["ducking"]) is bool, "音乐压低开关必须为布尔值")
+    ambience = document.get("ambience")
+    ambience_id = None
+    if ambience is not None:
+        fields(ambience, ("assetId", "sourceStartMs", "sourceEndMs", "gainDb", "fadeInMs", "fadeOutMs"))
+        ambience_id = identifier(ambience["assetId"])
+        begin, finish = integer(ambience["sourceStartMs"], 0, 1200000), integer(ambience["sourceEndMs"], 1, 1200000)
+        require(finish > begin and abs((finish - begin) * fps - count * 1000) <= 1000,
+                "环境声选区时长须对应整片，最多允许一帧误差，不循环或变速补齐")
+        require(type(ambience["gainDb"]) in (int, float) and math.isfinite(ambience["gainDb"])
+                and -36 <= ambience["gainDb"] <= 0, "环境声音量超出范围")
+        integer(ambience["fadeInMs"], 0, 10000)
+        integer(ambience["fadeOutMs"], 0, 10000)
+        require(ambience["fadeInMs"] + ambience["fadeOutMs"] <= finish - begin,
+                "环境声淡入淡出总时长不能超过选区")
+        require(music_id is None or ambience_id != music_id, "环境声不能与背景音乐使用同一素材")
     require(type(document["assets"]) is list and 0 < len(document["assets"]) <= 64, "资产数量不正确")
     assets, audio_info, video_assets = {}, {}, set()
     total_size = 0
@@ -181,12 +198,13 @@ def load_project(input_path, work_root):
         require(file.is_file(), "本地资产不存在", "ASSET_MISSING")
         size = file.stat().st_size
         total_size += size
-        require(0 < size <= (64 if key == music_id else 32) * 1024**2
+        require(0 < size <= (64 if key in (music_id, ambience_id) else 32) * 1024**2
                 and total_size <= 256 * 1024**2, "资产文件超出大小限制")
         require(type(asset["sha256"]) is str and re.fullmatch("[0-9a-f]{64}", asset["sha256"]), "资产摘要格式不正确")
         require(digest(file) == asset["sha256"], "资产摘要不匹配", "ASSET_HASH_MISMATCH")
         mime = asset["mime"]
         require(key != music_id or mime == "audio/wav", "背景音乐须引用真实 PCM16 WAV")
+        require(key != ambience_id or mime == "audio/wav", "环境声须引用真实 PCM16 WAV")
         if mime == "audio/wav":
             require(file.suffix.lower() == ".wav", "音频扩展名与类型不匹配")
             try:
@@ -194,7 +212,7 @@ def load_project(input_path, work_root):
                     rate, channels, samples = audio.getframerate(), audio.getnchannels(), audio.getnframes()
                     require(audio.getsampwidth() == 2 and audio.getcomptype() == "NONE"
                             and channels in (1, 2) and 8000 <= rate <= 48000
-                            and 0 < samples <= rate * (1200 if key == music_id else 30),
+                            and 0 < samples <= rate * (1200 if key in (music_id, ambience_id) else 30),
                             "音频须为时长受控的 16 位 PCM WAV，旁白不超过 30 秒")
                     # 长音乐只逐块验收真实字节，不能把整段源 WAV 一次载入内存。
                     remaining = samples
@@ -224,6 +242,11 @@ def load_project(input_path, work_root):
         rate, _, samples = audio_info[music_id]
         require(music["sourceEndMs"] * rate <= samples * 1000,
                 "音乐选区超过源音频实际范围，不能循环或补时", "MUSIC_OUT_OF_RANGE")
+    if ambience is not None:
+        require(ambience_id in audio_info, "环境声音频资产不存在")
+        rate, _, samples = audio_info[ambience_id]
+        require(ambience["sourceEndMs"] * rate <= samples * 1000,
+                "环境声选区超过源音频实际范围，不能循环或补时", "AMB_OUT_OF_RANGE")
     scenes, cursor, scene_ids, voice_windows = document["scenes"], 0, set(), {}
     require(type(scenes) is list and 0 < len(scenes) <= 48, "场景数量不正确")
     for scene in scenes:
