@@ -45,6 +45,13 @@ public class StoryboardController {
             @PathVariable @Pattern(regexp=ID) String storyboardId){
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(audio.timing(taskId,"default",storyboardId));
     }
+    @PostMapping("/storyboards/{storyboardId}/timeline:apply")
+    public ResponseEntity<TimelineApplyResult> applyTimeline(@PathVariable @Pattern(regexp=ID) String taskId,
+            @PathVariable @Pattern(regexp=ID) String storyboardId,
+            @RequestHeader("Idempotency-Key") @NotBlank @Size(max=128) String key,@RequestBody @Valid TimelineApply input){
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(audio.applyTimeline(taskId,"default",key,storyboardId,input));
+    }
     @PostMapping("/storyboards:generate")
     public ResponseEntity<Map<String,Object>> generate(@PathVariable @Pattern(regexp=ID) String taskId,@RequestHeader("Idempotency-Key") @NotBlank @Size(max=128) String key,@RequestBody @Valid Generate input){return ResponseEntity.accepted().cacheControl(CacheControl.noStore()).body(service.generate(taskId,"default",key,input));}
     @PostMapping("/storyboards:estimate")

@@ -54,6 +54,22 @@ class StoryboardControllerTest {
         }
         verifyNoInteractions(service);
     }
+    @Test void timelineApplyNeedsRevisionAndAnAcceptedProposalCode() throws Exception {
+        String path="/api/creator/tasks/task-1/creation/storyboards/board-1/timeline:apply";
+        // 缺少工作区修订或使用需要重录/补素材的提案代码时，不能到达服务层。
+        mvc.perform(post(path).header("Idempotency-Key","t-1").contentType("application/json")
+                .content("{\"adjustments\":[{\"sceneId\":\"scene-1\",\"proposalCode\":\"EXTEND_SCENE\",\"durationMs\":3000}]}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post(path).header("Idempotency-Key","t-1").contentType("application/json")
+                .content("{\"expectedWorkspaceRevision\":2,\"adjustments\":[{\"sceneId\":\"scene-1\",\"proposalCode\":\"RECORD_AGAIN\",\"durationMs\":3000}]}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(audio);
+        mvc.perform(post(path).header("Idempotency-Key","t-1").contentType("application/json")
+                .content("{\"expectedWorkspaceRevision\":2,\"adjustments\":[{\"sceneId\":\"scene-1\",\"proposalCode\":\"EXTEND_SCENE\",\"durationMs\":3000}]}"))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"));
+        verify(audio).applyTimeline(eq("task-1"),eq("default"),eq("t-1"),eq("board-1"),any(TimelineApply.class));
+    }
+
     @Test void subtitleImportNeedsRevisionAndReturnsNewBoardWhileTimingIsReadOnly() throws Exception {
         var saved=mock(Board.class);when(saved.storyboardId()).thenReturn("board-2");
         when(audio.importSubtitles(anyString(),anyString(),anyString(),anyString(),any())).thenReturn(saved);

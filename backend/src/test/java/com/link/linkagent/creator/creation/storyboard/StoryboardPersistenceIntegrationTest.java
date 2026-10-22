@@ -17,7 +17,7 @@ import com.link.linkagent.creator.creation.storyboard.service.StoryboardTextGene
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardWorker;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardAudioService;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardCompiler;
-import com.link.linkagent.creator.creation.storyboard.model.StoryboardAudioModels.SubtitleImport;
+import com.link.linkagent.creator.creation.storyboard.model.StoryboardAudioModels.*;
 import com.link.linkagent.creator.media.config.ObjectStorageProperties;
 import com.link.linkagent.creator.media.storage.ObjectStorageService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
@@ -829,6 +829,223 @@ class StoryboardPersistenceIntegrationTest {
         }
     }
 
+    @Test
+    void timelineApplyCreatesNewBriefAndBoardAndKeepsBothParents() {
+        String task = task("default");
+        String voice = audioAsset(task, "NARRATION", 3000, "c");
+        var brief = persistence.saveBrief(task, "default", "timeline-brief", new BriefInput(revision(task),
+                "时间线演示", "用户材料", "新手", 2000, "USER_NARRATION", "USER_PROVIDED", List.of(voice), "", null));
+        var scene = new Scene("scene-1", "TITLE_CARD", "开场", List.of("用户提供的内容"), "", 2000,
+                null, null, null, "CONTAIN", "NARRATION", voice,
+                List.of(new Cue(0, 3000, "真实录音字幕")), List.of("brief:user"));
+        var board = persistence.save(task, "default", "timeline-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(List.of(scene))));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+
+        var report = audio.timing(task, "default", board.storyboardId());
+        assertThat(report.scenes().getFirst().proposals()).extracting(TimingProposal::code).contains("EXTEND_SCENE");
+        assertThat(report.scenes().getFirst().proposals().getFirst().proposedDurationMs()).isEqualTo(3000);
+        long before = revision(task);
+        var result = audio.applyTimeline(task, "default", "timeline-key", board.storyboardId(),
+                new TimelineApply(before, List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3000))));
+
+        // 新简报记录新的用户意图，旧简报与旧故事板的原文必须原样保留。
+        assertThat(result.briefRevision()).isEqualTo(2);
+        assertThat(result.targetDurationMs()).isEqualTo(3000);
+        assertThat(result.applied()).containsExactly(new AppliedAdjustment("scene-1", "EXTEND_SCENE", 2000, 3000));
+        assertThat(result.board().check().renderable()).isTrue();
+        assertThat(mapper.brief(task, "default", brief.briefId()).orElseThrow().documentJson()).isEqualTo(brief.documentJson());
+        assertThat(mapper.board(task, "default", board.storyboardId()).orElseThrow().documentJson()).isEqualTo(board.documentJson());
+        var saved = mapper.board(task, "default", result.board().storyboardId()).orElseThrow();
+        assertThat(saved.parentStoryboardId()).isEqualTo(board.storyboardId());
+        assertThat(saved.briefId()).isNotEqualTo(brief.briefId());
+        assertThat(codec.candidate(codec.read(saved.documentJson()).path("candidate")).scenes().getFirst().durationMs())
+                .isEqualTo(3000);
+        assertThat(revision(task)).isEqualTo(before + 1);
+
+        // 同一幂等键重放返回同一版本，不重复写简报或故事板。
+        var replay = audio.applyTimeline(task, "default", "timeline-key", board.storyboardId(),
+                new TimelineApply(before, List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3000))));
+        assertThat(replay.board().storyboardId()).isEqualTo(result.board().storyboardId());
+        assertThat(count("creator_creation_brief", task)).isEqualTo(2);
+        assertThat(count("creator_creation_storyboard", task)).isEqualTo(2);
+    }
+
+    @Test
+    void timelineApplyMovesMusicSelectionWithTheNewTotalDuration() {
+        String task = task("default");
+        String first = audioAsset(task, "NARRATION", 3000, "c");
+        String second = audioAsset(task, "NARRATION", 3000, "d");
+        String music = audioAsset(task, "MUSIC", 8000, "e");
+        var bgm = new BackgroundMusic(music, 1000, 6000, cny("-18"), 500, 500, true);
+        var brief = persistence.saveBrief(task, "default", "music-timeline", new BriefInput(revision(task),
+                "音乐时间线", "用户材料", "新手", 5000, "USER_NARRATION", "USER_PROVIDED",
+                List.of(first, second, music), "", bgm));
+        var scenes = List.of(
+                new Scene("scene-1", "TITLE_CARD", "开场", List.of("第一段"), "", 2000, null, null, null,
+                        "CONTAIN", "NARRATION", first, List.of(new Cue(0, 3000, "第一段字幕")), List.of("brief:user")),
+                new Scene("scene-2", "TITLE_CARD", "结尾", List.of("第二段"), "", 3000, null, null, null,
+                        "CONTAIN", "NARRATION", second, List.of(new Cue(0, 3000, "第二段字幕")), List.of("brief:user")));
+        var board = persistence.save(task, "default", "music-timeline-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(scenes)));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+
+        var result = audio.applyTimeline(task, "default", "music-timeline-key", board.storyboardId(),
+                new TimelineApply(revision(task), List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3000))));
+
+        assertThat(result.targetDurationMs()).isEqualTo(6000);
+        assertThat(result.notes()).anyMatch(text -> text.contains("7000ms"));
+        var savedBrief = mapper.brief(task, "default", result.board().briefId()).orElseThrow();
+        assertThat(codec.read(savedBrief.documentJson()).path("backgroundMusic").path("sourceOutMs").asLong())
+                .isEqualTo(7000);
+        assertThat(result.board().check().renderable()).isTrue();
+        // 旧简报仍保留原来的音乐区间。
+        assertThat(codec.read(brief.documentJson()).path("backgroundMusic").path("sourceOutMs").asLong()).isEqualTo(6000);
+    }
+
+    @Test
+    void timelineApplyRefusesToStretchMusicBeyondItsRealDuration() {
+        String task = task("default");
+        String voice = audioAsset(task, "NARRATION", 7000, "c");
+        String music = audioAsset(task, "MUSIC", 6000, "d");
+        var bgm = new BackgroundMusic(music, 0, 5000, cny("-18"), 0, 0, false);
+        var brief = persistence.saveBrief(task, "default", "short-music", new BriefInput(revision(task),
+                "音乐不足", "用户材料", "新手", 5000, "USER_NARRATION", "USER_PROVIDED", List.of(voice, music), "", bgm));
+        var scene = new Scene("scene-1", "TITLE_CARD", "开场", List.of("用户提供的内容"), "", 5000,
+                null, null, null, "CONTAIN", "NARRATION", voice,
+                List.of(new Cue(0, 7000, "真实录音字幕")), List.of("brief:user"));
+        var board = persistence.save(task, "default", "short-music-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(List.of(scene))));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+        long before = revision(task);
+
+        assertThatThrownBy(() -> audio.applyTimeline(task, "default", "short-music-key", board.storyboardId(),
+                new TimelineApply(before, List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 7000)))))
+                .hasMessageContaining("背景音乐区间需要重新选择");
+        assertThat(count("creator_creation_brief", task)).isEqualTo(1);
+        assertThat(count("creator_creation_storyboard", task)).isEqualTo(1);
+        assertThat(revision(task)).isEqualTo(before);
+    }
+
+    @Test
+    void timelineApplyExtendsVideoSelectionTogetherWithTheScene() {
+        String task = task("default");
+        String video = videoAsset(task, 10000, "e");
+        String voice = audioAsset(task, "NARRATION", 3000, "f");
+        var brief = persistence.saveBrief(task, "default", "clip-timeline", new BriefInput(revision(task),
+                "片段时间线", "用户材料", "新手", 2000, "USER_NARRATION", "USER_PROVIDED", List.of(video, voice), "", null));
+        var scene = new Scene("scene-1", "VIDEO_CLIP", "片段", List.of(), "", 2000, video, 1000L, 3000L,
+                "COVER", "NARRATION", voice, List.of(new Cue(0, 3000, "片段配音字幕")), List.of("brief:user"));
+        var board = persistence.save(task, "default", "clip-timeline-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(List.of(scene))));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+
+        var result = audio.applyTimeline(task, "default", "clip-timeline-key", board.storyboardId(),
+                new TimelineApply(revision(task), List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3000))));
+
+        var saved = codec.candidate(codec.read(mapper.board(task, "default", result.board().storyboardId())
+                .orElseThrow().documentJson()).path("candidate")).scenes().getFirst();
+        assertThat(saved.durationMs()).isEqualTo(3000);
+        assertThat(saved.sourceInMs()).isEqualTo(1000);
+        assertThat(saved.sourceOutMs()).isEqualTo(4000);
+        assertThat(result.board().check().renderable()).isTrue();
+    }
+
+    @Test
+    void timelineApplyRejectsExtendingBeyondAvailableVideo() {
+        String task = task("default");
+        String video = videoAsset(task, 3000, "e");
+        String voice = audioAsset(task, "NARRATION", 3000, "f");
+        var brief = persistence.saveBrief(task, "default", "short-clip", new BriefInput(revision(task),
+                "片段不足", "用户材料", "新手", 2000, "USER_NARRATION", "USER_PROVIDED", List.of(video, voice), "", null));
+        var scene = new Scene("scene-1", "VIDEO_CLIP", "片段", List.of(), "", 2000, video, 1000L, 3000L,
+                "COVER", "NARRATION", voice, List.of(new Cue(0, 3000, "片段配音字幕")), List.of("brief:user"));
+        var board = persistence.save(task, "default", "short-clip-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(List.of(scene))));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+
+        // 画面只剩 0 ms 余量时只给补素材建议，不能凭时长提案延长。
+        assertThat(audio.timing(task, "default", board.storyboardId()).proposals())
+                .extracting(TimingProposal::code).contains("SUPPLY_MORE_VIDEO");
+        assertThatThrownBy(() -> audio.applyTimeline(task, "default", "short-clip-key", board.storyboardId(),
+                new TimelineApply(revision(task), List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3000)))))
+                .hasMessageContaining("当前不存在 EXTEND_SCENE 提案");
+        assertThat(count("creator_creation_storyboard", task)).isEqualTo(1);
+    }
+
+    @Test
+    void timelineApplyRefusesAStoryboardWhoseBriefIsNoLongerCurrent() {
+        String task = task("default");
+        String voice = audioAsset(task, "NARRATION", 3000, "c");
+        var brief = persistence.saveBrief(task, "default", "old-brief", new BriefInput(revision(task),
+                "旧简报", "用户材料", "新手", 2000, "USER_NARRATION", "USER_PROVIDED", List.of(voice), "", null));
+        var scene = new Scene("scene-1", "TITLE_CARD", "开场", List.of("用户提供的内容"), "", 2000,
+                null, null, null, "CONTAIN", "NARRATION", voice,
+                List.of(new Cue(0, 3000, "真实录音字幕")), List.of("brief:user"));
+        var board = persistence.save(task, "default", "old-brief-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(List.of(scene))));
+        persistence.saveBrief(task, "default", "new-brief", brief(revision(task), List.of()));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+
+        assertThatThrownBy(() -> audio.applyTimeline(task, "default", "old-brief-key", board.storyboardId(),
+                new TimelineApply(revision(task), List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3000)))))
+                .hasMessageContaining("当前简报已更新");
+        assertThat(count("creator_creation_brief", task)).isEqualTo(2);
+        assertThat(count("creator_creation_storyboard", task)).isEqualTo(1);
+    }
+
+    @Test
+    void timelineApplyStaysRenderableWhenTheNextSceneStartsOnAFractionalMillisecond() {
+        String task = task("default");
+        String first = audioAsset(task, "NARRATION", 3060, "c");
+        String second = audioAsset(task, "NARRATION", 1000, "d");
+        var brief = persistence.saveBrief(task, "default", "fraction-brief", new BriefInput(revision(task),
+                "帧边界时间线", "用户材料", "新手", 3000, "USER_NARRATION", "USER_PROVIDED",
+                List.of(first, second), "", null));
+        var scenes = List.of(
+                new Scene("scene-1", "TITLE_CARD", "开场", List.of("第一段"), "", 2000, null, null, null,
+                        "CONTAIN", "NARRATION", first, List.of(new Cue(0, 3060, "第一段字幕")), List.of("brief:user")),
+                new Scene("scene-2", "TITLE_CARD", "结尾", List.of("第二段"), "", 1000, null, null, null,
+                        "CONTAIN", "NARRATION", second, List.of(new Cue(0, 1000, "第二段字幕")), List.of("brief:user")));
+        var board = persistence.save(task, "default", "fraction-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(scenes)));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+
+        var report = audio.timing(task, "default", board.storyboardId());
+        assertThat(report.scenes().getFirst().proposals().getFirst().proposedDurationMs()).isEqualTo(3067);
+        // 92 帧的场景起点是 3066.67ms；第二段字幕结束在 4066.67ms 的片尾，不能被四舍五入成 4067 后误判越界。
+        var result = audio.applyTimeline(task, "default", "fraction-key", board.storyboardId(),
+                new TimelineApply(revision(task), List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3067))));
+
+        assertThat(result.targetDurationMs()).isEqualTo(4067);
+        assertThat(result.board().check().renderable()).isTrue();
+        assertThat(result.board().check().problems()).isEmpty();
+    }
+
+    @Test
+    void timelineApplyStillWorksWhenAnotherSceneIsNotPreparedYet() {
+        String task = task("default");
+        String first = audioAsset(task, "NARRATION", 3060, "c");
+        var brief = persistence.saveBrief(task, "default", "guard-brief", new BriefInput(revision(task),
+                "边界守卫", "用户材料", "新手", 3000, "USER_NARRATION", "USER_PROVIDED", List.of(first), "", null));
+        var scenes = List.of(
+                new Scene("scene-1", "TITLE_CARD", "开场", List.of("第一段"), "", 2000, null, null, null,
+                        "CONTAIN", "NARRATION", first, List.of(new Cue(0, 3060, "第一段字幕")), List.of("brief:user")),
+                // 第二段还没有真实录音；这是既有待准备状态，不是本次采纳引入的问题。
+                new Scene("scene-2", "TITLE_CARD", "结尾", List.of("第二段"), "第二段文稿", 1000, null, null, null,
+                        "CONTAIN", "NARRATION", null, List.of(), List.of("brief:user")));
+        var board = persistence.save(task, "default", "guard-board",
+                new Save(revision(task), brief.briefId(), null, new Candidate(scenes)));
+        var audio = new StoryboardAudioService(mapper, persistence, codec, new StoryboardCompiler(JSON), media, JSON);
+
+        var result = audio.applyTimeline(task, "default", "guard-key", board.storyboardId(),
+                new TimelineApply(revision(task), List.of(new TimelineAdjustment("scene-1", "EXTEND_SCENE", 3067))));
+
+        assertThat(result.applied()).hasSize(1);
+        assertThat(result.board().check().renderable()).isFalse();
+        assertThat(result.board().check().problems()).allMatch(problem -> "scene-2".equals(problem.sceneId()));
+    }
+
     private StoryboardWorker worker() {
         return new StoryboardWorker(mapper, runtime, persistence, generator, codec, JSON);
     }
@@ -879,6 +1096,18 @@ class StoryboardPersistenceIntegrationTest {
                 .put("sample_rate",48000).put("channels",2).put("duration",durationMs/1000.0).put("start_time",0);
         String objects=codec.write(List.of(new StoredFile("NORMALIZED",key,"audio/wav",durationMs*192+44,hashCharacter.repeat(64))));
         jdbc.update("UPDATE creator_creation_asset SET kind=?,content_type='audio/wav',metadata_json=?,objects_json=? WHERE asset_id=?",kind,codec.write(metadata),objects,id);
+        return id;
+    }
+
+    private static String videoAsset(String task,long durationMs,String hashCharacter) {
+        String id=asset(task,"default","fixture.mp4",hashCharacter);String key="fixtures/"+id+"/normalized.mp4";
+        var metadata=JSON.createObjectNode();var normalized=metadata.putObject("normalized");
+        normalized.putObject("format").put("duration",durationMs/1000.0);
+        normalized.putArray("streams").addObject().put("codec_type","video").put("codec_name","h264")
+                .put("duration",durationMs/1000.0).put("width",1280).put("height",720).put("start_time",0);
+        String objects=codec.write(List.of(new StoredFile("NORMALIZED",key,"video/mp4",durationMs*512,hashCharacter.repeat(64))));
+        jdbc.update("UPDATE creator_creation_asset SET kind='VIDEO_CLIP',content_type='video/mp4',metadata_json=?,objects_json=? WHERE asset_id=?",
+                codec.write(metadata),objects,id);
         return id;
     }
 

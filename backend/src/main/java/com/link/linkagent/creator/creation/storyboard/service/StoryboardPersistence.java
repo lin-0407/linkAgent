@@ -151,6 +151,35 @@ public class StoryboardPersistence {
         var board=new Board(boardId,brief.taskId(),brief.ownerId(),next(mapper.boardRevision(brief.taskId(),brief.ownerId())),brief.briefId(),parent,run,key,hash,codec.hash(doc),codec.write(doc),codec.write(frozen),null);
         mapper.insertBoard(board);for(var a:frozen)mapper.reference(boardId,a.assetId(),brief.taskId(),brief.ownerId());return mapper.board(brief.taskId(),brief.ownerId(),boardId).orElseThrow();
     }
+    /**
+     * 采纳时间线调整必须同时留下新的简报版本：目标时长属于用户意图，旧简报不能就地改写。
+     * 新故事板显式挂回父版本，历史工程、配音素材引用和旧简报原文都保留。
+     */
+    public Board saveTimeline(String task,String owner,String key,String requestHash,String boardId,
+            long expectedRevision,Candidate candidate,ObjectNode document,String timingSource,
+            Set<String> generatedVoiceAssets,List<Asset> frozen) {
+        if(candidate==null || document==null)throw conflict("时间线调整缺少场景或简报内容");
+        lock(task,owner);
+        var replay=mapper.boardByKey(task,owner,key);
+        if(replay.isPresent()){same(requestHash,replay.get().requestHash());return replay.get();}
+        idle(task,owner,expectedRevision);
+        var parent=mapper.board(task,owner,boardId).orElseThrow(()->conflict("故事板不存在或不属于本任务"));
+        var current=brief(task,owner,parent.briefId());
+        if(current.revision()!=mapper.briefRevision(task,owner))throw conflict("当前简报已更新，请使用最新简报的故事板调整时间线");
+        long target=document.path("targetDurationMs").asLong();
+        if(target<1000 || target>180000)throw conflict("调整后的总时长必须在 1 至 180 秒之间");
+        long frames=0;
+        for(var scene:candidate.scenes())frames+=Math.round(scene.durationMs()*30.0/1000);
+        if(Math.round(frames*1000.0/30)!=target)throw conflict("新简报目标时长与调整后场景帧长不一致");
+        String briefKey=key+"-brief";
+        if(briefKey.length()>128)throw conflict("时间线幂等键过长");
+        var nextBrief=new Brief(id(),task,owner,next(mapper.briefRevision(task,owner)),briefKey,requestHash,
+                codec.write(document),current.sourceJson(),null);
+        mapper.insertBrief(nextBrief);
+        var saved=saveBoard(nextBrief,candidate,frozen,key,requestHash,boardId,null,false,timingSource,generatedVoiceAssets);
+        bump(task,owner,expectedRevision);
+        return saved;
+    }
     public List<Asset> snapshotAssets(String task,String owner,List<String> ids) {
         if(new HashSet<>(ids).size()!=ids.size())throw conflict("素材选择不能重复");var result=new ArrayList<Asset>();
         for(String id:ids){var a=assets.require(task,owner,id);if(!"READY".equals(a.getStatus()))throw conflict("只可引用本任务已准备完成的素材");var file=assets.objects(a).stream().filter(f->"NORMALIZED".equals(f.role())).findFirst().orElseThrow(()->conflict("素材缺少工作文件"));result.add(new Asset(id,a.getKind(),a.getBucketName(),file.objectKey(),file.sha256(),file.bytes(),file.contentType(),codec.read(a.getMetadataJson())));}

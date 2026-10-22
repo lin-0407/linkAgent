@@ -170,15 +170,15 @@ public class StoryboardCompiler {
             if (scene.cues() == null) add(issues, sid, "CUES_INVALID", "字幕列表不能为空值");
             else {
                 long previous = 0;
+                // 全局时间必须用未取整的场景起点；用 round 后的起点会与未取整的片尾比较，产生最多 0.5ms 漂移。
+                double actualSceneStart = (frameCount - count) * 1000.0 / FPS, sceneEnd = frameCount * 1000.0 / FPS;
                 for (Cue cue : scene.cues()) {
                     cues++;
-                    double globalStart = Math.round((frameCount - count) * 1000.0 / FPS);
-                    double actualSceneStart = (frameCount - count) * 1000.0 / FPS;
                     if (cue == null || cue.startMs() < previous || cue.endMs() <= cue.startMs() || !text(cue.text(), 120)
-                            || cue.startMs() < Math.floor(audioStart) || cue.endMs() > Math.ceil(Math.min(audioDuration, duration))
-                            || globalStart + cue.startMs() < Math.floor(actualSceneStart + audioStart)
-                            || globalStart + cue.endMs() > Math.ceil(actualSceneStart + audioDuration)
-                            || globalStart + cue.endMs() > frameCount * 1000.0 / FPS
+                            || cue.startMs() < Math.floor(audioStart) || cue.endMs() > Math.ceil(Math.min(audioDuration, duration)) + .001
+                            || actualSceneStart + cue.startMs() < Math.floor(actualSceneStart + audioStart)
+                            || actualSceneStart + cue.endMs() > Math.ceil(actualSceneStart + audioDuration) + .001
+                            || actualSceneStart + cue.endMs() > sceneEnd + .001
                             || !("ORIGINAL".equals(audio) || "NARRATION".equals(audio) || "TTS".equals(audio)))
                         add(issues, sid, "CUE_OUT_OF_RANGE", "字幕须按顺序绑定当前真实音轨范围，不能重叠或超出场景");
                     if (cue != null) previous = cue.endMs();

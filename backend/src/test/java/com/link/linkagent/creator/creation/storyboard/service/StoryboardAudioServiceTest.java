@@ -170,8 +170,51 @@ class StoryboardAudioServiceTest {
         assertThat(service.timing("task","default","board").proposals()).extracting(TimingProposal::code).containsExactly("SUPPLY_MORE_VIDEO");
     }
 
-    private void configure(List<Scene> scenes,List<Asset> frozen,long target,String mode) {
-        candidate=new Candidate(scenes);assets=frozen;ObjectNode document=json.createObjectNode();document.set("candidate",json.valueToTree(candidate));
+    @Test void timelineApplyAcceptsOnlyTheExactMillisecondsOfARealProposal() {
+        configure(List.of(scene("s1",2000,"NARRATION","voice",List.of())),List.of(voice(3)),2000,"USER_NARRATION");
+        var report=service.timing("task","default","board");
+        assertThat(report.scenes().getFirst().proposals().getFirst().proposedDurationMs()).isEqualTo(3000);
+        assertThatThrownBy(()->service.applyTimeline("task","default","key","board",
+                new TimelineApply(0L,List.of(new TimelineAdjustment("s1","EXTEND_SCENE",2800)))))
+                .hasMessageContaining("采纳时长必须与当前时长提案给出的毫秒数一致");
+        assertThatThrownBy(()->service.applyTimeline("task","default","key","board",
+                new TimelineApply(0L,List.of(new TimelineAdjustment("s1","EXTEND_SCENE",3100)))))
+                .hasMessageContaining("采纳时长必须与当前时长提案给出的毫秒数一致");
+        assertThatThrownBy(()->service.applyTimeline("task","default","key","board",
+                new TimelineApply(0L,List.of(new TimelineAdjustment("s1","SHORTEN_SCENE",2000)))))
+                .hasMessageContaining("当前不存在 SHORTEN_SCENE 提案");
+        verify(persistence,never()).saveTimeline(anyString(),anyString(),anyString(),anyString(),anyString(),
+                anyLong(),any(),any(),anyString(),anySet(),anyList());
+    }
+
+    @Test void timelineApplyRejectsDuplicateScenesAndUnsupportedProposalCodes() {
+        configure(List.of(scene("s1",2000,"NARRATION","voice",List.of())),List.of(voice(3)),2000,"USER_NARRATION");
+        assertThatThrownBy(()->service.applyTimeline("task","default","key","board",
+                new TimelineApply(0L,List.of(new TimelineAdjustment("s1","EXTEND_SCENE",3000),
+                        new TimelineAdjustment("s1","EXTEND_SCENE",3000)))))
+                .hasMessageContaining("同一场景不能在一次请求中重复调整");
+        // RECORD_AGAIN/SUPPLY_MORE_VIDEO 需要重录或补素材，不能靠改时长自动满足。
+        assertThatThrownBy(()->service.applyTimeline("task","default","key","board",
+                new TimelineApply(0L,List.of(new TimelineAdjustment("s1","RECORD_AGAIN",2000)))))
+                .hasMessageContaining("故事板字段");
+        verify(persistence,never()).saveTimeline(anyString(),anyString(),anyString(),anyString(),anyString(),
+                anyLong(),any(),any(),anyString(),anySet(),anyList());
+    }
+
+    @Test void timelineApplyReplayRejectsDifferentRequest() {
+        var input=new TimelineApply(0L,List.of(new TimelineAdjustment("s1","EXTEND_SCENE",3000)));
+        String key="timeline-"+StoryboardCodec.digest("key");
+        var saved=new Board("child","task","default",2,"brief-2","board",null,key,
+                codec.hash(Map.of("storyboardId","board","input",input)),"hash","{}","[]",null);
+        when(mapper.boardByKey("task","default",key)).thenReturn(Optional.of(saved));
+        assertThatThrownBy(()->service.applyTimeline("task","default","key","board",
+                new TimelineApply(0L,List.of(new TimelineAdjustment("s1","SHORTEN_SCENE",1000)))))
+                .hasMessageContaining("同一时间线幂等键对应不同请求");
+        verify(persistence,never()).saveTimeline(anyString(),anyString(),anyString(),anyString(),anyString(),
+                anyLong(),any(),any(),anyString(),anySet(),anyList());
+    }
+
+    private void configure(List<Scene> scenes,List<Asset> frozen,long target,String mode) {        candidate=new Candidate(scenes);assets=frozen;ObjectNode document=json.createObjectNode();document.set("candidate",json.valueToTree(candidate));
         board=new Board("board","task","default",1,"brief",null,null,"original","original-hash","document-hash",document.toString(),"[]",null);
         ObjectNode briefDocument=json.createObjectNode().put("targetDurationMs",target).put("dialogueMode",mode);
         brief=new Brief("brief","task","default",1,"brief-key","hash",briefDocument.toString(),"{}",null);

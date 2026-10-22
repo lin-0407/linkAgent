@@ -187,6 +187,66 @@ class StoryboardCompilerNativeTest {
         files.discard(source);
     }
 
+    @Test void extendedSceneReordersGlobalSubtitlesAndKeepsMusicCoverage() throws Exception {
+        // 工程对应“场景由 1 秒延展到 2 秒、视频选区同步 0→2000、音乐区间 1→4 秒”的重排结果。
+        Path source = Files.createDirectory(root.resolve("timeline-source"));
+        Path clip = source.resolve("clip.mp4"), voice = source.resolve("voice.wav"), music = source.resolve("music.wav");
+        command("ffmpeg", "-v", "error", "-nostdin", "-threads", "2", "-f", "lavfi", "-i", "color=c=navy:size=240x160:rate=30:duration=3",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=3", "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "libx264", "-threads", "2", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2", "-shortest", "-y", clip.toString());
+        command("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000:duration=0.9",
+                "-c:a", "pcm_s16le", "-ac", "2", "-y", voice.toString());
+        command("ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000:duration=5",
+                "-c:a", "pcm_s16le", "-ac", "2", "-y", music.toString());
+        Asset video = asset("clip", "VIDEO_CLIP", "video/mp4", clip), narration = asset("voice", "NARRATION", "audio/wav", voice),
+                bgm = asset("music", "MUSIC", "audio/wav", music);
+        List<Asset> assets = List.of(video, narration, bgm);
+        var scenes = List.of(
+                StoryboardCompilerTest.scene("opening", "VIDEO_CLIP", 2000, "clip", 0L, 2000L, "NARRATION", "voice",
+                        List.of(new Cue(0, 900, "延展后的旁白"))),
+                StoryboardCompilerTest.scene("closing", "TITLE_CARD", 1000, null, null, null, "NARRATION", "voice",
+                        List.of(new Cue(0, 900, "重排后的旁白"))));
+        ObjectNode brief = json.createObjectNode().put("targetDurationMs", 3000).put("dialogueMode", "USER_NARRATION");
+        brief.putObject("backgroundMusic").put("assetId", "music").put("sourceInMs", 1000).put("sourceOutMs", 4000)
+                .put("gainDb", -12).put("fadeInMs", 100).put("fadeOutMs", 100).put("ducking", false);
+        var project = new StoryboardCompiler(json).compile("timeline-board", brief, new Candidate(scenes), assets,
+                "timeline-run", "source-attempt");
+        assertThat(project.path("video").path("frameCount").asInt()).isEqualTo(90);
+        // 工程字段名是 sourceEndMs；简报字段名 sourceOutMs，两者不能混用。
+        assertThat(project.path("backgroundMusic").path("sourceEndMs").asLong()).isEqualTo(4000);
+        assertThat(project.path("scenes").get(0).path("clip").path("sourceEndMs").asLong()).isEqualTo(2000);
+        var storage = mock(ObjectStorageService.class);
+        Map<String, Path> objects = Map.of(video.objectKey(), clip, narration.objectKey(), voice, bgm.objectKey(), music);
+        when(storage.headObject(eq("persisted-native-bucket"), anyString())).thenAnswer(i ->
+                new StoredObjectMetadata(Files.size(objects.get(i.getArgument(1, String.class))), "application/octet-stream", "etag"));
+        doAnswer(i -> { Files.copy(objects.get(i.getArgument(1, String.class)), i.getArgument(2, Path.class)); return null; })
+                .when(storage).downloadObject(eq("persisted-native-bucket"), anyString(), any(Path.class), any());
+        var properties = new FixedProjectRendererProperties(); properties.setEnabled(true);
+        properties.setWorkRoot(root.resolve("timeline-work").toString());
+        properties.setModuleRoot(System.getenv("LINKAGENT_RENDERER_MODULE_ROOT")); properties.setPythonPath("python");
+        var files = new StoryboardProjectFiles(properties, storage, json);
+        var request = files.materialize(project, assets, () -> false);
+        var output = new FixedProjectRenderService(properties, json).render(request, () -> false);
+        assertThat(output.durationMs()).isEqualTo(3000);
+        assertThat(output.frameCount()).isEqualTo(90);
+        // 第一段延展 1 秒后，第二段的全局字幕起点必须随重排后移，而不是沿用旧时间码。
+        String srt = Files.readString(output.files().get("subtitles.srt").path());
+        assertThat(srt).contains("00:00:00,000 --> 00:00:00,900", "00:00:02,000 --> 00:00:02,900", "重排后的旁白");
+        Path decoded = root.resolve("timeline-decoded.pcm");
+        command("ffmpeg", "-v", "error", "-nostdin", "-i", output.files().get("video.mp4").path().toString(),
+                "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "s16le", "-y", decoded.toString());
+        byte[] audio = Files.readAllBytes(decoded);
+        // 音乐延展后应覆盖到片尾；旁白在两段各自的实际位置出现。
+        assertThat(amplitude(audio, .2, .5, 220)).isGreaterThan(.005);
+        assertThat(amplitude(audio, 2.5, 2.8, 220)).isGreaterThan(.005);
+        assertThat(amplitude(audio, .2, .5, 660)).isGreaterThan(.02);
+        assertThat(amplitude(audio, 2.2, 2.5, 660)).isGreaterThan(.02);
+        assertThat(json.readTree(output.files().get("manifest.json").path().toFile())
+                .path("media").path("fullDecodePassed").asBoolean()).isTrue();
+        System.out.println("S4_TIMELINE_NATIVE_OK frames=90 extendedVideoMs=2000 musicEndMs=4000 subtitles=2 providerCalled=false");
+        files.discard(request);
+    }
+
     private double amplitude(byte[] pcm, double startSeconds, double endSeconds, int frequency) {
         int start = (int)Math.round(startSeconds * 48000), end = (int)Math.round(endSeconds * 48000);
         var samples = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN); double sine = 0, cosine = 0;

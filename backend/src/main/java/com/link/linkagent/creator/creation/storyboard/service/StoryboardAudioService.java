@@ -2,6 +2,7 @@ package com.link.linkagent.creator.creation.storyboard.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardAudioModels.*;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
@@ -58,6 +59,146 @@ public class StoryboardAudioService {
         return persistence.saveWithRequestHash(task,owner,scopedKey,
                 new Save(input.expectedWorkspaceRevision(),board.briefId(),boardId,changed),requestHash);
     }
+
+    /**
+     * 采纳时长提案：只接受当前报告中真实存在的 EXTEND_SCENE / SHORTEN_SCENE 及其原值，
+     * 同步视频选区、重算全片时间线和音乐区间，并新建简报与故事板版本保留历史。
+     */
+    public TimelineApplyResult applyTimeline(String task,String owner,String key,String boardId,TimelineApply input) {
+        codec.valid(input);
+        if(key==null || key.isBlank() || key.length()>128)throw conflict("时间线采纳需要非空幂等键，最多 128 字符");
+        String scopedKey="timeline-"+StoryboardCodec.digest(key);
+        String requestHash=codec.hash(Map.of("storyboardId",boardId,"input",input));
+        var replay=mapper.boardByKey(task,owner,scopedKey);
+        if(replay.isPresent()) {
+            if(!requestHash.equals(replay.get().requestHash()))throw conflict("同一时间线幂等键对应不同请求");
+            return describe(task,owner,replay.get());
+        }
+        requireTask(task,owner);var board=board(task,owner,boardId);
+        var brief=persistence.brief(task,owner,board.briefId());
+        if(brief.revision()!=mapper.briefRevision(task,owner))
+            throw conflict("当前简报已更新，请使用最新简报的故事板调整时间线");
+        Candidate candidate=candidate(board);List<Asset> frozen=persistence.frozen(board);
+        Map<String,Asset> assets=new HashMap<>();frozen.forEach(asset->assets.put(asset.assetId(),asset));
+        Map<String,TimingProposal> allowed=new HashMap<>();
+        for(var scene:timing(task,owner,boardId).scenes())for(var proposal:scene.proposals())
+            allowed.put(scene.sceneId()+"|"+proposal.code(),proposal);
+        Map<String,TimelineAdjustment> adjustments=new LinkedHashMap<>();
+        for(var adjustment:input.adjustments()) {
+            if(adjustments.putIfAbsent(adjustment.sceneId(),adjustment)!=null)
+                throw conflict("同一场景不能在一次请求中重复调整");
+            var proposal=allowed.get(adjustment.sceneId()+"|"+adjustment.proposalCode());
+            if(proposal==null)
+                throw conflict("场景 "+adjustment.sceneId()+" 当前不存在 "+adjustment.proposalCode()+" 提案，不能凭任意时长调整");
+            if(proposal.proposedDurationMs()==null || proposal.proposedDurationMs()!=adjustment.durationMs())
+                throw conflict("采纳时长必须与当前时长提案给出的毫秒数一致");
+        }
+        List<Scene> scenes=new ArrayList<>();
+        for(var scene:candidate.scenes()) {
+            var adjustment=adjustments.get(scene.id());
+            if(adjustment==null){scenes.add(scene);continue;}
+            long quantized=Math.round(frames(adjustment.durationMs())*1000.0/FPS);
+            Long in=scene.sourceInMs(),out=scene.sourceOutMs();
+            if("VIDEO_CLIP".equals(scene.layout())) {
+                if(in==null || out==null)throw conflict("视频场景缺少原始截取区间，无法随场景时长同步延长");
+                out=in+quantized;
+                double available=number(stream(assets.get(scene.visualAssetId()),"video").path("duration"),0)*1000;
+                if(available<=0)throw conflict("视频素材缺少可靠实际时长，无法确认延长后的截取区间");
+                if(out>available+.001)throw conflict("延长后的视频区间超出素材实际时长，请补充视频或缩短文稿后重新生成");
+                if(out>1800000)throw conflict("延长后的视频区间超过工程允许的最大截取时间");
+            }
+            scenes.add(new Scene(scene.id(),scene.layout(),scene.title(),scene.body(),scene.narration(),
+                    adjustment.durationMs(),scene.visualAssetId(),in,out,scene.fit(),scene.audioMode(),
+                    scene.narrationAssetId(),scene.cues(),scene.sourceRefs()));
+        }
+        long totalFrames=0;for(var scene:scenes)totalFrames+=frames(scene.durationMs());
+        if(totalFrames<FPS || totalFrames>FPS*180)throw conflict("调整后的总时长必须在 1 至 180 秒之间");
+        long target=Math.round(totalFrames*1000.0/FPS);
+        ObjectNode document=(ObjectNode)codec.read(brief.documentJson()).deepCopy();
+        document.put("targetDurationMs",target);
+        JsonNode music=document.path("backgroundMusic");
+        if(music.isObject()) {
+            // 用户选择的音乐区间语义是覆盖全片，总时长变化时同步首尾；超出素材实际尾部必须重新选择。
+            long start=music.path("sourceInMs").asLong(),end=start+target;
+            double available=audioDurationMs(assets.get(music.path("assetId").asText()));
+            if(available<=0)throw conflict("背景音乐素材缺少可靠时长，无法随总时长调整");
+            if(end>available+.001)
+                throw conflict("背景音乐区间需要重新选择：随总时长延展到 "+end+"ms 会超出素材实际时长");
+            if(end>1200000)throw conflict("背景音乐区间超过允许的最大 20 分钟");
+            if(music.path("fadeInMs").asLong()+music.path("fadeOutMs").asLong()>end-start)
+                throw conflict("背景音乐淡入淡出总长超过新的音乐区间");
+            ((ObjectNode)music).put("sourceOutMs",end);
+        }
+        // 采纳必须不引入新问题；原有缺配音、缺字幕仍保留，由作者按其它提案继续补齐。
+        var introduced=introducedProblems(boardId,brief,candidate,frozen,document,scenes);
+        if(!introduced.isEmpty())
+            throw conflict("采纳后会引入新问题："+introduced.getFirst().message()+"；请先处理该场景或改用其他提案");
+        String timingSource=codec.read(board.documentJson()).path("subtitleTimingSource").asText("");
+        if(!Set.of("USER_PROVIDED","ASR_ALIGNED","NOT_PROVIDED").contains(timingSource))timingSource="USER_PROVIDED";
+        Set<String> generatedVoices=new HashSet<>();
+        for(var asset:frozen)if(asset.metadata()!=null && "TTS".equals(asset.metadata().path("generated").path("kind").asText("")))
+            generatedVoices.add(asset.assetId());
+        var saved=persistence.saveTimeline(task,owner,scopedKey,requestHash,boardId,input.expectedWorkspaceRevision(),
+                new Candidate(List.copyOf(scenes)),document,timingSource,Set.copyOf(generatedVoices),frozen);
+        return describe(task,owner,saved);
+    }
+
+    /** 只拦截本次采纳新引入的问题；原本就缺配音或缺字幕的场景仍允许逐项补齐。 */
+    private List<Problem> introducedProblems(String boardId,Brief brief,Candidate before,List<Asset> frozen,
+            ObjectNode document,List<Scene> scenes) {
+        Set<String> existing=new HashSet<>();
+        for(var problem:compiler.check(boardId,codec.read(brief.documentJson()),before,frozen).problems())
+            existing.add(Objects.toString(problem.sceneId(),"")+"|"+problem.code());
+        List<Problem> introduced=new ArrayList<>();
+        for(var problem:compiler.check("timeline-check",document,new Candidate(List.copyOf(scenes)),frozen).problems())
+            if(!existing.contains(Objects.toString(problem.sceneId(),"")+"|"+problem.code()))introduced.add(problem);
+        return introduced;
+    }
+
+    private TimelineApplyResult describe(String task,String owner,Board saved) {
+        var brief=persistence.brief(task,owner,saved.briefId());
+        long target=codec.read(brief.documentJson()).path("targetDurationMs").asLong();
+        List<AppliedAdjustment> applied=new ArrayList<>();List<String> notes=new ArrayList<>();
+        if(saved.parentStoryboardId()!=null) {
+            var parent=mapper.board(task,owner,saved.parentStoryboardId()).orElse(null);
+            if(parent!=null) {
+                Map<String,Scene> before=new HashMap<>();
+                candidate(parent).scenes().forEach(scene->before.put(scene.id(),scene));
+                for(var scene:candidate(saved).scenes()) {
+                    var old=before.get(scene.id());
+                    if(old!=null && old.durationMs()!=scene.durationMs())
+                        applied.add(new AppliedAdjustment(scene.id(),scene.durationMs()>old.durationMs()
+                                ?"EXTEND_SCENE":"SHORTEN_SCENE",old.durationMs(),scene.durationMs()));
+                }
+                JsonNode oldMusic=codec.read(persistence.brief(task,owner,parent.briefId()).documentJson()).path("backgroundMusic");
+                JsonNode newMusic=codec.read(brief.documentJson()).path("backgroundMusic");
+                if(oldMusic.isObject() && newMusic.isObject()
+                        && oldMusic.path("sourceOutMs").asLong()!=newMusic.path("sourceOutMs").asLong())
+                    notes.add("背景音乐区间终点已随总时长从 "+oldMusic.path("sourceOutMs").asLong()
+                            +"ms 调整为 "+newMusic.path("sourceOutMs").asLong()+"ms");
+            }
+        }
+        return new TimelineApplyResult(view(saved),brief.revision(),target,List.copyOf(applied),List.copyOf(notes));
+    }
+
+    private BoardView view(Board board) {
+        var brief=persistence.brief(board.taskId(),board.ownerId(),board.briefId());
+        var document=codec.read(board.documentJson());var candidate=codec.candidate(document.path("candidate"));
+        return new BoardView(board.storyboardId(),board.revision(),board.briefId(),board.parentStoryboardId(),
+                board.runId(),board.documentHash(),document,
+                compiler.check(board.storyboardId(),codec.read(brief.documentJson()),candidate,persistence.frozen(board)));
+    }
+
+    /** 决策依据来自真实媒体；这里只读已冻结素材的规范化探测结果，不重新解码。 */
+    private double audioDurationMs(Asset asset) {
+        if(asset==null || !"MUSIC".equals(asset.kind()) || !"audio/wav".equals(asset.contentType()))return 0;
+        double track=number(stream(asset,"audio").path("duration"),0);
+        double format=asset.metadata()==null?0:number(asset.metadata().path("normalized").path("format").path("duration"),0);
+        if(track>0 && format>0)return Math.min(track,format)*1000;
+        return Math.max(track,format)*1000;
+    }
+
+    private static long frames(long millis) {return Math.round(millis*(double)FPS/1000);}
 
     public TimingReport timing(String task,String owner,String boardId) {
         requireTask(task,owner);var board=board(task,owner,boardId);var brief=persistence.brief(task,owner,board.briefId());
