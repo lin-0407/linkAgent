@@ -5,6 +5,7 @@
  * 绑定通过后才能读取反馈，并在视频分析页展示该视频卡片。
  */
 import { computed, ref, onMounted } from 'vue'
+import { errorText } from '@/utils/error'
 import { getTaskVideoBinding, bindBvToTask } from '@/api/creator'
 import { ApiError } from '@/api/http'
 import type { TaskVideoBinding } from '@/types/creator'
@@ -57,7 +58,7 @@ async function loadBinding() {
     } else {
       // 查询异常时保留上次成功结果，避免网络故障被误解为绑定已消失。
       binding.value = previousBinding
-      loadError.value = loadFailure instanceof Error ? loadFailure.message : String(loadFailure)
+      loadError.value = errorText(loadFailure, '加载失败，请稍后重试')
     }
   } finally {
     loading.value = false
@@ -87,8 +88,8 @@ async function handleBind() {
     binding.value = result
     editing.value = false
     emit('bound', result)
-  } catch (e: any) {
-    error.value = e?.message || '绑定失败，请稍后重试'
+  } catch (e) {
+    error.value = errorText(e, '绑定失败，请稍后重试')
   } finally {
     saving.value = false
   }
@@ -230,15 +231,15 @@ function cancelEdit() {
 
 .creator-section-title {
   margin: 0 0 8px;
-  font-size: 16px;
+  font-size: var(--fs-md);
   font-weight: 600;
-  color: var(--creator-text, #1d1d1f);
+  color: var(--creator-text, var(--ink));
 }
 
 .creator-section-desc {
   margin: 0 0 16px;
-  font-size: 13px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-sm);
+  color: var(--creator-muted-ink, var(--muted));
   line-height: 1.5;
 }
 
@@ -256,43 +257,43 @@ function cancelEdit() {
 }
 
 .bv-binding-label {
-  font-size: 13px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-sm);
+  color: var(--creator-muted-ink, var(--muted));
   min-width: 48px;
   flex-shrink: 0;
 }
 
 .bv-binding-value {
   font-family: 'SF Mono', 'Cascadia Code', monospace;
-  font-size: 14px;
+  font-size: var(--fs-base);
   color: var(--creator-accent, #0071e3);
   background: var(--creator-surface-sub, #f5f5f7);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
 }
 
 .bv-binding-status-tag {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 500;
   padding: 2px 10px;
-  border-radius: 100px;
+  border-radius: var(--r-pill);
   background: rgba(0, 0, 0, 0.06);
-  color: var(--creator-muted-ink, #86868b);
+  color: var(--creator-muted-ink, var(--muted));
 }
 
 .bv-binding-status-tag.is-ok {
   background: rgba(52, 199, 89, 0.12);
-  color: #248a3d;
+  color: var(--ok);
 }
 
 .bv-binding-status-tag.is-warn {
   background: rgba(255, 149, 0, 0.12);
-  color: #c93400;
+  color: var(--danger);
 }
 
 .bv-binding-message {
-  font-size: 13px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-sm);
+  color: var(--creator-muted-ink, var(--muted));
   line-height: 1.5;
 }
 
@@ -305,8 +306,8 @@ function cancelEdit() {
 
 .bv-binding-edit-hint {
   margin: 0;
-  font-size: 13px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-sm);
+  color: var(--creator-muted-ink, var(--muted));
   line-height: 1.5;
 }
 
@@ -317,30 +318,30 @@ function cancelEdit() {
 }
 
 .bv-binding-field-label {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 500;
-  color: var(--creator-text, #1d1d1f);
+  color: var(--creator-text, var(--ink));
 }
 
 /* .creator-input 通用输入框样式已移至全局 theme.css，此处只保留组件特有覆盖 */
 .creator-input.has-error {
-  border-color: #ff3b30;
+  border-color: var(--danger);
 }
 
 .bv-binding-field-error {
-  font-size: 12px;
-  color: #ff3b30;
+  font-size: var(--fs-xs);
+  color: var(--danger);
 }
 
 .bv-binding-error {
-  font-size: 13px;
-  color: #ff3b30;
+  font-size: var(--fs-sm);
+  color: var(--danger);
   margin: 0;
 }
 
 .bv-binding-loading {
-  font-size: 14px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-base);
+  color: var(--creator-muted-ink, var(--muted));
 }
 
 .bv-binding-load-error {
@@ -353,7 +354,7 @@ function cancelEdit() {
   background: rgba(220, 38, 38, 0.06);
   border: 1px solid rgba(220, 38, 38, 0.16);
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
 }
 </style>

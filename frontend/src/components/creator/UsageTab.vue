@@ -143,7 +143,7 @@ const {
           </b>
         </header>
         <div class="creator-usage-call-meta">
-          <span>模型：{{ record.modelName || '未返回' }}</span>
+          <span>模型：{{ record.modelName || '—' }}</span>
           <span>Token：{{ formatUsageToken(record.totalTokens) }}</span>
           <span>耗时：{{ formatDuration(record.elapsedMs) }}</span>
           <span>输入：{{ formatInputCount(record) }}</span>

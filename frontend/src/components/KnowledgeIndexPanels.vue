@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { errorText } from '@/utils/error'
 import {
   getReferenceVideoChunkIndexStatus,
   getReferenceVideoHybridIndexStatus,
@@ -60,7 +61,7 @@ async function loadIndexStatus() {
   try {
     indexStatus.value = await getReferenceVideoIndexStatus()
   } catch (error) {
-    indexStatusError.value = error instanceof Error ? error.message : String(error)
+    indexStatusError.value = errorText(error, '读取索引状态失败，请稍后重试')
   } finally {
     indexLoading.value = false
   }
@@ -77,7 +78,7 @@ async function rebuildIndex() {
     indexResult.value = await rebuildReferenceVideoIndex()
     await loadIndexStatus()
   } catch (error) {
-    indexError.value = error instanceof Error ? error.message : String(error)
+    indexError.value = errorText(error, '索引操作失败，请稍后重试')
   } finally {
     indexing.value = false
   }
@@ -89,7 +90,7 @@ async function loadChunkIndexStatus() {
   try {
     chunkIndexStatus.value = await getReferenceVideoChunkIndexStatus()
   } catch (error) {
-    chunkIndexStatusError.value = error instanceof Error ? error.message : String(error)
+    chunkIndexStatusError.value = errorText(error, '读取分块索引状态失败，请稍后重试')
   } finally {
     chunkIndexLoading.value = false
   }
@@ -106,7 +107,7 @@ async function rebuildChunkIndex() {
     chunkIndexResult.value = await rebuildReferenceVideoChunkIndex()
     await loadChunkIndexStatus()
   } catch (error) {
-    chunkIndexError.value = error instanceof Error ? error.message : String(error)
+    chunkIndexError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     chunkIndexing.value = false
   }
@@ -118,7 +119,7 @@ async function loadItemIndexStatus() {
   try {
     itemIndexStatus.value = await getReferenceVideoItemIndexStatus()
   } catch (error) {
-    itemIndexStatusError.value = error instanceof Error ? error.message : String(error)
+    itemIndexStatusError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     itemIndexLoading.value = false
   }
@@ -135,7 +136,7 @@ async function rebuildItemIndex() {
     itemIndexResult.value = await rebuildReferenceVideoItemIndex()
     await loadItemIndexStatus()
   } catch (error) {
-    itemIndexError.value = error instanceof Error ? error.message : String(error)
+    itemIndexError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     itemIndexing.value = false
   }
@@ -147,7 +148,7 @@ async function loadHybridIndexStatus() {
   try {
     hybridIndexStatus.value = await getReferenceVideoHybridIndexStatus()
   } catch (error) {
-    hybridIndexStatusError.value = error instanceof Error ? error.message : String(error)
+    hybridIndexStatusError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     hybridIndexLoading.value = false
   }
@@ -165,7 +166,7 @@ async function rebuildHybridIndex() {
     hybridIndexResult.value = await rebuildReferenceVideoHybridIndex()
     await loadHybridIndexStatus()
   } catch (error) {
-    hybridIndexError.value = error instanceof Error ? error.message : String(error)
+    hybridIndexError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     hybridIndexing.value = false
   }
@@ -177,7 +178,7 @@ async function loadChildHybridIndexStatus() {
   try {
     childHybridIndexStatus.value = await getReferenceVideoItemHybridIndexStatus()
   } catch (error) {
-    childHybridIndexStatusError.value = error instanceof Error ? error.message : String(error)
+    childHybridIndexStatusError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     childHybridIndexLoading.value = false
   }
@@ -194,7 +195,7 @@ async function rebuildChildHybridIndex() {
     childHybridIndexResult.value = await rebuildReferenceVideoItemHybridIndex()
     await loadChildHybridIndexStatus()
   } catch (error) {
-    childHybridIndexError.value = error instanceof Error ? error.message : String(error)
+    childHybridIndexError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     childHybridIndexing.value = false
   }
@@ -486,7 +487,7 @@ onMounted(() => {
   margin: 0;
   padding-left: 18px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
 }
 </style>

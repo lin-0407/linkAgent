@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { ApiError } from '@/api/http'
 import { getCreationVersions, selectCreationVersion, type CreationVersionList, type CreationVersion } from '@/api/creation'
 
@@ -24,7 +25,7 @@ async function load() {
     const result = await getCreationVersions(taskId, page.value)
     if (view === generation && request === listRequest) history.value = result
   } catch (cause) {
-    if (view === generation && request === listRequest) error.value = cause instanceof Error ? cause.message : '读取版本失败'
+    if (view === generation && request === listRequest) error.value = errorText(cause, '读取版本失败')
   } finally {
     if (view === generation && request === listRequest) loading.value = false
   }
@@ -50,7 +51,7 @@ async function select(version: CreationVersion) {
     await load()
   } catch (cause) {
     if (view !== generation) return
-    error.value = cause instanceof Error ? cause.message : '选择版本失败'
+    error.value = errorText(cause, '选择版本失败')
     if (cause instanceof ApiError && cause.status === 409) {
       emit('selected', taskId)
       await load()
@@ -108,14 +109,14 @@ onBeforeUnmount(() => { generation += 1 })
 </template>
 
 <style scoped>
-.video-version-history { margin-block: 16px; padding: 18px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 12px; }
+.video-version-history { margin-block: 16px; padding: 18px; border: 1px solid var(--border-color, #e5e7eb); border-radius: var(--r); }
 .version-heading, li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .version-heading > div { display: flex; gap: 8px; flex-wrap: wrap; }
-h4 { margin: 0; } small, li span { color: var(--text-secondary, #64748b); font-size: 12px; }
+h4 { margin: 0; } small, li span { color: var(--text-secondary, #64748b); font-size: var(--fs-xs); }
 ul { list-style: none; margin: 12px 0 0; padding: 0; }
 li { padding-block: 10px; border-top: 1px solid var(--border-color, #e5e7eb); }
 li > div { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
-button { flex-shrink: 0; padding: 6px 10px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 6px; background: var(--bg-primary, white); color: inherit; cursor: pointer; }
+button { flex-shrink: 0; padding: 6px 10px; border: 1px solid var(--border-color, #e5e7eb); border-radius: var(--r-xs); background: var(--bg-primary, white); color: inherit; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
 [role="alert"] { color: #b42318; }
 @media (max-width: 560px) { .version-heading { align-items: flex-start; flex-wrap: wrap; } }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { useRouter } from 'vue-router'
 import {
   cancelAssistantPlan, confirmAssistantPlan, getAssistantPlans, getPlatformOperations, resumeAssistantPlan,
@@ -235,7 +236,7 @@ function resultText(value: unknown): string {
   if (object.completed === true) lines.push('原业务服务已完成此操作。')
   return lines.length ? lines.join('\n') : '原业务服务已返回结果，可打开业务页面查看完整内容。'
 }
-function message(reason: unknown) { return reason instanceof Error ? reason.message : '暂时无法读取执行结果，请刷新查看' }
+function message(reason: unknown) { return errorText(reason, '暂时无法读取执行结果，请刷新查看') }
 </script>
 
 <template>
@@ -294,23 +295,23 @@ function message(reason: unknown) { return reason instanceof Error ? reason.mess
 </template>
 
 <style scoped>
-.assistant-plans { margin-top: 10px; font-size: 12px; line-height: 1.6; }
+.assistant-plans { margin-top: 10px; font-size: var(--fs-xs); line-height: 1.6; }
 .assistant-plan-empty { color: var(--muted); padding-block: 16px; }
 .plan-heading { display: flex; align-items: start; gap: 10px; justify-content: space-between; }
-.plan-heading strong { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
-.plan-heading > span { flex-shrink: 0; color: var(--accent); font-size: 11px; }
+.plan-heading strong { min-width: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.plan-heading > span { flex-shrink: 0; color: var(--accent); font-size: var(--fs-2xs); }
 .plan-review-details { padding: 10px 0; border-block: 1px solid var(--border); }
 summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-summary span { opacity: .7; font-size: 11px; flex-shrink: 0; }
+summary span { opacity: .7; font-size: var(--fs-2xs); flex-shrink: 0; }
 .assistant-capabilities { padding: 5px 0; color: var(--muted); }
 .assistant-capability-group { margin-top: 8px; }.assistant-capability-group p { margin: 2px 0; opacity: .75; }
-.assistant-plan { margin-top: 10px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.assistant-plan { margin-top: 10px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); }
 .plan-message { margin: 8px 0; }.plan-steps { padding-left: 20px; margin: 8px 0; }.plan-steps li { margin: 10px 0; }
-.plan-steps li>div { display: flex; justify-content: space-between; gap: 8px; }.plan-steps li>div>span, small { font-size: 11px; opacity: .72; }
-.plan-steps p { margin: 4px 0; overflow-wrap: anywhere; }.plan-notice { padding: 8px; background: var(--surface-sub); border-radius: 6px; }
-button { border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: inherit; padding: 6px 10px; font: inherit; cursor: pointer; }
+.plan-steps li>div { display: flex; justify-content: space-between; gap: 8px; }.plan-steps li>div>span, small { font-size: var(--fs-2xs); opacity: .72; }
+.plan-steps p { margin: 4px 0; overflow-wrap: anywhere; }.plan-notice { padding: 8px; background: var(--surface-sub); border-radius: var(--r-xs); }
+button { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: inherit; padding: 6px 10px; font: inherit; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }.plan-primary { background: var(--accent); border-color: var(--accent); color: white; }
 .plan-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }.plan-error { color: #b42b3e; }
-form { display: grid; gap: 10px; margin-top: 10px; }label { display: grid; gap: 4px; }input, textarea, select { box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: inherit; font: inherit; }
-textarea { min-height: 65px; resize: vertical; }pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+form { display: grid; gap: 10px; margin-top: 10px; }label { display: grid; gap: 4px; }input, textarea, select { box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: var(--r-xs); background: var(--surface); color: inherit; font: inherit; }
+textarea { min-height: 65px; resize: vertical; }pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-2xs); }
 </style>

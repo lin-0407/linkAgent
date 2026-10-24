@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { useRouter } from 'vue-router'
 import { AlertCircle, RefreshCw } from '@lucide/vue'
 import PlanTracePanel from '@/components/PlanTracePanel.vue'
@@ -104,7 +105,7 @@ async function prepare(type: AssistantActionType) {
     const proposal = await prepareAssistantAction(taskId, type)
     if (taskId === props.taskId) actions.value = [proposal, ...actions.value.filter(item => item.proposalId !== proposal.proposalId)].slice(0, 5)
   } catch (reason) {
-    if (taskId === props.taskId) error.value = reason instanceof Error ? reason.message : '准备操作失败'
+    if (taskId === props.taskId) error.value = errorText(reason, '准备操作失败')
   } finally { busy.value = false }
 }
 
@@ -119,7 +120,7 @@ async function confirm(action: AssistantAction) {
     if (action.taskId === props.taskId) Object.assign(action, result)
   } catch (reason) {
     // 请求超时不代表业务失败，读取持久化状态，不自动重发收费操作。
-    if (action.taskId === props.taskId) error.value = reason instanceof Error ? reason.message : '执行状态暂时无法确认，请刷新查看'
+    if (action.taskId === props.taskId) error.value = errorText(reason, '执行状态暂时无法确认，请刷新查看')
   } finally {
     busy.value = false
     if (action.taskId === props.taskId) await refresh()
@@ -179,24 +180,24 @@ function openResult(action: AssistantAction) {
 .creator-assistant-panel { padding: 0 0 14px; border-bottom: 1px solid var(--border); }
 .assistant-context-heading, .assistant-action-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .assistant-context-heading strong, .assistant-context-heading small { display: block; }
-.assistant-context-heading strong { margin-top: 3px; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
-.assistant-context-heading small { color: var(--muted); font-size: 11px; }
+.assistant-context-heading strong { margin-top: 3px; font-size: var(--fs-sm); color: var(--ink); overflow-wrap: anywhere; }
+.assistant-context-heading small { color: var(--muted); font-size: var(--fs-2xs); }
 .assistant-context-heading > button { display: grid; flex: 0 0 auto; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; color: var(--muted); background: transparent; }
 .assistant-context-heading > button:hover { color: var(--accent); background: var(--accent-tint); }
-.assistant-context-heading small, .assistant-hint, .assistant-action small { opacity: .72; font-size: 12px; line-height: 1.6; }
-.assistant-blocking, .assistant-action p { margin: 8px 0; font-size: 12px; line-height: 1.65; }
+.assistant-context-heading small, .assistant-hint, .assistant-action small { opacity: .72; font-size: var(--fs-xs); line-height: 1.6; }
+.assistant-blocking, .assistant-action p { margin: 8px 0; font-size: var(--fs-xs); line-height: 1.65; }
 .assistant-shortcuts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-button { border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: inherit; padding: 6px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+button { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: inherit; padding: 6px 10px; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
-.assistant-action { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.assistant-action-title { font-size: 13px; margin-bottom: 4px; }
-.assistant-action-title span { font-size: 11px; opacity: .7; }
+.assistant-action { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); }
+.assistant-action-title { font-size: var(--fs-sm); margin-bottom: 4px; }
+.assistant-action-title span { font-size: var(--fs-2xs); opacity: .7; }
 .assistant-confirm { margin-top: 8px; background: var(--accent); border-color: var(--accent); color: white; }
-.assistant-error { color: #b42b3e; font-size: 12px; line-height: 1.65; }
-.assistant-service-error { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 9px; margin-top: 12px; padding: 12px; color: #a82948; background: #fff4f7; border: 1px solid #f2d4dd; border-radius: 10px; }
-.assistant-service-error strong { font-size: 12px; }
-.assistant-service-error p { margin: 4px 0 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.assistant-service-error button { color: #a82948; font-size: 11px; }
-.assistant-business-trace { padding-top: 12px; font-size: 12px; }
+.assistant-error { color: #b42b3e; font-size: var(--fs-xs); line-height: 1.65; }
+.assistant-service-error { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 9px; margin-top: 12px; padding: 12px; color: #a82948; background: #fff4f7; border: 1px solid #f2d4dd; border-radius: var(--r); }
+.assistant-service-error strong { font-size: var(--fs-xs); }
+.assistant-service-error p { margin: 4px 0 0; font-size: var(--fs-xs); line-height: 1.6; overflow-wrap: anywhere; }
+.assistant-service-error button { color: #a82948; font-size: var(--fs-2xs); }
+.assistant-business-trace { padding-top: 12px; font-size: var(--fs-xs); }
 .assistant-business-trace summary { cursor: pointer; }
 </style>

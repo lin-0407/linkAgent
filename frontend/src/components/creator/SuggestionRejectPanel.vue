@@ -123,7 +123,7 @@ function labelOf(value: CreatorRejectReason): string {
 
 .reject-title {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
   color: var(--ink);
 }
@@ -143,9 +143,9 @@ function labelOf(value: CreatorRejectReason): string {
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--ink);
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color var(--dur-fast), background var(--dur-fast);
 }
 
 .reject-option:hover {
@@ -171,7 +171,7 @@ function labelOf(value: CreatorRejectReason): string {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--ink);
   resize: vertical;
 }

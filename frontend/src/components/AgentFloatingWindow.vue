@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useAppStore } from '@/stores/appStore'
@@ -10,7 +10,6 @@ import CreatorAssistantPanel from '@/components/CreatorAssistantPanel.vue'
 import { ChevronRight, History, Sparkles, SquarePen, X } from '@lucide/vue'
 import ChatComposer from '@/components/ChatComposer.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
-import MessageBubble from '@/components/MessageBubble.vue'
 import {
   chunkTypeLabel,
   formatKnowledgeCount,
@@ -32,6 +31,11 @@ import {
   KNOWLEDGE_VIDEO_CONTEXT_EVENT,
   type KnowledgeVideoContextEventDetail,
 } from '@/utils/agentContext'
+
+// 消息气泡独占 markdown-it + KaTeX（约 190 kB）。改为异步组件后，这两个库只在真正出现
+// 聊天消息时才加载，首屏不必为一条还不存在的消息付出体积；气泡本身是纯展示组件，
+// 不参与全局事件监听，异步化不影响任何交互时序。
+const MessageBubble = defineAsyncComponent(() => import('@/components/MessageBubble.vue'))
 
 const props = withDefaults(
   defineProps<{

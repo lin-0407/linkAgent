@@ -58,7 +58,7 @@ const labels = {
 
 .production-list-heading span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .production-list-items {
@@ -81,9 +81,9 @@ const labels = {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   transition:
-    color 180ms ease,
-    background 180ms ease,
-    box-shadow 180ms ease;
+    color var(--dur-fast) ease,
+    background var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
 }
 
 .production-step-item:hover,
@@ -107,7 +107,7 @@ const labels = {
   color: var(--accent-strong);
   background: var(--accent-tint);
   border-radius: 50%;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
 }
 
@@ -126,17 +126,17 @@ const labels = {
 
 .production-step-copy strong {
   color: currentColor;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .production-step-copy small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .production-required {
   color: var(--warn);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
 }
 
 @media (max-width: 800px) {

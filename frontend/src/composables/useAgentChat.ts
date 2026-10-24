@@ -41,6 +41,13 @@ export function useAgentChat(contextProvider?: () => AssistantChatContext) {
   const streamingThinking = ref('')
   /** 中断流式连接的函数，调用后 SSE 连接关闭 */
   let abortStream: (() => void) | null = null
+  /**
+   * 当前这轮流式的收尾函数。
+   * sendMessageStream 返回的 Promise 只在 done/error 时 resolve；用户点「停止」时
+   * SSE 是被 abort 掉的，不会再有回调，必须由 stopStreaming 主动收尾，
+   * 否则 await sendMessage() 之后的重载、输入框校正永远不执行。
+   */
+  let settleStream: (() => void) | null = null
   const isSessionsLoading = ref(false)
   const isSessionsOpen = ref(false)
   const executionMode = ref<AgentExecutionMode>('AUTO')
@@ -108,11 +115,12 @@ export function useAgentChat(contextProvider?: () => AssistantChatContext) {
 
     await scrollToBottom()
 
-    // 优先使用 SSE 流式，失败时回退到非流式
+    // 只走 SSE 流式，没有非流式回退：连接失败、超时、流被截断都会经
+    // onError / onWarning 报到 errorMessage / warningMessage，由界面呈现。
     try {
       await sendMessageStream(displayMessage, outboundMessage)
     } catch {
-      // 流式已内部处理错误，此处不需要额外操作
+      // 流式内部已统一处理并上报错误，这里只保证调用链不中断
     }
   }
 
@@ -139,6 +147,11 @@ export function useAgentChat(contextProvider?: () => AssistantChatContext) {
     return new Promise<void>((resolve) => {
       // 保存当前会话 ID 的快照，用于流式结束时构建消息
       const sessionSnapshot = sessionId.value
+      // 记录收尾函数，供 stopStreaming 在 abort 之后补一次 resolve
+      settleStream = () => {
+        settleStream = null
+        resolve()
+      }
 
       abortStream = sendAgentMessageStream(
         sessionId.value,
@@ -191,7 +204,7 @@ export function useAgentChat(contextProvider?: () => AssistantChatContext) {
             finalizeStreamedOutput('[响应中断]')
             isStreaming.value = false
             isLoading.value = false
-            resolve()
+            settleStream?.()
           },
           onDone: (sid) => {
             // 流式结束：将累积的内容固化为 assistant 消息
@@ -226,7 +239,7 @@ export function useAgentChat(contextProvider?: () => AssistantChatContext) {
             isStreaming.value = false
             isLoading.value = false
             void scrollToBottom()
-            resolve()
+            settleStream?.()
           },
         },
         undefined,
@@ -272,6 +285,9 @@ export function useAgentChat(contextProvider?: () => AssistantChatContext) {
 
     // 如果已有部分流式内容，固化为一条不完整的 assistant 消息
     finalizeStreamedOutput('[已中断]')
+    // abort 之后 SSE 不会再回调 done/error，这里必须补一次 resolve，
+    // 否则调用方 await sendMessage() 之后的刷新逻辑会永久挂起。
+    settleStream?.()
   }
 
   function startNewSession() {

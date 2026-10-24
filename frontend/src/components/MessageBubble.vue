@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import MarkdownIt from 'markdown-it'
 import markdownItKatex from 'markdown-it-katex'
+// 公式渲染实际由 markdown-it-katex 内置的 katex@0.6 完成，所以样式必须取同一份：
+// 取顶层 katex@0.17 的 CSS 会与 0.6 的 DOM 结构错配。缺这份 CSS 时 KaTeX 的
+// MathML 分支不会被隐藏，公式会重复显示且缺乏字体与间距。
+// 迁移到 katex 0.17 时，这里要和渲染实现一起换。
+import 'markdown-it-katex/node_modules/katex/dist/katex.min.css'
 import type { ChatMessage } from '@/types/agent'
 import PlanTracePanel from './PlanTracePanel.vue'
 import ReactTimeline from './ReactTimeline.vue'
@@ -111,7 +116,7 @@ function executionModeLabel(mode: ChatMessage['executionMode']) {
 /* 摘要检查点：虚线加低饱和底色，和普通消息、思考区都能一眼区分 */
 .summary-block {
   border: 1px dashed rgba(100, 116, 139, 0.5);
-  border-radius: 6px;
+  border-radius: var(--r-xs);
   background: rgba(100, 116, 139, 0.08);
   font-size: 0.9em;
 }
@@ -138,7 +143,7 @@ function executionModeLabel(mode: ChatMessage['executionMode']) {
 .thinking-block {
   margin-bottom: 0.6em;
   border: 1px dashed rgba(100, 116, 139, 0.45);
-  border-radius: 6px;
+  border-radius: var(--r-xs);
   background: rgba(100, 116, 139, 0.06);
   font-size: 0.88em;
 }

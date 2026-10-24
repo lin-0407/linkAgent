@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { ArrowRight, MonitorPlay, Sparkles } from '@lucide/vue'
 import {
   createInteractiveTask,
@@ -69,7 +70,6 @@ const {
   isConfirmingPrePublish: isConfirming,
   loadWorkflow,
   syncWorkflow,
-  refreshWorkflow,
   alignIntent,
   runAnalyze,
   confirmSuggestion,
@@ -105,9 +105,6 @@ const isBusy = computed(() =>
   props.skippingToPreflight,
 )
 const canSubmitIdea = computed(() => form.idea.trim().length >= 10 && !isBusy.value)
-const hasBackgroundContext = computed(() =>
-  (interactiveTask.value?.backgroundContext?.length ?? 0) > 0,
-)
 const alignmentMessages = computed(() => workflowMessages.value.filter((message) =>
   message.role === 'USER' ||
   (message.role === 'AGENT' && message.detailRefType === 'INTENT_ALIGNMENT'),
@@ -576,7 +573,7 @@ function clearMessages() {
 }
 
 function showError(error: unknown) {
-  errorMessage.value = error instanceof Error ? error.message : '请求失败'
+  errorMessage.value = errorText(error, '请求失败')
 }
 
 function formatFileSize(bytes: number) {

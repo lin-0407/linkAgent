@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 import { listPromptTemplates, updatePromptContent } from '@/api/prompts'
 import type { PromptTemplate } from '@/types/prompts'
@@ -45,7 +46,7 @@ async function loadPrompts() {
   try {
     promptTemplates.value = await listPromptTemplates()
   } catch (e) {
-    promptError.value = e instanceof Error ? e.message : String(e)
+    promptError.value = errorText(e, '操作失败，请稍后重试')
   } finally {
     promptLoading.value = false
   }
@@ -71,7 +72,7 @@ async function savePrompt(template: PromptTemplate) {
     expandedPromptKey.value = null
     editingPromptContent.value = ''
   } catch (e) {
-    promptError.value = e instanceof Error ? e.message : String(e)
+    promptError.value = errorText(e, '操作失败，请稍后重试')
   } finally {
     promptSavingKey.value = ''
   }
@@ -198,7 +199,7 @@ async function savePrompt(template: PromptTemplate) {
 
 .settings-section-toggle h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   flex: 0 0 auto;
 }
@@ -208,10 +209,10 @@ async function savePrompt(template: PromptTemplate) {
   place-items: center;
   width: 20px;
   height: 20px;
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1;
   color: var(--muted);
-  transition: transform 180ms ease;
+  transition: transform var(--dur-fast) ease;
 }
 
 .settings-section-chevron.open {
@@ -225,7 +226,7 @@ async function savePrompt(template: PromptTemplate) {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-regular);
 }
 
@@ -240,7 +241,7 @@ async function savePrompt(template: PromptTemplate) {
 .prompt-group-title {
   margin: 0 0 var(--s2);
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   padding-bottom: var(--s2);
   border-bottom: 1px solid var(--border);
@@ -280,7 +281,7 @@ async function savePrompt(template: PromptTemplate) {
 
 .prompt-card-head strong {
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-family: var(--font-code);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -301,14 +302,14 @@ async function savePrompt(template: PromptTemplate) {
   background: var(--accent-tint);
   border: 1px solid var(--accent-ring);
   border-radius: var(--r-pill);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
   line-height: 1.4;
 }
 
 .prompt-card-meta small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.4;
 }
 
@@ -317,7 +318,7 @@ async function savePrompt(template: PromptTemplate) {
   padding: var(--s3);
   color: var(--ink);
   font-family: var(--font-code);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
   background: var(--surface);
   border: 1px solid var(--border);

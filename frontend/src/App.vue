@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
 import {
   Activity,
   BrainCircuit,
@@ -18,10 +18,13 @@ import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AgentFloatingWindow from '@/components/AgentFloatingWindow.vue'
 import CreatorProfilePopover from '@/components/CreatorProfilePopover.vue'
-import SettingsDrawer from '@/components/SettingsDrawer.vue'
 import SystemStatusBar from '@/components/SystemStatusBar.vue'
 import { useModalDialog } from '@/composables/useModalDialog'
 import { useAppStore } from '@/stores/appStore'
+
+// 设置抽屉及其 5 个配置分区体积不小，且只有用户主动点开才需要。
+// 首次打开挂载后保持常驻，避免每次开关都重新拉一遍设置与前端的折叠状态。
+const SettingsDrawer = defineAsyncComponent(() => import('@/components/SettingsDrawer.vue'))
 
 const appStore = useAppStore()
 const { settingsOpen, assistantOpen, developerMode } = storeToRefs(appStore)
@@ -52,6 +55,11 @@ const routeLabel = computed(
 )
 const guideOpen = ref(false)
 const mobileNavigationOpen = ref(false)
+/** 设置抽屉首次打开后常驻：既省首屏体积，又不让每次开关抽屉都重拉配置。 */
+const settingsDrawerMounted = ref(false)
+watch(settingsOpen, (open) => {
+  if (open) settingsDrawerMounted.value = true
+})
 
 function closeGuide() {
   guideOpen.value = false
@@ -302,6 +310,10 @@ watch(() => route.path, closeMobileNavigation)
     </Teleport>
     <AgentFloatingWindow :developer-mode="developerMode" :background-inert="settingsOpen || guideOpen || mobileNavigationOpen" />
     <SystemStatusBar v-if="route.path !== '/usage-logs'" />
-    <SettingsDrawer v-model:open="settingsOpen" v-model:developer-mode="developerMode" />
+    <SettingsDrawer
+      v-if="settingsDrawerMounted"
+      v-model:open="settingsOpen"
+      v-model:developer-mode="developerMode"
+    />
   </div>
 </template>

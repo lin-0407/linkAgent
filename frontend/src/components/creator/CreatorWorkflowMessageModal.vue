@@ -114,7 +114,7 @@ function stepStatusLabel(status: string) {
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   box-shadow: var(--sh-lg);
 }
 
@@ -140,12 +140,12 @@ function stepStatusLabel(status: string) {
 
 .creator-process-head h3 {
   color: var(--ink);
-  font-size: 18px;
+  font-size: var(--fs-lg);
 }
 
 .creator-process-head span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .creator-process-actions {
@@ -164,7 +164,7 @@ function stepStatusLabel(status: string) {
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-xs);
   cursor: pointer;
 }
 
@@ -244,13 +244,13 @@ function stepStatusLabel(status: string) {
 .creator-process-list strong {
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .creator-process-list b,
 .creator-process-list small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 600;
 }
 
@@ -258,7 +258,7 @@ function stepStatusLabel(status: string) {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
 }
 

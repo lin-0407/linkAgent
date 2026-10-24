@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { API_BASE_URL } from './config'
 
 // ═══════════════════════════════════════════
 // 类型定义
@@ -36,8 +37,8 @@ export interface RequestOptions {
 // ═══════════════════════════════════════════
 
 const http = axios.create({
-  // 通过 Vite 环境变量支持自定义 API 前缀，默认 '/api'
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  // 基址统一由 api/config.ts 提供，避免多处各写一份默认值
+  baseURL: API_BASE_URL,
   // 默认 5 分钟超时，AI 对话、分析等接口响应时间远超普通 CRUD
   timeout: 300_000,
   // 不设默认 Content-Type：axios 对 JSON body 会自动设 application/json，
@@ -189,6 +190,8 @@ export async function upload<T>(url: string, formData: FormData, options?: Reque
  *
  * 注意：下载需同时取 blob 和响应头，因此不能走拦截器的 data 解包路径，
  * 直接调用 axios 取完整 AxiosResponse 后再自行处理。
+ * 但错误必须照样收敛成 ApiError：axios 对非 2xx 直接 reject，
+ * 不在这里转换的话，调用方按 `instanceof ApiError` 判断会漏掉下载失败。
  */
 export async function download(
   url: string,
@@ -203,19 +206,9 @@ export async function download(
     timeout: options?.timeout ?? 60_000,
     headers: options?.headers,
     params: options?.params,
+  }).catch(async (error: unknown) => {
+    throw await toDownloadError(error)
   })
-
-  // 对下载也做错误处理，与拦截器逻辑保持一致
-  if (response.status < 200 || response.status >= 300) {
-    let detail: string | undefined
-    try {
-      const errorBody = JSON.parse(await (response.data as Blob).text())
-      detail = errorBody.message || errorBody.detail || errorBody.error
-    } catch {
-      /* 错误体非 JSON 时忽略 */
-    }
-    throw new ApiError(response.status, detail || `HTTP ${response.status}`, detail)
-  }
 
   return {
     blob: response.data,
@@ -225,4 +218,23 @@ export async function download(
       || extractUrlFilename(url)
       || 'download',
   }
+}
+
+/** 把下载失败（可能是 blob 形式的错误体）转成与 axios 拦截器一致的 ApiError */
+async function toDownloadError(error: unknown): Promise<ApiError> {
+  if (axios.isAxiosError(error) && error.response) {
+    const { status, data } = error.response
+    let detail: string | undefined
+    try {
+      // responseType: 'blob' 时错误体也是 Blob，先取文本再尝试按 JSON 解析
+      const text = typeof data === 'string' ? data : await (data as Blob).text()
+      const body = JSON.parse(text)
+      detail = body.message || body.detail || body.error
+    } catch {
+      /* 错误体非 JSON 时忽略 */
+    }
+    return new ApiError(status, detail || error.message, detail)
+  }
+  const message = error instanceof Error ? error.message : '下载失败'
+  return new ApiError(0, message)
 }

@@ -104,15 +104,15 @@ defineExpose({
   color: var(--ink);
   background: var(--surface-sub);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--r);
   box-shadow: none;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
 }
 .composer-input textarea:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-ring); }
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.composer-hint { color: var(--faint); font-size: 10px; line-height: 1.5; }
+.composer-hint { color: var(--faint); font-size: var(--fs-2xs); line-height: 1.5; }
 .composer-toolbar button {
   display: inline-flex;
   flex: 0 0 auto;
@@ -122,9 +122,9 @@ defineExpose({
   min-width: 68px;
   min-height: 32px;
   padding: 0 12px;
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   box-shadow: none;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 .composer-toolbar .stop-btn { background: var(--danger); }
 @media (max-width: 480px) {

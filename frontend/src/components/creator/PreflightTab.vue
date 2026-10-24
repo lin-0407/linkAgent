@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { Check, CircleAlert, CircleCheck, LoaderCircle, Minus, Trash2, X } from '@lucide/vue'
 import { ApiError } from '@/api/http'
+import { API_BASE_URL } from '@/api/config'
 import {
   cancelPreflightReview,
   completePreflightScreening,
@@ -1192,7 +1194,7 @@ function connectPreflightEvents() {
   const review = preflightReview.value
   if (!currentTaskId || !review || !preflightIsActive.value || preflightEventSource) return
   clearPreflightReconnectTimer()
-  const baseUrl = String(import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+  const baseUrl = API_BASE_URL
   const url = `${baseUrl}/creator/tasks/${encodeURIComponent(currentTaskId)}/preflight-jobs/${encodeURIComponent(review.reviewId)}/events?afterSequence=${review.eventSequence}`
   const source = new EventSource(url, { withCredentials: true })
   preflightEventSource = source
@@ -1350,7 +1352,7 @@ function readVideoDuration(file: File): Promise<number> {
 }
 
 function toMessage(error: unknown) {
-  return error instanceof Error ? error.message : '媒体操作失败'
+  return errorText(error, '媒体操作失败')
 }
 </script>
 
@@ -2284,7 +2286,7 @@ function toMessage(error: unknown) {
 .preflight-hero h3 {
   margin-bottom: var(--s2);
   color: var(--lab-ink);
-  font-size: 38px;
+  font-size: var(--fs-display);
   letter-spacing: 0;
 }
 
@@ -2309,14 +2311,14 @@ function toMessage(error: unknown) {
 .preflight-limit-plate small {
   color: rgba(255, 255, 255, 0.68);
   font-family: var(--font-code);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0;
 }
 
 .preflight-limit-plate strong {
   margin: 4px 0;
   font-family: var(--font-code);
-  font-size: 28px;
+  font-size: var(--fs-3xl);
 }
 
 .preflight-route {
@@ -2326,7 +2328,7 @@ function toMessage(error: unknown) {
   margin: var(--s5) 0;
   color: var(--muted);
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -2353,7 +2355,7 @@ function toMessage(error: unknown) {
   right: var(--s4);
   color: rgba(0, 174, 236, 0.28);
   font-family: var(--font-code);
-  font-size: 28px;
+  font-size: var(--fs-3xl);
   font-weight: var(--fw-bold);
 }
 
@@ -2361,14 +2363,14 @@ function toMessage(error: unknown) {
 .preflight-meter-card h4 {
   margin: 0 0 var(--s2);
   color: var(--lab-ink);
-  font-size: 19px;
+  font-size: var(--fs-lg);
 }
 
 .preflight-card-head p,
 .preflight-meter-head p {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
 }
 
@@ -2376,7 +2378,7 @@ function toMessage(error: unknown) {
   display: block;
   margin-bottom: var(--s2);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -2451,9 +2453,9 @@ function toMessage(error: unknown) {
   border-radius: var(--r-sm);
   cursor: pointer;
   transition:
-    border-color 160ms ease,
-    transform 160ms ease,
-    background 160ms ease;
+    border-color var(--dur-fast) ease,
+    transform var(--dur-fast) ease,
+    background var(--dur-fast) ease;
 }
 
 .preflight-dropzone:hover:not(:disabled) {
@@ -2464,7 +2466,7 @@ function toMessage(error: unknown) {
 
 .preflight-reel {
   color: var(--lab-cyan);
-  font-size: 34px;
+  font-size: var(--fs-display);
 }
 
 .preflight-dropzone small {
@@ -2484,14 +2486,14 @@ function toMessage(error: unknown) {
 .preflight-status-copy {
   margin: var(--s3) 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
 }
 
 .preflight-meter-head strong {
   color: var(--lab-ink);
   font-family: var(--font-code);
-  font-size: 28px;
+  font-size: var(--fs-3xl);
 }
 
 .preflight-progress-track {
@@ -2499,7 +2501,7 @@ function toMessage(error: unknown) {
   margin: var(--s7) 0 var(--s2);
   overflow: hidden;
   background: #dfe8ef;
-  border-radius: 2px;
+  border-radius: var(--r-xs);
 }
 
 .preflight-progress-track span {
@@ -2507,13 +2509,13 @@ function toMessage(error: unknown) {
   width: 0;
   height: 100%;
   background: linear-gradient(90deg, var(--lab-cyan), var(--bili-pink));
-  transition: width 240ms ease;
+  transition: width var(--dur-base) ease;
 }
 
 .preflight-meter-meta {
   color: var(--muted);
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-actions {
@@ -2642,7 +2644,7 @@ button:disabled {
   display: block;
   margin-bottom: 2px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-bold);
   letter-spacing: 0.08em;
   overflow-wrap: anywhere;
@@ -2650,13 +2652,13 @@ button:disabled {
 
 .preflight-result-copy strong {
   color: var(--lab-ink);
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .preflight-result-copy p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -2676,7 +2678,7 @@ button:disabled {
 .preflight-result-backdrop {
   --lab-ink: #102235;
   --lab-cyan: var(--bili-blue);
-  z-index: 180;
+  z-index: var(--z-overlay);
 }
 
 .preflight-result-modal {
@@ -2690,7 +2692,7 @@ button:disabled {
   margin: 0 0 4px;
   color: var(--accent-strong);
   font-family: var(--font-code);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-bold);
   letter-spacing: 0.08em;
 }
@@ -2706,7 +2708,7 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 50%;
   cursor: pointer;
-  font-size: 24px;
+  font-size: var(--fs-2xl);
   line-height: 1;
 }
 
@@ -2740,7 +2742,7 @@ button:disabled {
 .preflight-modal-next-step {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
 }
 
@@ -2764,7 +2766,7 @@ button:disabled {
 .preflight-result-facts dt,
 .preflight-modal-probe dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-result-facts dd,
@@ -2794,7 +2796,7 @@ button:disabled {
 .preflight-modal-section-head span {
   color: var(--accent-strong);
   font-family: var(--font-code);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-bold);
 }
 
@@ -2811,14 +2813,14 @@ button:disabled {
 
 .preflight-modal-enter-active,
 .preflight-modal-leave-active {
-  transition: opacity 180ms ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .preflight-modal-enter-active .preflight-result-modal,
 .preflight-modal-leave-active .preflight-result-modal {
   transition:
-    opacity 180ms ease,
-    transform 180ms ease;
+    opacity var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
 }
 
 .preflight-modal-enter-from,
@@ -2840,7 +2842,7 @@ button:disabled {
   padding-top: var(--s4);
   color: var(--muted);
   border-top: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
 }
 
@@ -2891,7 +2893,7 @@ button:disabled {
 .preflight-focus-field span,
 .preflight-provider-consent span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -2936,14 +2938,14 @@ button:disabled {
 
 .preflight-review-facts dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-review-facts dd {
   margin: 5px 0 0;
   overflow-wrap: anywhere;
   font-family: var(--font-code);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .preflight-report {
@@ -2968,13 +2970,13 @@ button:disabled {
 .preflight-report-head span {
   color: #70d5fa;
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-report-head h5 {
   margin: 5px 0 0;
   color: #fff;
-  font-size: 20px;
+  font-size: var(--fs-xl);
 }
 
 .preflight-report-head > strong {
@@ -2982,8 +2984,8 @@ button:disabled {
   color: #ffb8ca;
   background: rgba(251, 114, 153, 0.14);
   border: 1px solid rgba(251, 114, 153, 0.36);
-  border-radius: 999px;
-  font-size: 12px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
 }
 
 .preflight-completion-card {
@@ -3006,20 +3008,20 @@ button:disabled {
 .preflight-section-title span {
   color: #70d5fa;
   font-family: var(--font-code);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .preflight-completion-card strong {
   color: #fff;
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .preflight-completion-card p {
   margin: 0;
   color: #a9bacb;
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .preflight-audience-section,
@@ -3039,12 +3041,12 @@ button:disabled {
 .preflight-section-title h6 {
   margin: 4px 0 0;
   color: #fff;
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .preflight-section-title small {
   color: #93a8ba;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-audience-grid {
@@ -3089,13 +3091,13 @@ button:disabled {
 .preflight-audience-card header small {
   color: #93a8ba;
   font-family: var(--font-code);
-  font-size: 9px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-audience-card > p {
   margin: 0;
   color: #e0e9f0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.65;
 }
 
@@ -3112,14 +3114,14 @@ button:disabled {
 
 .preflight-audience-card dt {
   color: #70d5fa;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-bold);
 }
 
 .preflight-audience-card dd {
   margin: 4px 0 0;
   color: #b8c7d3;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   line-height: 1.55;
 }
 
@@ -3150,7 +3152,7 @@ button:disabled {
   gap: var(--s2);
   color: #a9bacb;
   font-family: var(--font-code);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-issue-meta span {
@@ -3165,14 +3167,14 @@ button:disabled {
 .preflight-issue-card h6 {
   margin: 0;
   color: #fff;
-  font-size: 15px;
+  font-size: var(--fs-md);
 }
 
 .preflight-issue-card > p,
 .preflight-issue-action p {
   margin: 0;
   color: #cbd6e0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.65;
 }
 
@@ -3183,7 +3185,7 @@ button:disabled {
 
 .preflight-issue-action span {
   color: #70d5fa;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-bold);
 }
 
@@ -3205,9 +3207,9 @@ button:disabled {
 .preflight-text-button {
   min-height: 30px;
   padding: 6px 11px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-bold);
   cursor: pointer;
 }
@@ -3259,9 +3261,9 @@ button:disabled {
   color: #fff;
   background: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
 }
 
@@ -3278,14 +3280,14 @@ button:disabled {
 
 .preflight-decision-note span {
   color: #ffcf78;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-bold);
 }
 
 .preflight-decision-note p {
   margin: 0;
   color: #cbd6e0;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   line-height: 1.55;
 }
 
@@ -3324,14 +3326,14 @@ button:disabled {
 
 .preflight-edit-card header span {
   color: #70d5fa;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-bold);
 }
 
 .preflight-edit-card header time {
   color: #93a8ba;
   font-family: var(--font-code);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-edit-card h6,
@@ -3341,13 +3343,13 @@ button:disabled {
 
 .preflight-edit-card h6 {
   color: #fff;
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .preflight-edit-card p,
 .preflight-edit-card > small {
   color: #b8c7d3;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   line-height: 1.6;
 }
 
@@ -3366,7 +3368,7 @@ button:disabled {
   background: transparent;
   border: 0;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-bold);
   cursor: pointer;
 }
@@ -3412,7 +3414,7 @@ button:disabled {
 .preflight-transcript-list time {
   color: var(--accent-strong);
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-transcript-list p {
@@ -3431,13 +3433,13 @@ button:disabled {
 .preflight-processing-head h4 {
   margin: 0 0 var(--s2);
   color: var(--lab-ink);
-  font-size: 20px;
+  font-size: var(--fs-xl);
 }
 
 .preflight-processing-head p {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .preflight-processing-options {
@@ -3454,7 +3456,7 @@ button:disabled {
 
 .preflight-processing-options label > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -3512,19 +3514,19 @@ button:disabled {
 
 .preflight-cost-strip span {
   color: rgba(255, 255, 255, 0.65);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-cost-strip strong {
   overflow-wrap: anywhere;
   font-family: var(--font-code);
-  font-size: 17px;
+  font-size: var(--fs-md);
 }
 
 .preflight-cost-note,
 .preflight-processing-error {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
 }
 
@@ -3553,7 +3555,7 @@ button:disabled {
 .preflight-processing-status-head span {
   color: var(--muted);
   font-family: var(--font-code);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .preflight-signal-strip {
@@ -3573,14 +3575,14 @@ button:disabled {
 
 .preflight-signal-strip dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .preflight-signal-strip dd {
   margin: 4px 0 0;
   color: var(--ink);
   font-family: var(--font-code);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .preflight-preview-result {
@@ -3628,9 +3630,9 @@ button:disabled {
   padding: 3px 6px;
   color: #fff;
   background: rgba(8, 18, 29, 0.82);
-  border-radius: 2px;
+  border-radius: var(--r-xs);
   font-family: var(--font-code);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
 }
 
 @media (max-width: 860px) {
@@ -3669,7 +3671,7 @@ button:disabled {
 
 @media (max-width: 560px) {
   .preflight-hero h3 {
-    font-size: 30px;
+    font-size: var(--fs-3xl);
   }
 
   .preflight-route {
@@ -3778,7 +3780,7 @@ button:disabled {
 }
 
 .preflight-hero h3 {
-  font-size: 24px;
+  font-size: var(--fs-2xl);
 }
 
 .preflight-limit-plate {
@@ -3902,7 +3904,7 @@ button:disabled {
 
 @media (max-width: 560px) {
   .preflight-hero h3 {
-    font-size: 22px;
+    font-size: var(--fs-2xl);
   }
 }
 </style>

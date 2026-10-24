@@ -2,14 +2,14 @@
 
 一个面向 B 站创作者的自托管 AI 工作台。它把一期视频从选题、发布方案、制作蓝图、成片试映，到发布后的评论分析和复盘，放进同一个创作任务里。
 
-[在线演示](http://linkagent.cloud) · [快速开始](#快速开始) · [系统架构](#系统架构) · [本地开发](#本地开发)
+[快速开始](#快速开始) · [系统架构](#系统架构) · [本地开发](#本地开发)
 
-> 演示站只用于体验和联调，数据可能随时重置。项目默认给一位创作者自托管使用，不是公开多用户 SaaS。
+> 项目默认给一位创作者自托管使用，不是公开多用户 SaaS。
 
 <table>
 <tr>
-<td width="50%"><img src="frontend/public/screenshots/creator-publishing-plan.png" alt="创作台：发布前优化与发布方案"/><br/><sub>创作台：材料、历史偏好、发布方案和风险判断放在同一页</sub></td>
-<td width="50%"><img src="frontend/public/screenshots/media-preflight.png" alt="成片试映与修改清单"/><br/><sub>成片试映：转写、分段审查和可追踪的修改清单</sub></td>
+<td width="50%"><img src="assets/readme/screenshots/creator-publishing-plan.png" alt="创作台：发布前优化与发布方案"/><br/><sub>创作台：材料、历史偏好、发布方案和风险判断放在同一页</sub></td>
+<td width="50%"><img src="assets/readme/screenshots/media-preflight.png" alt="成片试映与修改清单"/><br/><sub>成片试映：转写、分段审查和可追踪的修改清单</sub></td>
 </tr>
 </table>
 
@@ -203,4 +203,3 @@ docker compose up -d --build
 - 不做自动投稿，也不绕过 B 站限制抓数据。
 - 不提供注册登录和多租户；默认一套部署只服务一位创作者。
 - 开发文档和阶段记录只保留在本地 `docs/`，不随仓库发布。
-- 演示站数据可能重置，别把它当生产环境。

@@ -347,7 +347,7 @@ const sourceText: Record<string, string> = {
 .settings-rate-source {
   padding: 1px 7px;
   color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--accent-tint);
   border-radius: 999px;
   font-size: var(--fs-xs);
 }

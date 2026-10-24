@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import SuggestionRejectPanel from './SuggestionRejectPanel.vue'
 import type { CreatorRejectReason } from '@/types/creator'
 
@@ -97,6 +97,11 @@ function onCopy() {
     copied.value = false
   }, 2000)
 }
+
+// 卡片可能在提示未消失时被父组件移除，定时器随组件一起清掉
+onBeforeUnmount(() => {
+  if (copiedTimer) clearTimeout(copiedTimer)
+})
 </script>
 
 <template>
@@ -170,7 +175,7 @@ function onCopy() {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
 }
 
 .suggestion-card:hover {
@@ -200,7 +205,7 @@ function onCopy() {
   align-items: center;
   padding: 2px var(--s2);
   border-radius: var(--r-pill);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
   line-height: 1.6;
 }
@@ -217,7 +222,7 @@ function onCopy() {
 
 .card-content {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   line-height: 1.52;
   color: var(--ink);
@@ -226,7 +231,7 @@ function onCopy() {
 
 /* 标签类建议更紧凑，像 chip */
 .type-tag .card-content {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
 }
 
@@ -239,7 +244,7 @@ function onCopy() {
 
 .card-meta p {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--muted);
 }

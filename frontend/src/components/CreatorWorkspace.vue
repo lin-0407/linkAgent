@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { storeToRefs } from 'pinia'
 import { ArrowRight, FileText, FolderOpen } from '@lucide/vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
@@ -20,6 +21,7 @@ import {
 } from '@/api/media'
 import { getCurrentProductionPlan } from '@/api/creatorProduction'
 import NotificationToast from '@/components/NotificationToast.vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import CreatorDeleteConfirmModal from '@/components/creator/CreatorDeleteConfirmModal.vue'
 import CreatorDevTestModal from '@/components/creator/CreatorDevTestModal.vue'
 import CreatorResultModal from '@/components/creator/CreatorResultModal.vue'
@@ -1978,7 +1980,7 @@ function handleGuidanceBackdropClick(event: MouseEvent) {
 }
 
 function showError(error: unknown) {
-  errorMessage.value = error instanceof Error ? error.message : '请求失败'
+  errorMessage.value = errorText(error, '请求失败')
 }
 
 function updateWorkflowMessageDraft(draft: string) {
@@ -2140,21 +2142,15 @@ provideCreatorWorkspace({
       @close="closeSuccessToast"
     />
 
-    <header v-if="!isRestoringTask && !selectedTask && !isTaskComposerOpen" class="creator-header">
-      <div>
-        <p class="creator-kicker">创作空间</p>
-        <h2>今天，想创作点什么？</h2>
-        <p>从一个想法开始，把下一条视频慢慢打磨好。</p>
-      </div>
-      <div
-        v-if="selectedTask || isTaskComposerOpen"
-        class="creator-header-actions"
-      >
-        <div
-          v-if="selectedTask || isTaskComposerOpen"
-          class="creator-status-strip"
-          aria-label="创作进度"
-        >
+    <PageHeader
+      v-if="!isRestoringTask && !selectedTask && !isTaskComposerOpen"
+      class="creator-page-header"
+      kicker="创作空间"
+      title="今天，想创作点什么？"
+      description="从一个想法开始，把下一条视频慢慢打磨好。"
+    >
+      <template v-if="isTaskComposerOpen" #actions>
+        <div class="creator-status-strip" aria-label="创作进度">
           <span :class="{ active: Boolean(selectedTask) }">视频资料</span>
           <span :class="{ active: Boolean(suggestion) }">发布方案</span>
           <span :class="{ active: activeStep === 'production' || productionPlanReady }">制作蓝图</span>
@@ -2163,15 +2159,14 @@ provideCreatorWorkspace({
           <span :class="{ active: hasCompletedCreatorReport }">总体复盘</span>
         </div>
         <button
-          v-if="selectedTask || isTaskComposerOpen"
           type="button"
           class="creator-secondary-action creator-mini-button"
           @click="openTaskManager"
         >
           继续历史项目
         </button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <CreatorTaskManagerModal
       v-if="!isRestoringTask"

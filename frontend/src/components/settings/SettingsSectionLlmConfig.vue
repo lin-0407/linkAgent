@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 import { CircleCheck, CircleX } from '@lucide/vue'
 import {
@@ -67,7 +68,7 @@ async function loadLlmConfigs() {
   try {
     llmConfigs.value = await listLlmConfigs()
   } catch (e) {
-    llmConfigError.value = e instanceof Error ? e.message : String(e)
+    llmConfigError.value = errorText(e, '操作失败，请稍后重试')
   } finally {
     llmConfigLoading.value = false
   }
@@ -131,7 +132,7 @@ async function saveLlmConfigForm() {
     cancelEditConfig()
     await loadLlmConfigs()
   } catch (e) {
-    llmConfigError.value = e instanceof Error ? e.message : String(e)
+    llmConfigError.value = errorText(e, '操作失败，请稍后重试')
   } finally {
     llmConfigSaving.value = ''
   }
@@ -145,7 +146,7 @@ async function removeLlmConfig(configId: string, provider: string) {
     await deleteLlmConfig(configId)
     await loadLlmConfigs()
   } catch (e) {
-    llmConfigError.value = e instanceof Error ? e.message : String(e)
+    llmConfigError.value = errorText(e, '操作失败，请稍后重试')
   } finally {
     llmConfigSaving.value = ''
   }
@@ -158,7 +159,7 @@ async function testConfigConnectivity(configId: string) {
   try {
     llmTestResult.value = await testLlmConnectivity(configId)
   } catch (e) {
-    llmConfigError.value = e instanceof Error ? e.message : String(e)
+    llmConfigError.value = errorText(e, '操作失败，请稍后重试')
   } finally {
     llmConfigTesting.value = ''
   }
@@ -537,7 +538,7 @@ async function testConfigConnectivity(configId: string) {
 
 .settings-section-toggle h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   flex: 0 0 auto;
 }
@@ -547,10 +548,10 @@ async function testConfigConnectivity(configId: string) {
   place-items: center;
   width: 20px;
   height: 20px;
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1;
   color: var(--muted);
-  transition: transform 180ms ease;
+  transition: transform var(--dur-fast) ease;
 }
 
 .settings-section-chevron.open {
@@ -564,7 +565,7 @@ async function testConfigConnectivity(configId: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-regular);
 }
 
@@ -595,7 +596,7 @@ async function testConfigConnectivity(configId: string) {
 
 .llm-config-card-head strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
 }
 
@@ -608,7 +609,7 @@ async function testConfigConnectivity(configId: string) {
   margin-bottom: var(--s2);
   padding: var(--s1) var(--s2);
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .llm-config-test-result span {
@@ -623,7 +624,7 @@ async function testConfigConnectivity(configId: string) {
 }
 
 .llm-config-test-result.failed {
-  color: var(--danger, #d93025);
+  color: var(--danger);
   background: rgba(217, 48, 37, 0.06);
 }
 
@@ -632,11 +633,11 @@ async function testConfigConnectivity(configId: string) {
   grid-template-columns: 110px 1fr;
   gap: var(--s1) var(--s2);
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .llm-config-fields dt {
-  color: var(--text-secondary, #666);
+  color: var(--text-secondary, var(--muted));
   font-weight: var(--fw-semibold);
   text-align: right;
   padding-top: 1px;
@@ -651,11 +652,11 @@ async function testConfigConnectivity(configId: string) {
 }
 
 .llm-config-fields code {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 1px 6px;
   background: var(--surface-dim, #f0f4ff);
   border-radius: var(--r-sm);
-  color: var(--accent, #1a73e8);
+  color: var(--accent);
 }
 
 .llm-config-form {
@@ -665,7 +666,7 @@ async function testConfigConnectivity(configId: string) {
 
 .llm-config-form strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .llm-config-field {
@@ -674,8 +675,8 @@ async function testConfigConnectivity(configId: string) {
 }
 
 .llm-config-field > span {
-  font-size: 13px;
-  color: var(--text-secondary, #666);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary, var(--muted));
   font-weight: var(--fw-medium);
 }
 
@@ -687,12 +688,12 @@ async function testConfigConnectivity(configId: string) {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .llm-config-input:focus {
   outline: none;
-  border-color: var(--accent, #1a73e8);
+  border-color: var(--accent);
 }
 
 .llm-config-key-wrap {
@@ -706,7 +707,7 @@ async function testConfigConnectivity(configId: string) {
 
 .llm-config-eye-btn {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 0 var(--s2);
   min-height: 34px;
 }

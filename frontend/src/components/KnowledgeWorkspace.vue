@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
+import { errorText } from '@/utils/error'
 import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 useAssistantBusinessRefresh(['references.', 'collection.', 'maintenance.'], () => loadList())
 import { ChevronDown, Plus } from '@lucide/vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import {
   fetchImportReferenceVideo,
   getReferenceVideoAnalysisContext,
@@ -120,7 +122,7 @@ async function submitFetchImport(videoId: string, tier: string, category: string
     page.value = 1
     await loadList()
   } catch (error) {
-    showNotice('error', '采集失败', error instanceof Error ? error.message : String(error))
+    showNotice('error', '采集失败', errorText(error, '采集失败，请稍后重试'))
   } finally {
     importing.value = false
   }
@@ -145,7 +147,7 @@ async function loadList() {
     page.value = result.page
   } catch (error) {
     if (requestVersion !== listRequestVersion) return
-    listError.value = error instanceof Error ? error.message : String(error)
+    listError.value = errorText(error, '操作失败，请稍后重试')
     showNotice('error', '列表加载失败', listError.value)
   } finally {
     if (requestVersion === listRequestVersion) listLoading.value = false
@@ -242,7 +244,7 @@ async function submitSearch(query: string, tier: string, category: string, strat
     })
   } catch (error) {
     searchResult.value = null
-    searchError.value = error instanceof Error ? error.message : String(error)
+    searchError.value = errorText(error, '操作失败，请稍后重试')
     showNotice('error', '检索失败', searchError.value)
   } finally {
     searching.value = false
@@ -266,7 +268,7 @@ async function openVideoAnalysis(hit: ReferenceVideo) {
     }
     window.dispatchEvent(new CustomEvent(KNOWLEDGE_VIDEO_CONTEXT_EVENT, { detail }))
   } catch (error) {
-    showNotice('error', '案例内容加载失败', error instanceof Error ? error.message : String(error))
+    showNotice('error', '案例内容加载失败', errorText(error, '案例内容加载失败，请稍后重试'))
   } finally {
     analysisLoadingVideoId.value = ''
   }
@@ -280,18 +282,17 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="creator-shell knowledge-shell">
-    <header class="creator-header">
-      <div>
-        <p class="creator-kicker">参考案例</p>
-        <h2>给下一条视频，找点灵感</h2>
-        <p>看看同分区的好内容，找到值得借鉴的表达。</p>
-      </div>
-      <div class="creator-header-actions">
+    <PageHeader
+      kicker="参考案例"
+      title="给下一条视频，找点灵感"
+      description="看看同分区的好内容，找到值得借鉴的表达。"
+    >
+      <template #actions>
         <div class="creator-status-strip">
           <span class="active">共 {{ total }} 条案例</span>
         </div>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <section class="creator-section knowledge-workspace-section">
       <NotificationToast
@@ -414,7 +415,7 @@ onBeforeUnmount(() => {
 }
 
 .knowledge-import-chevron {
-  transition: transform 180ms ease;
+  transition: transform var(--dur-fast) ease;
 }
 
 .knowledge-import-chevron.is-open {

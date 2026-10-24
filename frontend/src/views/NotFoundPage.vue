@@ -44,21 +44,21 @@ const router = useRouter()
 .not-found-code {
   margin: 0;
   color: var(--accent-strong);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-bold);
 }
 
 .not-found-content h1 {
   margin: 0;
   color: var(--ink);
-  font-size: 28px;
+  font-size: var(--fs-3xl);
   line-height: 1.3;
 }
 
 .not-found-content > p:last-of-type {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .not-found-actions {
@@ -78,7 +78,7 @@ const router = useRouter()
   gap: 7px;
   padding: 0 16px;
   border-radius: var(--r-sm);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   text-decoration: none;
   cursor: pointer;

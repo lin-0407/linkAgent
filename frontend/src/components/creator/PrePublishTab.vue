@@ -559,7 +559,7 @@ async function generateDraftFromConversation() {
 
 .creator-ai-prepublish-head h3 {
   color: var(--ink);
-  font-size: 20px;
+  font-size: var(--fs-xl);
 }
 
 .creator-settings-trigger,
@@ -593,7 +593,7 @@ async function generateDraftFromConversation() {
   padding: 8px 10px;
   background: var(--surface-sub);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-sm);
 }
 
 .creator-ai-compact-status.failed {
@@ -607,7 +607,7 @@ async function generateDraftFromConversation() {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -624,7 +624,7 @@ async function generateDraftFromConversation() {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -643,7 +643,7 @@ async function generateDraftFromConversation() {
   padding: 4px;
   background: var(--surface-sub);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--r-sm);
 }
 
 .creator-ai-view-tabs button {
@@ -652,9 +652,9 @@ async function generateDraftFromConversation() {
   color: var(--muted);
   background: transparent;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--r-xs);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 700;
 }
 
@@ -677,7 +677,7 @@ async function generateDraftFromConversation() {
   height: 100%;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-sm);
 }
 
 .creator-ai-understanding {
@@ -696,7 +696,7 @@ async function generateDraftFromConversation() {
 .creator-ai-understanding span,
 .creator-ai-understanding b {
   color: var(--accent-strong);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 750;
 }
 
@@ -735,7 +735,7 @@ async function generateDraftFromConversation() {
   padding: 11px 13px;
   background: var(--surface-sub);
   border-left: 3px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--r-xs);
 }
 
 .creator-ai-message.role-user {
@@ -761,7 +761,7 @@ async function generateDraftFromConversation() {
 .creator-ai-message strong,
 .creator-ai-message time {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 700;
 }
 
@@ -795,7 +795,7 @@ async function generateDraftFromConversation() {
 .creator-ai-material-note p {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .creator-ai-composer {
@@ -819,7 +819,7 @@ async function generateDraftFromConversation() {
   color: var(--text);
   background: var(--surface-sub);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--r-sm);
   outline: none;
   line-height: 1.55;
 }
@@ -864,7 +864,7 @@ async function generateDraftFromConversation() {
 .creator-settings-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1800;
+  z-index: var(--z-modal);
   display: flex;
   justify-content: flex-end;
   background: rgba(23, 32, 51, 0.38);
@@ -893,7 +893,7 @@ async function generateDraftFromConversation() {
 
 .creator-settings-head span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .creator-icon-button {
@@ -905,7 +905,7 @@ async function generateDraftFromConversation() {
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-xs);
   cursor: pointer;
 }
 
@@ -935,12 +935,12 @@ async function generateDraftFromConversation() {
 .creator-settings-section header strong,
 .creator-settings-section header span {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .creator-settings-section header span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .creator-preference-modes {
@@ -960,7 +960,7 @@ async function generateDraftFromConversation() {
   text-align: left;
   background: var(--surface-sub);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--r-sm);
   cursor: pointer;
 }
 
@@ -971,13 +971,13 @@ async function generateDraftFromConversation() {
 }
 
 .creator-preference-modes button span {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 700;
 }
 
 .creator-preference-modes button small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .creator-history-state {
@@ -991,7 +991,7 @@ async function generateDraftFromConversation() {
   color: var(--muted);
   background: var(--surface-sub);
   border-left: 3px solid var(--border-strong);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .creator-history-state.is-error {
@@ -1003,7 +1003,7 @@ async function generateDraftFromConversation() {
   min-height: 40px;
   color: var(--ink);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 700;
 }
 
@@ -1015,7 +1015,7 @@ async function generateDraftFromConversation() {
 .creator-history-details h4 {
   margin: 0 0 8px;
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .creator-history-details ul {
@@ -1037,19 +1037,19 @@ async function generateDraftFromConversation() {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
 }
 
 .creator-history-details small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .creator-history-developer-detail summary {
   color: var(--muted);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .creator-history-developer-detail code,
@@ -1060,7 +1060,7 @@ async function generateDraftFromConversation() {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .creator-settings-form {
@@ -1074,7 +1074,7 @@ async function generateDraftFromConversation() {
   min-width: 0;
   gap: 6px;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 700;
 }
 
@@ -1086,7 +1086,7 @@ async function generateDraftFromConversation() {
   color: var(--text);
   background: var(--surface-sub);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--r-sm);
   outline: none;
   line-height: 1.5;
 }
@@ -1121,12 +1121,12 @@ async function generateDraftFromConversation() {
   background: var(--surface-sub);
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .creator-context-tags em {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-style: normal;
 }
 
@@ -1142,7 +1142,7 @@ async function generateDraftFromConversation() {
   min-width: 0;
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .creator-settings-footer > span {

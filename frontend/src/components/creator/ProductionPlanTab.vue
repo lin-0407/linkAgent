@@ -160,7 +160,7 @@ onMounted(() => {
 .production-error,
 .production-loading {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .production-error {
@@ -215,7 +215,7 @@ onMounted(() => {
 .production-kicker {
   margin: 0;
   color: var(--accent-strong);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
 }
 
@@ -227,8 +227,8 @@ onMounted(() => {
 }
 
 .production-open-entry-copy strong {
-  font-size: 18px;
-  transition: color 180ms ease;
+  font-size: var(--fs-lg);
+  transition: color var(--dur-fast) ease;
 }
 
 .production-open-entry-copy small {

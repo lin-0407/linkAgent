@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { X } from '@lucide/vue'
 import {
   checkSettingsConnectivity,
@@ -72,7 +73,7 @@ async function loadSettings() {
     settings.value = await getSettingsStatus()
     hasLoaded.value = true
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = errorText(error, '加载失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -88,7 +89,7 @@ async function toggleSetting(key: string, enabled: boolean) {
     await updateRuntimeToggle(key, enabled)
     await loadSettings()
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = errorText(error, '加载失败，请稍后重试')
   } finally {
     savingKey.value = ''
   }
@@ -104,7 +105,7 @@ async function updateSettingValue(key: string, value: string) {
     await updateRuntimeValue(key, value)
     await loadSettings()
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = errorText(error, '加载失败，请稍后重试')
   } finally {
     savingKey.value = ''
   }
@@ -120,7 +121,7 @@ async function refreshRate() {
       settings.value = { ...settings.value, billing: latest }
     }
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = errorText(error, '汇率刷新失败，请稍后重试')
   } finally {
     refreshingRate.value = false
   }
@@ -133,7 +134,7 @@ async function runConnectivityCheck() {
     const result = await checkSettingsConnectivity()
     connectivityItems.value = result.items
   } catch (error) {
-    connectivityError.value = error instanceof Error ? error.message : String(error)
+    connectivityError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     connectivityLoading.value = false
   }
@@ -152,7 +153,8 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
       <div v-show="open" class="settings-layer" role="presentation" @click.self="closeDrawer">
         <aside
           ref="dialogRef"
-          class="settings-drawer"
+          class="settings-dialog"
+          :class="{ 'settings-dialog--compact': !developerMode }"
           role="dialog"
           aria-modal="true"
           aria-labelledby="settings-title"
@@ -287,7 +289,7 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
 .settings-layer {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: var(--z-popover);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -296,7 +298,7 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
   backdrop-filter: none;
 }
 
-.settings-drawer {
+.settings-dialog {
   width: min(820px, calc(100vw - 32px));
   max-height: min(840px, calc(100vh - 40px));
   overflow: hidden;
@@ -305,6 +307,11 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
   border: 1px solid var(--border-strong);
   border-radius: var(--r-lg);
   box-shadow: var(--sh-lg);
+}
+
+/* 非开发者模式下只有两张说明卡，按内容收窄，避免宽面板里留一大片空白 */
+.settings-dialog--compact {
+  width: min(560px, calc(100vw - 32px));
 }
 
 .settings-header {
@@ -318,7 +325,7 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
 
 .settings-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--fs-lg);
   font-weight: var(--fw-bold);
   letter-spacing: 0;
 }
@@ -333,7 +340,7 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   cursor: pointer;
-  font-size: 22px;
+  font-size: var(--fs-2xl);
   line-height: 1;
 }
 
@@ -375,14 +382,14 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
 
 .settings-developer-card strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
 }
 
 .settings-developer-card p {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
 }
 
@@ -400,11 +407,11 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
   border-radius: var(--r-sm);
   cursor: pointer;
   font-weight: var(--fw-semibold);
-  font-size: 14px;
+  font-size: var(--fs-base);
   transition:
-    background 180ms ease,
-    color 180ms ease,
-    border-color 180ms ease;
+    background var(--dur-fast) ease,
+    color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
 }
 
 .settings-switch.enabled {
@@ -419,7 +426,7 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
   height: 18px;
   background: var(--border-strong);
   border-radius: var(--r-pill);
-  transition: background 180ms ease;
+  transition: background var(--dur-fast) ease;
 }
 
 .settings-switch-track i {
@@ -430,7 +437,7 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
   height: 12px;
   background: var(--surface);
   border-radius: 50%;
-  transition: transform 180ms ease;
+  transition: transform var(--dur-fast) ease;
 }
 
 .settings-switch.enabled .settings-switch-track {
@@ -448,7 +455,7 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
 
 .settings-fade-enter-active,
 .settings-fade-leave-active {
-  transition: opacity 180ms ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .settings-fade-enter-from,
@@ -456,15 +463,15 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
   opacity: 0;
 }
 
-.settings-fade-enter-active .settings-drawer,
-.settings-fade-leave-active .settings-drawer {
+.settings-fade-enter-active .settings-dialog,
+.settings-fade-leave-active .settings-dialog {
   transition:
-    opacity 180ms ease,
-    transform 220ms ease;
+    opacity var(--dur-fast) ease,
+    transform var(--dur-base) ease;
 }
 
-.settings-fade-enter-from .settings-drawer,
-.settings-fade-leave-to .settings-drawer {
+.settings-fade-enter-from .settings-dialog,
+.settings-fade-leave-to .settings-dialog {
   opacity: 0;
   transform: translateY(14px) scale(0.98);
 }
@@ -472,8 +479,8 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
 @media (prefers-reduced-motion: reduce) {
   .settings-fade-enter-active,
   .settings-fade-leave-active,
-  .settings-fade-enter-active .settings-drawer,
-  .settings-fade-leave-active .settings-drawer {
+  .settings-fade-enter-active .settings-dialog,
+  .settings-fade-leave-active .settings-dialog {
     transition: none;
   }
 }
@@ -498,7 +505,7 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
 
 .settings-section-toggle h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   flex: 0 0 auto;
 }
@@ -508,10 +515,10 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
   place-items: center;
   width: 20px;
   height: 20px;
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1;
   color: var(--muted);
-  transition: transform 180ms ease;
+  transition: transform var(--dur-fast) ease;
 }
 
 .settings-section-chevron.open {
@@ -531,7 +538,7 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
     padding: var(--s3);
   }
 
-  .settings-drawer {
+  .settings-dialog {
     width: 100%;
     max-height: calc(100vh - 24px);
   }

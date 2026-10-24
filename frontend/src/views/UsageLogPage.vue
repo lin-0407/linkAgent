@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { errorText } from '@/utils/error'
 import { ChevronDown, ChevronUp, RefreshCw, RotateCcw, Search } from '@lucide/vue'
 import { listLlmApiCallLogs } from '@/api/usage'
+import PageHeader from '@/components/common/PageHeader.vue'
 import type {
   LlmApiCallRecord,
   LlmApiCallStatus,
@@ -72,7 +74,7 @@ async function loadLogs() {
   try {
     result.value = await listLlmApiCallLogs(buildRequestFilters())
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = errorText(error, '加载失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -104,12 +106,15 @@ function toggleDetails(callId: string) {
   expandedCallIds.value = next
 }
 
+/** 缺失数据统一用破折号占位：比“未返回”更像数据缺失，也不会读成错误 */
+const EMPTY_VALUE = '—'
+
 function formatNumber(value: number | null | undefined) {
-  return value == null ? '未返回' : new Intl.NumberFormat('zh-CN').format(value)
+  return value == null ? EMPTY_VALUE : new Intl.NumberFormat('zh-CN').format(value)
 }
 
 function formatDuration(value: number | null | undefined) {
-  if (value == null) return '未返回'
+  if (value == null) return EMPTY_VALUE
   if (value < 1000) return `${value} ms`
   if (value < 60_000) return `${(value / 1000).toFixed(1)} s`
   return `${(value / 60_000).toFixed(1)} min`
@@ -164,13 +169,12 @@ onMounted(() => {
 
 <template>
   <main class="usage-log-page">
-    <header class="usage-log-heading">
-      <div>
-        <span class="usage-log-kicker">模型调用记录</span>
-        <h1>使用日志</h1>
-      </div>
-      <p>查看文本模型、向量化与重排序的每次调用记录</p>
-    </header>
+    <PageHeader
+      class="usage-log-header"
+      kicker="模型调用记录"
+      title="使用日志"
+      description="查看文本模型、向量化与重排序的每次调用记录"
+    />
 
     <section class="usage-log-query" aria-labelledby="usage-log-filter-title">
       <h2 id="usage-log-filter-title" class="sr-only">筛选使用日志</h2>
@@ -210,11 +214,11 @@ onMounted(() => {
           </select>
         </label>
         <div class="usage-log-actions">
-          <button type="button" class="usage-log-button secondary" :disabled="loading" @click="resetFilters">
+          <button type="button" class="creator-secondary-action" :disabled="loading" @click="resetFilters">
             <RotateCcw :size="15" :stroke-width="1.8" aria-hidden="true" />
             重置
           </button>
-          <button type="submit" class="usage-log-button primary" :disabled="loading">
+          <button type="submit" class="creator-primary-button" :disabled="loading">
             <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
             {{ loading ? '查询中...' : '查询' }}
           </button>
@@ -247,7 +251,7 @@ onMounted(() => {
           <h2 id="usage-log-result-title">调用明细</h2>
           <span>共 {{ formatNumber(result?.total ?? 0) }} 条</span>
         </div>
-        <button type="button" class="usage-log-refresh" :disabled="loading" @click="loadLogs">
+        <button type="button" class="creator-ghost-button creator-mini-button" :disabled="loading" @click="loadLogs">
           <RefreshCw :size="15" :stroke-width="1.8" aria-hidden="true" />
           {{ loading ? '刷新中...' : '刷新' }}
         </button>
@@ -256,12 +260,16 @@ onMounted(() => {
       <div v-if="loadError" class="usage-log-state error" role="alert">
         <strong>日志读取失败</strong>
         <span>{{ loadError }}</span>
-        <button type="button" class="usage-log-button secondary" @click="loadLogs">重新加载</button>
+        <button type="button" class="creator-secondary-action" @click="loadLogs">重新加载</button>
       </div>
 
-      <div v-else-if="loading && !result" class="usage-log-state">
-        <span class="usage-log-loader" aria-hidden="true"></span>
-        <span>正在读取调用记录...</span>
+      <div v-else-if="loading && !result" class="skeleton-stack usage-log-skeleton" role="status">
+        <span class="sr-only">正在读取调用记录</span>
+        <div v-for="n in 5" :key="n" class="skeleton-row usage-log-skeleton-row" aria-hidden="true">
+          <span class="skeleton-bar skeleton-bar--short"></span>
+          <span class="skeleton-bar skeleton-bar--medium"></span>
+          <span class="skeleton-bar skeleton-bar--short"></span>
+        </div>
       </div>
 
       <div v-else-if="result && result.items.length > 0" class="usage-log-records">
@@ -293,7 +301,7 @@ onMounted(() => {
                   <small>{{ record.taskId ? `任务 ${shortId(record.taskId)}` : '通用调用' }}</small>
                 </td>
                 <td>
-                  <strong>{{ record.modelName || '未返回模型名' }}</strong>
+                  <strong>{{ record.modelName || EMPTY_VALUE }}</strong>
                   <small>{{ record.scene || '无场景备注' }}</small>
                 </td>
                 <td>
@@ -314,7 +322,7 @@ onMounted(() => {
                 <td class="usage-log-detail-column">
                   <button
                     type="button"
-                    class="usage-log-detail-button"
+                    class="creator-ghost-button creator-mini-button"
                     :aria-expanded="expandedCallIds.has(record.callId)"
                     @click="toggleDetails(record.callId)"
                   >
@@ -369,7 +377,7 @@ onMounted(() => {
             <dl class="usage-log-mobile-summary">
               <div>
                 <dt>模型</dt>
-                <dd>{{ record.modelName || '未返回模型名' }}</dd>
+                <dd>{{ record.modelName || EMPTY_VALUE }}</dd>
               </div>
               <div>
                 <dt>Token</dt>
@@ -390,7 +398,7 @@ onMounted(() => {
               </div>
               <button
                 type="button"
-                class="usage-log-detail-button"
+                class="creator-ghost-button creator-mini-button"
                 :aria-expanded="expandedCallIds.has(record.callId)"
                 @click="toggleDetails(record.callId)"
               >
@@ -433,10 +441,20 @@ onMounted(() => {
       <footer v-if="result && result.total > 0" class="usage-log-pagination">
         <span>第 {{ currentPage }} / {{ totalPages }} 页</span>
         <div>
-          <button type="button" :disabled="currentPage <= 1 || loading" @click="changePage(currentPage - 1)">
+          <button
+            type="button"
+            class="creator-ghost-button creator-mini-button"
+            :disabled="currentPage <= 1 || loading"
+            @click="changePage(currentPage - 1)"
+          >
             上一页
           </button>
-          <button type="button" :disabled="currentPage >= totalPages || loading" @click="changePage(currentPage + 1)">
+          <button
+            type="button"
+            class="creator-ghost-button creator-mini-button"
+            :disabled="currentPage >= totalPages || loading"
+            @click="changePage(currentPage + 1)"
+          >
             下一页
           </button>
         </div>
@@ -453,50 +471,17 @@ onMounted(() => {
   background: var(--canvas);
 }
 
-.usage-log-heading,
+.usage-log-header,
 .usage-log-query,
 .usage-log-results {
   width: min(1280px, 100%);
   margin-inline: auto;
 }
 
-.usage-log-heading {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 0 2px 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.usage-log-heading > div {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-
-.usage-log-kicker {
-  color: var(--accent-strong);
-  font-size: 12px;
-  font-weight: var(--fw-bold);
-}
-
-.usage-log-heading h1,
 .usage-log-results-head h2 {
   margin: 0;
   color: var(--ink);
   letter-spacing: 0;
-}
-
-.usage-log-heading h1 {
-  font-size: 24px;
-  line-height: 1.2;
-}
-
-.usage-log-heading p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
 }
 
 .usage-log-query,
@@ -524,7 +509,7 @@ onMounted(() => {
 
 .usage-log-field > span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -552,48 +537,8 @@ onMounted(() => {
   gap: 8px;
 }
 
-.usage-log-button,
-.usage-log-refresh,
-.usage-log-detail-button,
 .usage-log-pagination button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 40px;
-  padding: 0 14px;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
-  font-weight: var(--fw-semibold);
-  cursor: pointer;
-}
-
-.usage-log-button.primary {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.usage-log-button:hover:not(:disabled),
-.usage-log-refresh:hover:not(:disabled),
-.usage-log-detail-button:hover:not(:disabled),
-.usage-log-pagination button:hover:not(:disabled) {
-  color: var(--accent-strong);
-  border-color: var(--accent);
-}
-
-.usage-log-button.primary:hover:not(:disabled) {
-  color: #fff;
-  background: var(--accent-hover);
-}
-
-.usage-log-button:disabled,
-.usage-log-refresh:disabled,
-.usage-log-pagination button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
+  white-space: nowrap;
 }
 
 .usage-log-summary {
@@ -624,13 +569,13 @@ onMounted(() => {
 
 .usage-log-summary span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .usage-log-summary strong {
   color: var(--ink);
   font-family: var(--font-code);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .usage-log-summary .alert strong {
@@ -658,21 +603,14 @@ onMounted(() => {
 }
 
 .usage-log-results-head h2 {
-  font-size: 16px;
+  font-size: var(--fs-md);
 }
 
 .usage-log-results-head span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
-.usage-log-refresh,
-.usage-log-detail-button {
-  min-height: 32px;
-  padding-inline: 10px;
-  font-size: 12px;
-  white-space: nowrap;
-}
 
 .usage-log-table-wrap {
   width: 100%;
@@ -705,7 +643,7 @@ onMounted(() => {
   min-width: 0;
   color: var(--ink);
   font-family: var(--font-code);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   line-height: 1.45;
 }
@@ -725,13 +663,13 @@ onMounted(() => {
 .usage-log-mobile-scene strong {
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.45;
 }
 
 .usage-log-mobile-scene small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .usage-log-mobile-summary {
@@ -752,7 +690,7 @@ onMounted(() => {
 .usage-log-mobile-summary dt,
 .usage-log-mobile-detail dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .usage-log-mobile-summary dd,
@@ -761,7 +699,7 @@ onMounted(() => {
   overflow-wrap: anywhere;
   color: var(--ink);
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .usage-log-mobile-summary dd {
@@ -816,7 +754,7 @@ onMounted(() => {
 .usage-log-table th {
   color: var(--muted);
   background: var(--surface-sub);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -844,7 +782,7 @@ onMounted(() => {
 .usage-log-table time {
   overflow: hidden;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   line-height: 1.45;
   text-overflow: ellipsis;
@@ -862,7 +800,7 @@ onMounted(() => {
   margin-top: 3px;
   overflow: hidden;
   color: var(--faint);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -877,7 +815,7 @@ onMounted(() => {
   margin-top: 5px;
   padding: 0 7px;
   border-radius: var(--r-pill);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -892,7 +830,7 @@ onMounted(() => {
   background: var(--accent-tint);
   border-radius: var(--r-pill);
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -935,7 +873,7 @@ onMounted(() => {
 
 .usage-log-detail-row dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .usage-log-detail-row dd {
@@ -943,7 +881,7 @@ onMounted(() => {
   overflow-wrap: anywhere;
   color: var(--ink);
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .usage-log-error-message {
@@ -955,7 +893,7 @@ onMounted(() => {
   background: rgba(220, 38, 38, 0.06);
   border: 1px solid rgba(220, 38, 38, 0.16);
   border-radius: var(--r-sm);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .usage-log-state {
@@ -979,13 +917,15 @@ onMounted(() => {
   overflow-wrap: anywhere;
 }
 
-.usage-log-loader {
-  width: 24px;
-  height: 24px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: usage-log-spin 800ms linear infinite;
+.usage-log-skeleton {
+  padding: var(--s4);
+}
+
+.usage-log-skeleton-row {
+  grid-template-columns: 120px 1fr 90px;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) var(--s4);
 }
 
 .usage-log-pagination {
@@ -997,7 +937,7 @@ onMounted(() => {
   padding: 8px 14px;
   color: var(--muted);
   border-top: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .usage-log-pagination > div {
@@ -1014,10 +954,6 @@ onMounted(() => {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-@keyframes usage-log-spin {
-  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 1320px) {
@@ -1038,15 +974,6 @@ onMounted(() => {
     padding: 14px 10px 64px;
   }
 
-  .usage-log-heading {
-    display: grid;
-    gap: 6px;
-    padding-bottom: 12px;
-  }
-
-  .usage-log-heading p {
-    font-size: 12px;
-  }
 
   .usage-log-filter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1058,14 +985,12 @@ onMounted(() => {
     grid-column: span 2;
   }
 
-  .usage-log-actions .usage-log-button {
+  .usage-log-actions > button {
     flex: 1;
-    min-height: 44px;
   }
 
   .usage-log-field input,
-  .usage-log-field select,
-  .usage-log-pagination button {
+  .usage-log-field select {
     min-height: 44px;
     height: 44px;
   }
@@ -1091,17 +1016,9 @@ onMounted(() => {
     display: block;
   }
 
-  .usage-log-refresh,
-  .usage-log-detail-button {
-    min-height: 44px;
-  }
 }
 
 @media (max-width: 480px) {
-  .usage-log-heading > div {
-    display: grid;
-    gap: 4px;
-  }
 
   .usage-log-filter-grid {
     grid-template-columns: 1fr;
@@ -1127,12 +1044,6 @@ onMounted(() => {
 
   .usage-log-mobile-detail dl {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .usage-log-loader {
-    animation: none;
   }
 }
 </style>

@@ -11,6 +11,7 @@
  * 完整管理能力，设置面板的侧边抽屉空间不足以承载这些交互。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { errorText } from '@/utils/error'
 import { BrainCircuit, RefreshCw, RotateCcw, Search, Trash2, X } from '@lucide/vue'
 import {
   deleteLongTermMemory,
@@ -18,6 +19,7 @@ import {
   restoreLongTermMemory,
 } from '@/api/memory'
 import { formatDate } from '@/composables/creator/creatorWorkspaceUtils'
+import PageHeader from '@/components/common/PageHeader.vue'
 import { useModalDialog } from '@/composables/useModalDialog'
 import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 useAssistantBusinessRefresh(['memory.'], () => loadMemories())
@@ -38,7 +40,7 @@ async function loadMemories() {
   try {
     memories.value = await listLongTermMemories(DEFAULT_USER_ID)
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : String(err)
+    loadError.value = errorText(err, '加载失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -200,7 +202,7 @@ async function undoDelete() {
     ]
     recentlyDeleted.value = null
   } catch (err) {
-    undoError.value = err instanceof Error ? err.message : String(err)
+    undoError.value = errorText(err, '操作失败，请稍后重试')
   } finally {
     restoringId.value = null
   }
@@ -222,7 +224,7 @@ async function confirmDelete() {
     pendingDelete.value = null
     offerUndo(memory)
   } catch (err) {
-    deleteError.value = err instanceof Error ? err.message : String(err)
+    deleteError.value = errorText(err, '操作失败，请稍后重试')
   } finally {
     deletingId.value = null
   }
@@ -242,14 +244,8 @@ onBeforeUnmount(() => {
 <template>
   <main class="memory-page">
     <!-- 页面头部 -->
-    <header class="memory-header">
-      <div class="memory-header-left">
-        <h1>记忆管理</h1>
-        <p class="memory-subtitle">
-          系统从您的对话中自动提取的长期偏好和关键信息
-        </p>
-      </div>
-      <div class="memory-header-right">
+    <PageHeader title="记忆管理" description="系统从您的对话中自动提取的长期偏好和关键信息">
+      <template #actions>
         <span v-if="!loading" class="memory-count">
           共 <strong>{{ filteredMemories.length }}</strong> 条
         </span>
@@ -262,8 +258,8 @@ onBeforeUnmount(() => {
           <RefreshCw :size="16" :stroke-width="1.8" aria-hidden="true" />
           {{ loading ? '加载中…' : '刷新' }}
         </button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <!-- 工具栏：搜索 + 排序 -->
     <div class="memory-toolbar">
@@ -545,42 +541,12 @@ onBeforeUnmount(() => {
   padding: 22px var(--s4) 72px;
 }
 
-/* ── 头部 ── */
-
-.memory-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--s3);
-  margin-bottom: var(--s4);
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.memory-header-left h1 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: var(--fw-bold);
-  color: var(--ink);
-}
-
-.memory-subtitle {
-  margin: var(--s1) 0 0;
-  color: var(--text-secondary, #666);
-  font-size: 14px;
-}
-
-.memory-header-right {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-}
+/* ── 头部（结构由 PageHeader 提供，这里只保留右侧计数与按钮样式） ── */
 
 .memory-count {
   flex: none;
-  font-size: 14px;
-  color: var(--text-secondary, #666);
+  font-size: var(--fs-base);
+  color: var(--text-secondary, var(--muted));
   white-space: nowrap;
 }
 
@@ -592,7 +558,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: var(--s2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 /* ── 工具栏 ── */
@@ -632,12 +598,12 @@ onBeforeUnmount(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .memory-search-input:focus {
   outline: none;
-  border-color: var(--accent, #1a73e8);
+  border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
@@ -648,7 +614,7 @@ onBeforeUnmount(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  font-size: 14px;
+  font-size: var(--fs-base);
   cursor: pointer;
   /* 给排序下拉框一个最小宽度，防止选项文字截断 */
   min-width: 120px;
@@ -679,14 +645,14 @@ onBeforeUnmount(() => {
 
 .memory-empty h3 {
   margin: 0 0 var(--s2);
-  font-size: 18px;
+  font-size: var(--fs-lg);
   color: var(--text);
 }
 
 .memory-empty p {
   margin: 0;
-  color: var(--text-secondary, #666);
-  font-size: 14px;
+  color: var(--text-secondary, var(--muted));
+  font-size: var(--fs-base);
 }
 
 /* ── 卡片网格 ── */
@@ -708,11 +674,11 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 
 .memory-card:hover {
-  border-color: var(--accent, #1a73e8);
+  border-color: var(--accent);
   background: #f9fcfd;
 }
 
@@ -734,14 +700,14 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
   padding: 2px var(--s2);
   background: var(--surface-dim, #f0f4ff);
-  color: var(--accent, #1a73e8);
+  color: var(--accent);
   border-radius: var(--r-sm);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
 .memory-card-time {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--text-secondary, #999);
   white-space: nowrap;
 }
@@ -749,7 +715,7 @@ onBeforeUnmount(() => {
 .memory-card-content {
   flex: 1;
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.6;
   color: var(--text);
   /* 超出 4 行省略 */
@@ -770,7 +736,7 @@ onBeforeUnmount(() => {
 
 .memory-card-source {
   color: var(--text-secondary, #999);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   /* 超长 sessionId 截断 */
   max-width: 180px;
   overflow: hidden;
@@ -787,16 +753,16 @@ onBeforeUnmount(() => {
   gap: 5px;
   padding: 0 var(--s2);
   background: transparent;
-  color: var(--danger, #d93025);
+  color: var(--danger);
   border: 1px solid transparent;
   border-radius: var(--r-sm);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
 }
 
 .memory-card-delete:hover:not(:disabled) {
-  background: var(--danger, #d93025);
+  background: var(--danger);
   color: #fff;
 }
 
@@ -818,7 +784,7 @@ onBeforeUnmount(() => {
 
 .memory-delete-confirm-modal header span {
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -844,7 +810,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-left: 3px solid var(--danger);
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
 }
 
@@ -860,7 +826,7 @@ onBeforeUnmount(() => {
   position: fixed;
   right: 16px;
   bottom: 52px;
-  z-index: 70;
+  z-index: var(--z-toast);
   display: flex;
   width: min(460px, calc(100vw - 32px));
   align-items: center;
@@ -891,13 +857,13 @@ onBeforeUnmount(() => {
 }
 
 .memory-undo-copy strong {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.4;
 }
 
 .memory-undo-copy span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -924,7 +890,7 @@ onBeforeUnmount(() => {
 .memory-undo-action {
   gap: 6px;
   padding: 0 var(--s2);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
 }
 
@@ -954,7 +920,7 @@ onBeforeUnmount(() => {
 
 .memory-undo-toast-enter-active,
 .memory-undo-toast-leave-active {
-  transition: opacity 180ms ease, transform 180ms ease;
+  transition: opacity var(--dur-fast) ease, transform var(--dur-fast) ease;
 }
 
 .memory-undo-toast-enter-from,
@@ -979,26 +945,26 @@ onBeforeUnmount(() => {
 }
 
 .memory-detail-list dt {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
-  color: var(--text-secondary, #666);
+  color: var(--text-secondary, var(--muted));
   text-align: right;
   padding-top: 2px;
 }
 
 .memory-detail-list dd {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   color: var(--text);
   word-break: break-word;
 }
 
 .memory-detail-list code {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 1px 6px;
   background: var(--surface-dim, #f0f4ff);
   border-radius: var(--r-sm);
-  color: var(--accent, #1a73e8);
+  color: var(--accent);
 }
 
 .memory-detail-content {
@@ -1039,7 +1005,7 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   .memory-undo-toast-enter-active,
   .memory-undo-toast-leave-active {
-    transition: opacity 150ms ease;
+    transition: opacity var(--dur-fast) ease;
   }
 
   .memory-undo-toast-enter-from,

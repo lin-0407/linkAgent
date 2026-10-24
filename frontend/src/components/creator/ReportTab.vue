@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import {
   analyzeCreatorReport, exportCreatorReportMarkdown, getCreatorCompetitorReport,
   getCreatorReport, listCreatorReportHistory, getCreatorReportHistory,
@@ -116,7 +117,7 @@ async function loadHistory(page: number) {
     if (selectedTaskId.value === taskId && historySequence === sequence) history.value = result
   } catch (error) {
     if (selectedTaskId.value === taskId && historySequence === sequence)
-      historyError.value = error instanceof Error ? error.message : '复盘历史加载失败'
+      historyError.value = errorText(error, '复盘历史加载失败')
   } finally {
     if (historySequence === sequence) isLoadingHistory.value = false
   }
@@ -133,7 +134,7 @@ async function viewHistory(historyId: string) {
     selectedHistoryId.value = historyId
   } catch (error) {
     if (selectedTaskId.value === taskId && detailSequence === sequence)
-      reportError.value = error instanceof Error ? error.message : '复盘历史读取失败'
+      reportError.value = errorText(error, '复盘历史读取失败')
   }
 }
 
@@ -157,7 +158,7 @@ async function runCreatorReportAnalyze() {
     emit('generated', report)
   } catch (error) {
     if (selectedTaskId.value === taskId)
-      reportError.value = error instanceof Error ? error.message : '总体复盘生成失败'
+      reportError.value = errorText(error, '总体复盘生成失败')
   } finally {
     isAnalyzingCreatorReport.value = false
   }
@@ -179,7 +180,7 @@ async function downloadCreatorReportMarkdown() {
     URL.revokeObjectURL(url)
   } catch (error) {
     if (selectedTaskId.value === taskId)
-      reportError.value = error instanceof Error ? error.message : '总体复盘导出失败'
+      reportError.value = errorText(error, '总体复盘导出失败')
   } finally {
     isExportingCreatorReport.value = false
   }
@@ -265,7 +266,7 @@ async function downloadCreatorReportMarkdown() {
 .creator-report-summary h4,
 .creator-report-detail h4 {
   margin: 0 0 8px;
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .creator-report-summary p,
