@@ -9,6 +9,8 @@ import com.link.linkagent.creator.creation.service.CreationRuntimeService;
 import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardCodec;
+import com.link.linkagent.creator.creation.billing.BillingExchangeRate;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardPersistence;
 import com.link.linkagent.creator.creation.voice.model.CreationVoice;
 import com.link.linkagent.creator.creation.voice.model.VoiceModels;
@@ -17,6 +19,7 @@ import com.link.linkagent.creator.creation.voice.provider.SpeechSynthesisProvide
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -41,15 +44,29 @@ public class CreationVoiceService {
     private final CreationBillingProperties billing;
     private final CreatorMediaProperties mediaProperties;
     private final List<SpeechSynthesisProvider> providers;
+    private final CreationCapabilityGate capabilities;
+    private final BillingExchangeRate rates;
     private final ObjectMapper json;
 
+    /** 测试和旧调用入口：默认全部能力开启，汇率取部署配置值。 */
     public CreationVoiceService(StoryboardMapper boards, StoryboardPersistence persistence, StoryboardCodec codec,
             MediaUploadMapper media, CreationVoicePersistence voices, CreationRuntimeService runtime,
             CreationVoiceProperties settings, CreationBillingProperties billing, CreatorMediaProperties mediaProperties,
             List<SpeechSynthesisProvider> providers, ObjectMapper json) {
+        this(boards, persistence, codec, media, voices, runtime, settings, billing, mediaProperties, providers, json,
+                CreationCapabilityGate.defaults(settings.isEnabled(), false), BillingExchangeRate.fixed(billing.getUsdToCny()));
+    }
+
+    @Autowired
+    public CreationVoiceService(StoryboardMapper boards, StoryboardPersistence persistence, StoryboardCodec codec,
+            MediaUploadMapper media, CreationVoicePersistence voices, CreationRuntimeService runtime,
+            CreationVoiceProperties settings, CreationBillingProperties billing, CreatorMediaProperties mediaProperties,
+            List<SpeechSynthesisProvider> providers, ObjectMapper json, CreationCapabilityGate capabilities,
+            BillingExchangeRate rates) {
         this.boards = boards; this.persistence = persistence; this.codec = codec; this.media = media;
         this.voices = voices; this.runtime = runtime; this.settings = settings; this.billing = billing;
-        this.mediaProperties = mediaProperties; this.providers = providers; this.json = json;
+        this.mediaProperties = mediaProperties; this.providers = providers; this.capabilities = capabilities;
+        this.rates = rates; this.json = json;
     }
 
     public Estimate estimate(String task, String owner, String boardId) {
@@ -58,8 +75,10 @@ public class CreationVoiceService {
         var providerValue = providers.isEmpty() ? null : providers.getFirst();
         boolean keyConfigured = mediaProperties.getPreflight().getDashScopeApiKey() != null
                 && !mediaProperties.getPreflight().getDashScopeApiKey().isBlank();
-        if (!settings.configured() || providerValue == null || !keyConfigured)
-            blockers.add("配音供应商尚未配置：需要 creator.creation.voice.enabled=true、模型与音色，以及 DashScope 密钥");
+        boolean enabled = capabilities.voiceEnabled();
+        boolean providerReady = settings.providerConfigured() && providerValue != null && keyConfigured;
+        if (!enabled) blockers.add("配音生成已在设置中关闭");
+        if (!providerReady) blockers.add("配音供应商尚未配置：需要模型与音色，以及 DashScope 密钥");
         if (!"TTS".equals(context.dialogueMode()))
             blockers.add("本简报的声音选择不是 TTS，不能只对部分场景生成配音");
         if (context.scenes().isEmpty()) blockers.add("本故事板没有待配音的 TTS 场景");
@@ -67,6 +86,7 @@ public class CreationVoiceService {
         List<SceneEstimate> scenes = new ArrayList<>();
         long totalCharacters = 0;
         BigDecimal totalCny = BigDecimal.ZERO;
+        BigDecimal rate = rates.current().usdToCny();
         for (Scene scene : context.scenes()) {
             // 文稿原样保存，摘要必须和编译器看到的 narrations 完全一致。
             String text = Objects.toString(scene.narration(), "");
@@ -81,20 +101,21 @@ public class CreationVoiceService {
             long seconds = Math.max(1, (scene.durationMs() + 999) / 1000);
             BigDecimal asrUsd = mediaProperties.getProcessing().getAsrUsdPerSecond().multiply(BigDecimal.valueOf(seconds));
             totalCharacters += characters;
-            totalCny = totalCny.add(toCny(ttsUsd)).add(toCny(asrUsd));
+            totalCny = totalCny.add(toCny(ttsUsd, rate)).add(toCny(asrUsd, rate));
             scenes.add(new SceneEstimate(scene.id(), characters, StoryboardCodec.digest(text), scene.durationMs(), ttsUsd, asrUsd));
         }
-        return new Estimate(boardId, context.briefId(), settings.configured() && providerValue != null && keyConfigured,
+        return new Estimate(boardId, context.briefId(), enabled && providerReady,
                 settings.getModel(), settings.getVoice(), mediaProperties.getPreflight().getAsrModel(),
-                context.scenes().size(), totalCharacters, billing.getUsdToCny(), totalCny, "CONFIGURED_ESTIMATE",
+                context.scenes().size(), totalCharacters, rate, totalCny, "CONFIGURED_ESTIMATE",
                 List.copyOf(scenes), List.copyOf(blockers));
     }
 
     public Preparation generate(String task, String owner, String key, String boardId, VoiceModels.Generate input) {
         if (key == null || key.isBlank() || key.length() > 128) throw conflict("配音受理需要非空幂等键，最多 128 字符");
         var estimate = estimate(task, owner, boardId);
-        if (!estimate.configured()) throw conflict("配音供应商尚未配置，不能发起付费调用");
+        // 先返回具体原因：关闭开关时不能误报成“供应商未配置”。
         if (!estimate.blockers().isEmpty()) throw conflict(estimate.blockers().getFirst());
+        if (!estimate.configured()) throw conflict("配音供应商尚未配置，不能发起付费调用");
         if (input.maxAdditionalCostCny().compareTo(estimate.estimatedMaxAdditionalCostCny()) < 0)
             throw conflict("本次授权低于配音费用估算，请先查询估算并确认限额");
         var context = context(task, owner, boardId);
@@ -120,7 +141,7 @@ public class CreationVoiceService {
                 .put("usdPerMillionCharacters", settings.getUsdPerMillionCharacters())
                 .put("asrModel", mediaProperties.getPreflight().getAsrModel())
                 .put("asrUsdPerSecond", mediaProperties.getProcessing().getAsrUsdPerSecond())
-                .put("usdToCny", billing.getUsdToCny())
+                .put("usdToCny", estimate.usdToCny())
                 .put("reservationCny", estimate.estimatedMaxAdditionalCostCny())
                 .put("basis", "CONFIGURED_ESTIMATE");
         request.set("assets", json.valueToTree(context.frozen()));
@@ -166,8 +187,8 @@ public class CreationVoiceService {
         catch (com.fasterxml.jackson.core.JsonProcessingException exception) { return List.of(); }
     }
 
-    private BigDecimal toCny(BigDecimal usd) {
-        BigDecimal cny = usd.multiply(billing.getUsdToCny()).setScale(6, RoundingMode.CEILING);
+    private BigDecimal toCny(BigDecimal usd, BigDecimal rate) {
+        BigDecimal cny = usd.multiply(rate).setScale(6, RoundingMode.CEILING);
         // 台账不接受零金额预留；极小上界按最小可记账金额保留，结算后按实际费用回落。
         return cny.signum() == 0 ? new BigDecimal("0.000001") : cny;
     }

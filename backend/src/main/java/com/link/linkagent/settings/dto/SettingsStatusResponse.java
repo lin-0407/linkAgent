@@ -8,6 +8,8 @@ import java.util.List;
 public record SettingsStatusResponse(
         List<RuntimeToggleResponse> dynamicToggles,
         List<RuntimeValueResponse> dynamicValues,
-        List<ReadonlySettingResponse> readonlySettings
+        List<ReadonlySettingResponse> readonlySettings,
+        List<RuntimeToggleResponse> productionToggles,
+        BillingSettingsResponse billing
 ) {
 }

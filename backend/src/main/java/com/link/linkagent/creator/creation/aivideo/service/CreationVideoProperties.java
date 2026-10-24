@@ -44,13 +44,19 @@ public class CreationVideoProperties {
     /** 规范化视频上限；超过渲染器单素材限制的片段不能进入工程。 */
     private long maxNormalizedBytes = 32L * 1024 * 1024;
 
-    public boolean configured() {
-        return enabled && provider != null && !provider.isBlank()
+    /** 供应商参数是否完整；运行期开关单独由设置面板控制。 */
+    public boolean providerConfigured() {
+        return provider != null && !provider.isBlank()
                 && baseUrl != null && !baseUrl.isBlank()
                 && apiKey != null && !apiKey.isBlank()
                 && model != null && !model.isBlank()
                 && width >= 256 && height >= 256 && width <= 3840 && height <= 2160
                 && supportedDurations() && usdPerSecond != null && usdPerSecond.signum() > 0;
+    }
+
+    /** 部署默认值；设置面板可以对它做运行期覆盖。 */
+    public boolean configured() {
+        return enabled && providerConfigured();
     }
 
     public List<Integer> durations() {

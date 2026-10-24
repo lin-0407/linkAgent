@@ -2,6 +2,7 @@ package com.link.linkagent.creator.media.preflight.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.access.InternalMediaAcceptance;
 import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
@@ -18,6 +19,7 @@ import com.link.linkagent.creator.media.processing.model.MediaProcessingJobRecor
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
 import com.link.linkagent.util.TextUtil;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -52,19 +54,34 @@ public class PreflightReviewService {
     private final MediaProcessingMapper processingMapper;
     private final PreflightEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final CreationCapabilityGate capabilities;
 
+    /** 测试和旧调用入口：默认媒体分析与制作能力开启。 */
     public PreflightReviewService(CreatorMediaProperties properties,
                                   PreflightReviewMapper mapper,
                                   MediaUploadMapper uploadMapper,
                                   MediaProcessingMapper processingMapper,
                                   PreflightEventPublisher eventPublisher,
                                   ObjectMapper objectMapper) {
+        this(properties, mapper, uploadMapper, processingMapper, eventPublisher, objectMapper,
+                CreationCapabilityGate.ALL_ENABLED);
+    }
+
+    @Autowired
+    public PreflightReviewService(CreatorMediaProperties properties,
+                                  PreflightReviewMapper mapper,
+                                  MediaUploadMapper uploadMapper,
+                                  MediaProcessingMapper processingMapper,
+                                  PreflightEventPublisher eventPublisher,
+                                  ObjectMapper objectMapper,
+                                  CreationCapabilityGate capabilities) {
         this.properties = properties;
         this.mapper = mapper;
         this.uploadMapper = uploadMapper;
         this.processingMapper = processingMapper;
         this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
+        this.capabilities = capabilities;
     }
 
     @Transactional
@@ -86,6 +103,7 @@ public class PreflightReviewService {
                                           String idempotencyKey,
                                           CreatePreflightReviewRequest request,
                                           InternalMediaAcceptance acceptance) {
+        requireMediaAnalysis();
         lockTask(taskId, ownerId);
         mapper.lockDraftVersion(taskId, ownerId, request.versionId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
@@ -216,6 +234,7 @@ public class PreflightReviewService {
 
     @Transactional
     public PreflightReviewResponse retry(String ownerId, String taskId, String reviewId) {
+        requireMediaAnalysis();
         lockTask(taskId, ownerId);
         PreflightReviewRecord review = requireReview(ownerId, taskId, reviewId);
         if (!"FAILED".equals(review.status())) {
@@ -243,6 +262,7 @@ public class PreflightReviewService {
     /** 已完成的 P0-4a 任务由作者显式补全，避免页面刷新后自动产生新的模型费用。 */
     @Transactional
     public PreflightReviewResponse completeScreening(String ownerId, String taskId, String reviewId) {
+        requireMediaAnalysis();
         lockTask(taskId, ownerId);
         PreflightReviewRecord review = requireReview(ownerId, taskId, reviewId);
         PreflightStepRecord audience = mapper.findStep(reviewId, "SCREEN_AUDIENCE").orElse(null);
@@ -358,6 +378,14 @@ public class PreflightReviewService {
 
     public void publish(String reviewId, String eventType) {
         mapper.findReviewInternal(reviewId).ifPresent(review -> eventPublisher.publish(toResponse(review), eventType));
+    }
+
+    /** 关闭媒体付费分析后，新的试映、重试和补全都必须在发出任何模型请求前被拒绝。 */
+    private void requireMediaAnalysis() {
+        if (!capabilities.mediaAnalysisEnabled()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "媒体付费分析已在设置中关闭；重新开启后才能新建、重试或补全试映");
+        }
     }
 
     private PreflightReviewRecord requireReview(String ownerId, String taskId, String reviewId) {

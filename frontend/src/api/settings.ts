@@ -26,6 +26,11 @@ export function checkSettingsConnectivity() {
   return post<ConnectivityCheckResult>('/settings/connectivity/check', {})
 }
 
+/** 强制刷新公开汇率；只影响后续新调用，旧价格快照不变。 */
+export function refreshBillingRate() {
+  return post<SettingsStatus['billing']>('/settings/billing/refresh', {})
+}
+
 // ── P1-4: 用户 LLM/Embedding 配置 ──
 
 /** 列出用户的所有 LLM/Embedding 配置 */

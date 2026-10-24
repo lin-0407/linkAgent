@@ -2,7 +2,6 @@ package com.link.linkagent.creator.creation.aivideo.provider;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.link.linkagent.creator.creation.aivideo.service.CreationVideoProperties;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -32,7 +31,6 @@ import java.util.Map;
  * 这里只完成协议适配与本地替身验证，真实供应商仍须在实际部署中核对与验收。
  */
 @Component
-@ConditionalOnProperty(prefix = "creator.creation.video", name = "enabled", havingValue = "true")
 public class CompatibleVideoProvider implements VideoGenerationProvider {
 
     private final CreationVideoProperties settings;
@@ -46,7 +44,8 @@ public class CompatibleVideoProvider implements VideoGenerationProvider {
     }
 
     CompatibleVideoProvider(CreationVideoProperties settings, RestClient client, RestClient downloads) {
-        settings.validate();
+        // 运行期开关可能后置打开；部署默认开启时才在这里强制校验完整配置。
+        if (settings.isEnabled()) settings.validate();
         this.settings = settings;
         this.client = client;
         this.downloads = downloads;
@@ -153,7 +152,7 @@ public class CompatibleVideoProvider implements VideoGenerationProvider {
     }
 
     private void ensureConfigured() {
-        if (!settings.configured()) throw new VideoNotConfiguredException("视频生成供应商尚未配置");
+        if (!settings.providerConfigured()) throw new VideoNotConfiguredException("视频生成供应商尚未配置");
     }
 
     private String endpoint(String path) {

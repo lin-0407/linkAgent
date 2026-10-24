@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.creation.voice.service.CreationVoiceProperties;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -26,7 +25,6 @@ import java.util.Map;
  * 不能据此宣称真实供应商已验收。
  */
 @Component
-@ConditionalOnProperty(prefix = "creator.creation.voice", name = "enabled", havingValue = "true")
 public class DashScopeCosyVoiceProvider implements SpeechSynthesisProvider {
 
     private static final String GENERATION_PATH = "/api/v1/services/aigc/multimodal-generation/generation";

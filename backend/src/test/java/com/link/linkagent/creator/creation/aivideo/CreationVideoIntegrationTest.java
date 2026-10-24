@@ -12,7 +12,9 @@ import com.link.linkagent.creator.creation.asset.service.CreationAssetPersistenc
 import com.link.linkagent.creator.creation.asset.service.CreationAssetService;
 import com.link.linkagent.creator.creation.mapper.*;
 import com.link.linkagent.creator.creation.render.FixedProjectRendererProperties;
+import com.link.linkagent.creator.creation.billing.BillingExchangeRate;
 import com.link.linkagent.creator.creation.service.CreationBillingProperties;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.creation.service.CreationRuntimeService;
 import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
@@ -539,6 +541,37 @@ class CreationVideoIntegrationTest {
                         ex -> assertThat(ex.getStatusCode().value()).isEqualTo(409));
         assertThat(count("creator_creation_run", fixture.task)).isZero();
         assertThat(count("creator_creation_cost_entry", fixture.task)).isZero();
+    }
+
+    @Test
+    void runtimeDisabledVideoBlocksNewEstimateAndRun() {
+        var fixture = fixture("AI_VIDEO", List.of(), "海边日落", "NO_DIALOGUE", "NO_DIALOGUE", 2000);
+        var blocked = new CreationVideoService(boards, storyboards, codec, media, videoPersistence, runtime,
+                settings, prices, List.of(provider), JSON,
+                CreationCapabilityGate.defaults(false, false), BillingExchangeRate.fixed(new BigDecimal("6.7")));
+
+        var estimate = blocked.estimate(fixture.task, "default", fixture.boardId, "SELECTED", false);
+
+        assertThat(estimate.configured()).isFalse();
+        assertThat(estimate.blockers()).anyMatch(text -> text.contains("关闭"));
+        assertThatThrownBy(() -> blocked.generate(fixture.task, "default", "video-key", fixture.boardId,
+                new VideoModels.Generate(fixture.revision, new BigDecimal("10"), "SELECTED", false)))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode().value()).isEqualTo(409));
+        assertThat(count("creator_creation_run", fixture.task)).isZero();
+    }
+
+    @Test
+    void videoEstimateUsesInjectedLiveRate() {
+        var fixture = fixture("AI_VIDEO", List.of(), "海边日落", "NO_DIALOGUE", "NO_DIALOGUE", 2000);
+        var cheaper = new CreationVideoService(boards, storyboards, codec, media, videoPersistence, runtime,
+                settings, prices, List.of(provider), JSON,
+                CreationCapabilityGate.ALL_ENABLED, BillingExchangeRate.fixed(new BigDecimal("6.0")));
+
+        var estimate = cheaper.estimate(fixture.task, "default", fixture.boardId, "SELECTED", false);
+
+        assertThat(estimate.usdToCny()).isEqualByComparingTo("6.0");
+        assertThat(estimate.estimatedMaxCostCny()).isEqualByComparingTo("3.000000");
     }
 
     // ---------------------------------------------------------------- 夹具

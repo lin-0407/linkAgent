@@ -9,7 +9,9 @@ import com.link.linkagent.creator.creation.asset.service.CreationAssetService;
 import com.link.linkagent.creator.creation.mapper.*;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Run;
 import com.link.linkagent.creator.creation.render.FixedProjectRendererProperties;
+import com.link.linkagent.creator.creation.billing.BillingExchangeRate;
 import com.link.linkagent.creator.creation.service.CreationBillingProperties;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.creation.service.CreationRuntimeService;
 import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
@@ -499,6 +501,42 @@ class CreationVoiceIntegrationTest {
                 .isInstanceOfSatisfying(ResponseStatusException.class,
                         ex -> assertThat(ex.getStatusCode().value()).isEqualTo(409));
         assertThat(count("creator_creation_run", fixture.task)).isZero();
+    }
+
+    @Test
+    void runtimeDisabledVoiceBlocksNewEstimateAndRun() {
+        var fixture = fixture("第一句配音文稿", 3000);
+        var blocked = new CreationVoiceService(boards, storyboards, codec, media, voicePersistence, runtime,
+                settings, prices, mediaProperties, List.of(provider), JSON,
+                CreationCapabilityGate.defaults(false, false), BillingExchangeRate.fixed(new BigDecimal("6.7")));
+
+        var estimate = blocked.estimate(fixture.task, "default", fixture.boardId);
+
+        assertThat(estimate.configured()).isFalse();
+        assertThat(estimate.blockers()).anyMatch(text -> text.contains("关闭"));
+        assertThatThrownBy(() -> blocked.generate(fixture.task, "default", "voice-key", fixture.boardId,
+                new VoiceModels.Generate(fixture.revision, new BigDecimal("2"))))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        exception -> assertThat(exception.getStatusCode().value()).isEqualTo(409));
+        assertThat(count("creator_creation_run", fixture.task)).isZero();
+    }
+
+    @Test
+    void estimateAndAcceptanceUseInjectedLiveRateInPriceSnapshot() throws Exception {
+        var fixture = fixture("第一句配音文稿", 3000);
+        var cheaper = new CreationVoiceService(boards, storyboards, codec, media, voicePersistence, runtime,
+                settings, prices, mediaProperties, List.of(provider), JSON,
+                CreationCapabilityGate.ALL_ENABLED, BillingExchangeRate.fixed(new BigDecimal("6.0")));
+
+        var estimate = cheaper.estimate(fixture.task, "default", fixture.boardId);
+        var prep = cheaper.generate(fixture.task, "default", "voice-live-rate", fixture.boardId,
+                new VoiceModels.Generate(fixture.revision, new BigDecimal("2")));
+
+        assertThat(estimate.usdToCny()).isEqualByComparingTo("6.0");
+        String request = jdbc.queryForObject("SELECT request_json FROM creator_creation_run WHERE run_id=?",
+                String.class, prep.runId());
+        assertThat(JSON.readTree(request).path("price").path("usdToCny").decimalValue())
+                .isEqualByComparingTo("6.0");
     }
 
     // ---------------------------------------------------------------- 夹具

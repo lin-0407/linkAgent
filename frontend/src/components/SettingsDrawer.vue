@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { X } from '@lucide/vue'
-import { checkSettingsConnectivity, getSettingsStatus, updateRuntimeToggle, updateRuntimeValue } from '@/api/settings'
+import {
+  checkSettingsConnectivity,
+  getSettingsStatus,
+  refreshBillingRate,
+  updateRuntimeToggle,
+  updateRuntimeValue,
+} from '@/api/settings'
 import type { ConnectivityItem, SettingsStatus } from '@/types/settings'
 import KnowledgeIndexPanels from '@/components/KnowledgeIndexPanels.vue'
 import SettingsSectionRuntime from '@/components/settings/SettingsSectionRuntime.vue'
+import SettingsSectionProduction from '@/components/settings/SettingsSectionProduction.vue'
 import SettingsSectionReadonly from '@/components/settings/SettingsSectionReadonly.vue'
 import SettingsSectionConnectivity from '@/components/settings/SettingsSectionConnectivity.vue'
 import SettingsSectionLlmConfig from '@/components/settings/SettingsSectionLlmConfig.vue'
@@ -22,6 +29,7 @@ const settings = ref<SettingsStatus | null>(null)
 const loading = ref(false)
 const loadError = ref('')
 const savingKey = ref('')
+const refreshingRate = ref(false)
 
 const connectivityItems = ref<ConnectivityItem[]>([])
 const connectivityLoading = ref(false)
@@ -30,6 +38,7 @@ const connectivityError = ref('')
 const hasLoaded = ref(false)
 
 const collapsedSections = ref<Record<string, boolean>>({
+  production: false,
   runtime: true,
   readonly: true,
   connectivity: true,
@@ -45,12 +54,16 @@ function toggleSection(key: string) {
 const dynamicToggles = computed(() => settings.value?.dynamicToggles ?? [])
 const dynamicValues = computed(() => settings.value?.dynamicValues ?? [])
 const readonlySettings = computed(() => settings.value?.readonlySettings ?? [])
+const productionToggles = computed(() => settings.value?.productionToggles ?? [])
+const billing = computed(() => settings.value?.billing ?? null)
 
-watch([open, developerMode], ([isOpen, isDeveloperMode]) => {
-  if (isOpen && isDeveloperMode && !hasLoaded.value) {
+// immediate：抽屉按需挂载（首次打开才加载组件），挂载瞬间 open 已经是 true，
+// 不立即执行一次就会停在空面板。制作与付费能力对普通模式也可见，因此不再依赖开发者模式。
+watch(open, (isOpen) => {
+  if (isOpen && !hasLoaded.value) {
     void loadSettings()
   }
-})
+}, { immediate: true })
 
 async function loadSettings() {
   loading.value = true
@@ -94,6 +107,22 @@ async function updateSettingValue(key: string, value: string) {
     loadError.value = error instanceof Error ? error.message : String(error)
   } finally {
     savingKey.value = ''
+  }
+}
+
+async function refreshRate() {
+  if (refreshingRate.value) return
+  refreshingRate.value = true
+  loadError.value = ''
+  try {
+    const latest = await refreshBillingRate()
+    if (settings.value) {
+      settings.value = { ...settings.value, billing: latest }
+    }
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    refreshingRate.value = false
   }
 }
 
@@ -168,6 +197,20 @@ const { dialogRef, handleDialogKeydown } = useModalDialog(open, closeDrawer)
                 </button>
               </article>
             </section>
+
+            <SettingsSectionProduction
+              :toggles="productionToggles"
+              :billing="billing"
+              :saving-key="savingKey"
+              :collapsed="collapsedSections.production ?? false"
+              :loading="loading"
+              :error="loadError"
+              :refreshing-rate="refreshingRate"
+              @toggle="toggleSetting"
+              @refresh-rate="refreshRate"
+              @load="loadSettings"
+              @toggle-section="toggleSection('production')"
+            />
 
             <template v-if="developerMode">
               <SettingsSectionRuntime

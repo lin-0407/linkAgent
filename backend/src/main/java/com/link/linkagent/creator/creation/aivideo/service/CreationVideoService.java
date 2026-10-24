@@ -15,9 +15,12 @@ import com.link.linkagent.creator.creation.service.CreationRuntimeService;
 import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardCodec;
+import com.link.linkagent.creator.creation.billing.BillingExchangeRate;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardPersistence;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -47,22 +50,36 @@ public class CreationVideoService {
     private final CreationVideoProperties settings;
     private final CreationBillingProperties billing;
     private final List<VideoGenerationProvider> providers;
+    private final CreationCapabilityGate capabilities;
+    private final BillingExchangeRate rates;
     private final ObjectMapper json;
 
+    /** 测试和旧调用入口：默认全部能力开启，汇率取部署配置值。 */
     public CreationVideoService(StoryboardMapper boards, StoryboardPersistence persistence, StoryboardCodec codec,
             MediaUploadMapper media, CreationVideoPersistence videos, CreationRuntimeService runtime,
             CreationVideoProperties settings, CreationBillingProperties billing,
             List<VideoGenerationProvider> providers, ObjectMapper json) {
+        this(boards, persistence, codec, media, videos, runtime, settings, billing, providers, json,
+                CreationCapabilityGate.defaults(false, settings.isEnabled()), BillingExchangeRate.fixed(billing.getUsdToCny()));
+    }
+
+    @Autowired
+    public CreationVideoService(StoryboardMapper boards, StoryboardPersistence persistence, StoryboardCodec codec,
+            MediaUploadMapper media, CreationVideoPersistence videos, CreationRuntimeService runtime,
+            CreationVideoProperties settings, CreationBillingProperties billing,
+            List<VideoGenerationProvider> providers, ObjectMapper json, CreationCapabilityGate capabilities,
+            BillingExchangeRate rates) {
         this.boards = boards; this.persistence = persistence; this.codec = codec; this.media = media;
         this.videos = videos; this.runtime = runtime; this.settings = settings; this.billing = billing;
-        this.providers = providers; this.json = json;
+        this.providers = providers; this.capabilities = capabilities; this.rates = rates; this.json = json;
     }
 
     public Capability capability() {
         var providerValue = provider();
         var blockers = configurationBlockers(providerValue);
+        BigDecimal rate = rates.current().usdToCny();
         return new Capability(blockers.isEmpty(), settings.getProvider(), settings.getModel(), settings.durations(),
-                settings.getWidth(), settings.getHeight(), settings.getUsdPerSecond(), billing.getUsdToCny(),
+                settings.getWidth(), settings.getHeight(), settings.getUsdPerSecond(), rate,
                 "CONFIGURED_ESTIMATE", PROTOCOL, List.copyOf(blockers));
     }
 
@@ -75,8 +92,9 @@ public class CreationVideoService {
         if (key == null || key.isBlank() || key.length() > 128) throw conflict("视频生成受理需要非空幂等键，最多 128 字符");
         var plan = plan(task, owner, boardId, input.scope(), input.regenerateAll());
         var estimate = plan.estimate();
-        if (!estimate.configured()) throw conflict("视频生成供应商尚未配置，不能发起付费调用");
+        // 先返回具体原因：关闭开关时不能误报成“供应商未配置”。
         if (!estimate.blockers().isEmpty()) throw conflict(estimate.blockers().getFirst());
+        if (!estimate.configured()) throw conflict("视频生成供应商尚未配置，不能发起付费调用");
         if (input.maxAdditionalCostCny().compareTo(estimate.estimatedMaxCostCny()) < 0)
             throw conflict("本次授权低于视频生成费用估算，请先查询估算并确认限额");
 
@@ -202,7 +220,7 @@ public class CreationVideoService {
                             + maxSupportedSeconds() + " 秒；请拆分或缩短场景后重新确认");
                 else {
                     usd = settings.getUsdPerSecond().multiply(BigDecimal.valueOf(seconds));
-                    cny = toCny(usd);
+                    cny = toCny(usd, capability.usdToCny());
                     total = total.add(cny);
                     generate++;
                 }
@@ -248,7 +266,7 @@ public class CreationVideoService {
 
     private List<String> configurationBlockers(VideoGenerationProvider provider) {
         var blockers = new ArrayList<String>();
-        if (!settings.isEnabled()) blockers.add("AI 视频生成未启用：需要 creator.creation.video.enabled=true");
+        if (!capabilities.videoEnabled()) blockers.add("AI 视频生成未启用：已在设置中关闭");
         if (settings.getBaseUrl() == null || settings.getBaseUrl().isBlank())
             blockers.add("未配置兼容协议的视频生成服务地址");
         if (settings.getApiKey() == null || settings.getApiKey().isBlank())
@@ -261,8 +279,8 @@ public class CreationVideoService {
 
     private VideoGenerationProvider provider() { return providers.isEmpty() ? null : providers.getFirst(); }
 
-    private BigDecimal toCny(BigDecimal usd) {
-        BigDecimal cny = usd.multiply(billing.getUsdToCny()).setScale(6, RoundingMode.CEILING);
+    private BigDecimal toCny(BigDecimal usd, BigDecimal rate) {
+        BigDecimal cny = usd.multiply(rate).setScale(6, RoundingMode.CEILING);
         return cny.signum() == 0 ? new BigDecimal("0.000001") : cny;
     }
 

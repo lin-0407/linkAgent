@@ -10,6 +10,7 @@ import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Charge;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Run;
 import com.link.linkagent.creator.creation.render.FixedProjectRendererProperties;
 import com.link.linkagent.creator.creation.service.CreationBillingProperties;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.creation.service.CreationRuntimeService;
 import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
@@ -30,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -53,7 +55,7 @@ import java.util.function.BooleanSupplier;
  * 音频放不进镜头或文稿对不上时只给提案，不生成不可渲染的新版本。
  */
 @Service
-@ConditionalOnProperty(prefix = "creator.creation.voice", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(prefix = "creator.media", name = "enabled", havingValue = "true")
 public class CreationVoiceWorker implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(CreationVoiceWorker.class);
     private static final BigDecimal MILLION = new BigDecimal("1000000");
@@ -77,6 +79,7 @@ public class CreationVoiceWorker implements AutoCloseable {
     private final SpeechRecognitionProvider recognition;
     private final CreatorMediaProperties mediaProperties;
     private final VoiceScriptMatcher matcher;
+    private final CreationCapabilityGate capabilities;
     private final ObjectMapper json;
 
     private final String worker = "voice-" + UUID.randomUUID();
@@ -94,11 +97,26 @@ public class CreationVoiceWorker implements AutoCloseable {
             FixedProjectRendererProperties renderer, List<SpeechSynthesisProvider> providers,
             SpeechRecognitionProvider recognition, CreatorMediaProperties mediaProperties,
             VoiceScriptMatcher matcher, ObjectMapper json) {
+        this(mapper, persistence, settings, runtime, billing, boards, storyboards, codec, compiler, preparer,
+                storage, storageProperties, renderer, providers, recognition, mediaProperties, matcher, json,
+                CreationCapabilityGate.defaults(settings.isEnabled(), false));
+    }
+
+    @Autowired
+    public CreationVoiceWorker(CreationVoiceMapper mapper, CreationVoicePersistence persistence,
+            CreationVoiceProperties settings, CreationRuntimeService runtime, CreationBillingProperties billing,
+            StoryboardMapper boards,
+            StoryboardPersistence storyboards, StoryboardCodec codec, StoryboardCompiler compiler,
+            AssetMediaPreparer preparer, ObjectStorageService storage, ObjectStorageProperties storageProperties,
+            FixedProjectRendererProperties renderer, List<SpeechSynthesisProvider> providers,
+            SpeechRecognitionProvider recognition, CreatorMediaProperties mediaProperties,
+            VoiceScriptMatcher matcher, ObjectMapper json, CreationCapabilityGate capabilities) {
         this.mapper = mapper; this.persistence = persistence; this.settings = settings; this.runtime = runtime;
         this.billing = billing; this.boards = boards; this.storyboards = storyboards; this.codec = codec; this.compiler = compiler;
         this.preparer = preparer; this.storage = storage; this.storageProperties = storageProperties;
         this.renderer = renderer; this.providers = providers; this.recognition = recognition;
         this.mediaProperties = mediaProperties; this.matcher = matcher; this.json = json;
+        this.capabilities = capabilities;
     }
 
     @Scheduled(fixedDelayString = "${creator.creation.voice.poll-interval-ms:2000}")
@@ -110,6 +128,7 @@ public class CreationVoiceWorker implements AutoCloseable {
                     mapper.terminalWithPending().forEach(ref -> persistence.closeRows(ref.runId(),
                             "CANCELLED".equals(ref.runStatus()) ? "CANCELLED" : "FAILED",
                             "CANCELLED".equals(ref.runStatus()) ? null : "VOICE_RUN_FAILED"));
+                    // 关闭后仍要领取运行，才能把已经提交的转写查询完并结算；新的合成由 execute 跳过。
                     for (var job : mapper.candidates()) { if (stopping.get()) break; process(job); }
                 }
                 catch (RuntimeException ex) { log.warn("配音扫描暂不可用，类型={}", ex.getClass().getSimpleName()); }
@@ -160,10 +179,18 @@ public class CreationVoiceWorker implements AutoCloseable {
             settleRunAsFailed(run, "VOICE_TTS_RESULT_UNKNOWN");
             return;
         }
-        boolean failed = false;
+        boolean failed = false, paused = false;
+        boolean enabled = capabilities.voiceEnabled();
         for (CreationVoice row : mapper.scenes(run.runId())) {
             if (cancelled.getAsBoolean()) break;
             if (Set.of("ALIGNED", "NEEDS_REVIEW", "FAILED", "CANCELLED").contains(row.getStatus())) continue;
+            // 关闭后不再发起新的合成或转写；已经拿到供应商任务标识的 TRANSCRIBING 仍继续查询和结算。
+            if (!enabled
+                    && ("QUEUED".equals(row.getStatus()) || "SYNTHESIZED".equals(row.getStatus())
+                    || ("TRANSCRIBING".equals(row.getStatus()) && row.getProviderTaskId() == null))) {
+                paused = true;
+                continue;
+            }
             try {
                 if ("QUEUED".equals(row.getStatus())) synthesize(run, row, cancelled);
                 CreationVoice current = reload(row);
@@ -187,6 +214,8 @@ public class CreationVoiceWorker implements AutoCloseable {
             settleRunAsFailed(run);
             return;
         }
+        // 还有未发起的场景被开关暂停：保留运行，重新开启后从原状态继续。
+        if (paused) return;
         List<CreationVoice> rows = mapper.scenes(run.runId());
         List<CreationVoice> unresolved = rows.stream()
                 .filter(row -> !Set.of("ALIGNED", "NEEDS_REVIEW").contains(row.getStatus())).toList();
@@ -244,9 +273,11 @@ public class CreationVoiceWorker implements AutoCloseable {
         String key = ttsKey(run.runId(), row.getSceneId());
         BigDecimal usd = BigDecimal.valueOf(row.getCharacters())
                 .multiply(settings.getUsdPerMillionCharacters()).divide(MILLION, 8, RoundingMode.HALF_UP);
-        String snapshot = priceSnapshot("VOICE_TTS", usd, Map.of("model", provider.model(), "voice", provider.voice(),
+        // 受理时已经把折算率写进运行请求；预留沿用该值，不能被之后改配置或汇率变化改写。
+        BigDecimal rate = runRate(run);
+        String snapshot = priceSnapshot("VOICE_TTS", usd, rate, Map.of("model", provider.model(), "voice", provider.voice(),
                 "characters", row.getCharacters(), "usdPerMillionCharacters", settings.getUsdPerMillionCharacters().toPlainString()));
-        Charge charge = beginCharge(run, key, "VOICE_TTS", cny(usd), snapshot);
+        Charge charge = beginCharge(run, key, "VOICE_TTS", cny(usd, rate), snapshot);
         if (!send(run, charge, key)) throw new VoiceFailure("VOICE_TTS_NOT_SENT");
         SpeechSynthesisProvider.Audio audio;
         try {
@@ -359,7 +390,8 @@ public class CreationVoiceWorker implements AutoCloseable {
             long seconds = Math.max(1, (row.getAudioDurationMs() + 999) / 1000);
             BigDecimal usd = mediaProperties.getProcessing().getAsrUsdPerSecond()
                     .multiply(BigDecimal.valueOf(seconds));
-            String snapshot = priceSnapshot("VOICE_ASR", usd, Map.of("model", mediaProperties.getPreflight().getAsrModel(),
+            BigDecimal rate = runRate(run);
+            String snapshot = priceSnapshot("VOICE_ASR", usd, rate, Map.of("model", mediaProperties.getPreflight().getAsrModel(),
                     "seconds", seconds, "usdPerSecond", mediaProperties.getProcessing().getAsrUsdPerSecond().toPlainString()));
             // 短签在本地生成，失败时还没有发送，必须先于预留和发送标记处理。
             PresignedObjectRead read;
@@ -369,7 +401,7 @@ public class CreationVoiceWorker implements AutoCloseable {
             } catch (RuntimeException exception) {
                 throw new VoiceFailure("VOICE_ASR_URL_UNAVAILABLE");
             }
-            Charge charge = beginCharge(run, key, "VOICE_ASR", cny(usd), snapshot);
+            Charge charge = beginCharge(run, key, "VOICE_ASR", cny(usd, rate), snapshot);
             if (!send(run, charge, key)) throw new VoiceFailure("VOICE_ASR_NOT_SENT");
             String providerTaskId;
             try {
@@ -631,12 +663,22 @@ public class CreationVoiceWorker implements AutoCloseable {
         return value.signum() == 0 ? new BigDecimal("0.000001") : value;
     }
 
-    private BigDecimal mediaBillingRate() { return billing.getUsdToCny(); }
+    /** 运行请求里的折算率是受理时的事实；缺失或非法时才回退部署配置。 */
+    private BigDecimal runRate(Run run) {
+        try {
+            var price = json.readTree(run.requestJson()).path("price");
+            var value = price.path("usdToCny");
+            if (value.isNumber() && value.decimalValue().signum() > 0) return value.decimalValue();
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException ignored) {
+            // 旧运行可能没有价格快照；回退配置值并保留原有兼容行为。
+        }
+        return billing.getUsdToCny();
+    }
 
-    private String priceSnapshot(String capability, BigDecimal usd, Map<String, Object> extra) {
+    private String priceSnapshot(String capability, BigDecimal usd, BigDecimal rate, Map<String, Object> extra) {
         ObjectNode node = json.createObjectNode();
         node.put("currency", "USD").put("usdUpperBound", usd.toPlainString())
-                .put("usdToCny", mediaBillingRate().toPlainString())
+                .put("usdToCny", rate.toPlainString())
                 .put("capability", capability).put("basis", "CONFIGURED_ESTIMATE").put("accounting", "USAGE_ESTIMATE");
         extra.forEach((name, value) -> node.put(name, String.valueOf(value)));
         return node.toString();

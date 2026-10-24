@@ -239,10 +239,18 @@ creator:
       resolution: ${CREATOR_CREATION_MEDIA_RESOLUTION:P720}
       model-plan: ${CREATOR_CREATION_MEDIA_MODEL_PLAN:FLASH_PLUS_REVIEW}
       include-asr: ${CREATOR_CREATION_MEDIA_INCLUDE_ASR:true}
-    # 制作费用台账的计价口径。台账按人民币记账，媒体供应商按美元计价，
-    # 折算率和美元上界是记账口径而非实时汇率，均写入每次预留的价格快照。
+    # 制作费用台账的计价口径。台账按人民币记账，媒体供应商按美元计价；
+    # 新调用使用当前汇率，并把当时的折算率写入价格快照，旧调用不会被后续汇率改写。
     billing:
       usd-to-cny: ${CREATOR_CREATION_USD_TO_CNY:7.20}
+      # 实时汇率只影响新调用；每次预留仍把当时的折算率写入价格快照。
+      # 公开接口通常每日更新，失败时回退 usd-to-cny，并在设置页明确标注。
+      fx:
+        enabled: ${CREATOR_BILLING_FX_ENABLED:true}
+        url: ${CREATOR_BILLING_FX_URL:https://open.er-api.com/v6/latest/USD}
+        refresh-interval: ${CREATOR_BILLING_FX_REFRESH_INTERVAL:30m}
+        connect-timeout: ${CREATOR_BILLING_FX_CONNECT_TIMEOUT:2s}
+        read-timeout: ${CREATOR_BILLING_FX_READ_TIMEOUT:3s}
       segment-review-usd-upper-bound: ${CREATOR_CREATION_SEGMENT_REVIEW_USD_UPPER_BOUND:0.05}
       video-usd-upper-bound: ${CREATOR_CREATION_VIDEO_USD_UPPER_BOUND:0.30}
       text-screening-usd-upper-bound: ${CREATOR_CREATION_TEXT_SCREENING_USD_UPPER_BOUND:0.05}

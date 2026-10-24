@@ -2,6 +2,7 @@ package com.link.linkagent.creator.creation.storyboard.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.creation.billing.BillingExchangeRate;
 import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
 import com.link.linkagent.creator.creation.mapper.*;
@@ -10,6 +11,7 @@ import com.link.linkagent.creator.creation.service.*;
 import com.link.linkagent.creator.creation.asset.service.CreationAssetService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.task.mapper.CreatorTaskMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,11 +31,20 @@ public class StoryboardPersistence {
     private final CreationRuntimeMapper runs;private final CreationWorkspaceMapper workspace;private final CreationRuntimeService runtime;
     private final CreationAssetService assets;private final StoryboardCodec codec;private final ObjectMapper json;
     private final CreationBillingProperties prices;private final StoryboardTextGenerator generator;
+    private final BillingExchangeRate rates;
+    /** 测试和旧调用入口：汇率取部署配置值。 */
     public StoryboardPersistence(StoryboardMapper mapper,MediaUploadMapper media,CreatorTaskMapper tasks,CreationRuntimeMapper runs,
             CreationWorkspaceMapper workspace,CreationRuntimeService runtime,CreationAssetService assets,StoryboardCodec codec,
             ObjectMapper json,CreationBillingProperties prices,StoryboardTextGenerator generator){
+        this(mapper,media,tasks,runs,workspace,runtime,assets,codec,json,prices,generator,
+                BillingExchangeRate.fixed(prices.getUsdToCny()));
+    }
+    @Autowired
+    public StoryboardPersistence(StoryboardMapper mapper,MediaUploadMapper media,CreatorTaskMapper tasks,CreationRuntimeMapper runs,
+            CreationWorkspaceMapper workspace,CreationRuntimeService runtime,CreationAssetService assets,StoryboardCodec codec,
+            ObjectMapper json,CreationBillingProperties prices,StoryboardTextGenerator generator,BillingExchangeRate rates){
         this.mapper=mapper;this.media=media;this.tasks=tasks;this.runs=runs;this.workspace=workspace;this.runtime=runtime;
-        this.assets=assets;this.codec=codec;this.json=json;this.prices=prices;this.generator=generator;
+        this.assets=assets;this.codec=codec;this.json=json;this.prices=prices;this.generator=generator;this.rates=rates;
     }
     public Brief saveBrief(String task,String owner,String key,BriefInput input) {
         codec.valid(input);lock(task,owner);String hash=codec.hash(input);var old=mapper.briefByKey(task,owner,key);
@@ -111,11 +122,12 @@ public class StoryboardPersistence {
         // 使用同一份实际提示词与上下文估算，保留消息封装余量；配置价格不是供应商实付账单。
         int inputUpper=StoryboardWorker.prompt().getBytes(StandardCharsets.UTF_8).length
                 +codec.write(context).getBytes(StandardCharsets.UTF_8).length+4096;
+        BigDecimal rate=rates.current().usdToCny();
         BigDecimal reservation=prices.getTextInputUsdPerMillionTokens().multiply(BigDecimal.valueOf(inputUpper))
                 .add(prices.getTextOutputUsdPerMillionTokens().multiply(BigDecimal.valueOf(4096)))
-                .multiply(prices.getUsdToCny()).divide(new BigDecimal("1000000"),6,RoundingMode.CEILING)
+                .multiply(rate).divide(new BigDecimal("1000000"),6,RoundingMode.CEILING)
                 .max(new BigDecimal("0.000001"));
-        request.putObject("price").put("model",generator.modelName()).put("usdToCny",prices.getUsdToCny()).put("inputUsdPerMillion",prices.getTextInputUsdPerMillionTokens()).put("outputUsdPerMillion",prices.getTextOutputUsdPerMillionTokens()).put("maxOutputTokens",4096).put("inputTokenUpperBound",inputUpper).put("reservationCny",reservation).put("basis","CONFIGURED_ESTIMATE");
+        request.putObject("price").put("model",generator.modelName()).put("usdToCny",rate).put("inputUsdPerMillion",prices.getTextInputUsdPerMillionTokens()).put("outputUsdPerMillion",prices.getTextOutputUsdPerMillionTokens()).put("maxOutputTokens",4096).put("inputTokenUpperBound",inputUpper).put("reservationCny",reservation).put("basis","CONFIGURED_ESTIMATE");
         String payload=codec.write(request);if(payload.getBytes(StandardCharsets.UTF_8).length>60*1024)throw conflict("本次材料与素材元数据过多，请缩小准备范围");
         return request;
     }

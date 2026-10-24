@@ -15,6 +15,7 @@ import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Charge;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Run;
 import com.link.linkagent.creator.creation.render.FixedProjectRendererProperties;
 import com.link.linkagent.creator.creation.service.CreationBillingProperties;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.creation.service.CreationRuntimeService;
 import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.*;
@@ -27,6 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -49,7 +51,6 @@ import java.util.function.BooleanSupplier;
  * 片段短于镜头、供应商失败或结果不明时只给提案或受控失败，不保存不可渲染版本。
  */
 @Service
-@ConditionalOnProperty(prefix = "creator.creation.video", name = "enabled", havingValue = "true")
 @ConditionalOnProperty(prefix = "creator.media", name = "enabled", havingValue = "true")
 public class CreationVideoWorker implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(CreationVideoWorker.class);
@@ -72,6 +73,7 @@ public class CreationVideoWorker implements AutoCloseable {
     private final FixedProjectRendererProperties renderer;
     private final List<VideoGenerationProvider> providers;
     private final ObjectMapper json;
+    private final CreationCapabilityGate capabilities;
 
     private final String worker = "video-" + UUID.randomUUID();
     private final AtomicBoolean busy = new AtomicBoolean(), stopping = new AtomicBoolean();
@@ -85,10 +87,21 @@ public class CreationVideoWorker implements AutoCloseable {
             StoryboardMapper boards, StoryboardCodec codec, StoryboardCompiler compiler, AssetMediaPreparer preparer,
             CreationAssetService assets, ObjectStorageService storage, ObjectStorageProperties storageProperties,
             FixedProjectRendererProperties renderer, List<VideoGenerationProvider> providers, ObjectMapper json) {
+        this(mapper, persistence, settings, runtime, billing, boards, codec, compiler, preparer, assets, storage,
+                storageProperties, renderer, providers, json, CreationCapabilityGate.defaults(false, settings.isEnabled()));
+    }
+
+    @Autowired
+    public CreationVideoWorker(CreationVideoMapper mapper, CreationVideoPersistence persistence,
+            CreationVideoProperties settings, CreationRuntimeService runtime, CreationBillingProperties billing,
+            StoryboardMapper boards, StoryboardCodec codec, StoryboardCompiler compiler, AssetMediaPreparer preparer,
+            CreationAssetService assets, ObjectStorageService storage, ObjectStorageProperties storageProperties,
+            FixedProjectRendererProperties renderer, List<VideoGenerationProvider> providers, ObjectMapper json,
+            CreationCapabilityGate capabilities) {
         this.mapper = mapper; this.persistence = persistence; this.settings = settings; this.runtime = runtime;
         this.billing = billing; this.boards = boards; this.codec = codec; this.compiler = compiler;
         this.preparer = preparer; this.assets = assets; this.storage = storage; this.storageProperties = storageProperties;
-        this.renderer = renderer; this.providers = providers; this.json = json;
+        this.renderer = renderer; this.providers = providers; this.json = json; this.capabilities = capabilities;
     }
 
     @Scheduled(fixedDelayString = "${creator.creation.video.scan-interval-ms:3000}")
@@ -100,6 +113,7 @@ public class CreationVideoWorker implements AutoCloseable {
                     mapper.terminalWithPending().forEach(ref -> persistence.closeRows(ref.runId(),
                             "CANCELLED".equals(ref.runStatus()) ? "CANCELLED" : "FAILED",
                             "CANCELLED".equals(ref.runStatus()) ? null : "VIDEO_RUN_FAILED"));
+                    // 关闭后仍要领取运行，才能把已提交的供应商任务查询完并结算；新的提交由 execute 跳过。
                     for (var job : mapper.candidates()) { if (stopping.get()) break; process(job); }
                 } catch (RuntimeException ex) { log.warn("视频扫描暂不可用，类型={}", ex.getClass().getSimpleName()); }
                 finally { busy.set(false); }
@@ -151,9 +165,13 @@ public class CreationVideoWorker implements AutoCloseable {
             return;
         }
         String failureCode = null;
+        boolean paused = false;
+        boolean enabled = capabilities.videoEnabled();
         for (CreationVideo row : mapper.scenes(run.runId())) {
             if (cancelled.getAsBoolean()) break;
             if (!"QUEUED".equals(row.getStatus())) continue;
+            // 关闭后不再提交新镜头；已提交的 SUBMITTED 仍会进入下面的轮询与结算。
+            if (!enabled) { paused = true; continue; }
             try {
                 submit(run, row, cancelled);
             } catch (VideoFailure failure) {
@@ -202,6 +220,8 @@ public class CreationVideoWorker implements AutoCloseable {
             }
             return;
         }
+        // 还有未提交的镜头被开关暂停：保留运行，重新开启后从排队状态继续。
+        if (paused) return;
         List<CreationVideo> rows = mapper.scenes(run.runId());
         List<CreationVideo> unresolved = rows.stream()
                 .filter(row -> !Set.of("READY", "NEEDS_REVIEW").contains(row.getStatus())).toList();

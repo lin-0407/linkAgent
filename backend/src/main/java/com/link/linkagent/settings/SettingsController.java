@@ -1,5 +1,6 @@
 package com.link.linkagent.settings;
 
+import com.link.linkagent.settings.dto.BillingSettingsResponse;
 import com.link.linkagent.settings.dto.ConnectivityCheckResponse;
 import com.link.linkagent.settings.dto.SettingsStatusResponse;
 import com.link.linkagent.settings.dto.UpdateRuntimeToggleRequest;
@@ -39,6 +40,12 @@ public class SettingsController {
     @GetMapping("/status")
     public SettingsStatusResponse status() {
         return runtimeSettingService.status();
+    }
+
+    /** 手动刷新公开汇率；只影响后续新调用，已写入的价格快照不会被改写。 */
+    @PostMapping("/billing/refresh")
+    public BillingSettingsResponse refreshBilling() {
+        return runtimeSettingService.refreshBilling();
     }
 
     @PutMapping("/toggles/{settingKey}")

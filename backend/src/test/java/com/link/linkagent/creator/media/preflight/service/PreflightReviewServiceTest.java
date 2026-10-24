@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.media.preflight.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
 import com.link.linkagent.creator.media.preflight.model.CreatePreflightReviewRequest;
@@ -99,6 +100,29 @@ class PreflightReviewServiceTest {
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(exception.getReason()).contains("媒体文件已删除");
         verify(mapper, never()).retryReview("task-1", "default", "review-1");
+    }
+
+    @Test
+    void shouldRejectNewReviewBeforeTouchingDataWhenPaidAnalysisIsOff() {
+        PreflightReviewMapper mapper = mock(PreflightReviewMapper.class);
+        PreflightReviewService service = new PreflightReviewService(
+                new CreatorMediaProperties(), mapper, mock(MediaUploadMapper.class),
+                mock(MediaProcessingMapper.class), mock(PreflightEventPublisher.class), new ObjectMapper(),
+                new CreationCapabilityGate() {
+                    @Override public boolean mediaInfrastructureEnabled() { return true; }
+                    @Override public boolean mediaAnalysisEnabled() { return false; }
+                    @Override public boolean voiceEnabled() { return false; }
+                    @Override public boolean videoEnabled() { return false; }
+                });
+
+        ResponseStatusException exception = catchThrowableOfType(
+                () -> service.create("default", "task-1", "new-key",
+                        new CreatePreflightReviewRequest("version-1", true, null)),
+                ResponseStatusException.class);
+
+        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(exception.getReason()).contains("媒体付费分析");
+        verify(mapper, never()).lockDraftVersion("task-1", "default", "version-1");
     }
 
     private PreflightReviewService service(PreflightReviewMapper mapper) {

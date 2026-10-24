@@ -37,9 +37,16 @@ public class CreationVoiceProperties {
     private int maxSceneCharacters = 1000;
     private int maxScenes = 48;
 
+    /** 供应商参数是否完整；运行期开关单独由设置面板控制。 */
+    public boolean providerConfigured() {
+        return model != null && !model.isBlank() && voice != null && !voice.isBlank()
+                && "wav".equalsIgnoreCase(format) && sampleRate >= 8000 && sampleRate <= 48000
+                && usdPerMillionCharacters != null && usdPerMillionCharacters.signum() > 0;
+    }
+
+    /** 部署默认值；设置面板的覆盖值优先，不能再用它判断当前是否可用。 */
     public boolean configured() {
-        return enabled && model != null && !model.isBlank() && voice != null && !voice.isBlank()
-                && "wav".equalsIgnoreCase(format) && sampleRate >= 8000 && sampleRate <= 48000;
+        return enabled && providerConfigured();
     }
 
     public void validate() {

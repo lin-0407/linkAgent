@@ -2,12 +2,14 @@ package com.link.linkagent.creator.creation.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.link.linkagent.creator.creation.billing.BillingExchangeRate;
 import com.link.linkagent.creator.creation.mapper.CreationMediaMapper;
 import com.link.linkagent.creator.creation.model.CreationMediaLink;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Charge;
 import com.link.linkagent.creator.media.preflight.service.MediaCallChargeGate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -29,12 +31,22 @@ public class CreationMediaBilling implements MediaCallChargeGate {
     private final CreationMediaMapper links;
     private final CreationRuntimeService runtime;
     private final CreationBillingProperties properties;
+    private final BillingExchangeRate rates;
     private final ObjectMapper json;
 
+    /** 测试和旧调用入口：汇率取部署配置值。 */
     public CreationMediaBilling(CreationMediaMapper links, CreationRuntimeService runtime,
                                 CreationBillingProperties properties, ObjectMapper json) {
+        this(links, runtime, properties, json, BillingExchangeRate.fixed(properties.getUsdToCny()));
+    }
+
+    @Autowired
+    public CreationMediaBilling(CreationMediaMapper links, CreationRuntimeService runtime,
+                                CreationBillingProperties properties, ObjectMapper json,
+                                BillingExchangeRate rates) {
         properties.validate();
         this.links = links; this.runtime = runtime; this.properties = properties; this.json = json;
+        this.rates = rates;
     }
 
     @Override
@@ -128,7 +140,7 @@ public class CreationMediaBilling implements MediaCallChargeGate {
     private String price(String capability, BigDecimal usdUpperBound, String basis) {
         ObjectNode node = json.createObjectNode();
         node.put("currency", "USD").put("usdUpperBound", usdUpperBound.toPlainString())
-                .put("usdToCny", properties.getUsdToCny().toPlainString())
+                .put("usdToCny", rates.current().usdToCny().toPlainString())
                 .put("capability", capability).put("basis", basis(basis)).put("accounting", "USAGE_ESTIMATE");
         return node.toString();
     }
