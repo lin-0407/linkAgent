@@ -2,6 +2,7 @@ package com.link.linkagent.creator.creation.aivideo.provider;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.link.linkagent.creator.creation.aivideo.service.CreationVideoProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -37,6 +38,8 @@ public class CompatibleVideoProvider implements VideoGenerationProvider {
     private final RestClient client;
     private final RestClient downloads;
 
+    // 保留协议测试使用的构造器，同时明确 Spring 的实际装配入口。
+    @Autowired
     public CompatibleVideoProvider(CreationVideoProperties settings) {
         this(settings,
                 RestClient.builder().requestFactory(factory(settings.getConnectTimeout(), settings.getReadTimeout())).build(),

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.creator.creation.voice.service.CreationVoiceProperties;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -35,6 +36,8 @@ public class DashScopeCosyVoiceProvider implements SpeechSynthesisProvider {
     private final RestClient client;
     private final ObjectMapper json;
 
+    // 保留协议测试使用的构造器，同时明确 Spring 的实际装配入口。
+    @Autowired
     public DashScopeCosyVoiceProvider(CreationVoiceProperties voiceProperties,
                                       CreatorMediaProperties mediaProperties,
                                       ObjectMapper json) {
