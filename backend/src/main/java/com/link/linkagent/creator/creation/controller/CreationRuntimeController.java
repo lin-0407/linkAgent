@@ -12,7 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
-/** 执行器未接入前只开放预算与已有运行管理，避免页面出现无人消费的排队任务。 */
+/** 预算和已有运行管理；新的制作确认由独立制作入口受理，不能凭预算初始化启动扣费。 */
 @Validated
 @RestController
 @ConditionalOnProperty(prefix = "creator.media", name = "enabled", havingValue = "true")

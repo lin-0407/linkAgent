@@ -3119,3 +3119,115 @@ CREATE TABLE IF NOT EXISTS creator_creation_package
     UNIQUE KEY uk_creation_package_version (version_id),
     KEY idx_creation_package_task (task_id, owner_id, status)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '最小真实发布包';
+
+-- 配置保存与新运行受理共用行锁，重启前不允许换用新的供应商参数。
+CREATE TABLE IF NOT EXISTS creator_creation_provider_lock
+(
+    id TINYINT NOT NULL COMMENT '固定为一的制作配置事务锁',
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='制作配置受理锁';
+INSERT IGNORE INTO creator_creation_provider_lock(id) VALUES (1);
+CREATE TABLE IF NOT EXISTS creator_creation_provider_configuration
+(
+    id TINYINT NOT NULL COMMENT '固定为一的个人部署供应商配置',
+    configuration_json JSON NOT NULL COMMENT '模型及价格参数，密钥字段仅保存 AES-GCM 密文',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '保存时间，重启后生效',
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='制作供应商配置与加密密钥';
+
+-- 一次用户制作确认覆盖多个既有运行，子运行仍使用原有租约、费用与真实发布门禁。
+CREATE TABLE IF NOT EXISTS creator_creation_execution
+(
+    execution_id VARCHAR(64) NOT NULL COMMENT '本次明确确认的制作身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    kind VARCHAR(16) NOT NULL COMMENT '样片 SAMPLE、整片 FULL 或修改版 REVISION',
+    status VARCHAR(24) NOT NULL COMMENT 'ACTIVE、WAITING_USER、CANCEL_REQUESTED、COMPLETED、CANCELLED',
+    stage VARCHAR(32) NOT NULL COMMENT '实际正在推进的步骤',
+    source_storyboard_id VARCHAR(64) NOT NULL COMMENT '用户确认的不可变原故事板',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '已准备素材对应的最新故事板',
+    scene_ids_json TEXT NOT NULL COMMENT '本次授权覆盖的有序场景身份',
+    publishing_session_id VARCHAR(64) DEFAULT NULL COMMENT '整片确认的真实发布方案会话',
+    publishing_result_id VARCHAR(64) DEFAULT NULL COMMENT '整片确认的真实发布方案结果',
+    base_version_id VARCHAR(64) DEFAULT NULL COMMENT '确认时的基准成片，不能静默覆盖其他版本',
+    max_additional_cost_cny DECIMAL(18,6) NOT NULL COMMENT '所有子运行合计新增费用上限',
+    current_run_id VARCHAR(64) DEFAULT NULL COMMENT '已受理的当前子运行',
+    expected_workspace_revision BIGINT NOT NULL COMMENT '下一步受理所需修订，外部改动后停止自动推进',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '用户确认的重放身份',
+    request_hash CHAR(64) NOT NULL COMMENT '确认原文摘要，同键换范围必须拒绝',
+    provider_fingerprint CHAR(64) NOT NULL COMMENT '确认时的制作配置摘要，配置变化后需重新确认',
+    dispatch_failures INT NOT NULL DEFAULT 0 COMMENT '连续本地调度异常次数，达到三次后交还作者处理',
+    error_code VARCHAR(64) DEFAULT NULL COMMENT '可读提示对应的受控错误码',
+    objects_json LONGTEXT NOT NULL COMMENT '已验收样片产物清单，不包含读取签名',
+    active_slot TINYINT GENERATED ALWAYS AS (CASE WHEN status IN ('ACTIVE','WAITING_USER','CANCEL_REQUESTED') THEN 1 ELSE NULL END) STORED COMMENT '每条任务只允许一份活动制作确认',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '明确确认时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近推进时间',
+    PRIMARY KEY (execution_id),
+    UNIQUE KEY uk_execution_key (task_id, owner_id, idempotency_key),
+    UNIQUE KEY uk_execution_active (task_id, owner_id, active_slot),
+    KEY idx_execution_poll (status, update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户明确授权的连续制作';
+
+CREATE TABLE IF NOT EXISTS creator_creation_execution_run
+(
+    execution_id VARCHAR(64) NOT NULL COMMENT '归属制作确认',
+    run_id VARCHAR(64) NOT NULL COMMENT '费用和租约所在的既有运行',
+    stage VARCHAR(32) NOT NULL COMMENT '本次准备或渲染步骤',
+    PRIMARY KEY (execution_id, stage),
+    UNIQUE KEY uk_execution_run (run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='制作确认与真实运行关系';
+
+CREATE TABLE IF NOT EXISTS creator_creation_execution_object
+(
+    execution_id VARCHAR(64) NOT NULL COMMENT '归属样片制作确认',
+    generation BIGINT NOT NULL COMMENT '实际生成尝试的租约代数',
+    file_name VARCHAR(80) NOT NULL COMMENT '固定渲染器产物名称',
+    bucket_name VARCHAR(255) NOT NULL COMMENT '实际保存的私有桶',
+    object_key VARCHAR(1000) NOT NULL COMMENT '写入前登记的精确对象键',
+    bytes BIGINT NOT NULL COMMENT '本地校验后的实际字节数',
+    sha256 CHAR(64) NOT NULL COMMENT '本地内容摘要',
+    content_type VARCHAR(120) NOT NULL COMMENT '已验证的媒体类型',
+    adopted TINYINT NOT NULL DEFAULT 0 COMMENT '只有当前活租约可采纳产物',
+    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '未采纳产物是否已完成清理',
+    PRIMARY KEY (execution_id, generation, file_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='样片对象与失败回收依据';
+
+CREATE TABLE IF NOT EXISTS creator_creation_revision_proposal
+(
+    proposal_id VARCHAR(64) NOT NULL COMMENT '免费修改预览的不可变身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信素材归属',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '修改依据的不可变故事板',
+    expected_workspace_revision BIGINT NOT NULL COMMENT '确认修改时必须仍匹配的工作区修订',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '修改提案的重放身份',
+    request_hash CHAR(64) NOT NULL COMMENT '原修改请求摘要',
+    document_json LONGTEXT NOT NULL COMMENT '白名单修改后的简报、场景、真实素材、差异与复用计划',
+    applied_storyboard_id VARCHAR(64) DEFAULT NULL COMMENT '已采纳的新故事板，重复确认返回同一版本',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '提出时间',
+    PRIMARY KEY (proposal_id),
+    UNIQUE KEY uk_revision_key (task_id,owner_id,idempotency_key),
+    KEY idx_revision_board (task_id,owner_id,storyboard_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='受限局部修改提案';
+
+CREATE TABLE IF NOT EXISTS creator_creation_cleanup
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '已经终止的制作运行',
+    local_done TINYINT NOT NULL DEFAULT 0 COMMENT '受控本地工作目录是否已回收',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近清理时间',
+    PRIMARY KEY (run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='终止运行资源回收检查点';
+
+CREATE TABLE IF NOT EXISTS creator_creation_manual_review
+(
+    review_id VARCHAR(64) NOT NULL COMMENT '原有独立试映任务',
+    run_id VARCHAR(64) NOT NULL COMMENT '本次明确发起试映对应的预算运行',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    version_id VARCHAR(64) NOT NULL COMMENT '试映的精确成片版本',
+    status VARCHAR(24) NOT NULL DEFAULT 'ACTIVE' COMMENT '本次试映预算运行是否已收尾',
+    active_slot TINYINT GENERATED ALWAYS AS (CASE WHEN status='ACTIVE' THEN 1 ELSE NULL END) STORED COMMENT '一份试映仅有一个活动授权',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '受理时间',
+    PRIMARY KEY (review_id,run_id),
+    UNIQUE KEY uk_manual_review_run (run_id),
+    UNIQUE KEY uk_manual_review_active (review_id,active_slot)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='独立试映接入同任务制作预算';

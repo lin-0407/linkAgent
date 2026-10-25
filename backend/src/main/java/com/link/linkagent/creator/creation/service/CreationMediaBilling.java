@@ -19,7 +19,7 @@ import static com.link.linkagent.creator.creation.service.CreationInputRules.*;
 /**
  * 把发布前试映里真实付费的媒体调用接到制作费用台账。
  * <p>
- * 只有属于整片运行的试映才记账；人工试映保持原有的调用流水。美元用量按配置的记账折算率换成人民币，
+ * 整片运行和已初始化制作预算的独立试映都记账；旧上传流程仍保留原有调用流水。美元用量按配置的记账折算率换成人民币，
  * 折算率、美元上界和价格依据都写入 price_snapshot_json，事后可以核对当时的口径。
  */
 @Service
@@ -33,6 +33,7 @@ public class CreationMediaBilling implements MediaCallChargeGate {
     private final CreationBillingProperties properties;
     private final BillingExchangeRate rates;
     private final ObjectMapper json;
+    private final com.link.linkagent.creator.creation.execution.ManualReviewMapper manual;
 
     /** 测试和旧调用入口：汇率取部署配置值。 */
     public CreationMediaBilling(CreationMediaMapper links, CreationRuntimeService runtime,
@@ -40,19 +41,24 @@ public class CreationMediaBilling implements MediaCallChargeGate {
         this(links, runtime, properties, json, BillingExchangeRate.fixed(properties.getUsdToCny()));
     }
 
-    @Autowired
     public CreationMediaBilling(CreationMediaMapper links, CreationRuntimeService runtime,
                                 CreationBillingProperties properties, ObjectMapper json,
                                 BillingExchangeRate rates) {
+        this(links,runtime,properties,json,rates,null);
+    }
+    @Autowired
+    public CreationMediaBilling(CreationMediaMapper links,CreationRuntimeService runtime,CreationBillingProperties properties,
+            ObjectMapper json,BillingExchangeRate rates,com.link.linkagent.creator.creation.execution.ManualReviewMapper manual) {
         properties.validate();
         this.links = links; this.runtime = runtime; this.properties = properties; this.json = json;
         this.rates = rates;
+        this.manual=manual;
     }
 
     @Override
     public Handle reserve(String reviewId, String capability, String chargeKey, BigDecimal usdUpperBound,
                           String priceBasis) {
-        var link = links.byReview(reviewId).orElse(null);
+        var link = link(reviewId,chargeKey);
         if (link == null) return MediaCallChargeGate.NONE;
         if (usdUpperBound == null) throw new IllegalArgumentException("缺少本次调用的费用上界");
         if (usdUpperBound.signum() < 0) throw new IllegalArgumentException("费用上界不能为负");
@@ -76,7 +82,7 @@ public class CreationMediaBilling implements MediaCallChargeGate {
 
     @Override
     public void settle(String reviewId, String chargeKey, BigDecimal usdActual, String evidenceRef) {
-        var link = links.byReview(reviewId).orElse(null);
+        var link = link(reviewId,chargeKey);
         if (link == null) return;
         if (usdActual == null) { unknown(reviewId, chargeKey); return; }
         var charge = runtime.findCharge(link.taskId(), link.ownerId(), link.runId(), chargeKey).orElse(null);
@@ -93,7 +99,7 @@ public class CreationMediaBilling implements MediaCallChargeGate {
 
     @Override
     public void unknown(String reviewId, String chargeKey) {
-        var link = links.byReview(reviewId).orElse(null);
+        var link = link(reviewId,chargeKey);
         if (link == null) return;
         if (runtime.findCharge(link.taskId(), link.ownerId(), link.runId(), chargeKey).isEmpty()) {
             log.warn("试映调用无法标记费用未知 reviewId={}", reviewId);
@@ -180,6 +186,15 @@ public class CreationMediaBilling implements MediaCallChargeGate {
     }
 
     private static String basis(String value) { return value == null ? "" : value; }
+    private CreationMediaLink link(String reviewId,String chargeKey) {
+        var full=links.byReview(reviewId).orElse(null);
+        if(full!=null || manual==null)return full;
+        var entries=manual.byReview(reviewId);
+        if(entries.isEmpty())return null;
+        var selected=manual.byCharge(reviewId,chargeKey)
+                .orElseGet(()->entries.stream().filter(e->"ACTIVE".equals(e.status())).findFirst().orElse(entries.getFirst()));
+        return new CreationMediaLink(selected.runId(),selected.taskId(),selected.ownerId(),selected.versionId(),null,reviewId,"MANUAL_REVIEW",0,null);
+    }
 
     private static String evidence(String value) {
         String safe = value == null || value.isBlank() ? "media-call" : value.replaceAll("[^A-Za-z0-9_.:-]", "-");

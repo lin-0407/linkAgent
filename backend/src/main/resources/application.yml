@@ -220,7 +220,7 @@ mybatis:
 creator:
   creation:
     worker:
-      # 仅运行后端已冻结的固定工程，公开自动制作入口仍未开放。
+      # 仅推进作者已明确授权的制作，预算初始化不等于授权执行。
       enabled: ${CREATOR_CREATION_WORKER_ENABLED:false}
       poll-interval-ms: ${CREATOR_CREATION_WORKER_POLL_INTERVAL_MS:2000}
       lease-seconds: ${CREATOR_CREATION_WORKER_LEASE_SECONDS:30}

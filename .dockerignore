@@ -12,3 +12,12 @@ backend/src/main/resources/application-dev.yml
 
 !scripts/
 !scripts/**
+
+# 后端需要在同一容器内调用固定渲染器，只发送运行模块和锁定的依赖。
+!renderer/
+renderer/*
+!renderer/requirements.txt
+!renderer/linkagent_renderer/
+!renderer/linkagent_renderer/**
+renderer/**/__pycache__/
+renderer/**/*.pyc

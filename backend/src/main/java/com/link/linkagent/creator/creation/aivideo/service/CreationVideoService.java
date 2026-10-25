@@ -84,13 +84,17 @@ public class CreationVideoService {
     }
 
     public Estimate estimate(String task, String owner, String boardId, String scope, boolean regenerate) {
-        var plan = plan(task, owner, boardId, scope, regenerate);
+        return estimate(task, owner, boardId, scope, regenerate, null);
+    }
+
+    public Estimate estimate(String task, String owner, String boardId, String scope, boolean regenerate, List<String> sceneIds) {
+        var plan = plan(task, owner, boardId, scope, regenerate, sceneIds);
         return plan.estimate();
     }
 
     public Preparation generate(String task, String owner, String key, String boardId, VideoModels.Generate input) {
         if (key == null || key.isBlank() || key.length() > 128) throw conflict("视频生成受理需要非空幂等键，最多 128 字符");
-        var plan = plan(task, owner, boardId, input.scope(), input.regenerateAll());
+        var plan = plan(task, owner, boardId, input.scope(), input.regenerateAll(), input.sceneIds());
         var estimate = plan.estimate();
         // 先返回具体原因：关闭开关时不能误报成“供应商未配置”。
         if (!estimate.blockers().isEmpty()) throw conflict(estimate.blockers().getFirst());
@@ -115,6 +119,7 @@ public class CreationVideoService {
                     "reuse", Objects.toString(scene.reuseAssetId(), "")));
         }
         var price = request.putObject("price");
+        price.put("providerConfigurationHash",com.link.linkagent.creator.creation.execution.ProviderConfiguration.videoFingerprint(settings));
         price.put("provider", estimate.provider());
         price.put("model", estimate.model());
         price.put("usdPerSecond", estimate.usdPerSecond());
@@ -173,7 +178,7 @@ public class CreationVideoService {
 
     private record Plan(Context context, Estimate estimate) { }
 
-    private Plan plan(String task, String owner, String boardId, String scope, boolean regenerate) {
+    private Plan plan(String task, String owner, String boardId, String scope, boolean regenerate, List<String> sceneIds) {
         requireTask(task, owner);
         if (!"SELECTED".equals(scope) && !"ALL".equals(scope)) throw conflict("视频生成范围只能是 SELECTED 或 ALL");
         var board = boards.board(task, owner, boardId).orElseThrow(() -> conflict("故事板不存在或不属于本任务"));
@@ -185,8 +190,10 @@ public class CreationVideoService {
         for (Asset asset : frozen) assets.put(asset.assetId(), asset);
         var capability = capability();
         var blockers = new ArrayList<String>(capability.blockers());
-        List<Scene> targets = candidate.scenes().stream()
+        List<Scene> targets = com.link.linkagent.creator.creation.storyboard.service.StoryboardSelection.select(candidate.scenes(), sceneIds).stream()
                 .filter(scene -> "ALL".equals(scope) || "AI_VIDEO".equals(scene.layout())).toList();
+        if (sceneIds != null && targets.size() != sceneIds.size())
+            throw conflict("按场景生成只能选择当前范围内的 AI 视频场景");
         if (targets.isEmpty())
             blockers.add("本故事板没有 AI 视频场景；如需全片切换请使用 scope=ALL 并确认画面来源变更");
         if (targets.size() > settings.getMaxScenes())
@@ -208,7 +215,7 @@ public class CreationVideoService {
             if (prompt.codePointCount(0, prompt.length()) > settings.getMaxPromptCharacters())
                 own.add("场景 " + scene.id() + " 的画面描述超过 " + settings.getMaxPromptCharacters() + " 字符");
             // 模型是否输出音轨无法预先承诺；原声镜头必须由作者显式改用配音或无对白，不能默认替换。
-            if ("ORIGINAL".equals(scene.audioMode()) && "SOURCE".equals(mode))
+            if ("ORIGINAL".equals(scene.audioMode()))
                 own.add("场景 " + scene.id() + " 当前保留原声，AI 片段不承诺模型输出音轨；请改用配音或无对白后再生成");
             String reused = regenerate ? null : reusable(task, owner, scene, assets, sha, quantized);
             Integer seconds = null;
@@ -266,7 +273,7 @@ public class CreationVideoService {
 
     private List<String> configurationBlockers(VideoGenerationProvider provider) {
         var blockers = new ArrayList<String>();
-        if (!capabilities.videoEnabled()) blockers.add("AI 视频生成未启用：已在设置中关闭");
+        if (!capabilities.videoEnabled()) blockers.add(capabilities.disabledReason()==null?"AI 视频生成未启用：已在设置中关闭":capabilities.disabledReason());
         if (settings.getBaseUrl() == null || settings.getBaseUrl().isBlank())
             blockers.add("未配置兼容协议的视频生成服务地址");
         if (settings.getApiKey() == null || settings.getApiKey().isBlank())

@@ -13,14 +13,20 @@ public final class StoryboardModels {
     public record BriefInput(@NotNull @Min(0) Long expectedWorkspaceRevision,
             @NotBlank @Size(max=200) String topic,@NotBlank @Size(max=500) String coreMessage,
             @NotBlank @Size(max=200) String audience,@Min(1000) @Max(180000) long targetDurationMs,
-            @NotBlank @Pattern(regexp="TTS|USER_NARRATION|SOURCE|NO_DIALOGUE") String dialogueMode,
+            @NotBlank @Pattern(regexp="TTS|USER_NARRATION|SOURCE|NO_DIALOGUE|MIXED") String dialogueMode,
             @NotBlank @Pattern(regexp="USER_PROVIDED|FICTION") String contentKind,
             @NotNull @Size(max=32) List<@NotNull @Pattern(regexp="[A-Za-z0-9_-]{1,64}") String> assetIds,
             @NotNull @Size(max=2000) String constraints,
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
             @Valid BackgroundMusic backgroundMusic,
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-            @Valid Ambience ambience) {
+            @Valid Ambience ambience,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            @Min(24) @Max(60) Integer subtitleFontSize) {
+        public BriefInput(Long expectedWorkspaceRevision,String topic,String coreMessage,String audience,long targetDurationMs,
+                String dialogueMode,String contentKind,List<String> assetIds,String constraints,BackgroundMusic backgroundMusic,Ambience ambience) {
+            this(expectedWorkspaceRevision,topic,coreMessage,audience,targetDurationMs,dialogueMode,contentKind,assetIds,constraints,backgroundMusic,ambience,null);
+        }
         public BriefInput(Long expectedWorkspaceRevision,String topic,String coreMessage,String audience,long targetDurationMs,
                 String dialogueMode,String contentKind,List<String> assetIds,String constraints) {
             this(expectedWorkspaceRevision,topic,coreMessage,audience,targetDurationMs,dialogueMode,contentKind,assetIds,constraints,null,null);

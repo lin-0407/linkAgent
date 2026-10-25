@@ -1094,5 +1094,109 @@
     "controller": "",
     "method": "",
     "access": "WRITE"
+  },
+  {
+    "id": "creation.runtime",
+    "group": "视频制作",
+    "label": "读取制作预算与活动运行",
+    "controller": "com.link.linkagent.creator.creation.controller.CreationRuntimeController",
+    "method": "snapshot",
+    "access": "READ"
+  },
+  {
+    "id": "creation.briefs",
+    "group": "视频制作",
+    "label": "读取制作简报",
+    "controller": "com.link.linkagent.creator.creation.storyboard.controller.StoryboardController",
+    "method": "briefs",
+    "access": "READ"
+  },
+  {
+    "id": "creation.brief.save",
+    "group": "视频制作",
+    "label": "保存制作简报",
+    "controller": "com.link.linkagent.creator.creation.storyboard.controller.StoryboardController",
+    "method": "saveBrief",
+    "access": "WRITE"
+  },
+  {
+    "id": "creation.storyboards",
+    "group": "视频制作",
+    "label": "读取故事板版本",
+    "controller": "com.link.linkagent.creator.creation.storyboard.controller.StoryboardController",
+    "method": "boards",
+    "access": "READ"
+  },
+  {
+    "id": "creation.storyboard.estimate",
+    "group": "视频制作",
+    "label": "估算故事板准备费用",
+    "controller": "com.link.linkagent.creator.creation.storyboard.controller.StoryboardController",
+    "method": "estimate",
+    "access": "READ"
+  },
+  {
+    "id": "creation.storyboard.prepare",
+    "group": "视频制作",
+    "label": "确认准备故事板",
+    "controller": "com.link.linkagent.creator.creation.storyboard.controller.StoryboardController",
+    "method": "generate",
+    "access": "WRITE"
+  },
+  {
+    "id": "creation.execution.estimate",
+    "group": "视频制作",
+    "label": "查看制作范围与费用",
+    "controller": "com.link.linkagent.creator.creation.execution.ExecutionController",
+    "method": "estimate",
+    "access": "READ"
+  },
+  {
+    "id": "creation.execution.start",
+    "group": "视频制作",
+    "label": "确认制作样片、整片或修改版",
+    "controller": "com.link.linkagent.creator.creation.execution.ExecutionController",
+    "method": "start",
+    "access": "WRITE"
+  },
+  {
+    "id": "creation.executions",
+    "group": "视频制作",
+    "label": "读取制作记录与进度",
+    "controller": "com.link.linkagent.creator.creation.execution.ExecutionController",
+    "method": "list",
+    "access": "READ"
+  },
+  {
+    "id": "creation.execution.cancel",
+    "group": "视频制作",
+    "label": "停止本次制作",
+    "controller": "com.link.linkagent.creator.creation.execution.ExecutionController",
+    "method": "cancel",
+    "access": "WRITE"
+  },
+  {
+    "id": "creation.revision.propose",
+    "group": "视频制作",
+    "label": "预览受限局部修改提案",
+    "controller": "com.link.linkagent.creator.creation.revision.RevisionController",
+    "method": "propose",
+    "access": "WRITE"
+  },
+  {
+    "id": "creation.revision.apply",
+    "group": "视频制作",
+    "label": "确认修改并保存新版本",
+    "controller": "com.link.linkagent.creator.creation.revision.RevisionController",
+    "method": "apply",
+    "access": "WRITE"
+  },
+  {
+    "id": "creation.assets",
+    "group": "视频制作",
+    "label": "读取独立素材状态",
+    "controller": "com.link.linkagent.creator.creation.asset.controller.CreationAssetController",
+    "method": "list",
+    "access": "READ"
   }
 ]

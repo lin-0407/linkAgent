@@ -77,6 +77,29 @@ class RendererTest(unittest.TestCase):
     def test_valid_local_contract(self):
         self.assertEqual(2000, self.project().duration_ms)
 
+    def test_subtitle_size_is_v2_only_and_rejects_unsupported_values(self):
+        self.document["video"]["subtitleFontSize"] = 42
+        self.assert_invalid("INVALID_INPUT")
+        self.document["schemaVersion"] = 2
+        for size in (23, 61, 36.5, True):
+            self.document["video"]["subtitleFontSize"] = size
+            self.assert_invalid("INVALID_INPUT")
+
+    def test_larger_subtitles_change_actual_pixels_only_in_subtitle_area(self):
+        from PIL import ImageChops
+        self.document["schemaVersion"] = 2
+        normal = Visuals(self.project(), FONT)
+        first = normal.frame(normal.project.document["scenes"][0], 12)
+        self.document["video"]["subtitleFontSize"] = 52
+        enlarged = Visuals(self.project(), FONT)
+        second = enlarged.frame(enlarged.project.document["scenes"][0], 12)
+        try:
+            self.assertEqual(52, enlarged.fonts["subtitle"].size)
+            self.assertIsNotNone(ImageChops.difference(first, second).getbbox())
+            self.assertIsNone(ImageChops.difference(first.crop((0, 0, 1280, 500)), second.crop((0, 0, 1280, 500))).getbbox())
+        finally:
+            first.close(); second.close(); normal.close(); enlarged.close()
+
     def test_rejects_changed_input_hash(self):
         self.input.write_text(self.input.read_text().replace("本地媒体验证", "其他文本"), encoding="utf-8")
         with self.assertRaisesRegex(RenderError, "输入摘要"):

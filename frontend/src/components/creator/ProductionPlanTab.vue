@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import ProductionBlueprintModal from './ProductionBlueprintModal.vue'
 import ProductionPositioningForm from './ProductionPositioningForm.vue'
+import AutomaticProductionPanel from './AutomaticProductionPanel.vue'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 import { useProductionPlan } from '@/composables/creator/useProductionPlan'
 import type { CreateProductionPlanPayload } from '@/types/creatorProduction'
@@ -15,6 +16,7 @@ const production = useProductionPlan()
 const selectedStepId = ref('')
 const isBlueprintOpen = ref(false)
 const isRegenerating = ref(false)
+const mode = ref<'automatic' | 'manual'>('automatic')
 const selectedStep = computed(
   () =>
     production.workspace.value?.steps.find((step) => step.stepId === selectedStepId.value) ??
@@ -91,6 +93,12 @@ onMounted(() => {
 
 <template>
   <section class="production-plan-tab">
+    <div class="production-mode" role="group" aria-label="制作方式">
+      <button type="button" :aria-pressed="mode === 'automatic'" @click="mode = 'automatic'">自动制作</button>
+      <button type="button" :aria-pressed="mode === 'manual'" @click="mode = 'manual'">手动制作蓝图</button>
+    </div>
+    <AutomaticProductionPanel v-if="mode === 'automatic'" @changed="load" />
+    <template v-else>
     <p v-if="production.errorMessage.value" class="production-error" role="alert">
       {{ production.errorMessage.value }}
     </p>
@@ -148,6 +156,7 @@ onMounted(() => {
       @select="selectedStepId = $event"
       @update="updateStep"
     />
+    </template>
   </section>
 </template>
 
@@ -156,6 +165,10 @@ onMounted(() => {
   display: grid;
   gap: 16px;
 }
+.production-mode { display:flex; gap:8px; border-bottom:1px solid var(--border); padding-bottom:12px; }
+.production-mode button { padding:9px 14px; background:var(--surface,#fff); color:var(--muted); border:1px solid var(--border); border-radius:var(--r-xs); font:inherit; cursor:pointer; }
+.production-mode button[aria-pressed=true] { color:var(--accent-strong); border-color:var(--accent-strong); }
+.production-mode button:focus-visible { outline:3px solid var(--accent-ring); outline-offset:2px; }
 
 .production-error,
 .production-loading {

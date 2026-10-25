@@ -26,13 +26,21 @@ public class CreationCapabilityService implements CreationCapabilityGate {
     private final CreationVoiceProperties voice;
     private final CreationVideoProperties video;
     private final CreatorMediaProperties media;
+    private final com.link.linkagent.creator.creation.execution.ProviderConfiguration configuration;
 
     public CreationCapabilityService(RuntimeSettingMapper settings, CreationVoiceProperties voice,
                                      CreationVideoProperties video, CreatorMediaProperties media) {
+        this(settings,voice,video,media,null);
+    }
+    @org.springframework.beans.factory.annotation.Autowired
+    public CreationCapabilityService(RuntimeSettingMapper settings, CreationVoiceProperties voice,
+            CreationVideoProperties video, CreatorMediaProperties media,
+            com.link.linkagent.creator.creation.execution.ProviderConfiguration configuration) {
         this.settings = settings;
         this.voice = voice;
         this.video = video;
         this.media = media;
+        this.configuration=configuration;
     }
 
     @Override
@@ -43,8 +51,10 @@ public class CreationCapabilityService implements CreationCapabilityGate {
 
     /** 媒体基础设施存在，且运行期没有暂停付费分析。 */
     public boolean mediaEnabled() {
-        return mediaInfrastructureEnabled() && read(RuntimeSettingKey.CREATION_MEDIA_ENABLED, true);
+        return mediaInfrastructureEnabled() && disabledReason()==null && read(RuntimeSettingKey.CREATION_MEDIA_ENABLED, true);
     }
+    @Override public String disabledReason(){return configuration==null?null:configuration.disabledReason();}
+    @Override public void requireStartReady(){if(configuration!=null)configuration.lockForStart();}
 
     @Override
     public boolean mediaAnalysisEnabled() {

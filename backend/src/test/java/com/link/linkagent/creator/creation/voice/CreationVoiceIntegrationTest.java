@@ -563,6 +563,20 @@ class CreationVoiceIntegrationTest {
 
     private long revision(String task) { return runs.workspace(task, "default").orElseThrow().workspaceRevision(); }
 
+    @Test void selectedVoiceCompletesWhileUnselectedVoiceAndAiClipRemainUnprepared(){
+        var fixture=fixture("第一句配音文稿",2000);String task=fixture.task;
+        var brief=storyboards.saveBrief(task,"default","mixed-brief",new BriefInput(revision(task),"混合场景","只准备指定配音","新观众",6000,"MIXED","USER_PROVIDED",List.of(),""));
+        var first=new Scene("s1","TITLE_CARD","第一幕",List.of(),"第一句配音文稿",2000,null,null,null,"CONTAIN","TTS",null,List.of(),List.of("brief:user"));
+        var second=new Scene("s2","TITLE_CARD","第二幕",List.of(),"第二句待准备",2000,null,null,null,"CONTAIN","TTS",null,List.of(),List.of("brief:user"));
+        var third=new Scene("s3","AI_VIDEO","第三幕",List.of(),"",2000,null,null,null,"CONTAIN","NO_DIALOGUE",null,List.of(),List.of("brief:user"),"海边日落");
+        var board=storyboards.save(task,"default","mixed-board",new Save(revision(task),brief.briefId(),fixture.boardId,new Candidate(List.of(first,second,third))));
+        var prep=service.generate(task,"default","selected-voice",board.storyboardId(),new VoiceModels.Generate(revision(task),new BigDecimal("2"),List.of("s1")));
+        worker.process(voices.job(task,"default",prep.runId()).orElseThrow());var view=service.view(task,"default",prep.runId());
+        assertThat(view.runStatus()).isEqualTo("COMPLETED");assertThat(view.scenes()).hasSize(1);assertThat(provider.calls.get()).isEqualTo(1);
+        var saved=boards.board(task,"default",view.storyboardId()).orElseThrow();var result=codec.candidate(codec.read(saved.documentJson()).path("candidate"));
+        assertThat(result.scenes().get(0).narrationAssetId()).isNotBlank();assertThat(result.scenes().get(1).narrationAssetId()).isNull();assertThat(result.scenes().get(2).visualAssetId()).isNull();
+    }
+
     private String chargeStatus(String task, String key) {
         var values = jdbc.queryForList("SELECT status FROM creator_creation_cost_entry WHERE task_id=? AND charge_key=?",
                 String.class, task, key);

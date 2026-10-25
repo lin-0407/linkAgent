@@ -31,13 +31,32 @@ public class CreationRuntimeService {
     private final CreationMediaMapper mediaLinks;
     private final CreationPackageMapper packages;
     private final ObjectMapper json;
+    private final com.link.linkagent.creator.creation.render.FixedProjectRendererProperties renderer;
+    private final CreationWorkerProperties worker;
+    private final com.link.linkagent.creator.creation.execution.ProviderConfiguration configuration;
 
     public CreationRuntimeService(MediaUploadMapper media, CreationRuntimeMapper mapper,
                                   CreationWorkspaceMapper workspace, CreationMediaMapper mediaLinks,
                                   CreationPackageMapper packages, ObjectMapper json) {
+        this(media,mapper,workspace,mediaLinks,packages,json,null,null);
+    }
+    public CreationRuntimeService(MediaUploadMapper media, CreationRuntimeMapper mapper,
+            CreationWorkspaceMapper workspace, CreationMediaMapper mediaLinks, CreationPackageMapper packages,
+            ObjectMapper json,com.link.linkagent.creator.creation.render.FixedProjectRendererProperties renderer,
+            CreationWorkerProperties worker) {
+        this(media,mapper,workspace,mediaLinks,packages,json,renderer,worker,null);
+    }
+    @org.springframework.beans.factory.annotation.Autowired
+    public CreationRuntimeService(MediaUploadMapper media, CreationRuntimeMapper mapper,
+            CreationWorkspaceMapper workspace, CreationMediaMapper mediaLinks, CreationPackageMapper packages,
+            ObjectMapper json,com.link.linkagent.creator.creation.render.FixedProjectRendererProperties renderer,
+            CreationWorkerProperties worker,com.link.linkagent.creator.creation.execution.ProviderConfiguration configuration) {
         this.media = media; this.mapper = mapper; this.workspace = workspace; this.json = json;
         this.mediaLinks = mediaLinks; this.packages = packages;
+        this.renderer=renderer;this.worker=worker;
+        this.configuration=configuration;
     }
+    public void checkConfiguration(){if(configuration!=null)configuration.lockForStart();}
 
     public Snapshot initialize(String taskId, String ownerId, String key, long expectedRevision, BigDecimal amount) {
         lock(taskId, ownerId); key(key); amount = money(amount, false);
@@ -80,8 +99,9 @@ public class CreationRuntimeService {
                     value.budgetLimitCny().subtract(totals.occupied()).max(BigDecimal.ZERO),
                     blocked(totals) || totals.occupied().compareTo(value.budgetLimitCny()) >= 0);
         }
-        // 内部固定工程执行器不代表公开制作链路已开放，预算初始化也不授权扣费。
-        return new Snapshot(budget != null, value.workspaceRevision(), budget, active, false, "CREATION_RUNTIME_ONLY");
+        // 可受理制作不代表本条内容已就绪，更不代表初始化预算就允许扣费。
+        boolean available=renderer!=null && worker!=null && renderer.isEnabled() && worker.isEnabled();
+        return new Snapshot(budget != null, value.workspaceRevision(), budget, active, available, "CREATION_RUNTIME_ONLY");
     }
 
     @Transactional(readOnly = true)
@@ -116,6 +136,7 @@ public class CreationRuntimeService {
     public Run start(String taskId, String ownerId, String kind, String key, long expectedRevision,
                      String approvalId, String requestJson) {
         lock(taskId, ownerId);
+        checkConfiguration();
         media.lockTaskDraftVersions(taskId, ownerId);
         return startLocked(taskId, ownerId, kind, key, expectedRevision, approvalId, requestJson, null);
     }
@@ -123,6 +144,7 @@ public class CreationRuntimeService {
     /** 请求确认接入后以此为受理入口，授权与排队运行必须一起提交或回滚。 */
     public Run startPreparation(String taskId, String ownerId, String kind, String key, long expectedRevision,
                                 String requestJson, BigDecimal maxCost) {
+        lock(taskId,ownerId);checkConfiguration();
         key(key);
         var approval = approvePreparation(taskId, ownerId, "prepare-" + hash(key), expectedRevision, requestJson, maxCost);
         return startLocked(taskId, ownerId, kind, key, expectedRevision + 1, approval.approvalId(), requestJson, null);
@@ -132,6 +154,7 @@ public class CreationRuntimeService {
     public Run startProduction(String taskId, String ownerId, String key, long expectedRevision,
                                String requestJson, BigDecimal maxCost) {
         lock(taskId, ownerId); media.lockTaskDraftVersions(taskId, ownerId); key(key);
+        checkConfiguration();
         String input = canonical(json, requestJson); productionInput(json, input); maxCost = money(maxCost, true);
         String approvalKey = "production-" + hash(key);
         String requestHash = hash("PRODUCTION:" + hash(input) + ":" + maxCost.toPlainString() + ":" + expectedRevision);
@@ -153,6 +176,7 @@ public class CreationRuntimeService {
 
     public Run retry(String taskId, String ownerId, String originalRunId, String key, long expectedRevision) {
         lock(taskId, ownerId); media.lockTaskDraftVersions(taskId, ownerId);
+        checkConfiguration();
         var original = run(taskId, ownerId, originalRunId);
         if ("FULL".equals(original.kind())) throw conflict("整片运行重试需要新制作计划，当前尚未接入");
         // 配音准备另有场景任务关联，直接重试会产生无人消费的排队运行；重新提交配音请求会另行授权。
@@ -386,7 +410,7 @@ public class CreationRuntimeService {
         }
         var current = active(taskId, ownerId, runId);
         var run = run(taskId, ownerId, runId);
-        if (!Set.of("RUNNING", "WAITING_DEPENDENCY", "CANCEL_REQUESTED").contains(run.status()))
+        if (!Set.of("RUNNING", "WAITING_DEPENDENCY").contains(run.status()))
             throw conflict("运行已结束，不能发起新的付费调用");
         var approval = approval(taskId, ownerId, run.approvalId());
         if (!"ACTIVE".equals(approval.status())) throw conflict("费用授权已撤销");
@@ -408,8 +432,8 @@ public class CreationRuntimeService {
         lock(taskId, ownerId);
         var charge = charge(taskId, ownerId, chargeKey);
         var run = run(taskId, ownerId, charge.runId());
-        if (!Set.of("RUNNING", "WAITING_DEPENDENCY", "CANCEL_REQUESTED").contains(run.status()))
-            throw conflict("运行已结束，不能登记新的物理发送");
+        if (!Set.of("RUNNING", "WAITING_DEPENDENCY").contains(run.status()))
+            return false;
         return mapper.sent(taskId, ownerId, chargeKey) == 1;
     }
 

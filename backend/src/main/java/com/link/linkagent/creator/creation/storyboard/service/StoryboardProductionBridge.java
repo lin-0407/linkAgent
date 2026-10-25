@@ -45,6 +45,8 @@ public class StoryboardProductionBridge {
             try{registered=jobs.find(task,owner,runId);}catch(RuntimeException uncertain){throw ex;}
             if(registered.isPresent() && prepared.attemptId().equals(registered.get().sourceAttemptId()))return registered.get();
             if(registered.isPresent())files.discard(prepared);
+            if(registered.isEmpty() && runs.run(task,owner,runId)
+                    .map(r->java.util.Set.of("CANCELLED","FAILED").contains(r.status())).orElse(false))files.discard(prepared);
             throw ex;
         }
     }

@@ -18,7 +18,11 @@ public final class VideoModels {
     public record Generate(@NotNull @Min(0) Long expectedWorkspaceRevision,
             @NotNull @DecimalMin("0.000001") @Digits(integer = 12, fraction = 6) BigDecimal maxAdditionalCostCny,
             @NotBlank @Pattern(regexp = "SELECTED|ALL") String scope,
-            Boolean regenerate) {
+            Boolean regenerate,
+            @Size(min = 1, max = 48) List<@NotBlank @Pattern(regexp = "[A-Za-z0-9_-]{1,64}") String> sceneIds) {
+        public Generate(Long revision, BigDecimal maximum, String scope, Boolean regenerate) {
+            this(revision, maximum, scope, regenerate, null);
+        }
         public boolean regenerateAll() { return Boolean.TRUE.equals(regenerate); }
     }
 

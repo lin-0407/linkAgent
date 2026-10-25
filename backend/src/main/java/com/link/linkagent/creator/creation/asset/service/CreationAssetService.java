@@ -83,6 +83,13 @@ public class CreationAssetService {
         persistence.complete(taskId,ownerId,assetId); return get(taskId,ownerId,assetId);
     }
     public Snapshot cancel(String taskId,String ownerId,String assetId) { persistence.cancel(taskId,ownerId,assetId); return get(taskId,ownerId,assetId); }
+    public record DeletionImpact(String assetId,int references,boolean allowed,String message) { }
+    public DeletionImpact deletionImpact(String task,String owner,String id) {
+        var asset=require(task,owner,id);int references=mapper.referenceCount(task,owner,id);
+        boolean allowed="READY".equals(asset.getStatus()) && references==0 && mapper.activeExecutions(task,owner)==0;
+        return new DeletionImpact(id,references,allowed,allowed?"该素材没有简报或历史工程引用，可删除私有媒体。":"素材仍有历史引用、活动制作或尚未准备完成；删除将被拒绝。");
+    }
+    public Snapshot deleteReady(String task,String owner,String id){persistence.deleteReady(task,owner,id);return get(task,owner,id);}
     public Snapshot retry(String taskId,String ownerId,String assetId) { persistence.retry(taskId,ownerId,assetId); return get(taskId,ownerId,assetId); }
 
     public PresignedObjectRead read(String taskId,String ownerId,String assetId,String role) {

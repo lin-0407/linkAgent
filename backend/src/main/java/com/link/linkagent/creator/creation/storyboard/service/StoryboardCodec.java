@@ -31,6 +31,7 @@ public class StoryboardCodec {
     public void policy(Brief brief,Candidate candidate,boolean generated,Set<String> generatedAssets) {
         valid(candidate);var doc=read(brief.documentJson());Set<String> assets=new HashSet<>();doc.path("assetIds").forEach(n->assets.add(n.asText()));
         Set<String> sources=new HashSet<>(Set.of("brief:user"));read(brief.sourceJson()).path("materials").forEach(n->sources.add(n.path("sourceId").asText()));
+        read(brief.sourceJson()).path("revisions").forEach(n->sources.add(n.path("sourceId").asText()));
         Set<String> ids=new HashSet<>();String mode=doc.path("dialogueMode").asText();
         for(var s:candidate.scenes()) {
             if(!ids.add(s.id()))throw conflict("场景身份重复");
@@ -44,7 +45,7 @@ public class StoryboardCodec {
             if(!sources.containsAll(s.sourceRefs()) || ("USER_PROVIDED".equals(doc.path("contentKind").asText()) && s.sourceRefs().isEmpty()))throw conflict("事实场景需要引用本简报真实输入来源");
             if(generated && !s.cues().isEmpty())throw conflict("模型不能生成未经音频对齐的字幕时间");
             String required=switch(mode){case "USER_NARRATION"->"NARRATION";case "SOURCE"->"ORIGINAL";case "TTS"->"TTS";default->"NO_DIALOGUE";};
-            if(!required.equals(s.audioMode()) && !("SOURCE".equals(mode) && "NO_DIALOGUE".equals(s.audioMode())
+            if(!"MIXED".equals(mode) && !required.equals(s.audioMode()) && !("SOURCE".equals(mode) && "NO_DIALOGUE".equals(s.audioMode())
                     && !Set.of("VIDEO_CLIP","AI_VIDEO").contains(s.layout())))throw conflict("场景声音选择与简报不一致，不能自动替换用户选择");
             if("TTS".equals(s.audioMode()) && s.narration().isBlank())throw conflict("生成配音场景需要真实文稿");
             for(String text:List.of(s.title(),s.narration(),Objects.toString(s.visualPrompt(),""))) if(text.codePoints().anyMatch(c->c<32 && c!='\n'))throw conflict("文字包含不支持的控制字符");

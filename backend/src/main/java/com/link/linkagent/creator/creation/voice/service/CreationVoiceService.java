@@ -70,16 +70,20 @@ public class CreationVoiceService {
     }
 
     public Estimate estimate(String task, String owner, String boardId) {
-        var context = context(task, owner, boardId);
+        return estimate(task, owner, boardId, null);
+    }
+
+    public Estimate estimate(String task, String owner, String boardId, List<String> sceneIds) {
+        var context = context(task, owner, boardId, sceneIds);
         var blockers = new ArrayList<String>();
         var providerValue = providers.isEmpty() ? null : providers.getFirst();
         boolean keyConfigured = mediaProperties.getPreflight().getDashScopeApiKey() != null
                 && !mediaProperties.getPreflight().getDashScopeApiKey().isBlank();
         boolean enabled = capabilities.voiceEnabled();
         boolean providerReady = settings.providerConfigured() && providerValue != null && keyConfigured;
-        if (!enabled) blockers.add("配音生成已在设置中关闭");
+        if (!enabled) blockers.add(capabilities.disabledReason()==null?"配音生成已在设置中关闭":capabilities.disabledReason());
         if (!providerReady) blockers.add("配音供应商尚未配置：需要模型与音色，以及 DashScope 密钥");
-        if (!"TTS".equals(context.dialogueMode()))
+        if (!Set.of("TTS","MIXED").contains(context.dialogueMode()))
             blockers.add("本简报的声音选择不是 TTS，不能只对部分场景生成配音");
         if (context.scenes().isEmpty()) blockers.add("本故事板没有待配音的 TTS 场景");
         if (context.scenes().size() > settings.getMaxScenes()) blockers.add("待配音场景超过单次受理上限");
@@ -112,13 +116,13 @@ public class CreationVoiceService {
 
     public Preparation generate(String task, String owner, String key, String boardId, VoiceModels.Generate input) {
         if (key == null || key.isBlank() || key.length() > 128) throw conflict("配音受理需要非空幂等键，最多 128 字符");
-        var estimate = estimate(task, owner, boardId);
+        var estimate = estimate(task, owner, boardId, input.sceneIds());
         // 先返回具体原因：关闭开关时不能误报成“供应商未配置”。
         if (!estimate.blockers().isEmpty()) throw conflict(estimate.blockers().getFirst());
         if (!estimate.configured()) throw conflict("配音供应商尚未配置，不能发起付费调用");
         if (input.maxAdditionalCostCny().compareTo(estimate.estimatedMaxAdditionalCostCny()) < 0)
             throw conflict("本次授权低于配音费用估算，请先查询估算并确认限额");
-        var context = context(task, owner, boardId);
+        var context = context(task, owner, boardId, input.sceneIds());
         var request = json.createObjectNode();
         request.put("purpose", "VOICE").put("storyboardId", boardId).put("briefId", context.briefId());
         var scenes = request.putArray("scenes");
@@ -137,6 +141,7 @@ public class CreationVoiceService {
             rows.add(row);
         }
         var price = request.putObject("price");
+        price.put("providerConfigurationHash",com.link.linkagent.creator.creation.execution.ProviderConfiguration.voiceFingerprint(settings,mediaProperties));
         price.put("model", settings.getModel()).put("voice", settings.getVoice())
                 .put("usdPerMillionCharacters", settings.getUsdPerMillionCharacters())
                 .put("asrModel", mediaProperties.getPreflight().getAsrModel())
@@ -195,13 +200,16 @@ public class CreationVoiceService {
 
     private record Context(String briefId, String dialogueMode, List<Scene> scenes, List<Asset> frozen, JsonNode brief) { }
 
-    private Context context(String task, String owner, String boardId) {
+    private Context context(String task, String owner, String boardId, List<String> sceneIds) {
         requireTask(task, owner);
         var board = boards.board(task, owner, boardId).orElseThrow(() -> conflict("故事板不存在或不属于本任务"));
         var brief = persistence.brief(task, owner, board.briefId());
         JsonNode briefDocument = codec.read(brief.documentJson());
         Candidate candidate = codec.candidate(codec.read(board.documentJson()).path("candidate"));
-        List<Scene> scenes = candidate.scenes().stream().filter(scene -> "TTS".equals(scene.audioMode())).toList();
+        List<Scene> selected = com.link.linkagent.creator.creation.storyboard.service.StoryboardSelection.select(candidate.scenes(), sceneIds);
+        if (sceneIds != null && selected.stream().anyMatch(s -> !"TTS".equals(s.audioMode())))
+            throw conflict("配音范围只能包含选择了 TTS 的场景");
+        List<Scene> scenes = selected.stream().filter(scene -> "TTS".equals(scene.audioMode())).toList();
         return new Context(brief.briefId(), briefDocument.path("dialogueMode").asText(), scenes,
                 persistence.frozen(board), briefDocument);
     }

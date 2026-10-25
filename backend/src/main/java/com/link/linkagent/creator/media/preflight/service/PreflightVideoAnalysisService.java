@@ -202,7 +202,8 @@ public class PreflightVideoAnalysisService {
                 JsonNode refsNode = node.path("evidenceRefs");
                 if (refsNode.isArray()) {
                     refsNode.forEach(ref -> {
-                        if (ref.isTextual() && validEvidenceIds.contains(ref.asText())) refs.add(ref.asText());
+                        if (ref.isTextual() && validEvidenceIds.contains(ref.asText()) && existingEvidence.stream()
+                                .anyMatch(e->e.evidenceId().equals(ref.asText()) && e.startMs()<=endMs && e.endMs()>=startMs)) refs.add(ref.asText());
                     });
                 }
                 BigDecimal confidence = BigDecimal.valueOf(node.path("confidence").asDouble(-1));
@@ -214,7 +215,7 @@ public class PreflightVideoAnalysisService {
                         requiredText(node, "issueType"), requiredText(node, "dimension"),
                         requiredText(node, "title"), requiredText(node, "description"),
                         startMs, endMs, severity, confidence, refs, suggestedAction,
-                        node.path("needsHumanReview").asBoolean(false)
+                        refs.isEmpty() || node.path("needsHumanReview").asBoolean(false)
                 ));
             }
             return new ParsedAnalysis(summary.trim(), issues);

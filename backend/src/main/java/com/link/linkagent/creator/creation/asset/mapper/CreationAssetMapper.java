@@ -8,6 +8,22 @@ import java.util.Optional;
 
 @Mapper
 public interface CreationAssetMapper {
+    @Select("""
+        SELECT (SELECT COUNT(*) FROM creator_creation_storyboard_asset WHERE task_id=#{task} AND owner_id=#{owner} AND asset_id=#{id})
+        + (SELECT COUNT(*) FROM creator_creation_brief WHERE task_id=#{task} AND owner_id=#{owner}
+            AND JSON_CONTAINS(JSON_EXTRACT(document_json,'$.assetIds'),JSON_QUOTE(#{id})))
+        + (SELECT COUNT(*) FROM creator_creation_voice s JOIN creator_creation_run r ON r.run_id=s.run_id
+            WHERE r.task_id=#{task} AND r.owner_id=#{owner} AND s.audio_asset_id=#{id}
+            AND r.status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED'))
+        + (SELECT COUNT(*) FROM creator_creation_video s JOIN creator_creation_run r ON r.run_id=s.run_id
+            WHERE r.task_id=#{task} AND r.owner_id=#{owner} AND s.video_asset_id=#{id}
+            AND r.status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED'))
+        """)
+    int referenceCount(@Param("task")String task,@Param("owner")String owner,@Param("id")String id);
+    @Select("SELECT COUNT(*) FROM creator_creation_execution WHERE task_id=#{task} AND owner_id=#{owner} AND status IN ('ACTIVE','WAITING_USER','CANCEL_REQUESTED')")
+    int activeExecutions(@Param("task")String task,@Param("owner")String owner);
+    @Update("UPDATE creator_creation_asset SET status='CANCELLED',cleanup_pending=1,lease_token=NULL,lease_expires_at=TIMESTAMPADD(SECOND,180,NOW(6)) WHERE asset_id=#{id} AND status='READY'")
+    int deleteReady(@Param("id")String id);
     String ACTIVE_TASK = "EXISTS(SELECT 1 FROM creator_task t WHERE t.task_id=a.task_id AND t.user_id=a.owner_id AND t.is_deleted=0)";
 
     @Select("SELECT task_id FROM creator_task WHERE task_id=#{taskId} AND user_id=#{ownerId} AND is_deleted=0 FOR UPDATE")

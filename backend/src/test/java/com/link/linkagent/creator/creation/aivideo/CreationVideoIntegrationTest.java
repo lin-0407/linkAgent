@@ -598,6 +598,20 @@ class CreationVideoIntegrationTest {
 
     private long revision(String task) { return runs.workspace(task, "default").orElseThrow().workspaceRevision(); }
 
+    @Test void selectedVideoCompletesWhileOtherAiAndVoiceScenesRemainUnprepared(){
+        var fixture=fixture("AI_VIDEO",List.of(),"海边日落","NO_DIALOGUE","NO_DIALOGUE",2000);String task=fixture.task;
+        var brief=storyboards.saveBrief(task,"default","mixed-brief",new BriefInput(revision(task),"混合场景","只准备指定镜头","新观众",6000,"MIXED","USER_PROVIDED",List.of(),""));
+        var first=new Scene("s1","AI_VIDEO","第一幕",List.of(),"",2000,null,null,null,"CONTAIN","NO_DIALOGUE",null,List.of(),List.of("brief:user"),"海边日落");
+        var second=new Scene("s2","AI_VIDEO","第二幕",List.of(),"",2000,null,null,null,"CONTAIN","NO_DIALOGUE",null,List.of(),List.of("brief:user"),"山间清晨");
+        var third=new Scene("s3","TITLE_CARD","第三幕",List.of(),"等待准备的配音",2000,null,null,null,"CONTAIN","TTS",null,List.of(),List.of("brief:user"));
+        var board=storyboards.save(task,"default","mixed-board",new Save(revision(task),brief.briefId(),fixture.boardId,new Candidate(List.of(first,second,third))));
+        var prep=service.generate(task,"default","selected-video",board.storyboardId(),new VideoModels.Generate(revision(task),new BigDecimal("10"),"SELECTED",false,List.of("s1")));
+        worker.process(videos.job(task,"default",prep.runId()).orElseThrow());var view=service.view(task,"default",prep.runId());
+        assertThat(view.status()).isEqualTo("COMPLETED");assertThat(videos.scenes(prep.runId())).hasSize(1);assertThat(provider.submitted.get()).isEqualTo(1);
+        var saved=boards.board(task,"default",view.storyboardResultId()).orElseThrow();var result=codec.candidate(codec.read(saved.documentJson()).path("candidate"));
+        assertThat(result.scenes().get(0).visualAssetId()).isNotBlank();assertThat(result.scenes().get(1).visualAssetId()).isNull();assertThat(result.scenes().get(2).narrationAssetId()).isNull();
+    }
+
     private String chargeStatus(String task, String key) {
         var values = jdbc.queryForList("SELECT status FROM creator_creation_cost_entry WHERE task_id=? AND charge_key=?",
                 String.class, task, key);

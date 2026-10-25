@@ -43,6 +43,10 @@ public class CreationAssetController {
     public Snapshot retry(@PathVariable @Pattern(regexp=ID) String taskId,@PathVariable @Pattern(regexp=ID) String assetId) {return service.retry(taskId,"default",assetId);}
     @DeleteMapping("/{assetId}")
     public Snapshot cancel(@PathVariable @Pattern(regexp=ID) String taskId,@PathVariable @Pattern(regexp=ID) String assetId) {return service.cancel(taskId,"default",assetId);}
+    @GetMapping("/{assetId}/deletion-impact")
+    public CreationAssetService.DeletionImpact deletionImpact(@PathVariable @Pattern(regexp=ID)String taskId,@PathVariable @Pattern(regexp=ID)String assetId){return service.deletionImpact(taskId,"default",assetId);}
+    @DeleteMapping("/{assetId}/media")
+    public Snapshot deleteReady(@PathVariable @Pattern(regexp=ID)String taskId,@PathVariable @Pattern(regexp=ID)String assetId){return service.deleteReady(taskId,"default",assetId);}
     @PostMapping("/{assetId}:read-url")
     public ResponseEntity<PresignedObjectRead> read(@PathVariable @Pattern(regexp=ID) String taskId,@PathVariable @Pattern(regexp=ID) String assetId,
             @RequestParam(defaultValue="NORMALIZED") @Pattern(regexp="ORIGINAL|NORMALIZED|THUMBNAIL") String role) {return privateResponse(service.read(taskId,"default",assetId,role));}

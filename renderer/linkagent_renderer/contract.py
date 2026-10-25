@@ -146,7 +146,10 @@ def load_project(input_path, work_root):
         raise RenderError("INVALID_INPUT", "工程数值或层级无效") from error
     require(document["inputHash"] == actual_hash, "输入摘要不匹配", "INPUT_HASH_MISMATCH")
     video = document["video"]
-    fields(video, ("width", "height", "fps", "frameCount", "codec", "audioSampleRate", "fontId"))
+    fields(video, ("width", "height", "fps", "frameCount", "codec", "audioSampleRate", "fontId"), ("subtitleFontSize",))
+    if "subtitleFontSize" in video:
+        require(version == 2, "字幕字号仅适用于 V2 工程")
+        integer(video["subtitleFontSize"], 24, 60)
     width = integer(video["width"], 1, 1920)
     height = integer(video["height"], 1, 1080)
     fps = integer(video["fps"], 24, 30)

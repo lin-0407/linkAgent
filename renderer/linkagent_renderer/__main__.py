@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 from .contract import RenderError
-from .engine import render
 
 
 def offline_audit(event, args):
@@ -31,9 +30,19 @@ def main():
     command.add_argument("--ffmpeg", default="ffmpeg")
     command.add_argument("--ffprobe", default="ffprobe")
     command.add_argument("--timeout-seconds", type=int, default=600)
+    check = commands.add_parser("check-env")
+    check.add_argument("--font", type=Path, required=True)
+    check.add_argument("--ffmpeg", default="ffmpeg")
+    check.add_argument("--ffprobe", default="ffprobe")
     args = parser.parse_args()
     sys.addaudithook(offline_audit)
     try:
+        if args.command == "check-env":
+            from .environment import check_environment
+            check_environment(args.font, args.ffmpeg, args.ffprobe)
+            print(json.dumps({"status": "READY"}))
+            return 0
+        from .engine import render
         if not 1 <= args.timeout_seconds <= 3600:
             raise RenderError("INVALID_INPUT", "超时范围应为 1 到 3600 秒")
         result = render(args.input, args.work_root, args.output_dir, args.font, args.ffmpeg, args.ffprobe, args.timeout_seconds)
@@ -42,7 +51,7 @@ def main():
     except RenderError as error:
         print(json.dumps({"status": "FAILED", "code": error.code, "message": str(error)}, ensure_ascii=False))
         return error.exit_code
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, ImportError) as error:
         print(json.dumps({"status": "FAILED", "code": "RENDER_FAILED", "message": "工程或本地环境处理失败"}, ensure_ascii=False))
         return 4
 

@@ -10,7 +10,10 @@ public final class VoiceModels {
     private VoiceModels() { }
 
     public record Generate(@NotNull @Min(0) Long expectedWorkspaceRevision,
-            @NotNull @DecimalMin("0.000001") @Digits(integer = 12, fraction = 6) BigDecimal maxAdditionalCostCny) { }
+            @NotNull @DecimalMin("0.000001") @Digits(integer = 12, fraction = 6) BigDecimal maxAdditionalCostCny,
+            @Size(min = 1, max = 48) List<@NotBlank @Pattern(regexp = "[A-Za-z0-9_-]{1,64}") String> sceneIds) {
+        public Generate(Long revision, BigDecimal maximum) { this(revision, maximum, null); }
+    }
 
     public record Proposal(String sceneId, String code, String message, Long proposedDurationMs) { }
 

@@ -87,8 +87,16 @@ public class StoryboardPersistence {
         if(old.isPresent()){same(hash,old.get().requestHash());return old.get();}
         idle(task,owner,input.expectedWorkspaceRevision());var brief=brief(task,owner,input.briefId());
         if(mapper.briefRevision(task,owner)!=brief.revision())throw conflict("当前简报已更新，请明确使用新简报保存工程");
-        if(input.parentStoryboardId()!=null)mapper.board(task,owner,input.parentStoryboardId()).orElseThrow(()->conflict("父故事板不属于本任务"));
-        var board=saveBoard(brief,input.candidate(),snapshotAssets(task,owner,ids(brief)),key,hash,input.parentStoryboardId(),null,false);
+        var frozen=new ArrayList<>(snapshotAssets(task,owner,ids(brief)));
+        if(input.parentStoryboardId()!=null) {
+            var parent=mapper.board(task,owner,input.parentStoryboardId()).orElseThrow(()->conflict("父故事板不属于本任务"));
+            // 场景编辑复用本任务已经生成的真实素材，改词或改提示词后的失效仍由编译器核对。
+            for(var asset:frozen(parent)) if(asset.metadata()!=null
+                    && !asset.metadata().path("generated").path("kind").asText("").isBlank()
+                    && input.candidate().scenes().stream().anyMatch(s->asset.assetId().equals(s.visualAssetId()) || asset.assetId().equals(s.narrationAssetId()))
+                    && frozen.stream().noneMatch(a->a.assetId().equals(asset.assetId()))) frozen.add(asset);
+        }
+        var board=saveBoard(brief,input.candidate(),frozen,key,hash,input.parentStoryboardId(),null,false);
         bump(task,owner,input.expectedWorkspaceRevision());return board;
     }
     public Job generate(String task,String owner,String key,Generate input) {
@@ -206,6 +214,11 @@ public class StoryboardPersistence {
     public Board saveTimeline(String task,String owner,String key,String requestHash,String boardId,
             long expectedRevision,Candidate candidate,ObjectNode document,String timingSource,
             Set<String> generatedVoiceAssets,List<Asset> frozen) {
+        return saveRevision(task,owner,key,requestHash,boardId,expectedRevision,candidate,document,timingSource,generatedVoiceAssets,frozen,null);
+    }
+    public Board saveRevision(String task,String owner,String key,String requestHash,String boardId,
+            long expectedRevision,Candidate candidate,ObjectNode document,String timingSource,
+            Set<String> generatedVoiceAssets,List<Asset> frozen,String revisedSourceJson) {
         if(candidate==null || document==null)throw conflict("时间线调整缺少场景或简报内容");
         lock(task,owner);
         var replay=mapper.boardByKey(task,owner,key);
@@ -222,7 +235,7 @@ public class StoryboardPersistence {
         String briefKey=key+"-brief";
         if(briefKey.length()>128)throw conflict("时间线幂等键过长");
         var nextBrief=new Brief(id(),task,owner,next(mapper.briefRevision(task,owner)),briefKey,requestHash,
-                codec.write(document),current.sourceJson(),null);
+                codec.write(document),revisedSourceJson==null?current.sourceJson():revisedSourceJson,null);
         mapper.insertBrief(nextBrief);
         var saved=saveBoard(nextBrief,candidate,frozen,key,requestHash,boardId,null,false,timingSource,generatedVoiceAssets);
         bump(task,owner,expectedRevision);

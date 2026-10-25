@@ -19,6 +19,16 @@ import com.link.linkagent.creator.creation.storyboard.service.StoryboardWorker;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardAudioService;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardCompiler;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardAudioModels.*;
+import com.link.linkagent.creator.creation.execution.*;
+import com.link.linkagent.creator.creation.revision.*;
+import com.link.linkagent.creator.creation.service.CreationWorkerProperties;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
+import com.link.linkagent.creator.creation.service.AutomaticProductionPlanService;
+import com.link.linkagent.creator.creation.billing.BillingExchangeRate;
+import com.link.linkagent.creator.creation.render.FixedProjectRendererProperties;
+import com.link.linkagent.creator.creation.voice.service.CreationVoiceService;
+import com.link.linkagent.creator.creation.aivideo.service.CreationVideoService;
+import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.config.ObjectStorageProperties;
 import com.link.linkagent.creator.media.storage.ObjectStorageService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
@@ -105,7 +115,7 @@ class StoryboardPersistenceIntegrationTest {
         configuration.setMapUnderscoreToCamelCase(true);
         for (Class<?> type : List.of(MediaUploadMapper.class, CreationRuntimeMapper.class,
                 CreationWorkspaceMapper.class, CreationMediaMapper.class, CreationPackageMapper.class,
-                CreatorTaskMapper.class, CreationAssetMapper.class, StoryboardMapper.class)) {
+                CreatorTaskMapper.class, CreationAssetMapper.class, StoryboardMapper.class, ExecutionMapper.class, RevisionMapper.class)) {
             configuration.addMapper(type);
         }
         var factory = new SqlSessionFactoryBean();
@@ -1141,6 +1151,154 @@ class StoryboardPersistenceIntegrationTest {
         assertThat(codec.read(savedBrief.documentJson()).path("ambience").path("sourceOutMs").asLong())
                 .isEqualTo(4567);
         assertThat(result.board().check().renderable()).isTrue();
+    }
+
+    @Test
+    void sampleConfirmationReplaysWithoutExtraBudgetOrRunAndBlocksTaskDeletion() {
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","execution-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","execution-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=executions();
+        var input=executionInput(task,board,"SAMPLE",BigDecimal.ZERO);
+        var started=service.start(task,"default","sample-confirm",input);
+        assertThat(service.start(task,"default","sample-confirm",input).executionId()).isEqualTo(started.executionId());
+        assertThat(count("creator_creation_execution",task)).isEqualTo(1);
+        assertThat(tasks.countDeletionBlockers(task,"default")).isEqualTo(1);
+        assertThat(count("creator_creation_run",task)).isZero();
+        assertThatThrownBy(()->service.start(task,"default","sample-confirm",new ExecutionModels.Start(input.expectedWorkspaceRevision(),board.storyboardId(),board.documentHash(),"FULL",input.providerFingerprint(),BigDecimal.ZERO))).isInstanceOf(ResponseStatusException.class);
+    }
+
+    @Test
+    void sampleDispatchIsDurableAndNeverAllocatesDraftVersionOrFullApproval() {
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","execution-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","execution-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=executions();
+        var started=service.start(task,"default","sample-confirm",executionInput(task,board,"SAMPLE",BigDecimal.ZERO));
+        var work=service.advance(task,"default",started.executionId());
+        assertThat(work.action()).isEqualTo("SAMPLE");
+        assertThat(executions().advance(task,"default",started.executionId()).execution().currentRunId()).isEqualTo(work.execution().currentRunId());
+        assertThat(count("creator_creation_run",task)).isEqualTo(1);
+        assertThat(count("creator_draft_video",task)).isZero();
+        assertThat(jdbc.queryForObject("SELECT approval_kind FROM creator_creation_approval WHERE task_id=?",String.class,task)).isEqualTo("PREPARATION");
+        assertThat(service.cancel(task,"default",started.executionId()).status()).isEqualTo("CANCELLED");
+        assertThat(runtime.snapshot(task,"default").activeRun()).isNull();
+        assertThat(tasks.countDeletionBlockers(task,"default")).isZero();
+    }
+
+    @Test
+    void externalRevisionBetweenConfirmationAndDispatchStopsWithoutStartingAnyRun() {
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","execution-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","execution-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=executions();
+        var started=service.start(task,"default","sample-confirm",executionInput(task,board,"SAMPLE",BigDecimal.ZERO));
+        runtime.updateBudget(task,"default",revision(task),cny("21"));
+        assertThat(service.advance(task,"default",started.executionId())).isNull();
+        var result=service.get(task,"default",started.executionId());
+        assertThat(result.status()).isEqualTo("WAITING_USER");assertThat(result.errorCode()).isEqualTo("WORKSPACE_CHANGED");
+        assertThat(count("creator_creation_run",task)).isZero();
+    }
+
+    @Test
+    void fullWithoutRealPublishingConfirmationIsRejectedAndCreatesNothing() {
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","execution-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","execution-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=executions();
+        conflict(()->service.start(task,"default","full-confirm",executionInput(task,board,"FULL",cny("5"))));
+        assertThat(count("creator_creation_execution",task)).isZero();assertThat(count("creator_creation_run",task)).isZero();
+    }
+
+    @Test
+    void subtitleRevisionHasReadOnlyPreviewAndAtomicReplayableAdoption() {
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","rev-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","rev-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=revisions();long before=revision(task);
+        var preview=service.propose(task,"default","subtitle-proposal",new RevisionModels.Propose(before,board.storyboardId(),"字幕大一点",null));
+        assertThat(preview.plan().voiceSceneIds()).isEmpty();assertThat(preview.plan().estimatedPreparationCny()).isZero();
+        assertThat(revision(task)).isEqualTo(before);assertThat(count("creator_creation_storyboard",task)).isEqualTo(1);
+        var applied=service.apply(task,"default",preview.proposalId(),new RevisionModels.Apply(before));
+        assertThat(service.apply(task,"default",preview.proposalId(),new RevisionModels.Apply(before)).storyboardId()).isEqualTo(applied.storyboardId());
+        assertThat(applied.parentStoryboardId()).isEqualTo(board.storyboardId());
+        var updatedBrief=mapper.brief(task,"default",applied.briefId()).orElseThrow();
+        assertThat(codec.read(updatedBrief.documentJson()).path("subtitleFontSize").asInt()).isEqualTo(42);
+        assertThat(codec.read(updatedBrief.sourceJson()).path("revisions")).hasSize(1);
+        assertThat(codec.read(mapper.brief(task,"default",brief.briefId()).orElseThrow().documentJson()).has("subtitleFontSize")).isFalse();
+        assertThat(count("creator_creation_run",task)).isZero();assertThat(count("creator_creation_cost_entry",task)).isZero();
+    }
+
+    @Test
+    void revisionApplyRejectsAStaleWorkspaceWithoutOverwritingEitherVersion() {
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","rev-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","rev-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=revisions();long before=revision(task);
+        var preview=service.propose(task,"default","stale-proposal",new RevisionModels.Propose(before,board.storyboardId(),"字幕大一点",null));
+        runtime.updateBudget(task,"default",before,cny("21"));
+        conflict(()->service.apply(task,"default",preview.proposalId(),new RevisionModels.Apply(before)));
+        assertThat(count("creator_creation_brief",task)).isEqualTo(1);assertThat(count("creator_creation_storyboard",task)).isEqualTo(1);
+    }
+
+    @Test
+    void revisionRejectsUnknownNestedFieldsAndNeverAcceptsForeignAssets() {
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","rev-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","rev-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=revisions();
+        var injected=JSON.createObjectNode().put("mode","NO_DIALOGUE").put("command","invalid-command");
+        conflict(()->service.propose(task,"default","invalid-fields",new RevisionModels.Propose(revision(task),board.storyboardId(),null,List.of(new RevisionModels.Change("SET_AUDIO","scene-1",injected)))));
+        String foreign=asset(task("other"),"other","foreign.png","c");
+        var foreignRequest=new RevisionModels.Propose(revision(task),board.storyboardId(),null,
+                List.of(new RevisionModels.Change("SET_VISUAL","scene-1",JSON.getNodeFactory().textNode(foreign))));
+        rejected(()->service.propose(task,"default","foreign-asset",foreignRequest),404);
+        assertThat(count("creator_creation_revision_proposal",task)).isZero();
+    }
+
+    private RevisionService revisions() {
+        var compiler=new StoryboardCompiler(JSON);
+        return tx(new RevisionService(session.getMapper(RevisionMapper.class),mapper,persistence,
+                new com.link.linkagent.creator.creation.storyboard.service.StoryboardService(mapper,persistence,compiler,codec,media,runtime,assets),
+                codec,compiler,assets,media,runtime,session.getMapper(ExecutionMapper.class),new RevisionInterpreter(JSON),JSON,
+                new com.link.linkagent.creator.creation.voice.service.CreationVoiceProperties(),new com.link.linkagent.creator.creation.aivideo.service.CreationVideoProperties(),
+                new CreatorMediaProperties(),BillingExchangeRate.fixed(cny("7.2"))));
+    }
+
+    private ExecutionService executions() {
+        var compiler=new StoryboardCompiler(JSON);
+        var voice=mock(CreationVoiceService.class);var video=mock(CreationVideoService.class);
+        var renderer=new FixedProjectRendererProperties();renderer.setEnabled(true);
+        var worker=new CreationWorkerProperties();worker.setEnabled(true);
+        var planner=new ExecutionPlanner(mapper,persistence,codec,compiler,voice,video,runtime,prices,
+                new CreatorMediaProperties(),CreationCapabilityGate.defaults(true,true),BillingExchangeRate.fixed(cny("7.2")),renderer,worker);
+        return tx(new ExecutionService(session.getMapper(ExecutionMapper.class),planner,media,runs,runtime,mapper,codec,voice,video,
+                mock(AutomaticProductionPlanService.class),session.getMapper(CreationMediaMapper.class),session.getMapper(CreationPackageMapper.class)));
+    }
+    private ExecutionModels.Start executionInput(String task,Board board,String kind,BigDecimal limit){
+        var quote=executions().estimate(task,"default",new ExecutionModels.EstimateInput(revision(task),board.storyboardId(),kind));
+        return new ExecutionModels.Start(quote.workspaceRevision(),board.storyboardId(),board.documentHash(),kind,quote.providerFingerprint(),limit);
+    }
+    @Test void fullEstimateExplainsMissingReviewCredentialsWhileAReadySampleNeedsNoCloudReview(){
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","cloud-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","cloud-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=executions();
+        assertThat(service.estimate(task,"default",new ExecutionModels.EstimateInput(revision(task),board.storyboardId(),"SAMPLE")).blockers()).isEmpty();
+        assertThat(service.estimate(task,"default",new ExecutionModels.EstimateInput(revision(task),board.storyboardId(),"FULL")).blockers())
+            .contains("完整试映尚未配置密钥或视频理解模型，请先完成制作配置后再制作整片");
+        assertThat(count("creator_creation_run",task)).isZero();
+    }
+    @Test void changedConfigurationAndRepeatedLocalFailuresStopBeforeNewCalls(){
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","guard-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","guard-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var input=executionInput(task,board,"SAMPLE",BigDecimal.ZERO);var service=executions();
+        conflict(()->service.start(task,"default","wrong-config",new ExecutionModels.Start(input.expectedWorkspaceRevision(),input.storyboardId(),input.storyboardHash(),input.kind(),"0".repeat(64),input.maxAdditionalCostCny())));
+        var started=service.start(task,"default","guarded",input);service.dispatchFailed(task,"default",started.executionId());service.dispatchFailed(task,"default",started.executionId());
+        assertThat(service.get(task,"default",started.executionId()).status()).isEqualTo("ACTIVE");service.dispatchFailed(task,"default",started.executionId());
+        assertThat(service.get(task,"default",started.executionId()).errorCode()).isEqualTo("DISPATCH_FAILED");assertThat(service.advance(task,"default",started.executionId())).isNull();
+        assertThat(count("creator_creation_run",task)).isZero();service.cancel(task,"default",started.executionId());
     }
 
     private StoryboardWorker worker() {

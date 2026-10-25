@@ -8,6 +8,8 @@ package com.link.linkagent.creator.creation.service;
  * 媒体对象存储、上传与渲染 Bean 仍是启动期装配，这里只控制依赖媒体的付费分析与生成能力。
  */
 public interface CreationCapabilityGate {
+    default String disabledReason(){return null;}
+    default void requireStartReady(){ }
 
     /** 媒体基础设施是否在启动时装配；未装配时任何运行期开关都不能把它打开。 */
     boolean mediaInfrastructureEnabled();

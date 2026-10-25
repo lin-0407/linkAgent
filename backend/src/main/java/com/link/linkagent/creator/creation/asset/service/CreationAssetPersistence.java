@@ -62,6 +62,15 @@ public class CreationAssetPersistence {
         if ("READY".equals(a.getStatus())) throw conflict("已准备的素材需要保留历史引用，不能通过取消上传删除");
         mapper.cancel(assetId);
     }
+    @Transactional
+    public void deleteReady(String taskId,String ownerId,String assetId) {
+        var asset=ownedLock(taskId,ownerId,assetId);
+        if("CANCELLED".equals(asset.getStatus()))return;
+        if(!"READY".equals(asset.getStatus()))throw conflict("当前素材尚未准备完成，请使用取消上传");
+        if(mapper.referenceCount(taskId,ownerId,assetId)>0)throw conflict("素材仍被简报、历史故事板或活动配音引用，不能物理删除");
+        if(mapper.activeExecutions(taskId,ownerId)>0)throw conflict("任务仍有活动制作，请先结束制作后再删除素材");
+        if(mapper.deleteReady(assetId)!=1)throw conflict("素材状态已变化，请刷新后重试");
+    }
 
     @Transactional
     public void retry(String taskId,String ownerId,String assetId) {

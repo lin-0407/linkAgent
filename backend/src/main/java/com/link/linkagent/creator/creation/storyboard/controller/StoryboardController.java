@@ -58,6 +58,8 @@ public class StoryboardController {
     public ResponseEntity<Map<String,Object>> estimate(@PathVariable @Pattern(regexp=ID) String taskId,@RequestBody @Valid EstimateInput input){return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(service.estimate(taskId,"default",input));}
     @GetMapping("/storyboard-preparations/{runId}")
     public ResponseEntity<Map<String,Object>> preparation(@PathVariable @Pattern(regexp=ID) String taskId,@PathVariable @Pattern(regexp=ID) String runId){return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(service.preparation(taskId,"default",runId));}
+    @GetMapping("/storyboard-preparations/current")
+    public ResponseEntity<Map<String,Object>> currentPreparation(@PathVariable @Pattern(regexp=ID) String taskId){return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(service.currentPreparation(taskId,"default"));}
     @GetMapping("/asset-references/{assetId}")
     public List<StoryboardMapper.Reference> references(@PathVariable @Pattern(regexp=ID) String taskId,@PathVariable @Pattern(regexp=ID) String assetId,@RequestParam(defaultValue="0") @Min(0) @Max(100000) int offset,@RequestParam(defaultValue="20") @Min(1) @Max(100) int limit){return service.references(taskId,"default",assetId,offset,limit);}
 }

@@ -19,8 +19,10 @@ class Visuals:
         try:
             with TTFont(str(self.font_path), fontNumber=0, lazy=True) as font:
                 coverage = font.getBestCmap()
+            subtitle_size = project.document["video"].get("subtitleFontSize", 36)
+            self.subtitle_line_height = round(subtitle_size * 49 / 36)
             self.fonts = {name: ImageFont.truetype(str(self.font_path), round(size * self.scale))
-                          for name, size in (("title", 48), ("body", 30), ("subtitle", 36), ("label", 20))}
+                          for name, size in (("title", 48), ("body", 30), ("subtitle", subtitle_size), ("label", 20))}
         except Exception as error:
             raise RenderError("FONT_INVALID", "中文字体无法加载", 3) from error
         visible_scenes = [s for s in project.document["scenes"] if s["layout"] != "VIDEO_CLIP"]
@@ -64,7 +66,7 @@ class Visuals:
         draw.rounded_rectangle(tuple(round(v * self.scale) for v in coords), radius=round(radius * self.scale), fill=color)
 
     def lines(self, draw, rows, kind, x, y, color="#f4f7fb", center=False):
-        height = {"title": 64, "body": 44, "subtitle": 49, "label": 30}[kind]
+        height = {"title": 64, "body": 44, "subtitle": self.subtitle_line_height, "label": 30}[kind]
         for row in rows:
             px = x * self.scale
             if center:
@@ -127,8 +129,9 @@ class Visuals:
         for cue in self.project.document["subtitles"]:
             if cue["startMs"] <= timestamp < cue["endMs"]:
                 rows = self.cues[cue["id"]]
-                top = 618 if len(rows) == 1 else 572
-                self.box(draw, (70, top - 12, 1210, top + 49 * len(rows) + 10), "#08101c", 10)
+                # 字号变大时向上扩展安全区，保持底部位置，旧工程仍采用原字号和原坐标。
+                top = (618 if len(rows) == 1 else 572) - (self.subtitle_line_height - 49) * len(rows)
+                self.box(draw, (70, top - 12, 1210, top + self.subtitle_line_height * len(rows) + 10), "#08101c", 10)
                 self.lines(draw, rows, "subtitle", 640, top, center=True)
                 break
 

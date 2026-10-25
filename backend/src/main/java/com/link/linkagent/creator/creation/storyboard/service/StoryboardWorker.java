@@ -31,6 +31,7 @@ public class StoryboardWorker implements AutoCloseable {
         TITLE_CARD无visualAssetId；COMPARE_CARD正好两项body；IMAGE_CARD和VIDEO_CLIP的body须空；SPLIT_CARD需图片。
         sourceInMs/sourceOutMs只用于真实视频区间，区间与场景时长一致；fit只能CONTAIN或COVER。
         dialogueMode=NO_DIALOGUE时所有audioMode=NO_DIALOGUE；TTS对应TTS并提供narration文稿；USER_NARRATION对应NARRATION并引用录音；SOURCE的视频用ORIGINAL，文字过场可NO_DIALOGUE。
+        dialogueMode=MIXED时逐场景保留用户明确指定的声音；未明确的场景不能擅自安排付费配音。
         不得生成字幕时间，cues一律空数组。缺素材或配音可以列待准备的方案，不能偷偷改为静音。
         USER_PROVIDED内容的sourceRefs必须引用brief:user或给定material:编号；FICTION保持虚构，不补真实证据。
         只返回JSON对象，不加Markdown或解释。

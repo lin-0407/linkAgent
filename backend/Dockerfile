@@ -26,12 +26,6 @@ FROM eclipse-temurin:21-jre-noble
 
 WORKDIR /app
 
-# 只拷展开后的布局：app.jar 是瘦 jar（含应用类），依赖都以普通 jar 文件躺在 lib/ 下，
-# 这样 DJL 拿到的 native 资源是 jar:file: 而不是 jar:nested:，原生库才能正常定位和解压。
-COPY --from=build /workspace/target/extracted/lib/ /app/lib/
-COPY --from=build /workspace/target/extracted/linkAgent-0.0.1-SNAPSHOT.jar /app/app.jar
-COPY scripts/ /app/scripts/
-
 # apt 源可切换：默认仍是官方源，线上行为不变；国内网络直连 archive.ubuntu.com 不稳定时
 # （实测出现过 apt 重试 39 分钟仍失败），用 build arg APT_UBUNTU_MIRROR 换成国内镜像即可。
 ARG APT_UBUNTU_MIRROR=http://archive.ubuntu.com
@@ -44,9 +38,21 @@ RUN if [ "$APT_UBUNTU_MIRROR" != "http://archive.ubuntu.com" ]; then \
             /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
     fi \
     && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update \
-    && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends python3 ffmpeg \
+    && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends python3 python3-venv ffmpeg fonts-noto-cjk \
     && ln -sf /usr/bin/python3 /usr/local/bin/python \
     && rm -rf /var/lib/apt/lists/*
+
+# 渲染器使用独立虚拟环境，避免修改系统 Python；依赖层不随业务源码变化重装。
+COPY renderer/requirements.txt /opt/renderer/requirements.txt
+RUN python3 -m venv /opt/renderer-venv \
+    && /opt/renderer-venv/bin/pip install --no-cache-dir -r /opt/renderer/requirements.txt
+ENV PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+COPY renderer/linkagent_renderer/ /opt/renderer/linkagent_renderer/
+
+# 展开的依赖使用普通文件 URL，供 DJL 读取原生库资源。
+COPY --from=build /workspace/target/extracted/lib/ /app/lib/
+COPY --from=build /workspace/target/extracted/linkAgent-0.0.1-SNAPSHOT.jar /app/app.jar
+COPY scripts/ /app/scripts/
 
 EXPOSE 8080
 

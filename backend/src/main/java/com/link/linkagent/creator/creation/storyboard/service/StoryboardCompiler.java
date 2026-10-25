@@ -55,6 +55,9 @@ public class StoryboardCompiler {
             add(issues, null, "BRIEF_INVALID", "简报必须明确 1 至 180 秒的目标时长"); return issues;
         }
         // 简报选择 TTS 时不再整体拒绝；每个场景在下方场景循环里必须具备真实生成的配音音频。
+        if(brief.hasNonNull("subtitleFontSize") && (!brief.path("subtitleFontSize").isIntegralNumber()
+                || brief.path("subtitleFontSize").asInt()<24 || brief.path("subtitleFontSize").asInt()>60))
+            add(issues,null,"SUBTITLE_STYLE_INVALID","字幕字号须为 24 至 60 的整数");
         if (candidate == null || candidate.scenes() == null || candidate.scenes().isEmpty() || candidate.scenes().size() > 48) {
             add(issues, null, "SCENES_INVALID", "故事板需要 1 至 48 个场景"); return issues;
         }
@@ -301,6 +304,7 @@ public class StoryboardCompiler {
         ObjectNode video = document.putObject("video");
         video.put("width", 1280).put("height", 720).put("fps", FPS).put("frameCount", candidate.scenes().stream().mapToInt(s -> frames(s.durationMs())).sum())
                 .put("codec", "h264").put("audioSampleRate", 48000).put("fontId", "cjk_sans");
+        if(brief.hasNonNull("subtitleFontSize")) ((ObjectNode)document.path("video")).put("subtitleFontSize",brief.path("subtitleFontSize").asInt());
         Map<String, Asset> available = new HashMap<>(); if (supplied != null) supplied.forEach(a -> available.put(a.assetId(), a));
         ArrayNode assets = document.putArray("assets"), scenes = document.putArray("scenes"), subtitles = document.putArray("subtitles");
         Set<String> used = new LinkedHashSet<>();

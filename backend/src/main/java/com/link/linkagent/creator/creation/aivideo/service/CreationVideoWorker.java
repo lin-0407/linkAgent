@@ -164,6 +164,10 @@ public class CreationVideoWorker implements AutoCloseable {
             settleRunAsFailed(run, "VIDEO_RESULT_UNKNOWN");
             return;
         }
+        var config=codec.read(run.requestJson()).path("price").path("providerConfigurationHash").asText();
+        if(!config.isBlank() && !config.equals(com.link.linkagent.creator.creation.execution.ProviderConfiguration.videoFingerprint(settings))){
+            settleRunAsFailed(run,"PROVIDER_CONFIGURATION_CHANGED");return;
+        }
         String failureCode = null;
         boolean paused = false;
         boolean enabled = capabilities.videoEnabled();
@@ -492,9 +496,12 @@ public class CreationVideoWorker implements AutoCloseable {
         Candidate candidate = new Candidate(List.copyOf(scenes));
         var brief = persistence.brief(job.taskId(), job.ownerId(), job.briefId());
         var frozen = new ArrayList<>(persistence.frozen(board));
+        var before = compiler.check(job.storyboardId(), codec.read(brief.documentJson()), source, frozen);
         for (Asset asset : extra) if (frozen.stream().noneMatch(item -> item.assetId().equals(asset.assetId()))) frozen.add(asset);
         var check = compiler.check(job.storyboardId(), codec.read(brief.documentJson()), candidate, frozen);
-        if (!check.renderable()) {
+        if (!com.link.linkagent.creator.creation.storyboard.service.StoryboardSelection.prepared(before, check,
+                rows.stream().map(CreationVideo::getSceneId).collect(java.util.stream.Collectors.toSet()),
+                Set.of("AI_VIDEO_", "VISUAL_", "CLIP_"))) {
             log.warn("AI 视频故事板仍不可渲染，运行={}，问题={}", run.runId(),
                     check.problems().stream().map(Problem::code).toList());
             throw new VideoFailure("VIDEO_BOARD_NOT_RENDERABLE");

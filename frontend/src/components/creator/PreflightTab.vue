@@ -1769,6 +1769,7 @@ function toMessage(error: unknown) {
             <div class="preflight-progress-track">
               <span :style="{ width: preflightReview.progressPercent + `%` }"></span>
             </div>
+            <p class="preflight-cost-note">媒体检测事实、模型观察与三类观众假设分别解读；AI 观众不是真实反馈。报告只对应这个视频版本，发布文案变更后请另行核对。</p>
             <p v-if="preflightReview.executiveSummary" class="preflight-cost-note">
               {{ preflightReview.executiveSummary }}
             </p>

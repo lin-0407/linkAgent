@@ -41,6 +41,12 @@ public interface StoryboardMapper {
     int insertJob(Job job);
     @Select("SELECT * FROM creator_creation_storyboard_job WHERE task_id=#{task} AND owner_id=#{owner} AND run_id=#{run}")
     Optional<Job> job(@Param("task") String task,@Param("owner") String owner,@Param("run") String run);
+    @Select("""
+        SELECT j.run_id,j.task_id,j.owner_id,j.brief_id,j.request_hash,j.storyboard_id
+        FROM creator_creation_storyboard_job j JOIN creator_creation_run r ON r.run_id=j.run_id
+        WHERE j.task_id=#{task} AND j.owner_id=#{owner} ORDER BY r.create_time DESC,r.run_id DESC LIMIT 1
+        """)
+    Optional<Job> latestJob(@Param("task") String task,@Param("owner") String owner);
     @Update("UPDATE creator_creation_storyboard_job SET storyboard_id=#{board} WHERE run_id=#{run} AND storyboard_id IS NULL")
     int result(@Param("run") String run,@Param("board") String board);
     @Select("""

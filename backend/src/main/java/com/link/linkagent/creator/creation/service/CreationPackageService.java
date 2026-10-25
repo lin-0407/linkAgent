@@ -94,6 +94,8 @@ public class CreationPackageService {
         var context = drafts.contextSnapshot(lease.taskId(), lease.ownerId(), link.versionId())
                 .orElseThrow(() -> conflict("成片缺少不可变制作上下文"));
         var review = preflight.get(lease.ownerId(), lease.taskId(), link.preflightReviewId());
+        if(!link.versionId().equals(review.versionId()) || !"COMPLETED".equals(review.status()))
+            throw conflict("正式包必须对应本版本已完成的完整试映");
         var objects = objects(attempt.objectsJson());
         var beginning = new CreationPackageRecord(lease.runId(), lease.taskId(), lease.ownerId(), link.versionId(),
                 link.processingJobId(), link.preflightReviewId(), "BUILDING", null, null, null, null,
@@ -185,6 +187,8 @@ public class CreationPackageService {
         manifest.put("taskId", lease.taskId()).put("runId", lease.runId()).put("versionId", link.versionId())
                 .put("attemptId", attempt.attemptId()).put("inputHash", attempt.inputHash())
                 .put("bundleHash", attempt.bundleHash()).put("published", false).put("notice", NOTICE);
+        manifest.put("preflightScope","VERSION_MEDIA_ONLY").put("audienceClaimType","AUDIENCE_HYPOTHESIS")
+                .put("publishingCopyScope","VERSION_SNAPSHOT");
         ObjectNode video = manifest.putObject("video");
         video.put("file", "video.mp4").put("contentType", draft.contentType()).put("bytes", draft.fileSize());
         if (draft.durationMs() != null) video.put("durationMs", draft.durationMs());
@@ -205,7 +209,9 @@ public class CreationPackageService {
                 .put("preflightStatus", review.status())
                 .put("preflightIssues", review.issues() == null ? 0 : review.issues().size())
                 .put("preflightBlockers", countSeverity(review, "BLOCKER"))
-                .put("preflightActualCostUsd", review.actualCostUsd() == null ? "0" : review.actualCostUsd().toPlainString());
+                .put("preflightCostKnown",review.actualCostUsd()!=null);
+        if(review.actualCostUsd()==null)mediaFacts.putNull("preflightActualCostUsd");
+        else mediaFacts.put("preflightActualCostUsd",review.actualCostUsd().toPlainString());
         try {
             var snapshot = json.readTree(context);
             manifest.set("publishing", snapshot.path("publishingPlan"));
