@@ -3155,7 +3155,7 @@ CREATE TABLE IF NOT EXISTS creator_creation_execution
     expected_workspace_revision BIGINT NOT NULL COMMENT '下一步受理所需修订，外部改动后停止自动推进',
     idempotency_key VARCHAR(128) NOT NULL COMMENT '用户确认的重放身份',
     request_hash CHAR(64) NOT NULL COMMENT '确认原文摘要，同键换范围必须拒绝',
-    provider_fingerprint CHAR(64) NOT NULL COMMENT '确认时的制作配置摘要，配置变化后需重新确认',
+    provider_fingerprint CHAR(64) NOT NULL DEFAULT '' COMMENT '确认时的制作配置摘要，旧运行留空时须重新确认',
     dispatch_failures INT NOT NULL DEFAULT 0 COMMENT '连续本地调度异常次数，达到三次后交还作者处理',
     error_code VARCHAR(64) DEFAULT NULL COMMENT '可读提示对应的受控错误码',
     objects_json LONGTEXT NOT NULL COMMENT '已验收样片产物清单，不包含读取签名',
@@ -3167,6 +3167,12 @@ CREATE TABLE IF NOT EXISTS creator_creation_execution
     UNIQUE KEY uk_execution_active (task_id, owner_id, active_slot),
     KEY idx_execution_poll (status, update_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户明确授权的连续制作';
+
+-- 已有表不会由 CREATE IF NOT EXISTS 补列，升级时逐项检查；旧运行不能推断成已确认当前配置。
+SET @creation_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_creation_execution' AND COLUMN_NAME='provider_fingerprint')=0, 'ALTER TABLE creator_creation_execution ADD COLUMN provider_fingerprint CHAR(64) NOT NULL DEFAULT '''' COMMENT ''确认时的制作配置摘要，旧运行留空时须重新确认''', 'SELECT 1');
+PREPARE creation_stmt FROM @creation_ddl; EXECUTE creation_stmt; DEALLOCATE PREPARE creation_stmt;
+SET @creation_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_creation_execution' AND COLUMN_NAME='dispatch_failures')=0, 'ALTER TABLE creator_creation_execution ADD COLUMN dispatch_failures INT NOT NULL DEFAULT 0 COMMENT ''连续本地调度异常次数，达到三次后交还作者处理''', 'SELECT 1');
+PREPARE creation_stmt FROM @creation_ddl; EXECUTE creation_stmt; DEALLOCATE PREPARE creation_stmt;
 
 CREATE TABLE IF NOT EXISTS creator_creation_execution_run
 (
