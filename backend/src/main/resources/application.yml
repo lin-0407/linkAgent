@@ -349,6 +349,10 @@ knowledge:
     max-category-adjustment: ${KNOWLEDGE_QUALITY_MAX_CATEGORY_ADJUSTMENT:5}
   rag:
     enabled: ${KNOWLEDGE_RAG_ENABLED:false}
+    # 定时补齐未索引记录；只保留单批大小，不限制总处理条数。
+    auto-index-enabled: ${KNOWLEDGE_RAG_AUTO_INDEX_ENABLED:true}
+    auto-index-interval-ms: ${KNOWLEDGE_RAG_AUTO_INDEX_INTERVAL_MS:30000}
+    max-index-items: ${KNOWLEDGE_RAG_MAX_INDEX_ITEMS:200}
     collection-name: ${KNOWLEDGE_RAG_COLLECTION_NAME:creator_reference_video}
     # 5.2c 子集合：存优质评论弹幕原文（small 端），与父集合物理隔离；与父集合共用同一 Milvus 连接与维度，仅集合名不同
     child-collection-name: ${KNOWLEDGE_RAG_CHILD_COLLECTION_NAME:creator_reference_video_item}

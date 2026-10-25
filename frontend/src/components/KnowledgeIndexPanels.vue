@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { errorText } from '@/utils/error'
 import {
   getReferenceVideoChunkIndexStatus,
@@ -205,17 +205,28 @@ function retrievalModeLabel(mode: string) {
   return mode === 'VECTOR' ? '向量检索' : 'SQL 检索'
 }
 
+let statusTimer: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
   void loadIndexStatus()
   void loadChunkIndexStatus()
   void loadItemIndexStatus()
   void loadHybridIndexStatus()
   void loadChildHybridIndexStatus()
+  statusTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return
+    if (!indexLoading.value) void loadIndexStatus()
+    if (!chunkIndexLoading.value) void loadChunkIndexStatus()
+    if (!itemIndexLoading.value) void loadItemIndexStatus()
+  }, 30_000)
+})
+onBeforeUnmount(() => {
+  if (statusTimer) clearInterval(statusTimer)
 })
 </script>
 
 <template>
   <div class="knowledge-index-panels">
+    <p class="creator-inline-note">后台自动索引会分批补齐待索引记录，单批大小不限制总处理条数。此面板每 30 秒刷新状态，失败项可点击重建重试。</p>
     <section class="creator-section settings-index-section">
       <div class="creator-section-head">
         <h3>向量索引</h3>
@@ -252,7 +263,7 @@ onMounted(() => {
       </div>
 
       <div v-if="indexResult" class="creator-alert success-alert">
-        <strong>重建完成</strong>
+        <strong>本批处理完成</strong>
         <span>
           本次索引 {{ indexResult.indexedCount }} 条<template v-if="indexResult.failedCount > 0">，失败 {{ indexResult.failedCount }} 条</template>。
         </span>
@@ -302,7 +313,7 @@ onMounted(() => {
       </div>
 
       <div v-if="chunkIndexResult" class="creator-alert success-alert">
-        <strong>重建完成</strong>
+        <strong>本批处理完成</strong>
         <span>
           本次索引 {{ chunkIndexResult.indexedCount }} 条主题中块<template v-if="chunkIndexResult.failedCount > 0">，失败 {{ chunkIndexResult.failedCount }} 条</template>。
         </span>
@@ -351,7 +362,7 @@ onMounted(() => {
       </div>
 
       <div v-if="itemIndexResult" class="creator-alert success-alert">
-        <strong>重建完成</strong>
+        <strong>本批处理完成</strong>
         <span>
           本次索引 {{ itemIndexResult.indexedCount }} 条子条目<template v-if="itemIndexResult.failedCount > 0">，失败 {{ itemIndexResult.failedCount }} 条</template>。
         </span>

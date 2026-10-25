@@ -516,11 +516,17 @@ public interface KnowledgeReferenceVideoMapper {
             WHERE v.is_deleted = 0
               AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
               AND v.embedding_status IN ('PENDING', 'FAILED')
+              AND (#{includeFailed} OR v.embedding_status = 'PENDING')
             ORDER BY v.id DESC
             LIMIT #{limit}
             """)
     @ResultMap("ReferenceVideoRecordMap")
-    List<ReferenceVideoRecord> listIndexableVideos(@Param("limit") int limit);
+    List<ReferenceVideoRecord> listIndexableVideos(@Param("limit") int limit,
+                                                 @Param("includeFailed") boolean includeFailed);
+
+    default List<ReferenceVideoRecord> listIndexableVideos(int limit) {
+        return listIndexableVideos(limit, true);
+    }
 
     /**
      * 标记某案例已成功写入向量库：embedding_id 复用 video_id，让向量文档与父表案例一一对应、回查免映射。
@@ -602,6 +608,7 @@ public interface KnowledgeReferenceVideoMapper {
                  AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
             WHERE i.is_deleted = 0
               AND i.embedding_status IN ('PENDING', 'FAILED')
+              AND (#{includeFailed} OR i.embedding_status = 'PENDING')
             ORDER BY i.id
             LIMIT #{limit}
             """)
@@ -614,7 +621,12 @@ public interface KnowledgeReferenceVideoMapper {
             @Result(column = "category", property = "category"),
             @Result(column = "tier", property = "tier")
     })
-    List<ReferenceVideoItemIndexRow> listIndexableItems(@Param("limit") int limit);
+    List<ReferenceVideoItemIndexRow> listIndexableItems(@Param("limit") int limit,
+                                                     @Param("includeFailed") boolean includeFailed);
+
+    default List<ReferenceVideoItemIndexRow> listIndexableItems(int limit) {
+        return listIndexableItems(limit, true);
+    }
 
     /**
      * 取全部未删除优质子条目（5.2d-3 子集合 hybrid 整库重灌）。
@@ -953,6 +965,7 @@ public interface KnowledgeReferenceVideoMapper {
                  AND (v.published_at IS NULL OR v.published_at BETWEEN DATE_SUB(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR), INTERVAL 1 YEAR) AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 8 HOUR))
             WHERE c.is_deleted = 0
               AND c.embedding_status IN ('PENDING', 'FAILED')
+              AND (#{includeFailed} OR c.embedding_status = 'PENDING')
             ORDER BY c.id
             LIMIT #{limit}
             """)
@@ -966,7 +979,12 @@ public interface KnowledgeReferenceVideoMapper {
             @Result(column = "category", property = "category"),
             @Result(column = "tier", property = "tier")
     })
-    List<ReferenceVideoChunkIndexRow> listIndexableChunks(@Param("limit") int limit);
+    List<ReferenceVideoChunkIndexRow> listIndexableChunks(@Param("limit") int limit,
+                                                       @Param("includeFailed") boolean includeFailed);
+
+    default List<ReferenceVideoChunkIndexRow> listIndexableChunks(int limit) {
+        return listIndexableChunks(limit, true);
+    }
 
     /**
      * 标记某主题中块已成功写入向量库：embedding_id 复用 chunk_id，让向量文档与中块表一一对应。

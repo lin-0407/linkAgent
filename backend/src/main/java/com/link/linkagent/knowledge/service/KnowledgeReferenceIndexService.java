@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 案例库父表向量索引服务 — Pipeline 中「父卡片 → Milvus 向量」的写入器。
@@ -51,6 +52,9 @@ import java.util.Map;
 public class KnowledgeReferenceIndexService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeReferenceIndexService.class);
+
+    // 手动入口与自动任务共用锁，避免同一条记录同时向量化两次。
+    private final ReentrantLock indexLock = new ReentrantLock();
 
     /**
      * 单次索引硬上限，与接口校验 @Max(1000) 对齐。
@@ -110,6 +114,25 @@ public class KnowledgeReferenceIndexService {
      * @return 索引结果，含 indexed/failed 计数 + warnings
      */
     public ReferenceVideoIndexResponse rebuild(ReferenceVideoIndexRequest request) {
+        return index(request, true);
+    }
+
+    public ReferenceVideoIndexResponse indexPending() {
+        return index(null, false);
+    }
+
+    private ReferenceVideoIndexResponse index(ReferenceVideoIndexRequest request, boolean includeFailed) {
+        if (!indexLock.tryLock()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "该层索引正在处理中，请稍后刷新");
+        }
+        try {
+            return doIndex(request, includeFailed);
+        } finally {
+            indexLock.unlock();
+        }
+    }
+
+    private ReferenceVideoIndexResponse doIndex(ReferenceVideoIndexRequest request, boolean includeFailed) {
         if (!knowledgeRagProperties.isEnabled()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "知识库 RAG 业务开关未启用，请先设置 knowledge.rag.enabled=true");
@@ -125,8 +148,12 @@ public class KnowledgeReferenceIndexService {
         // 批大小取配置值（默认 10，Qwen text-embedding-v3/v4 兼容模式单批硬上限）；兜底至少 1，防误配 0 死循环
         int batchSize = Math.max(1, knowledgeRagProperties.getIndexBatchSize());
 
-        List<ReferenceVideoRecord> videos = knowledgeReferenceVideoMapper.listIndexableVideos(maxItems);
+        List<ReferenceVideoRecord> videos = includeFailed
+                ? knowledgeReferenceVideoMapper.listIndexableVideos(maxItems)
+                : knowledgeReferenceVideoMapper.listIndexableVideos(maxItems, false);
         if (videos.isEmpty()) {
+            if (!includeFailed) return new ReferenceVideoIndexResponse(
+                    true, true, 0, 0, 0, 0, List.of(), LocalDateTime.now());
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "没有待索引的案例（PENDING / FAILED），请先导入案例，或确认是否已全部索引完成");
         }
@@ -135,6 +162,7 @@ public class KnowledgeReferenceIndexService {
         int indexed = 0;
         int failed = 0;
         for (int start = 0; start < videos.size(); start += batchSize) {
+            if (Thread.currentThread().isInterrupted()) break;
             int end = Math.min(start + batchSize, videos.size());
             List<ReferenceVideoRecord> chunk = videos.subList(start, end);
             try {
@@ -161,14 +189,13 @@ public class KnowledgeReferenceIndexService {
             }
         }
 
-        // skippedCount 恒为 0：候选已在 SQL 层按 is_deleted + 状态过滤，没有「查出来又跳过」的情况；
-        // 字段保留是为了和反馈索引响应结构一致、便于前端复用。
+        // 关闭后台任务时保留未处理记录为 PENDING，返回实际未处理数量。
         return new ReferenceVideoIndexResponse(
                 true,
                 true,
                 videos.size(),
                 indexed,
-                0,
+                videos.size() - indexed - failed,
                 failed,
                 warnings,
                 LocalDateTime.now()
