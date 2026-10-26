@@ -99,7 +99,8 @@ public class ExecutionService {
             var result=runtime.cancel(task,owner,e.currentRunId());
             if(!Set.of("COMPLETED","CANCELLED","FAILED").contains(result.status())) state="CANCEL_REQUESTED";
         }
-        update(e,state,state,e.storyboardId(),e.currentRunId(),runtime.snapshot(task,owner).workspaceRevision(),null);
+        // 尚未收尾时保留原阶段，失联样片仍需派发样片执行器确认取消。
+        update(e,state,"CANCEL_REQUESTED".equals(state)?e.stage():state,e.storyboardId(),e.currentRunId(),runtime.snapshot(task,owner).workspaceRevision(),null);
         return view(require(task,owner,id));
     }
     /** 返回需要事务外执行的动作；后台重启后再次从同一个子运行恢复。 */
@@ -110,7 +111,7 @@ public class ExecutionService {
         if("CANCEL_REQUESTED".equals(e.status())) {
             if(e.currentRunId()==null || Set.of("COMPLETED","CANCELLED","FAILED").contains(runtime.getRun(task,owner,e.currentRunId()).status()))
                 update(e,"CANCELLED","CANCELLED",e.storyboardId(),e.currentRunId(),runtime.snapshot(task,owner).workspaceRevision(),null);
-            else if("SAMPLE".equals(e.stage()))return new Work(e,"SAMPLE");
+            else if(cancelledSample(e))return new Work(e,"SAMPLE");
             return null;
         }
         if(!e.providerFingerprint().equals(planner.fingerprint())) {
@@ -203,6 +204,13 @@ public class ExecutionService {
     }
     public Execution require(String task,String owner,String id) {requireTask(task,owner);return executions.find(task,owner,id).orElseThrow(()->conflict("制作记录不存在或不属于本任务"));}
     public List<String> sceneIds(Execution e) {var ids=new ArrayList<String>();codec.read(e.sceneIdsJson()).forEach(n->ids.add(n.asText()));return List.copyOf(ids);}
+    private boolean cancelledSample(Execution e) {
+        if("SAMPLE".equals(e.stage()))return true;
+        if(!"SAMPLE".equals(e.kind()) || !"CANCEL_REQUESTED".equals(e.stage()))return false;
+        // 旧记录可能已丢失阶段；只按冻结的样片用途补收尾，不能把配音或视频准备误当样片。
+        return runs.run(e.taskId(),e.ownerId(),e.currentRunId())
+                .map(run->"SAMPLE".equals(codec.read(run.requestJson()).path("purpose").asText())).orElse(false);
+    }
     private void waitForUser(Execution e,String code) {update(e,"WAITING_USER",e.stage(),e.storyboardId(),e.currentRunId(),e.expectedWorkspaceRevision(),code);}
     private void update(Execution e,String status,String stage,String board,String run,long revision,String error) {
         if(executions.update(e.executionId(),status,stage,board,run,revision,error)!=1)throw conflict("制作状态已变化，请刷新");

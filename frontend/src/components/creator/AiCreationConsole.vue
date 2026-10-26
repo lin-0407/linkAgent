@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import MarkdownIt from 'markdown-it'
 import { errorText } from '@/utils/error'
-import { ArrowRight, MonitorPlay, Sparkles } from '@lucide/vue'
+import { ArrowDown, ArrowRight, FileText, MonitorPlay, Send, Sparkles } from '@lucide/vue'
 import { createInteractiveTask, getInteractiveTask, uploadContextDocuments } from '@/api/creator'
 import { getRecordText, parseJsonArray } from '@/composables/creator/creatorWorkspaceUtils'
 import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
@@ -53,6 +54,22 @@ const isUploading = ref(false)
 const isRestoring = ref(false)
 const generationRequestLocked = ref(false)
 const activePanel = ref<InteractiveCreationPanel>('idea')
+const alignmentView = ref<'conversation' | 'plan'>('conversation')
+const conversationElement = ref<HTMLElement | null>(null)
+const feedbackElement = ref<HTMLTextAreaElement | null>(null)
+const isFollowingConversation = ref(true)
+const showLatestShortcut = ref(false)
+const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
+const referenceMarkdown = new MarkdownIt({ html: true, breaks: true, linkify: true })
+// 文档的排版 HTML 只提取文字，避免展示布局代码或执行脚本；围栏内的代码仍保留原文。
+referenceMarkdown.renderer.rules.html_block = (tokens, index) =>
+  markdown.render(extractReferenceHtmlText(tokens[index]?.content || ''))
+referenceMarkdown.renderer.rules.html_inline = (tokens, index) => {
+  const content = tokens[index]?.content || ''
+  return /^<br\s*\/?\s*>$/i.test(content)
+    ? '<br>'
+    : markdown.utils.escapeHtml(extractReferenceHtmlText(content))
+}
 let restoreVersion = 0
 
 const selectedTaskId = computed(() => interactiveTask.value?.taskId ?? '')
@@ -64,6 +81,7 @@ const {
   workflowSteps,
   suggestion,
   isLoadingWorkflow,
+  isSendingWorkflowMessage: isSendingFeedback,
   isAligningIntent: isAligning,
   isAnalyzingPrePublish: isGeneratingPlan,
   isConfirmingPrePublish: isConfirming,
@@ -75,12 +93,17 @@ const {
   sendSupplement,
   markIntentPending,
   canSendWorkflowMessage,
+  canConfirmPrePublish,
   prePublishAnalyzeUnavailableReason,
   resetWorkflowState,
   disconnect,
 } = workflowModule
 
 const uploadedFiles = computed(() => interactiveTask.value?.uploadedDocuments ?? [])
+const hasReferenceText = computed(() => Boolean(interactiveTask.value?.backgroundContext?.trim()))
+const referenceHtml = computed(() =>
+  referenceMarkdown.render(interactiveTask.value?.backgroundContext || ''),
+)
 const isDragging = ref(false)
 const previewModalVisible = ref(false)
 const previewFileName = ref('')
@@ -110,6 +133,7 @@ const isBusy = computed(
     isRestoring.value ||
     generationRequestLocked.value ||
     isLoadingWorkflow.value ||
+    isSendingFeedback.value ||
     isAligning.value ||
     isGeneratingPlan.value ||
     isConfirming.value ||
@@ -154,10 +178,11 @@ const clarificationRequired = computed(
 )
 const canGeneratePlan = computed(
   () =>
+    Boolean(interactiveTask.value) &&
+    intentReady.value &&
+    !clarificationRequired.value &&
     !isBusy.value &&
-    workflowSession.value?.status !== 'RUNNING' &&
-    workflowSession.value?.status !== 'CONFIRMED' &&
-    workflowSession.value?.status !== 'CANCELLED',
+    !prePublishAnalyzeUnavailableReason.value,
 )
 const canSendFeedback = computed(
   () =>
@@ -165,6 +190,12 @@ const canSendFeedback = computed(
     Boolean(workflowSession.value) &&
     canSendWorkflowMessage.value &&
     !isBusy.value,
+)
+const canStartAlignment = computed(
+  () =>
+    Boolean(interactiveTask.value) &&
+    !isBusy.value &&
+    (!workflowSession.value || canSendWorkflowMessage.value),
 )
 
 watch(
@@ -183,16 +214,45 @@ const statusText = computed(() => {
   if (props.skippingToPreflight) return '正在进入成片试映...'
   if (isCreating.value) return '正在创建任务...'
   if (isUploading.value) return '正在解析补充资料...'
+  if (isSendingFeedback.value) return '正在发送你的补充...'
   if (isAligning.value) return 'AI 正在理解你的想法...'
   if (isGeneratingPlan.value) return '正在生成发布方案...'
   if (isConfirming.value) return '正在确认方案...'
   if (workflowSession.value?.status === 'RUNNING') return '服务端任务运行中，正在继续接收进度...'
   if (workflowSession.value?.status === 'CONFIRMED') return '发布方案已确认'
+  if (workflowSession.value?.status === 'CANCELLED') return '当前会话已取消'
   if (clarificationRequired.value) return '需要先说清楚分歧'
+  if (hasAlignmentResponse.value && !intentReady.value) return '资料已更新，等待重新对齐'
   if (suggestion.value) return '发布方案待确认'
   if (intentReady.value) return '理解无误后可生成方案'
   if (interactiveTask.value) return '可以补充资料并开始对齐'
   return '等待输入想法'
+})
+const renderedAlignmentMessages = computed(() =>
+  alignmentMessages.value.map((message) => ({
+    ...message,
+    html: message.role === 'AGENT' ? markdown.render(message.content) : '',
+  })),
+)
+const sessionHeading = computed(() => {
+  if (activePanel.value === 'idea') return '原始想法'
+  if (activePanel.value === 'context') return '创作资料'
+  return '想法对齐'
+})
+const planHeading = computed(() => {
+  if (isPlanProgressVisible.value) return 'AI 正在整理发布方案'
+  if (clarificationRequired.value) return '先回答这轮澄清问题'
+  if (!hasAlignmentResponse.value) return '先让 AI 理解你的想法'
+  if (!intentReady.value) return '需要更新 AI 的理解'
+  return '方向清楚了，就生成方案'
+})
+const planStatusText = computed(() => {
+  if (workflowSession.value?.status === 'CONFIRMED') return '已确认'
+  if (workflowSession.value?.status === 'CANCELLED') return '已取消'
+  if (isPlanProgressVisible.value) return '生成中'
+  if (clarificationRequired.value) return '待澄清'
+  if (!intentReady.value) return '等待对齐'
+  return suggestion.value ? '待你确认' : '对齐后生成'
 })
 
 const generationBlockReason = computed(() => {
@@ -245,6 +305,9 @@ const isPlanProgressVisible = computed(
   () =>
     !isAligning.value &&
     (generationRequestLocked.value || isGeneratingPlan.value || hasRunningPlanGeneration.value),
+)
+const hasSecondarySurface = computed(
+  () => Boolean(suggestion.value) || isPlanProgressVisible.value || hasReferenceText.value,
 )
 const planProgress = computed(() => {
   if (workflowSession.value?.status !== 'RUNNING') {
@@ -335,6 +398,52 @@ watch(
   { flush: 'sync' },
 )
 
+watch(
+  () =>
+    [
+      activePanel.value,
+      alignmentView.value,
+      alignmentMessages.value[alignmentMessages.value.length - 1]?.messageId,
+      isAligning.value,
+    ] as const,
+  async ([panel, view, , aligning], [previousPanel, previousView]) => {
+    if (panel !== 'alignment' || view !== 'conversation') return
+    await nextTick()
+    if (panel === previousPanel && view !== previousView) {
+      trackConversationScroll()
+      return
+    }
+    if (panel === previousPanel && view === previousView && !isFollowingConversation.value) {
+      trackConversationScroll()
+      return
+    }
+    if (aligning && conversationElement.value) {
+      conversationElement.value.scrollTop = conversationElement.value.scrollHeight
+    } else {
+      scrollToLatestReply()
+    }
+  },
+  { flush: 'post' },
+)
+
+watch(
+  [latestAlignmentSequence, isBusy, () => workflowSession.value?.status],
+  async ([sequence, busy, status]) => {
+    const task = interactiveTask.value
+    const version = restoreVersion
+    if (!task || !sequence || busy || status !== 'WAITING_USER_INPUT') return
+    if (task.understandingStatus === 'READY') return
+    try {
+      // 实时回复先于 HTTP 请求返回时，以服务端状态判断是否就绪，避免重复调用 AI 对齐。
+      const latestTask = await getInteractiveTask(task.taskId)
+      if (version === restoreVersion && interactiveTask.value === task && !isBusy.value)
+        interactiveTask.value = latestTask
+    } catch {
+      // 后台同步失败保留当前状态；不能依据一条历史回复擅自放开生成门禁。
+    }
+  },
+)
+
 async function restoreInteractiveTask(taskId: string) {
   const version = ++restoreVersion
   resetWorkflowState(false)
@@ -371,7 +480,6 @@ async function restoreInteractiveTask(taskId: string) {
     })
     if (version !== restoreVersion || interactiveTask.value?.taskId !== task.taskId) return
     if (!savedDraft && hasAlignmentResponse.value) activePanel.value = 'alignment'
-    noticeMessage.value = '已载入当前创作任务，可继续补充资料或对齐想法。'
   } catch (error) {
     if (version !== restoreVersion) return
     creatorStore.setActiveInteractiveTaskId(null)
@@ -424,8 +532,11 @@ async function ensureWorkflow() {
 
 async function startAlignment() {
   const task = interactiveTask.value
-  if (!task || isBusy.value) return
+  if (!task || !canStartAlignment.value) return
   clearMessages()
+  activePanel.value = 'alignment'
+  alignmentView.value = 'conversation'
+  isFollowingConversation.value = true
   const session = await ensureWorkflow()
   if (!session) return
   const message = await alignIntent()
@@ -439,6 +550,7 @@ async function sendFeedbackAndAlign() {
   const currentSession = workflowSession.value
   if (!task || !canSendFeedback.value || !currentSession) return
   clearMessages()
+  isFollowingConversation.value = true
   const userMessage = await sendSupplement(feedbackDraft.value.trim())
   if (!userMessage) return
   feedbackDraft.value = ''
@@ -469,6 +581,7 @@ async function generatePlan() {
   }
   generationRequestLocked.value = true
   clearMessages()
+  alignmentView.value = 'plan'
   try {
     const latestTask = await getInteractiveTask(task.taskId)
     if (interactiveTask.value?.taskId !== task.taskId) return
@@ -645,20 +758,64 @@ function handlePreparationTabKeydown(event: KeyboardEvent) {
   else return
   event.preventDefault()
   activePanel.value = panels[next]!
+  if (activePanel.value === 'alignment') alignmentView.value = 'conversation'
   const buttons = (event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(
     '[role="tab"]',
   )
   buttons[next]?.focus()
+}
+
+function trackConversationScroll() {
+  const element = conversationElement.value
+  if (element) {
+    isFollowingConversation.value =
+      element.scrollHeight - element.scrollTop - element.clientHeight < 100
+    const latest = element.querySelector<HTMLElement>('[data-intent-message]:last-of-type')
+    showLatestShortcut.value = Boolean(
+      latest && latest.getBoundingClientRect().top > element.getBoundingClientRect().bottom,
+    )
+  }
+}
+
+function scrollToLatestReply() {
+  const container = conversationElement.value
+  const latest = container?.querySelector<HTMLElement>('[data-intent-message]:last-of-type')
+  if (!container || !latest) return
+  // 长回复从开头阅读，滚动只发生在消息区，不能把底部输入框带出窗口。
+  container.scrollTop +=
+    latest.getBoundingClientRect().top - container.getBoundingClientRect().top - 24
+  trackConversationScroll()
+}
+
+async function focusFeedback() {
+  alignmentView.value = 'conversation'
+  await nextTick()
+  feedbackElement.value?.focus()
+}
+
+function openAlignmentConversation() {
+  activePanel.value = 'alignment'
+  alignmentView.value = 'conversation'
+}
+
+function extractReferenceHtmlText(content: string) {
+  const fragment = document.createElement('template')
+  fragment.innerHTML = content
+  fragment.content
+    .querySelectorAll('script, style, iframe, object')
+    .forEach((node) => node.remove())
+  fragment.content.querySelectorAll('img').forEach((node) => node.replaceWith(node.alt))
+  return fragment.content.textContent || ''
 }
 </script>
 
 <template>
   <section
     class="studio-creation-console"
-    :class="{ 'is-session': Boolean(interactiveTask) }"
+    :class="{ 'is-session': Boolean(interactiveTask || props.resumeTaskId) }"
     aria-label="AI 创作台"
   >
-    <div v-if="!interactiveTask" class="studio-invitation">
+    <div v-if="!interactiveTask && !isRestoring" class="studio-invitation">
       <span class="studio-invitation-symbol" aria-hidden="true"
         ><svg viewBox="0 0 76 54" fill="none">
           <rect
@@ -676,17 +833,17 @@ function handlePreparationTabKeydown(event: KeyboardEvent) {
       <h1>让一个想法，<br />成为一部作品。</h1>
       <p>说说你想拍什么。一起理清方向，把剩下的工作逐步交给 AI。</p>
     </div>
-    <div v-else class="studio-creation-header">
-      <div>
-        <h3><Sparkles :size="20" :stroke-width="1.6" aria-hidden="true" />开始创作任务</h3>
-        <p>先说目标，AI 会结合你的资料理清方向，再生成发布方案。</p>
+    <header v-else class="studio-intent-header">
+      <div class="studio-intent-identity">
+        <h2><Sparkles :size="17" :stroke-width="1.6" aria-hidden="true" />{{ sessionHeading }}</h2>
+        <p :title="form.idea">{{ form.idea || '正在恢复创作任务…' }}</p>
       </div>
-      <span class="studio-creation-status">{{ statusText }}</span>
-    </div>
+      <span class="studio-intent-status" role="status">{{ statusText }}</span>
+    </header>
 
     <nav
       v-if="interactiveTask"
-      class="studio-creation-tabs"
+      class="studio-intent-tabs"
       aria-label="创作准备步骤"
       role="tablist"
       @keydown="handlePreparationTabKeydown"
@@ -701,7 +858,7 @@ function handlePreparationTabKeydown(event: KeyboardEvent) {
         :class="{ active: activePanel === 'idea' }"
         @click="activePanel = 'idea'"
       >
-        创作输入
+        原始想法
       </button>
       <button
         id="creation-tab-context"
@@ -713,7 +870,9 @@ function handlePreparationTabKeydown(event: KeyboardEvent) {
         :class="{ active: activePanel === 'context' }"
         @click="activePanel = 'context'"
       >
-        补充资料
+        资料<span v-if="uploadedFiles.length" class="studio-intent-file-count">{{
+          uploadedFiles.length
+        }}</span>
       </button>
       <button
         id="creation-tab-alignment"
@@ -723,40 +882,46 @@ function handlePreparationTabKeydown(event: KeyboardEvent) {
         :aria-selected="activePanel === 'alignment'"
         aria-controls="creation-preparation-panel"
         :class="{ active: activePanel === 'alignment' }"
-        @click="activePanel = 'alignment'"
+        @click="openAlignmentConversation"
       >
         想法对齐
       </button>
     </nav>
 
-    <aside
-      v-if="interactiveTask"
-      class="studio-existing-video-entry"
-      aria-labelledby="existing-video-entry-title"
+    <nav
+      v-if="interactiveTask && activePanel === 'alignment' && hasSecondarySurface"
+      class="studio-intent-view-switch"
+      aria-label="切换对齐工作面"
     >
-      <div>
-        <strong id="existing-video-entry-title">已经做好视频？</strong>
-        <p>跳过想法对齐、发布方案和制作蓝图，直接上传视频进行成片试映。</p>
-      </div>
       <button
         type="button"
-        class="studio-existing-video-button"
-        :disabled="isBusy"
-        @click="requestSkipToPreflight"
+        :aria-pressed="alignmentView === 'conversation'"
+        @click="alignmentView = 'conversation'"
       >
-        <MonitorPlay :size="18" :stroke-width="1.8" aria-hidden="true" />
-        {{ props.skippingToPreflight ? '正在进入...' : '直接进入成片试映' }}
+        对话
       </button>
-    </aside>
+      <button
+        type="button"
+        :aria-pressed="alignmentView === 'plan'"
+        @click="alignmentView = 'plan'"
+      >
+        {{ suggestion || isPlanProgressVisible ? '发布方案' : '创作参考'
+        }}<span v-if="suggestion" class="studio-intent-result-dot" aria-label="已有方案" />
+      </button>
+    </nav>
 
     <div
       id="creation-preparation-panel"
       class="studio-creation-panel"
-      role="tabpanel"
-      :aria-labelledby="`creation-tab-${activePanel}`"
+      :data-panel="activePanel"
+      :role="interactiveTask ? 'tabpanel' : undefined"
+      :aria-labelledby="interactiveTask ? `creation-tab-${activePanel}` : undefined"
     >
+      <p v-if="isRestoring && !interactiveTask" class="studio-intent-restoring" role="status">
+        正在恢复创作现场…
+      </p>
       <form
-        v-if="activePanel === 'idea'"
+        v-else-if="activePanel === 'idea'"
         class="studio-creation-composer"
         @submit.prevent="submitIdea"
       >
@@ -845,7 +1010,7 @@ function handlePreparationTabKeydown(event: KeyboardEvent) {
             <button
               type="button"
               class="creator-primary-button"
-              :disabled="isBusy"
+              :disabled="!canStartAlignment"
               @click="startAlignment"
             >
               {{
@@ -856,182 +1021,315 @@ function handlePreparationTabKeydown(event: KeyboardEvent) {
               v-if="hasAlignmentResponse"
               type="button"
               class="creator-secondary-action"
-              @click="activePanel = 'alignment'"
+              @click="openAlignmentConversation"
             >
               查看对话
             </button>
           </div>
-        </template>
-      </div>
-
-      <div v-else class="studio-creation-alignment-panel">
-        <div v-if="!interactiveTask" class="studio-creation-empty-panel">
-          <strong>这里会显示你和 AI 的对齐过程</strong>
-          <button type="button" class="creator-secondary-action" @click="activePanel = 'idea'">
-            先填写想法
-          </button>
-        </div>
-        <div v-else-if="!hasAlignmentResponse && !isAligning" class="studio-creation-empty-panel">
-          <strong>AI 还没有说明它的理解</strong>
-          <p>可以先补充资料，也可以直接开始对齐。</p>
-          <button type="button" class="creator-primary-button" @click="startAlignment">
-            开始想法对齐
-          </button>
-        </div>
-        <template v-else>
-          <div class="studio-alignment-chat" aria-live="polite">
-            <article
-              v-for="message in alignmentMessages"
-              :key="message.messageId"
-              class="studio-alignment-message"
-              :class="message.role === 'USER' ? 'user' : 'agent'"
-            >
-              <span>{{ message.role === 'USER' ? '你' : 'AI 当前理解' }}</span>
-              <p>{{ message.content }}</p>
-            </article>
-            <div v-if="isAligning" class="studio-creation-loading">
-              <span />
-              <p>主 Agent 正在理解，审查 Agent 会检查它有没有偏离你的原话。</p>
+          <aside class="studio-intent-existing-video" aria-labelledby="existing-video-entry-title">
+            <div>
+              <strong id="existing-video-entry-title">已经有成片？</strong>
+              <p>可跳过发布方案和制作蓝图，上传视频进行成片试映。</p>
             </div>
-          </div>
-
-          <div class="studio-alignment-composer">
-            <label class="studio-creation-field">
-              <span>哪里不对，直接告诉它</span>
-              <textarea
-                v-model="feedbackDraft"
-                rows="3"
-                maxlength="2000"
-                :disabled="isBusy"
-                placeholder="例如：我不是要教别人部署，我是想展示现在的流程为什么麻烦。"
-              />
-            </label>
             <button
               type="button"
               class="creator-secondary-action"
-              :disabled="!canSendFeedback"
-              @click="sendFeedbackAndAlign"
+              :disabled="isBusy"
+              @click="requestSkipToPreflight"
             >
-              发送并重新对齐
+              <MonitorPlay :size="16" aria-hidden="true" />
+              {{ props.skippingToPreflight ? '正在进入…' : '进入成片试映' }}
             </button>
-          </div>
+          </aside>
+        </template>
+      </div>
 
-          <div class="studio-plan-action">
-            <div class="studio-plan-action-copy">
-              <strong>发布方案由你决定什么时候生成</strong>
-              <p v-if="clarificationRequired">AI 已停止重复生成，请先回答上面的问题。</p>
-              <p v-else>
-                当前上下文已生成 {{ planGenerationCount }}/3 次；你补充新信息后会重新计数。
-              </p>
-              <div v-if="isPlanProgressVisible" class="studio-plan-progress">
-                <div class="studio-plan-progress-header">
-                  <strong>发布方案生成中</strong>
-                  <span>{{ planProgress.currentStep }}</span>
-                </div>
-                <div
-                  class="studio-plan-progress-track"
-                  role="progressbar"
-                  aria-label="发布方案生成进度"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  :aria-valuenow="planProgress.percent"
-                  :aria-valuetext="planProgress.currentStep"
+      <div
+        v-else
+        class="studio-intent-workspace"
+        :class="{ 'is-discussion-only': !hasSecondarySurface }"
+        :data-view="alignmentView"
+      >
+        <section class="studio-intent-conversation" aria-label="创作对话">
+          <button
+            v-if="hasAlignmentResponse && showLatestShortcut"
+            type="button"
+            class="studio-intent-jump"
+            @click="scrollToLatestReply"
+          >
+            <ArrowDown :size="13" aria-hidden="true" />最新回复
+          </button>
+          <div
+            ref="conversationElement"
+            class="studio-intent-history"
+            role="log"
+            aria-label="想法对齐消息"
+            aria-live="polite"
+            @scroll="trackConversationScroll"
+          >
+            <div class="studio-intent-thread">
+              <div class="studio-intent-original">
+                <span>这期视频，我想做</span>
+                <p>{{ form.idea }}</p>
+                <button v-if="uploadedFiles.length" type="button" @click="activePanel = 'context'">
+                  <FileText :size="13" aria-hidden="true" />{{ uploadedFiles.length }} 份参考资料
+                </button>
+              </div>
+              <div v-if="!hasAlignmentResponse && !isAligning" class="studio-intent-empty">
+                <Sparkles :size="23" :stroke-width="1.4" aria-hidden="true" />
+                <h3>先聊清楚这期视频</h3>
+                <p>AI 会结合想法和资料说明它的理解，你可以继续补充、纠正。</p>
+                <button
+                  type="button"
+                  class="creator-primary-button"
+                  :disabled="!canStartAlignment"
+                  @click="startAlignment"
                 >
-                  <span :style="{ width: `${planProgress.percent}%` }" />
-                </div>
-                <div class="studio-plan-progress-stages" aria-hidden="true">
-                  <span
-                    v-for="(stage, index) in planProgressStages"
-                    :key="stage"
-                    :class="{
-                      done: index < planProgress.stageIndex,
-                      current: index === planProgress.stageIndex,
-                    }"
-                  >
-                    {{ stage }}
-                  </span>
+                  开始想法对齐
+                </button>
+              </div>
+              <article
+                v-for="message in renderedAlignmentMessages"
+                :key="message.messageId"
+                class="studio-intent-message"
+                :class="message.role === 'USER' ? 'is-user' : 'is-agent'"
+                data-intent-message
+              >
+                <header>
+                  <Sparkles
+                    v-if="message.role === 'AGENT'"
+                    :size="15"
+                    :stroke-width="1.7"
+                    aria-hidden="true"
+                  /><span>{{ message.role === 'USER' ? '你' : 'AI 当前理解' }}</span>
+                </header>
+                <div
+                  v-if="message.role === 'AGENT'"
+                  class="studio-intent-markdown"
+                  v-html="message.html"
+                />
+                <p v-else class="studio-intent-user-text">{{ message.content }}</p>
+              </article>
+              <div v-if="isAligning" class="studio-intent-thinking" role="status">
+                <span class="studio-intent-thinking-mark" />
+                <div>
+                  <strong>正在理解你的想法</strong>
+                  <p>结合资料梳理方向，并检查有没有偏离你的原话。</p>
                 </div>
               </div>
-              <p
-                v-if="generationBlockReason && !isPlanProgressVisible"
-                class="studio-plan-block-reason"
-              >
-                {{ generationBlockReason }}
-              </p>
             </div>
+          </div>
+
+          <form class="studio-intent-composer" @submit.prevent="sendFeedbackAndAlign">
+            <div class="studio-intent-input">
+              <label for="intent-feedback" class="sr-only">补充或纠正 AI 的理解</label>
+              <textarea
+                id="intent-feedback"
+                ref="feedbackElement"
+                v-model="feedbackDraft"
+                rows="2"
+                maxlength="2000"
+                :disabled="isBusy || !workflowSession || !canSendWorkflowMessage"
+                placeholder="回答 AI 的问题，或告诉它哪里需要调整…"
+                @keydown.ctrl.enter.prevent="sendFeedbackAndAlign"
+                @keydown.meta.enter.prevent="sendFeedbackAndAlign"
+              />
+              <div class="studio-intent-input-actions">
+                <span>{{ isAligning ? 'AI 正在回复…' : '补充后，AI 会重新对齐想法' }}</span>
+                <button
+                  type="submit"
+                  class="creator-primary-button"
+                  :disabled="!canSendFeedback"
+                  title="Ctrl / ⌘ + Enter 发送"
+                >
+                  <Send :size="14" aria-hidden="true" />{{
+                    isSendingFeedback ? '发送中…' : '发送并对齐'
+                  }}
+                </button>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <aside class="studio-intent-plan" aria-label="参考资料与发布方案">
+          <header class="studio-intent-plan-header">
+            <FileText :size="16" :stroke-width="1.6" aria-hidden="true" />
+            <h3>{{ suggestion || isPlanProgressVisible ? '发布方案' : '创作参考' }}</h3>
+            <span>{{ suggestion || isPlanProgressVisible ? planStatusText : '资料提取正文' }}</span>
+          </header>
+          <div class="studio-intent-plan-body">
+            <article
+              v-if="hasReferenceText && !suggestion && !isPlanProgressVisible"
+              class="studio-intent-reference"
+            >
+              <header>
+                {{ uploadedFiles.map((file) => file.fileName).join(' / ') || '背景资料' }}
+              </header>
+              <div class="studio-intent-markdown" v-html="referenceHtml" />
+            </article>
+            <div v-else-if="!suggestion || isPlanProgressVisible" class="studio-intent-plan-intro">
+              <h4>{{ planHeading }}</h4>
+              <p v-if="isPlanProgressVisible">生成完成后，方案会出现在这里。</p>
+              <p v-else-if="clarificationRequired">在对话里回答 AI 的问题，再继续生成。</p>
+              <p v-else-if="!intentReady && hasAlignmentResponse">
+                资料或补充信息有变化。重新对齐后，再生成发布方案。
+              </p>
+              <p v-else>在对话里确认 AI 的理解。准备好后，由你开始生成。</p>
+            </div>
+            <div v-if="isPlanProgressVisible" class="studio-intent-progress">
+              <div class="studio-intent-progress-header">
+                <strong>发布方案生成中</strong>
+                <span>{{ planProgress.currentStep }}</span>
+              </div>
+              <div
+                class="studio-intent-progress-track"
+                role="progressbar"
+                aria-label="发布方案生成进度"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                :aria-valuenow="planProgress.percent"
+                :aria-valuetext="planProgress.currentStep"
+              >
+                <span :style="{ width: `${planProgress.percent}%` }" />
+              </div>
+              <div class="studio-intent-progress-stages" aria-hidden="true">
+                <span
+                  v-for="(stage, index) in planProgressStages"
+                  :key="stage"
+                  :class="{
+                    done: index < planProgress.stageIndex,
+                    current: index === planProgress.stageIndex,
+                  }"
+                >
+                  {{ stage }}
+                </span>
+              </div>
+            </div>
+            <article v-if="suggestion" class="studio-intent-plan-result">
+              <header>
+                <div>
+                  <span>当前发布方案</span>
+                  <h4>
+                    {{
+                      suggestion.contentPositioning ||
+                      suggestion.contentSummary ||
+                      '本期视频发布方案'
+                    }}
+                  </h4>
+                </div>
+                <span>{{ suggestion.parseStatus === 'PARSED' ? '结构化结果' : '原始结果' }}</span>
+              </header>
+              <div v-if="suggestion.audienceProfile" class="studio-intent-plan-block">
+                <strong>给谁看</strong>
+                <p>{{ suggestion.audienceProfile }}</p>
+              </div>
+              <div
+                v-if="parseTextList(suggestion.titleSuggestions).length"
+                class="studio-intent-plan-block"
+              >
+                <strong>标题建议</strong>
+                <ul>
+                  <li v-for="title in parseTextList(suggestion.titleSuggestions)" :key="title">
+                    {{ title }}
+                  </li>
+                </ul>
+              </div>
+              <div v-if="suggestion.descriptionSuggestion" class="studio-intent-plan-block">
+                <strong>简介</strong>
+                <p>{{ suggestion.descriptionSuggestion }}</p>
+              </div>
+              <div
+                v-if="parseTextList(suggestion.tagSuggestions).length"
+                class="studio-intent-plan-block"
+              >
+                <strong>标签</strong>
+                <p>{{ parseTextList(suggestion.tagSuggestions).join(' / ') }}</p>
+              </div>
+              <div v-if="suggestion.riskPoints" class="studio-intent-plan-block">
+                <strong>需要注意</strong>
+                <p>
+                  {{ parseTextList(suggestion.riskPoints).join('；') || suggestion.riskPoints }}
+                </p>
+              </div>
+              <pre v-if="suggestion.parseStatus !== 'PARSED'" class="understanding-content">{{
+                suggestion.rawOutput
+              }}</pre>
+            </article>
+          </div>
+          <footer class="studio-intent-plan-actions">
+            <p
+              v-if="!hasSecondarySurface && !generationBlockReason && !planGenerationCount"
+              class="studio-intent-block-reason"
+            >
+              理解无误后，可让 AI 生成发布方案。
+            </p>
+            <p
+              v-if="generationBlockReason && !isPlanProgressVisible"
+              class="studio-intent-block-reason"
+            >
+              {{ generationBlockReason }}
+            </p>
+            <p v-if="planGenerationCount" class="studio-intent-generation-count">
+              当前信息已生成 {{ planGenerationCount }}/3 次，补充新信息后重新计数。
+            </p>
             <button
+              v-if="suggestion"
               type="button"
               class="creator-primary-button"
+              :disabled="isBusy || !canConfirmPrePublish"
+              @click="confirmPlan"
+            >
+              {{ isConfirming ? '确认中…' : '确认方案，进入制作' }}
+            </button>
+            <button
+              v-if="clarificationRequired"
+              type="button"
+              class="creator-secondary-action"
+              :disabled="isBusy"
+              @click="focusFeedback"
+            >
+              回答澄清问题
+            </button>
+            <button
+              v-else-if="!intentReady && hasAlignmentResponse && !isPlanProgressVisible"
+              type="button"
+              class="creator-primary-button"
+              :disabled="!canStartAlignment"
+              @click="startAlignment"
+            >
+              {{ isAligning ? '正在对齐…' : '按最新资料重新对齐' }}
+            </button>
+            <button
+              v-else
+              type="button"
+              :class="suggestion ? 'creator-secondary-action' : 'creator-primary-button'"
               :disabled="!canGeneratePlan"
               :title="generationBlockReason"
               @click="generatePlan"
             >
               {{
                 isPlanProgressVisible
-                  ? '生成中...'
+                  ? '正在生成…'
                   : planGenerationCount >= 3
                     ? '让 AI 先问清楚'
                     : suggestion
-                      ? '重新生成发布方案'
+                      ? '重新生成方案'
                       : '生成发布方案'
               }}
             </button>
-          </div>
-
-          <article v-if="suggestion" class="studio-plan-result">
-            <header>
-              <div>
-                <span>当前发布方案</span>
-                <h4>
-                  {{
-                    suggestion.contentPositioning || suggestion.contentSummary || '本期视频发布方案'
-                  }}
-                </h4>
-              </div>
-              <span>{{ suggestion.parseStatus === 'PARSED' ? '结构化结果' : '原始结果' }}</span>
-            </header>
-            <div v-if="suggestion.audienceProfile" class="studio-plan-block">
-              <strong>给谁看</strong>
-              <p>{{ suggestion.audienceProfile }}</p>
-            </div>
-            <div v-if="parseTextList(suggestion.titleSuggestions).length" class="studio-plan-block">
-              <strong>标题建议</strong>
-              <ul>
-                <li v-for="title in parseTextList(suggestion.titleSuggestions)" :key="title">
-                  {{ title }}
-                </li>
-              </ul>
-            </div>
-            <div v-if="suggestion.descriptionSuggestion" class="studio-plan-block">
-              <strong>简介</strong>
-              <p>{{ suggestion.descriptionSuggestion }}</p>
-            </div>
-            <div v-if="parseTextList(suggestion.tagSuggestions).length" class="studio-plan-block">
-              <strong>标签</strong>
-              <p>{{ parseTextList(suggestion.tagSuggestions).join(' / ') }}</p>
-            </div>
-            <div v-if="suggestion.riskPoints" class="studio-plan-block">
-              <strong>需要注意</strong>
-              <p>{{ parseTextList(suggestion.riskPoints).join('；') || suggestion.riskPoints }}</p>
-            </div>
-            <pre v-if="suggestion.parseStatus !== 'PARSED'" class="understanding-content">{{
-              suggestion.rawOutput
-            }}</pre>
-            <button
-              type="button"
-              class="creator-primary-button"
-              :disabled="isBusy"
-              @click="confirmPlan"
-            >
-              {{ isConfirming ? '确认中...' : '确认这个发布方案' }}
-            </button>
-          </article>
-        </template>
+          </footer>
+        </aside>
       </div>
     </div>
 
-    <p v-if="noticeMessage" class="studio-creation-notice">{{ noticeMessage }}</p>
-    <p v-if="errorMessage" class="studio-creation-error">{{ errorMessage }}</p>
+    <div
+      v-if="noticeMessage || errorMessage"
+      class="studio-intent-notification"
+      :class="{ 'is-error': errorMessage }"
+      :role="errorMessage ? 'alert' : 'status'"
+    >
+      {{ errorMessage || noticeMessage }}
+    </div>
 
     <Teleport to="body">
       <div v-if="previewModalVisible" class="preview-modal-overlay" @click.self="closePreview">

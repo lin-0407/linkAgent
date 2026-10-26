@@ -168,11 +168,12 @@ public class CreationVideoWorker implements AutoCloseable {
         if(!config.isBlank() && !config.equals(com.link.linkagent.creator.creation.execution.ProviderConfiguration.videoFingerprint(settings))){
             settleRunAsFailed(run,"PROVIDER_CONFIGURATION_CHANGED");return;
         }
-        String failureCode = null;
+        // 接管会把已发送费用暂记未知，先核对已有任务，才能继续发送仍在排队的镜头。
+        String failureCode = awaitSubmitted(run, cancelled);
         boolean paused = false;
         boolean enabled = capabilities.videoEnabled();
         for (CreationVideo row : mapper.scenes(run.runId())) {
-            if (cancelled.getAsBoolean()) break;
+            if (failureCode != null || cancelled.getAsBoolean()) break;
             if (!"QUEUED".equals(row.getStatus())) continue;
             // 关闭后不再提交新镜头；已提交的 SUBMITTED 仍会进入下面的轮询与结算。
             if (!enabled) { paused = true; continue; }
@@ -187,34 +188,8 @@ public class CreationVideoWorker implements AutoCloseable {
             }
         }
         if (!cancelled.getAsBoolean()) {
-            long deadline = System.nanoTime() + settings.getTaskTimeout().toNanos();
-            while (true) {
-                if (cancelled.getAsBoolean()) break;
-                List<CreationVideo> pending = mapper.scenes(run.runId()).stream()
-                        .filter(row -> "SUBMITTED".equals(row.getStatus())).toList();
-                if (pending.isEmpty()) break;
-                for (CreationVideo row : pending) {
-                    if (cancelled.getAsBoolean()) break;
-                    try { pollScene(run, row, cancelled); }
-                    catch (VideoFailure failure) {
-                        if (cancelled.getAsBoolean()) break;
-                        markFailed(row, failure.code, run.leaseGeneration());
-                        if (failureCode == null) failureCode = failure.code;
-                    }
-                }
-                if (cancelled.getAsBoolean()) break;
-                if (System.nanoTime() >= deadline) {
-                    for (CreationVideo row : mapper.scenes(run.runId()))
-                        if ("SUBMITTED".equals(row.getStatus())) {
-                            // 已提交但结果未回：保留任务标识，费用未知，不在这里自动重新提交。
-                            markUnknown(run, videoKey(run.runId(), row.getSceneId()));
-                            markFailed(row, "VIDEO_GENERATION_TIMEOUT", run.leaseGeneration());
-                        }
-                    if (failureCode == null) failureCode = "VIDEO_GENERATION_TIMEOUT";
-                    break;
-                }
-                sleep(settings.getPollInterval());
-            }
+            String pollingFailure = awaitSubmitted(run, cancelled);
+            if (failureCode == null) failureCode = pollingFailure;
         }
         if (cancelled.getAsBoolean()) { cancelIfRequested(run); return; }
         if (failureCode != null) {
@@ -252,6 +227,38 @@ public class CreationVideoWorker implements AutoCloseable {
             try { settleRunAsFailed(run); }
             catch (RuntimeException ignored) { log.info("视频失败收尾等待租约恢复，运行={}", run.runId()); }
         }
+    }
+
+    private String awaitSubmitted(Run run, BooleanSupplier cancelled) {
+        String failureCode = null;
+        long deadline = System.nanoTime() + settings.getTaskTimeout().toNanos();
+        while (!cancelled.getAsBoolean()) {
+            List<CreationVideo> pending = mapper.scenes(run.runId()).stream()
+                    .filter(row -> "SUBMITTED".equals(row.getStatus())).toList();
+            if (pending.isEmpty()) break;
+            for (CreationVideo row : pending) {
+                if (cancelled.getAsBoolean()) break;
+                try { pollScene(run, row, cancelled); }
+                catch (VideoFailure failure) {
+                    if (cancelled.getAsBoolean()) break;
+                    markFailed(row, failure.code, run.leaseGeneration());
+                    if (failureCode == null) failureCode = failure.code;
+                }
+            }
+            if (cancelled.getAsBoolean()) break;
+            if (System.nanoTime() >= deadline) {
+                for (CreationVideo row : mapper.scenes(run.runId()))
+                    if ("SUBMITTED".equals(row.getStatus())) {
+                        // 已提交但结果未回：保留任务标识和未知费用，不能重发或继续新增镜头。
+                        markUnknown(run, videoKey(run.runId(), row.getSceneId()));
+                        markFailed(row, "VIDEO_GENERATION_TIMEOUT", run.leaseGeneration());
+                    }
+                if (failureCode == null) failureCode = "VIDEO_GENERATION_TIMEOUT";
+                break;
+            }
+            sleep(settings.getPollInterval());
+        }
+        return failureCode;
     }
 
     private boolean recoverInterrupted(Run run) {

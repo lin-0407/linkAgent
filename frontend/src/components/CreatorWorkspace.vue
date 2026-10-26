@@ -2132,7 +2132,19 @@ provideCreatorWorkspace({
       <TaskListPanel v-if="selectedTask || isTaskComposerOpen" />
       <template v-else>
         <div class="studio-home-identity"><span class="studio-live-mark" aria-hidden="true"></span><strong>创作片场</strong><span>想法在这里成为作品</span></div>
-        <button type="button" class="creator-ghost-button" @click="openTaskManager"><FolderOpen :size="16" aria-hidden="true" />所有作品</button>
+        <div class="studio-home-actions">
+          <button
+            v-if="activeInteractiveTaskId"
+            type="button"
+            class="creator-ghost-button"
+            @click="startAiCreationTask"
+          >
+            新建任务
+          </button>
+          <button type="button" class="creator-ghost-button" @click="openTaskManager">
+            <FolderOpen :size="16" aria-hidden="true" />所有作品
+          </button>
+        </div>
       </template>
     </header>
 
@@ -2204,6 +2216,7 @@ provideCreatorWorkspace({
     <section
       v-else-if="!selectedTask && !isTaskComposerOpen"
       class="studio-start-screen"
+      :class="{ 'is-active-session': Boolean(activeInteractiveTaskId) }"
       aria-label="创作台入口"
     >
       <AiCreationConsole
@@ -2215,15 +2228,7 @@ provideCreatorWorkspace({
         @skip-to-preflight="handleSkipToPreflight"
         @task-created="handleInteractiveTaskCreated"
       />
-      <div class="studio-start-actions" aria-label="其他创建方式">
-        <button
-          v-if="activeInteractiveTaskId"
-          type="button"
-          class="creator-secondary-action creator-mini-button"
-          @click="startAiCreationTask"
-        >
-          新建任务
-        </button>
+      <div v-if="!activeInteractiveTaskId" class="studio-start-actions" aria-label="其他创建方式">
         <button
           v-if="hasTaskHistory"
           type="button"

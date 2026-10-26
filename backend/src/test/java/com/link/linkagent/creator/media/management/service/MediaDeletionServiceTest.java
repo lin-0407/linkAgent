@@ -43,12 +43,18 @@ class MediaDeletionServiceTest {
         when(uploadMapper.listUploadsByVersion("task-1", "default", "version-1"))
                 .thenReturn(List.of(upload));
         when(processingMapper.listAssetsByVersion("version-1")).thenReturn(List.of(asset));
+        when(uploadMapper.listPackageObjects("task-1", "default", "version-1"))
+                .thenReturn(List.of(new MediaUploadMapper.PackageObject("package-bucket", "package/publish-package.zip")));
         when(uploadMapper.markDraftMediaDeleted("task-1", "default", "version-1")).thenReturn(1);
 
         service.deleteMedia("default", "task-1", "version-1");
 
         verify(storage).deleteObject("media-bucket", "derived/preview.mp4");
         verify(storage).deleteObject("media-bucket", "original/source.mp4");
+        var order = org.mockito.Mockito.inOrder(storage, uploadMapper);
+        order.verify(storage).deleteObject("package-bucket", "package/publish-package.zip");
+        order.verify(uploadMapper).markPackagesMediaDeleted("task-1", "default", "version-1");
+        order.verify(uploadMapper).markDraftMediaDeleted("task-1", "default", "version-1");
         verify(processingMapper).markAssetsDeleted("version-1");
         verify(preflightMapper).markVersionEvidenceUnavailable("version-1");
         verify(uploadMapper).deleteParts("upload-1");

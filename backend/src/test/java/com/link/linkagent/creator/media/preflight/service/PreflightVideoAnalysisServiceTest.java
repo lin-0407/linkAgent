@@ -26,6 +26,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.anyString;
 
 /** 验证模型问题只有绑定合法时间段和可追溯证据后才会进入发布前体检。 */
 class PreflightVideoAnalysisServiceTest {
@@ -149,7 +151,30 @@ class PreflightVideoAnalysisServiceTest {
         );
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(value={"NULL,180", "1200,NULL", "NULL,NULL", "0,0"},nullValues="NULL")
+    void videoUsageMustPreserveUnknownCostsWithoutConfusingAnExplicitZero(Long input,Long output) {
+        var gate=mock(MediaCallChargeGate.class);
+        when(gate.upperBound("MEDIA_VIDEO")).thenReturn(new BigDecimal("0.30"));
+        when(gate.reserve(anyString(),anyString(),anyString(),any(),anyString())).thenReturn(()->true);
+        var fixture=fixture("{\"executiveSummary\":\"可见画面已完成观察。\",\"issues\":[]}",input,output,gate);
+        var result=fixture.service.analyze(review(),step());
+        if(input==null || output==null) {
+            assertThat(result.actualCostUsd()).isNull();
+            verify(gate).unknown("review-1","video-review-1-call-1");
+            verify(gate,never()).settle(anyString(),anyString(),any(),anyString());
+        } else {
+            assertThat(result.actualCostUsd()).isZero();
+            verify(gate).settle(eq("review-1"),eq("video-review-1-call-1"),eq(result.actualCostUsd()),anyString());
+            verify(gate,never()).unknown(anyString(),anyString());
+        }
+    }
+
     private Fixture fixture(String response) {
+        return fixture(response,1200L,180L,MediaCallChargeGate.NOOP);
+    }
+
+    private Fixture fixture(String response,Long input,Long output,MediaCallChargeGate gate) {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.getPreflight().setDashScopeApiKey("test-key");
         PreflightReviewMapper mapper = mock(PreflightReviewMapper.class);
@@ -158,7 +183,7 @@ class PreflightVideoAnalysisServiceTest {
         AtomicReference<String> prompt = new AtomicReference<>();
         VideoUnderstandingProvider provider = (videoUrl, requestPrompt) -> {
             prompt.set(requestPrompt);
-            return new VideoUnderstandingProvider.AnalysisResult(response, 1200L, 180L);
+            return new VideoUnderstandingProvider.AnalysisResult(response, input, output);
         };
         MediaProcessingAssetRecord preview = new MediaProcessingAssetRecord(
                 null, "asset-1", "job-1", "version-1", "PREVIEW_VIDEO", "bucket",
@@ -183,7 +208,7 @@ class PreflightVideoAnalysisServiceTest {
         when(mapper.completeVideoCall(any(), any(), any(), any(), anyInt())).thenReturn(1);
         PreflightVideoAnalysisService service = new PreflightVideoAnalysisService(
                 properties, mapper, processingMapper, storage, provider, new ObjectMapper(), () -> "call-1",
-                () -> "video-model-evidence-1", () -> "issue-1"
+                () -> "video-model-evidence-1", () -> "issue-1", gate
         );
         return new Fixture(service, mapper, prompt);
     }

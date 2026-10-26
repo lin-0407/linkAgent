@@ -1,6 +1,8 @@
 package com.link.linkagent.creator.creation.revision;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.link.linkagent.creator.creation.asset.model.CreationAsset;
 import com.link.linkagent.creator.creation.revision.RevisionModels.Change;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardModels.Scene;
@@ -18,25 +20,29 @@ public class RevisionInterpreter {
     public Result interpret(String instruction,List<Scene> scenes,List<CreationAsset> assets,int fontSize) {
         return interpret(instruction,scenes,assets,fontSize,json.createObjectNode().put("targetDurationMs",scenes.stream().mapToLong(Scene::durationMs).sum()));
     }
-    public Result interpret(String instruction,List<Scene> scenes,List<CreationAsset> assets,int fontSize,com.fasterxml.jackson.databind.JsonNode brief) {
+    public Result interpret(String instruction,List<Scene> scenes,List<CreationAsset> assets,int fontSize,JsonNode brief) {
         if(instruction.chars().filter(c->c=='“').count()!=instruction.chars().filter(c->c=='”').count()
                 || instruction.chars().filter(c->c=='"').count()%2!=0)
             return new Result(List.of(),List.of("修改文稿的引号未配对，请补齐后再预览"));
         var changes=new ArrayList<Change>();var questions=new ArrayList<String>();
+        // 同一句里的音乐操作顺序生效，每条变更保留当时的值，避免后续操作覆盖预览。
+        JsonNode music=brief.path("backgroundMusic").deepCopy();
         for(String raw:split(instruction)) {
             String part=raw.strip().replaceFirst("[。！]$","");
             if(part.isEmpty())continue;
             Matcher match;
-            if(Pattern.matches("(?:取消|去掉|移除)(?:背景音乐|BGM)",part))
+            if(Pattern.matches("(?:取消|去掉|移除)(?:背景音乐|BGM)",part)) {
+                music=json.nullNode();
                 changes.add(new Change("SET_BGM",null,json.nullNode()));
+            }
             else if((match=Pattern.compile("(?:把)?(?:背景音乐|BGM)(?:换成|改为|改成)(.+)").matcher(part)).matches()) {
                 String id=asset(unquote(match.group(1)),assets,Set.of("MUSIC"),questions);
-                if(id!=null){var bed=brief.path("backgroundMusic").isObject()?(com.fasterxml.jackson.databind.node.ObjectNode)brief.path("backgroundMusic").deepCopy():json.createObjectNode()
+                if(id!=null){var bed=music.isObject()?(ObjectNode)music.deepCopy():json.createObjectNode()
                     .put("sourceInMs",0).put("sourceOutMs",brief.path("targetDurationMs").asLong()).put("gainDb",-18).put("fadeInMs",200).put("fadeOutMs",200).put("ducking",true);
-                    bed.put("assetId",id);changes.add(new Change("SET_BGM",null,bed));}
+                    bed.put("assetId",id);music=bed;changes.add(new Change("SET_BGM",null,bed.deepCopy()));}
             } else if((match=Pattern.compile("(?:背景音乐|BGM)(?:音量)?(?:改为|设为|改成)(-?[0-9]{1,2}(?:\\.[0-9])?)(?:dB|分贝)",Pattern.CASE_INSENSITIVE).matcher(part)).matches()) {
-                if(!brief.path("backgroundMusic").isObject())questions.add("当前没有背景音乐，请先明确要使用的音乐文件");
-                else {var bed=(com.fasterxml.jackson.databind.node.ObjectNode)brief.path("backgroundMusic").deepCopy();bed.put("gainDb",new java.math.BigDecimal(match.group(1)));changes.add(new Change("SET_BGM",null,bed));}
+                if(!music.isObject())questions.add("当前没有背景音乐，请先明确要使用的音乐文件");
+                else {var bed=(ObjectNode)music.deepCopy();bed.put("gainDb",new java.math.BigDecimal(match.group(1)));music=bed;changes.add(new Change("SET_BGM",null,bed.deepCopy()));}
             } else if((match=Pattern.compile(SCENE+"(?:的)?(?:声音|音轨)(?:来源)?(?:改为|改成|换成)(原声|保留原声|无对白|静音|AI配音|AI 配音)").matcher(part)).matches()) {
                 String id=scene(match.group(1),scenes,questions),value=match.group(2);
                 if(id!=null)changes.add(new Change("SET_AUDIO",id,json.createObjectNode().put("mode",Set.of("原声","保留原声").contains(value)?"ORIGINAL":value.contains("AI")?"TTS":"NO_DIALOGUE")));

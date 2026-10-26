@@ -12,6 +12,12 @@ import com.link.linkagent.creator.creation.render.FixedProjectRendererProperties
 import com.link.linkagent.creator.creation.billing.BillingExchangeRate;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.storage.ObjectStorageService;
+import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
+import com.link.linkagent.creator.media.preflight.model.PreflightReviewRecord;
+import com.link.linkagent.creator.media.preflight.model.PreflightStepRecord;
+import com.link.linkagent.creator.media.preflight.service.AudienceScreeningService;
+import com.link.linkagent.creator.creation.storyboard.service.StoryboardTextGenerator;
+import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.settings.mapper.RuntimeSettingMapper;
 import jakarta.validation.Validation;
@@ -35,6 +41,7 @@ import java.time.Duration;
 import java.util.*;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 
 /** 只使用隔离 MySQL 与存储替身，验证真实事务和清理范围，不代表外部供应商或浏览器验收。 */
 @Testcontainers
@@ -95,6 +102,54 @@ class CreationFinishIntegrationTest {
         String legacy=task(false);ledger().accept(legacy,"default",id(),id(),5000);assertThat(runtime.snapshot(legacy,"default").initialized()).isFalse();
         String task=task(true);runtime.updateBudget(task,"default",runtime.snapshot(task,"default").workspaceRevision(),new BigDecimal("0.01"));
         assertThatThrownBy(()->ledger().accept(task,"default",id(),id(),5000)).isInstanceOf(ResponseStatusException.class);assertThat(runtime.snapshot(task,"default").activeRun()).isNull();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(value={
+            "NULL,100,true", "100,NULL,true", "NULL,NULL,true",
+            "NULL,100,false", "100,NULL,false", "120,40,true", "0,0,true", "0,100,true"
+    },nullValues="NULL")
+    void audienceUsageMustRemainUnknownUntilBothTokenCountsAreKnown(Integer input,Integer output,boolean valid) {
+        String task=task(true),reviewId=id(),version=id();var ledger=ledger();var billing=billing();
+        ledger.accept(task,"default",reviewId,version,5000);insertReview(task,reviewId,version,"RUNNING");
+        var mapper=mock(PreflightReviewMapper.class);
+        when(mapper.listIssues(reviewId)).thenReturn(List.of());when(mapper.listEvidence(reviewId)).thenReturn(List.of());
+        when(mapper.insertTextScreeningCall(anyString(),anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(1);
+        when(mapper.insertAudienceScreening(any())).thenReturn(1);
+        when(mapper.completeTextScreeningCall(anyString(),any(),any(),anyInt())).thenReturn(1);
+        var personas=List.of("CASUAL","TARGET","CORE_FAN").stream().map(type->new AudienceScreeningService.PersonaOutput(
+                type,"可能继续观看",List.of(),List.of(),List.of(),List.of(),List.of(),new BigDecimal("0.5"))).toList();
+        String content=valid?JSON.valueToTree(new AudienceScreeningService.AudienceOutput(personas)).toString():"invalid-json";
+        var generator=mock(StoryboardTextGenerator.class);var llm=mock(LLMService.class);
+        when(generator.generate(anyString(),anyString(),eq(4096))).thenReturn(new StoryboardTextGenerator.Raw(content,input,output,"isolated-model"));
+        var service=new AudienceScreeningService(mapper,llm,JSON,billing,generator);
+        var review=new PreflightReviewRecord(null,reviewId,task,version,"default","processing","usage-key",null,"RUNNING","SCREEN_AUDIENCE",80,0L,false,1,3,null,null,null,"a".repeat(64),"{}","[]",null,BigDecimal.ONE,null,null,"USD",null,null,null,null,null,null);
+        var step=new PreflightStepRecord(null,"usage-step",reviewId,"SCREEN_AUDIENCE",5,"RUNNING",1,"a".repeat(64),null,null,null,null,null,null,null,null);
+        try {
+            if(valid)assertThat(service.screen(review,step).personaCount()).isEqualTo(3);
+            else assertThatThrownBy(()->service.screen(review,step)).isInstanceOf(AudienceScreeningService.AudienceScreeningException.class);
+            var charge=jdbc.queryForMap("SELECT status,known_cost_cny FROM creator_creation_cost_entry WHERE task_id=?",task);
+            var budget=runtime.snapshot(task,"default").budget();
+            boolean unknown=input==null || output==null;
+            assertThat(charge.get("status")).isEqualTo(unknown?"UNKNOWN":"SETTLED");
+            assertThat(budget.unknownCny()).isEqualByComparingTo(unknown?"0.36":"0");
+            assertThat(budget.reservedCny()).isZero();
+            assertThat(budget.paidCallsBlocked()).isEqualTo(unknown);
+            if(unknown) {
+                assertThat(charge.get("known_cost_cny")).isNull();
+                assertThatThrownBy(()->billing.reserve(reviewId,"MEDIA_TEXT_SCREENING","next-"+reviewId,new BigDecimal("0.05"),"缺失用量后的调用"))
+                        .isInstanceOf(ResponseStatusException.class);
+            } else {
+                BigDecimal expected=new BigDecimal(input).multiply(new BigDecimal("0.2")).add(new BigDecimal(output).multiply(new BigDecimal("0.8")))
+                        .divide(new BigDecimal("1000000")).multiply(new BigDecimal("7.2")).setScale(6,java.math.RoundingMode.HALF_UP);
+                assertThat(budget.knownCny()).isEqualByComparingTo(expected);
+                billing.reserve(reviewId,"MEDIA_TEXT_SCREENING","next-"+reviewId,new BigDecimal("0.05"),"完整用量后的调用");
+            }
+            verify(generator,times(1)).generate(anyString(),anyString(),eq(4096));verifyNoInteractions(llm);
+        } finally {
+            ledger.cancel(task,"default",reviewId);jdbc.update("UPDATE creator_preflight_review SET status='CANCELLED' WHERE review_id=?",reviewId);
+            ledger.advance(session.getMapper(ManualReviewMapper.class).byReview(reviewId).getFirst());
+        }
     }
     @Test void unreferencedReadyAssetCanBeDeletedWhileHistoricalBriefReferenceProtectsMedia(){
         String task=task(false),free=asset(task),used=asset(task);var mapper=session.getMapper(CreationAssetMapper.class);var service=tx(new CreationAssetPersistence(mapper));

@@ -141,8 +141,11 @@ class CreationVideoIntegrationTest {
     @AfterAll
     static void cleanup() throws Exception {
         if (validators != null) validators.close();
-        try (var paths = Files.walk(workRoot)) {
-            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+        // 私有存储替身也是本轮测试数据，和工作目录一起回收。
+        for (Path root : List.of(workRoot, storage.root)) {
+            try (var paths = Files.walk(root)) {
+                for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+            }
         }
     }
 
@@ -448,6 +451,56 @@ class CreationVideoIntegrationTest {
     }
 
     @Test
+    void takeoverSettlesSubmittedVideoBeforeSendingTheRemainingScene() {
+        var job=partiallySubmittedJob();
+        worker.process(job);
+        assertThat(runs.run(job.taskId(),"default",job.runId()).orElseThrow().status()).isEqualTo("COMPLETED");
+        assertThat(videos.scenes(job.runId())).allMatch(row->"READY".equals(row.getStatus()));
+        assertThat(provider.submitted.get()).isEqualTo(2);
+        assertThat(provider.events.indexOf("query:task-1")).isLessThan(provider.events.indexOf("submit:task-2"));
+        var budget=runtime.snapshot(job.taskId(),"default").budget();
+        assertThat(budget.knownCny()).isEqualByComparingTo("7.2");assertThat(budget.unknownCny()).isZero();assertThat(budget.reservedCny()).isZero();
+        var saved=service.view(job.taskId(),"default",job.runId()).storyboardResultId();assertThat(saved).isNotBlank();
+        assertThat(codec.candidate(codec.read(boards.board(job.taskId(),"default",saved).orElseThrow().documentJson()).path("candidate")).scenes())
+                .allMatch(scene->scene.visualAssetId()!=null);
+        worker.process(job);assertThat(provider.submitted.get()).isEqualTo(2);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void takeoverDoesNotSendQueuedVideoWhenThePreviousTaskRemainsUnknown(boolean timeout) {
+        var job=partiallySubmittedJob();provider.failQuery=!timeout;provider.keepRunning=timeout;
+        settings.setTaskTimeout(Duration.ofMillis(500));
+        worker.process(job);
+        assertThat(provider.submitted.get()).isEqualTo(1);
+        assertThat(videos.scene(job.runId(),"s2").orElseThrow().getStatus()).isEqualTo("QUEUED");
+        assertThat(chargeStatus(job.taskId(),"video-gen-"+job.runId()+"-s1")).isEqualTo("UNKNOWN");
+        assertThat(runtime.snapshot(job.taskId(),"default").budget().unknownCny()).isEqualByComparingTo("3.6");
+        assertThat(runtime.snapshot(job.taskId(),"default").budget().paidCallsBlocked()).isTrue();
+        assertThat(runs.run(job.taskId(),"default",job.runId()).orElseThrow().errorCode())
+                .isEqualTo(timeout?"VIDEO_GENERATION_TIMEOUT":"VIDEO_GENERATION_FAILED");
+    }
+
+    private CreationVideoMapper.Job partiallySubmittedJob() {
+        var fixture=fixture("AI_VIDEO",List.of(),"海边日落","NO_DIALOGUE","NO_DIALOGUE",2000);String task=fixture.task;
+        var brief=storyboards.saveBrief(task,"default","two-scene-brief",new BriefInput(revision(task),"双镜头恢复","保留已提交结果","创作者",4000,"NO_DIALOGUE","USER_PROVIDED",List.of(),""));
+        var first=new Scene("s1","AI_VIDEO","第一幕",List.of(),"",2000,null,null,null,"CONTAIN","NO_DIALOGUE",null,List.of(),List.of("brief:user"),"海边日落");
+        var second=new Scene("s2","AI_VIDEO","第二幕",List.of(),"",2000,null,null,null,"CONTAIN","NO_DIALOGUE",null,List.of(),List.of("brief:user"),"山间清晨");
+        var board=storyboards.save(task,"default","two-scene-board",new Save(revision(task),brief.briefId(),fixture.boardId,new Candidate(List.of(first,second))));
+        var prep=service.generate(task,"default","two-scene-run",board.storyboardId(),new VideoModels.Generate(revision(task),new BigDecimal("10"),"SELECTED",false));
+        var lease=runtime.claim(task,"default",prep.runId(),"lost-worker",30).orElseThrow();
+        String key="video-gen-"+prep.runId()+"-s1";
+        runtime.reserve(task,"default",prep.runId(),"lost-worker",lease.leaseGeneration(),key,"VIDEO_GENERATION",new BigDecimal("3.6"),
+                "{\"currency\":\"USD\",\"usdToCny\":\"7.2\",\"usdPerSecond\":\"0.1\"}");
+        assertThat(videos.beginSubmit(prep.runId(),"s1",provider.provider(),provider.model(),5,"lost-worker",lease.leaseGeneration())).isEqualTo(1);
+        assertThat(runtime.markSent(task,"default",key,"lost-worker",lease.leaseGeneration())).isTrue();
+        var submitted=provider.submit(new VideoGenerationProvider.Submit("海边日落",5,1280,720,1));
+        videoPersistence.submitted(videos.scene(prep.runId(),"s1").orElseThrow(),submitted.taskId(),submitted.requestId(),"lost-worker",lease.leaseGeneration());
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,-1,NOW(6)) WHERE run_id=?",prep.runId());
+        return videos.job(task,"default",prep.runId()).orElseThrow();
+    }
+
+    @Test
     void unchangedPromptIsReusedWithoutAnotherProviderCall() {
         var fixture = fixture("AI_VIDEO", List.of(), "海边日落", "NO_DIALOGUE", "NO_DIALOGUE", 2000);
         var first = service.generate(fixture.task, "default", "video-key", fixture.boardId,
@@ -646,7 +699,9 @@ class CreationVideoIntegrationTest {
     static final class StubProvider implements VideoGenerationProvider {
         final AtomicInteger submitted = new AtomicInteger();
         final AtomicInteger queried = new AtomicInteger();
+        final List<String> events = new ArrayList<>();
         volatile boolean reject;
+        volatile boolean failQuery, keepRunning;
         volatile long clipDurationMs = 5000;
         @Override public String provider() { return "compatible"; }
         @Override public String model() { return "test-video-1"; }
@@ -655,11 +710,15 @@ class CreationVideoIntegrationTest {
         }
         @Override public TaskRef submit(Submit request) {
             submitted.incrementAndGet();
+            events.add("submit:task-"+submitted.get());
             if (reject) throw new VideoRejectedException("HTTP 400");
             return new TaskRef("task-" + submitted.get(), "req-" + submitted.get());
         }
         @Override public QueryResult query(String taskId) {
             queried.incrementAndGet();
+            events.add("query:"+taskId);
+            if(failQuery)return new QueryResult(Status.FAILED,null,null,null,null,null,null,"req-1");
+            if(keepRunning)return new QueryResult(Status.RUNNING,null,null,null,null,null,null,null);
             if (queried.get() < 2) return new QueryResult(Status.RUNNING, null, null, null, null, null, null, null);
             return new QueryResult(Status.SUCCEEDED, "https://cdn.example.invalid/" + taskId + ".mp4",
                     5L, clipDurationMs, 1280, 720, null, "req-1");

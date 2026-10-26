@@ -117,6 +117,9 @@ public class RevisionService {
         idle(task,owner,input.expectedWorkspaceRevision());
         var payload=codec.read(proposal.documentJson());
         var frozen=new ArrayList<Asset>();payload.path("assets").forEach(n->frozen.add(codec.decode(n,Asset.class)));
+        // 提案不占用素材引用，预览后素材可能被删除或替换；持有任务锁时重新核对。
+        var current=persistence.snapshotAssets(task,owner,frozen.stream().map(Asset::assetId).toList());
+        if(!current.equals(frozen))throw conflict("提案素材已变化，请重新预览修改");
         var result=persistence.saveRevision(task,owner,"revision-"+id,proposal.requestHash(),proposal.storyboardId(),input.expectedWorkspaceRevision(),
                 codec.candidate(payload.path("candidate")),(ObjectNode)payload.path("brief"),payload.path("timingSource").asText(),Set.of(),List.copyOf(frozen),codec.write(payload.path("sources")));
         if(proposals.apply(id,result.storyboardId())!=1)throw conflict("提案已被其他操作处理");

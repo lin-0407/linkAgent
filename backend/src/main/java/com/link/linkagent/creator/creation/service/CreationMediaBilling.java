@@ -111,10 +111,11 @@ public class CreationMediaBilling implements MediaCallChargeGate {
     /** 文本模型仅按配置单价上界估算美元费用，结算类型仍为 USAGE_ESTIMATE。 */
     @Override
     public BigDecimal estimateTextCost(Long inputTokens, Long outputTokens) {
-        if (inputTokens == null && outputTokens == null) return null;
-        BigDecimal input = BigDecimal.valueOf(inputTokens == null ? 0L : inputTokens)
+        // 缺少任一侧用量都不能当作零，否则会提前释放预留并放行后续付费。
+        if (inputTokens == null || outputTokens == null) return null;
+        BigDecimal input = BigDecimal.valueOf(inputTokens)
                 .multiply(properties.getTextInputUsdPerMillionTokens()).divide(ONE_MILLION, 12, RoundingMode.HALF_UP);
-        BigDecimal output = BigDecimal.valueOf(outputTokens == null ? 0L : outputTokens)
+        BigDecimal output = BigDecimal.valueOf(outputTokens)
                 .multiply(properties.getTextOutputUsdPerMillionTokens()).divide(ONE_MILLION, 12, RoundingMode.HALF_UP);
         return input.add(output).setScale(8, RoundingMode.HALF_UP);
     }

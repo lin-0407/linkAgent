@@ -1256,6 +1256,71 @@ class StoryboardPersistenceIntegrationTest {
         assertThat(count("creator_creation_revision_proposal",task)).isZero();
     }
 
+    @ParameterizedTest
+    @ValueSource(strings={"DELETED","CHANGED","READY"})
+    void revisionAdoptionRevalidatesTheFrozenAssetBeforeSavingAnyReferences(String state) {
+        String task=task("default");initialize(task);
+        String image=asset(task,"default","replacement.png","c");
+        var metadata=JSON.createObjectNode();metadata.putObject("normalized").putArray("streams").addObject()
+                .put("codec_type","video").put("codec_name","png").put("width",640).put("height",360);
+        jdbc.update("UPDATE creator_creation_asset SET metadata_json=? WHERE asset_id=?",codec.write(metadata),image);
+        var brief=persistence.saveBrief(task,"default","asset-brief",brief(revision(task),List.of()));
+        var board=persistence.save(task,"default","asset-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=revisions();long before=revision(task);
+        var preview=service.propose(task,"default","asset-proposal",new RevisionModels.Propose(before,board.storyboardId(),null,
+                List.of(new RevisionModels.Change("SET_VISUAL","scene-1",JSON.getNodeFactory().textNode(image)))));
+        var assetMapper=session.getMapper(CreationAssetMapper.class);
+        if("DELETED".equals(state)) {
+            assertThat(assets.deletionImpact(task,"default",image).allowed()).isTrue();
+            var row=assets.require(task,"default",image);var keys=new java.util.HashSet<String>();
+            keys.add(row.getSourceKey());assets.objects(row).forEach(file->keys.add(file.objectKey()));
+            var storage=mock(ObjectStorageService.class);
+            when(storage.listMultipartUploads(anyString(),anyString())).thenReturn(List.of());
+            doAnswer(call->{keys.remove(call.getArgument(1,String.class));return null;}).when(storage).deleteObject(anyString(),anyString());
+            assets.deleteReady(task,"default",image);
+            try(var worker=new com.link.linkagent.creator.creation.asset.service.CreationAssetWorker(assetMapper,assets,storage,
+                    mock(com.link.linkagent.creator.creation.asset.service.AssetMediaPreparer.class),new FixedProjectRendererProperties(),JSON)) {
+                worker.process(assets.require(task,"default",image));
+            }
+            assertThat(keys).isEmpty();
+        } else if("CHANGED".equals(state)) {
+            var row=assets.require(task,"default",image);
+            jdbc.update("UPDATE creator_creation_asset SET objects_json=? WHERE asset_id=?",row.getObjectsJson().replace("c".repeat(64),"d".repeat(64)),image);
+        }
+        assertThat(revision(task)).isEqualTo(before);
+        if("READY".equals(state)) {
+            var applied=service.apply(task,"default",preview.proposalId(),new RevisionModels.Apply(before));
+            assertThat(applied.check().renderable()).isTrue();
+            assertThat(assetMapper.referenceCount(task,"default",image)).isEqualTo(2);
+            assertThat(service.apply(task,"default",preview.proposalId(),new RevisionModels.Apply(before)).storyboardId()).isEqualTo(applied.storyboardId());
+        } else {
+            conflict(()->service.apply(task,"default",preview.proposalId(),new RevisionModels.Apply(before)));
+            assertThat(revision(task)).isEqualTo(before);
+            assertThat(count("creator_creation_brief",task)).isEqualTo(1);
+            assertThat(count("creator_creation_storyboard",task)).isEqualTo(1);
+            assertThat(assetMapper.referenceCount(task,"default",image)).isZero();
+            assertThat(session.getMapper(RevisionMapper.class).find(task,"default",preview.proposalId()).orElseThrow().appliedStoryboardId()).isNull();
+        }
+    }
+
+    @Test
+    void composedMusicInstructionsArePersistedAndAdoptedWithTheNewAsset() {
+        String task=task("default");initialize(task);
+        String original=audioAsset(task,"MUSIC",8000,"a"),replacement=audioAsset(task,"MUSIC",8000,"b");
+        jdbc.update("UPDATE creator_creation_asset SET file_name='replacement.wav' WHERE asset_id=?",replacement);
+        var brief=persistence.saveBrief(task,"default","music-brief",new BriefInput(revision(task),"音乐组合修改","替换并调低音量","创作者",5000,
+                "NO_DIALOGUE","USER_PROVIDED",List.of(original),"",new BackgroundMusic(original,0,5000,cny("-18"),0,0,true)));
+        var board=persistence.save(task,"default","music-board",new Save(revision(task),brief.briefId(),null,candidate(null,List.of("brief:user"),List.of())));
+        var service=revisions();
+        var preview=service.propose(task,"default","music-proposal",new RevisionModels.Propose(revision(task),board.storyboardId(),"背景音乐换成replacement.wav，背景音乐音量改为-12dB",null));
+        assertThat(preview.clarifications()).isEmpty();
+        var applied=service.apply(task,"default",preview.proposalId(),new RevisionModels.Apply(preview.workspaceRevision()));
+        var music=codec.read(mapper.brief(task,"default",applied.briefId()).orElseThrow().documentJson()).path("backgroundMusic");
+        assertThat(music.path("assetId").asText()).isEqualTo(replacement);
+        assertThat(music.path("gainDb").decimalValue()).isEqualByComparingTo("-12");
+        assertThat(applied.check().renderable()).isTrue();
+    }
+
     private RevisionService revisions() {
         var compiler=new StoryboardCompiler(JSON);
         return tx(new RevisionService(session.getMapper(RevisionMapper.class),mapper,persistence,

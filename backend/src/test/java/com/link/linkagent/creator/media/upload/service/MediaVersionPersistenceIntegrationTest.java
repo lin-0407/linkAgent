@@ -32,8 +32,13 @@ import com.link.linkagent.creator.creation.execution.ExecutionMapper;
 import com.link.linkagent.creator.creation.execution.ExecutionModels;
 import com.link.linkagent.creator.creation.execution.ExecutionPlanner;
 import com.link.linkagent.creator.creation.execution.ExecutionService;
+import com.link.linkagent.creator.creation.execution.ExecutionSampleRenderer;
+import com.link.linkagent.creator.creation.render.FixedProjectRenderService;
 import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardCodec;
+import com.link.linkagent.creator.creation.storyboard.service.StoryboardCompiler;
+import com.link.linkagent.creator.creation.storyboard.service.StoryboardPersistence;
+import com.link.linkagent.creator.creation.storyboard.service.StoryboardProjectFiles;
 import com.link.linkagent.creator.creation.voice.service.CreationVoiceService;
 import com.link.linkagent.creator.creation.aivideo.service.CreationVideoService;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Run;
@@ -1532,6 +1537,54 @@ class MediaVersionPersistenceIntegrationTest {
         System.out.println("S3_REPAIR_REAL_DB_WORKER_COMPLETED attempts=" + done.attemptCount() + " zipEntries=" + entries.size());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void deletingMediaRemovesItsRealPackageAndRetriesLegacyLeftovers(boolean previouslyDeleted) throws Exception {
+        var fixture=mediaFixture(cny("0"));
+        try(var worker=fixture.worker()){fixture.until(worker,"COMPLETED");}
+        var ready=creationPackages.find(fixture.lease.runId()).orElseThrow();
+        assertThat(ready.status()).isEqualTo("READY");
+        var retainedReview=reviews.findReview(fixture.task,"default",ready.preflightReviewId()).orElseThrow();
+        try(var zip=new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(fixture.storageBytes.get(ready.objectKey())))) {
+            var entries=new java.util.HashMap<String,String>();
+            for(var entry=zip.getNextEntry();entry!=null;entry=zip.getNextEntry())
+                entries.put(entry.getName(),new String(zip.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(entries.get("video.mp4")).isEqualTo("隔离调度协议夹具-video.mp4");
+        }
+        var other=readyVideo(fixture.task,"keep-other-version");
+        String otherRun="other-"+fixture.task,otherKey="other-package/"+other.versionId()+".zip";
+        jdbc.update("""
+                INSERT INTO creator_creation_package(run_id,task_id,owner_id,version_id,processing_job_id,
+                    preflight_review_id,status,bucket_name,object_key,bytes,manifest_json,lease_generation)
+                VALUES (?,?,'default',?,'other-job','other-review','READY','bucket',?,1,'{}',1)
+                """,otherRun,fixture.task,other.versionId(),otherKey);
+        fixture.storageBytes.put(otherKey,new byte[]{1});
+        if(previouslyDeleted)assertThat(mapper.markDraftMediaDeleted(fixture.task,"default",fixture.version)).isEqualTo(1);
+        var firstDelete=new java.util.concurrent.atomic.AtomicBoolean(true);
+        doAnswer(call->{
+            String key=call.getArgument(1);
+            if(ready.objectKey().equals(key) && firstDelete.getAndSet(false))throw new com.link.linkagent.creator.media.storage.MediaStorageException("隔离删除故障",null);
+            fixture.storageBytes.remove(key);return null;
+        }).when(fixture.storage).deleteObject(anyString(),anyString());
+        var deletion=new MediaDeletionService(mapper,processing,reviews,fixture.storage);
+        assertThatThrownBy(()->transactions.executeWithoutResult(status->deletion.deleteMedia("default",fixture.task,fixture.version)))
+                .isInstanceOfSatisfying(ResponseStatusException.class,error->assertThat(error.getStatusCode().value()).isEqualTo(503));
+        assertThat(creationPackages.find(fixture.lease.runId()).orElseThrow().status()).isEqualTo("READY");
+        assertThat(mapper.findDraftVideoByVersion(fixture.task,"default",fixture.version).orElseThrow().mediaDeletedAt()!=null).isEqualTo(previouslyDeleted);
+        assertThat(fixture.storageBytes).containsKey(ready.objectKey());
+
+        transactions.executeWithoutResult(status->deletion.deleteMedia("default",fixture.task,fixture.version));
+        transactions.executeWithoutResult(status->deletion.deleteMedia("default",fixture.task,fixture.version));
+        var deleted=creationPackages.find(fixture.lease.runId()).orElseThrow();
+        assertThat(fixture.storageBytes).doesNotContainKey(ready.objectKey()).containsKey(otherKey);
+        assertThat(deleted.status()).isEqualTo("FAILED");assertThat(deleted.failureCode()).isEqualTo("MEDIA_DELETED");
+        assertThat(deleted.manifestJson()).isEqualTo(ready.manifestJson());
+        assertThat(mapper.findDraftVideoByVersion(fixture.task,"default",fixture.version).orElseThrow().mediaDeletedAt()).isNotNull();
+        assertThat(creationPackages.find(otherRun).orElseThrow().status()).isEqualTo("READY");
+        assertThat(mapper.findDraftVideoByVersion(fixture.task,"default",other.versionId()).orElseThrow().mediaDeletedAt()).isNull();
+        assertThat(reviews.findReview(fixture.task,"default",ready.preflightReviewId()).orElseThrow()).isEqualTo(retainedReview);
+    }
+
     @Test void sameStageFailuresStayBoundedAcrossWorkerRestartAndCanBeCancelled() throws Exception {
         var fixture = mediaFixture(cny("0"));
         doThrow(new IllegalStateException("隔离测试的临时受理故障"))
@@ -2143,6 +2196,42 @@ class MediaVersionPersistenceIntegrationTest {
             assertThat(runtime.snapshot(job.taskId(), "default").activeRun().runId()).isEqualTo(job.runId());
             ExecutionService.Work repeated = transactions.execute(status -> service.advance(job.taskId(), "default", id));
             assertThat(repeated).isNull();
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void cancelledLostSampleReleasesTheWorkspaceEvenWithAnAlreadyOverwrittenStage(boolean legacyStage) {
+        String task=task(),id=UUID.randomUUID().toString();
+        runtime.initialize(task,"default","sample-budget",revision(task),cny("20"));
+        var run=runtime.startPreparation(task,"default","PREPARE","sample-run",revision(task),
+                "{\"purpose\":\"SAMPLE\",\"executionId\":\""+id+"\"}",cny("0"));
+        runtime.claim(task,"default",run.runId(),"lost-sample-worker",30).orElseThrow();
+        executionMapper.insert(new ExecutionModels.Execution(id,task,"default","SAMPLE","ACTIVE","SAMPLE",
+                "board","board","[\"s1\"]",null,null,null,cny("0"),null,revision(task),id,"a".repeat(64),"f".repeat(64),null,"[]",null));
+        executionMapper.update(id,"ACTIVE","SAMPLE","board",run.runId(),revision(task),null);
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=TIMESTAMPADD(SECOND,-1,NOW(6)) WHERE run_id=?",run.runId());
+        var boardMapper=mock(StoryboardMapper.class);var renderer=mock(FixedProjectRenderService.class);var storage=mock(ObjectStorageService.class);
+        try(var validators=jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            var codec=new StoryboardCodec(new ObjectMapper(),validators.getValidator());
+            var service=new ExecutionService(executionMapper,mock(ExecutionPlanner.class),mapper,runtimeMapper,runtime,boardMapper,
+                    codec,mock(CreationVoiceService.class),mock(CreationVideoService.class),automaticPlans,mediaLinks,creationPackages);
+            ExecutionModels.View cancelled=transactions.execute(status->service.cancel(task,"default",id));
+            assertThat(cancelled.status()).isEqualTo("CANCEL_REQUESTED");
+            if(legacyStage)executionMapper.update(id,"CANCEL_REQUESTED","CANCEL_REQUESTED","board",run.runId(),revision(task),null);
+            else assertThat(cancelled.stage()).isEqualTo("SAMPLE");
+            ExecutionService.Work work=transactions.execute(status->service.advance(task,"default",id));
+            assertThat(work).isNotNull();assertThat(work.action()).isEqualTo("SAMPLE");
+            try(var samples=new ExecutionSampleRenderer(runtime,service,executionMapper,boardMapper,mock(StoryboardPersistence.class),codec,
+                    mock(StoryboardCompiler.class),mock(StoryboardProjectFiles.class),renderer,storage,new ObjectStorageProperties())) {
+                samples.render(work.execution());
+            }
+            ExecutionService.Work finished=transactions.execute(status->service.advance(task,"default",id));
+            assertThat(finished).isNull();assertThat(service.get(task,"default",id).status()).isEqualTo("CANCELLED");
+            assertThat(runtime.getRun(task,"default",run.runId()).status()).isEqualTo("CANCELLED");
+            assertThat(runtime.snapshot(task,"default").activeRun()).isNull();verifyNoInteractions(renderer,storage,boardMapper);
+            var next=runtime.startPreparation(task,"default","PREPARE","next-sample",revision(task),"{\"purpose\":\"SAMPLE\"}",cny("0"));
+            assertThat(next.status()).isEqualTo("QUEUED");runtime.cancel(task,"default",next.runId());
         }
     }
 

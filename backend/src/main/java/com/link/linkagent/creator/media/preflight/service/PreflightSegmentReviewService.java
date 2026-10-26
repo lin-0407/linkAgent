@@ -364,10 +364,11 @@ public class PreflightSegmentReviewService {
     }
 
     private BigDecimal actualCost(Long inputTokens, Long outputTokens) {
-        if (inputTokens == null && outputTokens == null) return null;
-        BigDecimal input = BigDecimal.valueOf(inputTokens == null ? 0 : inputTokens)
+        // 复核也要保留缺失用量的占用，避免以偏低费用释放预算。
+        if (inputTokens == null || outputTokens == null) return null;
+        BigDecimal input = BigDecimal.valueOf(inputTokens)
                 .multiply(properties.getProcessing().getPlusInputUsdPerMillionTokens());
-        BigDecimal output = BigDecimal.valueOf(outputTokens == null ? 0 : outputTokens)
+        BigDecimal output = BigDecimal.valueOf(outputTokens)
                 .multiply(properties.getProcessing().getPlusOutputUsdPerMillionTokens());
         return input.add(output).divide(BigDecimal.valueOf(1_000_000L), 8, RoundingMode.HALF_UP);
     }

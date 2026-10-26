@@ -75,6 +75,22 @@ public interface MediaUploadMapper {
             """)
     List<String> listGeneratedObjectKeys(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("versionId") String versionId);
 
+    record PackageObject(String bucketName, String objectKey) { }
+
+    @Select("""
+            SELECT bucket_name, object_key FROM creator_creation_package
+            WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND version_id=#{versionId}
+            """)
+    List<PackageObject> listPackageObjects(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+                                         @Param("versionId") String versionId);
+
+    @Update("""
+            UPDATE creator_creation_package SET status='FAILED', failure_code='MEDIA_DELETED'
+            WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND version_id=#{versionId}
+            """)
+    int markPackagesMediaDeleted(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+                                 @Param("versionId") String versionId);
+
     @Select("""
             SELECT version_id, task_id, owner_id, planning_skipped, publishing_session_id,
                    publishing_result_id, production_plan_id, snapshot_json

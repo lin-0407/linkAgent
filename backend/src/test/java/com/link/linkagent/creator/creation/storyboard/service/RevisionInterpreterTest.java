@@ -40,4 +40,45 @@ class RevisionInterpreterTest {
         assertThat(parser.interpret("背景音乐音量改为-20dB",scenes,List.of(),36).clarifications()).isNotEmpty();
         assertThat(parser.interpret("第二十三四幕声音改为无对白",scenes,List.of(),36).changes()).isEmpty();
     }
+    @Test void replacingMusicThenChangingVolumeKeepsTheNewMusicAndIndependentChanges(){
+        var brief=new ObjectMapper().createObjectNode().put("targetDurationMs",15000);
+        var original=brief.putObject("backgroundMusic").put("assetId","original").put("gainDb",-18).put("fadeInMs",400);
+        var result=parser.interpret("背景音乐换成音乐.wav，背景音乐音量改为-12dB",scenes,List.of(music()),36,brief);
+        assertThat(result.clarifications()).isEmpty();assertThat(result.changes()).hasSize(2);
+        assertThat(result.changes().getLast().value().path("assetId").asText()).isEqualTo("replacement");
+        assertThat(result.changes().getLast().value().path("gainDb").asInt()).isEqualTo(-12);
+        assertThat(result.changes().getFirst().value().path("gainDb").asInt()).isEqualTo(-18);
+        assertThat(original.path("assetId").asText()).isEqualTo("original");
+        assertThat(original.path("gainDb").asInt()).isEqualTo(-18);
+    }
+    @Test void addingMusicThenChangingVolumeWorksWithoutAnExistingMusicBed(){
+        var result=parser.interpret("背景音乐换成音乐.wav，背景音乐音量改为-12dB",scenes,List.of(music()),36);
+        assertThat(result.clarifications()).isEmpty();
+        assertThat(result.changes().getLast().value().path("assetId").asText()).isEqualTo("replacement");
+        assertThat(result.changes().getLast().value().path("gainDb").asInt()).isEqualTo(-12);
+    }
+    @Test void changingVolumeThenReplacingMusicPreservesTheUpdatedVolume(){
+        var brief=new ObjectMapper().createObjectNode().put("targetDurationMs",15000);
+        brief.putObject("backgroundMusic").put("assetId","original").put("gainDb",-18);
+        var result=parser.interpret("背景音乐音量改为-12dB，背景音乐换成音乐.wav",scenes,List.of(music()),36,brief);
+        assertThat(result.clarifications()).isEmpty();
+        assertThat(result.changes().getLast().value().path("assetId").asText()).isEqualTo("replacement");
+        assertThat(result.changes().getLast().value().path("gainDb").asInt()).isEqualTo(-12);
+        assertThat(result.changes().getFirst().value().path("assetId").asText()).isEqualTo("original");
+    }
+    @Test void removingMusicResetsItsSettingsAndRequiresAFileBeforeAnotherVolumeChange(){
+        var brief=new ObjectMapper().createObjectNode().put("targetDurationMs",15000);
+        brief.putObject("backgroundMusic").put("assetId","original").put("gainDb",-6).put("fadeInMs",900);
+        var replacement=parser.interpret("取消背景音乐，背景音乐换成音乐.wav",scenes,List.of(music()),36,brief);
+        assertThat(replacement.clarifications()).isEmpty();
+        assertThat(replacement.changes().getFirst().value().isNull()).isTrue();
+        assertThat(replacement.changes().getLast().value().path("gainDb").asInt()).isEqualTo(-18);
+        assertThat(replacement.changes().getLast().value().path("fadeInMs").asInt()).isEqualTo(200);
+        var missing=parser.interpret("取消背景音乐，背景音乐音量改为-12dB",scenes,List.of(music()),36,brief);
+        assertThat(missing.clarifications()).hasSize(1);assertThat(missing.changes()).isEmpty();
+    }
+    private static com.link.linkagent.creator.creation.asset.model.CreationAsset music(){
+        var music=new com.link.linkagent.creator.creation.asset.model.CreationAsset();
+        music.setAssetId("replacement");music.setKind("MUSIC");music.setStatus("READY");music.setFileName("音乐.wav");return music;
+    }
 }
