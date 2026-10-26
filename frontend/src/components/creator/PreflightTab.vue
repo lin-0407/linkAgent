@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { errorText } from '@/utils/error'
-import { Check, CircleAlert, CircleCheck, LoaderCircle, Minus, Trash2, X } from '@lucide/vue'
+import {
+  Check,
+  CircleAlert,
+  CircleCheck,
+  LoaderCircle,
+  Minus,
+  MonitorPlay,
+  Trash2,
+  X,
+} from '@lucide/vue'
 import { ApiError } from '@/api/http'
 import { API_BASE_URL } from '@/api/config'
 import {
@@ -36,6 +45,7 @@ const {
   refreshCurrentDraftVideo,
 } = useCreatorWorkspaceShell()
 const versionName = ref('V1 初剪')
+const screeningView = ref<'media' | 'review'>('media')
 const selectedFile = ref<File | null>(null)
 const localError = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -108,9 +118,7 @@ const taskId = computed(() => selectedTaskId.value ?? '')
 const mediaDeleted = computed(() => Boolean(completedDraft.value?.mediaDeletedAt))
 const canRetryFailedUpload = computed(() => {
   const status = completedDraft.value?.status
-  return (
-    status === 'UPLOAD_FAILED' || status === 'UPLOAD_ABORTED' || status === 'PROBE_FAILED'
-  )
+  return status === 'UPLOAD_FAILED' || status === 'UPLOAD_ABORTED' || status === 'PROBE_FAILED'
 })
 const hasStoredMedia = computed(() => {
   const status = completedDraft.value?.status
@@ -133,7 +141,9 @@ const fileSummary = computed(() => {
   if (!selectedFile.value) return '尚未选择文件'
   return `${selectedFile.value.name} · ${formatBytes(selectedFile.value.size)}`
 })
-const visibleError = computed(() => localError.value || errorMessage.value || mediaDeleteError.value)
+const visibleError = computed(
+  () => localError.value || errorMessage.value || mediaDeleteError.value,
+)
 const completedPartRatio = computed(() => {
   const upload = currentUpload.value
   if (!upload || upload.totalParts <= 0) return '0 / 0'
@@ -158,7 +168,8 @@ const currentProcessingOptionsFingerprint = computed(() =>
   ].join('|'),
 )
 const canProbeDraft = computed(() => {
-  if (mediaDeleted.value || !activeVersionId.value || isUploading.value || isProbing.value) return false
+  if (mediaDeleted.value || !activeVersionId.value || isUploading.value || isProbing.value)
+    return false
   if (completedDraft.value) {
     return (
       completedDraft.value.status === 'UPLOADED' || completedDraft.value.status === 'PROBE_FAILED'
@@ -279,13 +290,11 @@ const processingPreviewAsset = computed(() =>
     ? undefined
     : processingJob.value?.assets.find((asset) => asset.assetType === 'PREVIEW_VIDEO'),
 )
-const processingFrameAssets = computed(
-  () =>
-    mediaDeleted.value
-      ? []
-      : (processingJob.value?.assets
-          .filter((asset) => asset.assetType === 'KEYFRAME')
-          .slice(0, 24) ?? []),
+const processingFrameAssets = computed(() =>
+  mediaDeleted.value
+    ? []
+    : (processingJob.value?.assets.filter((asset) => asset.assetType === 'KEYFRAME').slice(0, 24) ??
+      []),
 )
 const processingStepLabel = computed(() => {
   const step = processingJob.value?.steps.find(
@@ -329,11 +338,17 @@ const processingSignalFacts = computed(() => {
   ]
 })
 const canStartPreflight = computed(
-  () => !mediaDeleted.value && processingJob.value?.status === 'COMPLETED' && !preflightReview.value,
+  () =>
+    !mediaDeleted.value && processingJob.value?.status === 'COMPLETED' && !preflightReview.value,
 )
 const preflightIsActive = computed(() => {
   const status = preflightReview.value?.status
-  return status === 'QUEUED' || status === 'RUNNING' || status === 'RETRY_WAIT' || status === 'CANCEL_REQUESTED'
+  return (
+    status === 'QUEUED' ||
+    status === 'RUNNING' ||
+    status === 'RETRY_WAIT' ||
+    status === 'CANCEL_REQUESTED'
+  )
 })
 const preflightTranscript = computed(
   () => preflightReview.value?.evidence.filter((item) => item.sourceType === 'TRANSCRIPT') ?? [],
@@ -370,10 +385,13 @@ const canDeleteMedia = computed(
 const preflightTranscribeStep = computed(() =>
   preflightReview.value?.steps.find((item) => item.stepType === 'TRANSCRIBE'),
 )
-const preflightProviderTaskId = computed(() => preflightTranscribeStep.value?.providerTaskId ?? null)
+const preflightProviderTaskId = computed(
+  () => preflightTranscribeStep.value?.providerTaskId ?? null,
+)
 // 创建时跳过的步骤没有 Provider ID；两者同时成立才能说明 ASR 已执行并确认无人声。
 const preflightSkippedNoSpeech = computed(
-  () => preflightTranscribeStep.value?.status === 'SKIPPED' && Boolean(preflightProviderTaskId.value),
+  () =>
+    preflightTranscribeStep.value?.status === 'SKIPPED' && Boolean(preflightProviderTaskId.value),
 )
 const preflightStepLabel = computed(() => {
   if (preflightReview.value?.currentStep === 'TRANSCRIBE') return '正在生成带时间戳字幕'
@@ -825,8 +843,7 @@ async function restoreProcessingState() {
     if (processingJob.value.status === 'COMPLETED') {
       await loadProcessingAssetUrls()
       await restorePreflightState()
-    }
-    else scheduleProcessingRefreshIfNecessary()
+    } else scheduleProcessingRefreshIfNecessary()
   } catch (error) {
     if (
       isDisposed ||
@@ -877,8 +894,7 @@ async function startMediaProcessing() {
     if (processingJob.value.status === 'COMPLETED') {
       await loadProcessingAssetUrls()
       await restorePreflightState()
-    }
-    else scheduleProcessingRefreshIfNecessary()
+    } else scheduleProcessingRefreshIfNecessary()
   } catch (error) {
     if (
       !isDisposed &&
@@ -980,7 +996,8 @@ async function restorePreflightState() {
       generation !== viewGeneration ||
       currentTaskId !== taskId.value ||
       versionId !== activeVersionId.value
-    ) return
+    )
+      return
     applyPreflightSnapshot(review)
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
@@ -1034,7 +1051,8 @@ async function refreshPreflightReview() {
       generation !== viewGeneration ||
       currentTaskId !== taskId.value ||
       reviewId !== preflightReview.value?.reviewId
-    ) return
+    )
+      return
     applyPreflightSnapshot(review)
   } catch (error) {
     if (!isDisposed && generation === viewGeneration) {
@@ -1208,7 +1226,8 @@ function connectPreflightEvents() {
     'step_failed',
     'review_completed',
     'review_cancelled',
-  ]) source.addEventListener(eventName, refresh)
+  ])
+    source.addEventListener(eventName, refresh)
   source.onerror = () => {
     disconnectPreflightEvents(false)
     schedulePreflightReconnect()
@@ -1357,780 +1376,935 @@ function toMessage(error: unknown) {
 </script>
 
 <template>
-  <section class="creator-section preflight-studio">
-    <header class="preflight-hero">
+  <section class="preflight-studio">
+    <header class="studio-screening-header">
       <div>
         <h3>成片试映</h3>
-        <p>上传最终成片并保留传输进度，随后进入发布前画面与声音体检。</p>
+        <p>先看片，再决定改哪里。</p>
       </div>
-      <div class="preflight-limit-plate" aria-label="视频上传限制">
-        <span>仅支持 MP4</span>
-        <strong>30:00</strong>
-        <small>最大 1.5 GB</small>
-      </div>
+      <span class="studio-screening-limits">MP4 · 30 分钟以内 · 1.5 GB</span>
+      <details class="studio-version-picker">
+        <summary>视频版本</summary>
+        <div>
+          <VideoVersionHistory
+            :task-id="taskId"
+            :active-version-id="activeVersionId"
+            :busy="
+              isRestoringMediaState ||
+              isUploading ||
+              isProbing ||
+              processingIsActive ||
+              preflightIsActive ||
+              mediaDeleteBusy
+            "
+            @selected="handleVersionSelected"
+            @upload-new="prepareNewVersion"
+          />
+        </div>
+      </details>
     </header>
 
-    <VideoVersionHistory :task-id="taskId" :active-version-id="activeVersionId"
-      :busy="isRestoringMediaState || isUploading || isProbing || processingIsActive || preflightIsActive || mediaDeleteBusy"
-      @selected="handleVersionSelected" @upload-new="prepareNewVersion" />
-    <button v-if="preparingNewVersion" type="button" :disabled="isUploading || uploadBlocksMediaDeletion"
-      @click="handleVersionSelected(taskId)">返回当前版本</button>
+    <button
+      v-if="preparingNewVersion"
+      type="button"
+      :disabled="isUploading || uploadBlocksMediaDeletion"
+      @click="handleVersionSelected(taskId)"
+    >
+      返回当前版本
+    </button>
 
     <div class="preflight-route" aria-label="媒体上传链路">
-      <span>选择成片</span><i aria-hidden="true"></i><span>分片上传</span><i aria-hidden="true"></i
-      ><span>媒体探测</span><i aria-hidden="true"></i><span>发布前体检</span>
+      <span>上传成片</span><i aria-hidden="true"></i><span>整理画面与声音</span
+      ><i aria-hidden="true"></i><span>AI 试映</span><i aria-hidden="true"></i
+      ><span>查看修改清单</span>
     </div>
 
-    <div class="preflight-work-grid">
-      <section v-if="showUploadWorkbench" class="preflight-file-card">
-        <span class="preflight-index">01</span>
-        <div class="preflight-card-head">
-          <div>
-            <h4>选择成片</h4>
-            <p>{{ selectedTask?.taskName || '当前创作任务' }}</p>
-          </div>
-        </div>
-
-        <label class="preflight-version-field">
-          <span>版本名称</span>
-          <input
-            v-model="versionName"
-            type="text"
-            maxlength="128"
-            :disabled="isUploading || mediaDeleted"
-          />
-        </label>
-
-        <button
-          type="button"
-          class="preflight-dropzone"
-          :disabled="isUploading || mediaDeleted"
-          @click="selectFile"
-        >
-          <span class="preflight-reel" aria-hidden="true">◉</span>
-          <strong>{{
-            mediaDeleted ? '媒体文件已删除' : selectedFile ? '已选择成片' : '选择 MP4 文件'
-          }}</strong>
-          <small>{{ mediaDeleted ? '试映报告和修改清单仍可查看' : fileSummary }}</small>
-        </button>
-        <input
-          ref="fileInput"
-          class="preflight-hidden-input"
-          type="file"
-          accept="video/mp4,.mp4"
-          @change="handleFileChange"
-        />
-
-        <p
-          v-if="currentUpload && !selectedFile && currentUpload.status !== 'COMPLETED'"
-          class="preflight-resume-note"
-        >
-          已恢复服务器端分片记录。浏览器不会保存你的本地文件，请重新选择同一个文件继续。
-        </p>
-      </section>
-
-      <section v-if="showUploadWorkbench" class="preflight-meter-card">
-        <span class="preflight-index">02</span>
-        <div class="preflight-meter-head">
-          <div>
-            <h4>分片传输</h4>
-            <p>支持暂停与继续</p>
-          </div>
-          <strong>{{ mediaDeleted ? '已删除' : `${progressPercent.toFixed(1)}%` }}</strong>
-        </div>
-
-        <div class="preflight-progress-track" aria-label="上传进度">
-          <span :style="{ width: mediaDeleted ? '0%' : `${progressPercent}%` }"></span>
-        </div>
-        <div class="preflight-meter-meta">
-          <span>{{ mediaDeleted ? '分片记录已关闭' : `分片 ${completedPartRatio}` }}</span>
-          <span>{{ mediaDeleted ? '云端文件已移除' : currentUpload ? formatBytes(currentUpload.expectedSize) : '等待文件' }}</span>
-        </div>
-
-        <p class="preflight-status-copy">
-          {{ statusMessage || '上传进度会自动保存，刷新页面后可以继续。' }}
-        </p>
-
-        <div class="preflight-actions">
-          <button
-            v-if="!mediaDeleted && !isUploading"
-            type="button"
-            class="preflight-primary"
-            :disabled="!canStartUpload"
-            @click="beginUpload"
-          >
-            {{ uploadActionLabel }}
-          </button>
-          <button
-            v-else-if="currentUpload?.status !== 'VERIFYING'"
-            type="button"
-            class="preflight-secondary"
-            @click="pauseUpload"
-          >
-            暂停
-          </button>
-          <button v-else type="button" class="preflight-secondary" disabled>确认中...</button>
-          <button
-            v-if="currentUpload && currentUpload.status !== 'COMPLETED'"
-            type="button"
-            class="preflight-ghost"
-            :disabled="isUploading || currentUpload.status === 'VERIFYING'"
-            @click="cancelCurrentUpload"
-          >
-            取消上传
-          </button>
-        </div>
-      </section>
-      <section
-        class="preflight-result-dock"
-        :class="`is-${resultPanelStatus}`"
-        aria-label="当前成片状态"
-        aria-live="polite"
+    <nav class="studio-workspace-switch" aria-label="试映工作面">
+      <button
+        type="button"
+        :aria-pressed="screeningView === 'media'"
+        @click="screeningView = 'media'"
       >
-        <span class="preflight-result-icon" aria-hidden="true">
-          <CircleAlert v-if="resultPanelStatus === 'error'" :size="20" :stroke-width="1.8" />
-          <CircleCheck v-else-if="resultPanelStatus === 'success'" :size="20" :stroke-width="1.8" />
-          <LoaderCircle v-else-if="resultPanelStatus === 'working'" :size="20" :stroke-width="1.8" />
-          <Minus v-else :size="20" :stroke-width="1.8" />
-        </span>
-        <div class="preflight-result-copy">
-          <small v-if="completedDraft">
-            {{ completedDraft.versionName }} · {{ completedDraft.originalFileName }}
-          </small>
-          <small v-else>当前成片状态</small>
-          <strong>{{ resultPanelTitle }}</strong>
-          <p :role="resultPanelStatus === 'error' ? 'alert' : undefined">
-            {{ resultPanelDescription }}
-          </p>
-        </div>
-        <div class="preflight-result-actions">
-          <button
-            v-if="mediaStateRestoreFailed"
-            type="button"
-            class="preflight-secondary"
-            :disabled="isRestoringMediaState"
-            @click="retryMediaStateRestore"
-          >
-            <LoaderCircle
-              v-if="isRestoringMediaState"
-              :size="15"
-              :stroke-width="1.8"
-              aria-hidden="true"
-            />
-            {{ isRestoringMediaState ? '重新读取中...' : '重新读取' }}
-          </button>
-          <button
-            v-if="hasCompletedUpload"
-            type="button"
-            class="preflight-ghost-action"
-            @click="openStoredResult"
-          >
-            查看详情
-          </button>
-          <button
-            v-if="showProbeButton"
-            type="button"
-            class="preflight-secondary"
-            :disabled="!canUseProbeAction"
-            @click="handleProbeAction"
-          >
-            {{ probeButtonLabel }}
-          </button>
-          <button
-            v-if="hasStoredMedia && !mediaDeleted"
-            type="button"
-            class="preflight-danger-action"
-            :disabled="!canDeleteMedia"
-            :title="canDeleteMedia ? '删除云端媒体' : '请等待当前媒体操作完成后再删除'"
-            @click="deleteCurrentMedia"
-          >
-            <LoaderCircle
-              v-if="mediaDeleteBusy"
-              :size="15"
-              :stroke-width="1.8"
-              aria-hidden="true"
-            />
-            <Trash2 v-else :size="15" :stroke-width="1.8" aria-hidden="true" />
-            {{ mediaDeleteBusy ? '删除中...' : '删除媒体' }}
-          </button>
-        </div>
-      </section>
-
-      <section v-if="canProcessDraft" class="preflight-processing-panel">
-        <div class="preflight-processing-head">
-          <div>
-            <span class="preflight-index">03</span>
-            <h4>生成预览与关键画面</h4>
-            <p>先确定抽帧和识别档位，系统按实际视频时长给出本次预估。</p>
+        成片与处理</button
+      ><button
+        type="button"
+        :aria-pressed="screeningView === 'review'"
+        @click="screeningView = 'review'"
+      >
+        试映与修改清单
+      </button>
+    </nav>
+    <div class="studio-screening-workspace" :class="{ 'show-review': screeningView === 'review' }">
+      <div class="studio-screening-media">
+        <section v-if="showUploadWorkbench" class="preflight-file-card">
+          <span class="preflight-index">01</span>
+          <div class="preflight-card-head">
+            <div>
+              <h4>选择成片</h4>
+              <p>{{ selectedTask?.taskName || '当前创作任务' }}</p>
+            </div>
           </div>
-        </div>
 
-        <div
-          v-if="processingPreviewAsset && processingAssetUrls[processingPreviewAsset.assetId]"
-          class="preflight-preview-result"
-        >
-          <div class="preflight-processing-status-head">
-            <strong>预览成片</strong>
-            <span>{{ formatBytes(processingPreviewAsset.fileSize) }}</span>
-          </div>
-          <video
-            ref="processingPreviewVideo"
-            controls
-            preload="metadata"
-            :src="processingAssetUrls[processingPreviewAsset.assetId]"
-          ></video>
-        </div>
-
-        <div class="preflight-processing-options">
-          <label>
-            <span>抽帧间隔</span>
-            <select
-              v-model="processingOptions.frameIntervalSeconds"
-              :disabled="processingIsActive || processingBusy"
-            >
-              <option :value="5">每 5 秒</option>
-              <option :value="10">每 10 秒</option>
-              <option :value="15">每 15 秒</option>
-              <option :value="30">每 30 秒</option>
-            </select>
-          </label>
-          <label>
-            <span>分析清晰度</span>
-            <select
-              v-model="processingOptions.resolution"
-              :disabled="processingIsActive || processingBusy"
-            >
-              <option value="P480">480p · 低成本</option>
-              <option value="P720">720p · 平衡</option>
-              <option value="P1080">1080p · 高细节</option>
-            </select>
-          </label>
-          <label>
-            <span>模型档位</span>
-            <select
-              v-model="processingOptions.modelPlan"
-              :disabled="processingIsActive || processingBusy"
-            >
-              <option value="FLASH">Plus · 基础观察</option>
-              <option value="FLASH_PLUS_REVIEW">Plus · 全片观察与抽样复核</option>
-            </select>
-          </label>
-          <label class="preflight-check-option">
+          <label class="preflight-version-field">
+            <span>版本名称</span>
             <input
-              v-model="processingOptions.includeAsr"
-              type="checkbox"
-              :disabled="processingIsActive || processingBusy"
+              v-model="versionName"
+              type="text"
+              maxlength="128"
+              :disabled="isUploading || mediaDeleted"
             />
-            <span>识别人声并生成字幕</span>
           </label>
-        </div>
 
-        <div
-          v-if="processingEstimateMatchesOptions && processingEstimate"
-          class="preflight-cost-strip"
-        >
-          <div>
-            <span>预计图片</span><strong>{{ processingEstimate.estimatedFrameCount }} 张</strong>
-          </div>
-          <div>
-            <span>视觉 Token</span
-            ><strong>{{ processingEstimate.estimatedVisualInputTokens.toLocaleString() }}</strong>
-          </div>
-          <div>
-            <span>ASR 时长</span><strong>{{ processingEstimate.estimatedAsrSeconds }} 秒</strong>
-          </div>
-          <div>
-            <span>预计费用</span
-            ><strong>{{ formatCost(processingEstimate.estimatedTotalCostUsd) }}</strong>
-          </div>
-        </div>
-        <p v-if="processingEstimateMatchesOptions && processingEstimate" class="preflight-cost-note">
-          {{ processingEstimate.notice }}
-        </p>
-        <p v-if="processingError" class="preflight-processing-error" role="alert">
-          {{ processingError }}
-        </p>
-
-        <div v-if="processingJob" class="preflight-processing-status">
-          <div class="preflight-processing-status-head">
+          <button
+            type="button"
+            class="preflight-dropzone"
+            :disabled="isUploading || mediaDeleted"
+            @click="selectFile"
+          >
+            <span class="preflight-reel" aria-hidden="true">◉</span>
             <strong>{{
-              processingJob.status === 'COMPLETED'
-                ? '预览已生成'
-                : processingJob.status === 'FAILED'
-                  ? '预处理失败'
-                  : processingStepLabel
+              mediaDeleted ? '媒体文件已删除' : selectedFile ? '已选择成片' : '选择 MP4 文件'
             }}</strong>
-            <span>{{ processingJob.progressPercent }}%</span>
-          </div>
-          <div class="preflight-progress-track">
-            <span :style="{ width: processingJob.progressPercent + `%` }"></span>
-          </div>
-          <p v-if="processingJob.failureMessage" class="preflight-processing-error">
-            {{ processingJob.failureMessage }}
-          </p>
-        </div>
-
-        <dl v-if="processingSignalFacts.length" class="preflight-signal-strip">
-          <div v-for="fact in processingSignalFacts" :key="fact[0]">
-            <dt>{{ fact[0] }}</dt>
-            <dd>{{ fact[1] }}</dd>
-          </div>
-        </dl>
-
-        <div class="preflight-actions">
-          <button
-            v-if="canStartProcessing"
-            type="button"
-            class="preflight-primary"
-            :disabled="!processingEstimateMatchesOptions || processingBusy"
-            @click="startMediaProcessing"
-          >
-            {{
-              processingJob?.status === 'FAILED'
-                ? '重新处理'
-                : processingJob?.status === 'COMPLETED'
-                  ? '使用新设置重新生成'
-                  : '确认并开始处理'
-            }}
+            <small>{{ mediaDeleted ? '试映报告和修改清单仍可查看' : fileSummary }}</small>
           </button>
-        </div>
+          <input
+            ref="fileInput"
+            class="preflight-hidden-input"
+            type="file"
+            accept="video/mp4,.mp4"
+            @change="handleFileChange"
+          />
 
-        <div v-if="processingFrameAssets.length" class="preflight-frame-grid">
-          <figure v-for="asset in processingFrameAssets" :key="asset.assetId">
-            <img
-              v-if="processingAssetUrls[asset.assetId]"
-              :src="processingAssetUrls[asset.assetId]"
-              alt="关键画面"
-              loading="lazy"
-            />
-            <figcaption>{{ formatDuration(asset.timestampMs || 0) }}</figcaption>
-          </figure>
-        </div>
-      </section>
-
-      <section v-if="processingJob?.status === 'COMPLETED'" class="preflight-review-panel">
-        <div class="preflight-processing-head">
-          <div>
-            <span class="preflight-index">04</span>
-            <h4>完成发布前试映</h4>
-            <p>页面关闭后任务仍会继续；系统会检查成片、按所选模型档位复核重点，再给出三类观众反馈。</p>
+          <p
+            v-if="currentUpload && !selectedFile && currentUpload.status !== 'COMPLETED'"
+            class="preflight-resume-note"
+          >
+            已恢复服务器端分片记录。浏览器不会保存你的本地文件，请重新选择同一个文件继续。
+          </p>
+        </section>
+        <section
+          v-if="showUploadWorkbench && (selectedFile || currentUpload)"
+          class="preflight-meter-card"
+        >
+          <span class="preflight-index">02</span>
+          <div class="preflight-meter-head">
+            <div>
+              <h4>分片传输</h4>
+              <p>支持暂停与继续</p>
+            </div>
+            <strong>{{ mediaDeleted ? '已删除' : `${progressPercent.toFixed(1)}%` }}</strong>
           </div>
-        </div>
 
-        <template v-if="!preflightReview && !mediaDeleted">
-          <label class="preflight-focus-field">
-            <span>后续试映重点（可选）</span>
-            <textarea
-              v-model="preflightReviewFocus"
-              maxlength="1000"
-              rows="3"
-              placeholder="例如：重点检查项目演示是否能让非技术观众看懂"
-              :disabled="preflightBusy"
-            ></textarea>
-          </label>
-          <label class="preflight-provider-consent">
-            <input
-              v-model="preflightDisclosureConfirmed"
-              type="checkbox"
-              :disabled="preflightBusy"
-            />
-            <span>我确认代理视频和音轨会通过短时私有 OSS 地址提交给 DashScope 处理。</span>
-          </label>
+          <div class="preflight-progress-track" aria-label="上传进度">
+            <span :style="{ width: mediaDeleted ? '0%' : `${progressPercent}%` }"></span>
+          </div>
+          <div class="preflight-meter-meta">
+            <span>{{ mediaDeleted ? '分片记录已关闭' : `分片 ${completedPartRatio}` }}</span>
+            <span>{{
+              mediaDeleted
+                ? '云端文件已移除'
+                : currentUpload
+                  ? formatBytes(currentUpload.expectedSize)
+                  : '等待文件'
+            }}</span>
+          </div>
+
+          <p class="preflight-status-copy">
+            {{ statusMessage || '上传进度会自动保存，刷新页面后可以继续。' }}
+          </p>
+
           <div class="preflight-actions">
             <button
+              v-if="!mediaDeleted && !isUploading"
               type="button"
               class="preflight-primary"
-              :disabled="!canStartPreflight || !preflightDisclosureConfirmed || preflightBusy"
-              @click="startPreflight"
+              :disabled="!canStartUpload"
+              @click="beginUpload"
             >
-              {{ preflightBusy ? '正在创建任务' : '开始发布前试映' }}
+              {{ uploadActionLabel }}
+            </button>
+            <button
+              v-else-if="currentUpload?.status !== 'VERIFYING'"
+              type="button"
+              class="preflight-secondary"
+              @click="pauseUpload"
+            >
+              暂停
+            </button>
+            <button v-else type="button" class="preflight-secondary" disabled>确认中...</button>
+            <button
+              v-if="currentUpload && currentUpload.status !== 'COMPLETED'"
+              type="button"
+              class="preflight-ghost"
+              :disabled="isUploading || currentUpload.status === 'VERIFYING'"
+              @click="cancelCurrentUpload"
+            >
+              取消上传
             </button>
           </div>
-        </template>
+        </section>
 
-        <p v-else-if="!preflightReview" class="preflight-deleted-note">
-          媒体文件已删除，不能开始新的试映；已有的处理记录仍保留。
-        </p>
+        <section v-if="canProcessDraft" class="preflight-processing-panel">
+          <div class="preflight-processing-head">
+            <div>
+              <span class="preflight-index">03</span>
+              <h4>生成预览与关键画面</h4>
+              <p>先确定抽帧和识别档位，系统按实际视频时长给出本次预估。</p>
+            </div>
+          </div>
 
-        <template v-else>
-          <div class="preflight-processing-status" aria-live="polite">
+          <div
+            v-if="processingPreviewAsset && processingAssetUrls[processingPreviewAsset.assetId]"
+            class="preflight-preview-result"
+          >
             <div class="preflight-processing-status-head">
-              <strong>
-                {{
-                  preflightReview.status === 'COMPLETED'
-                    ? audienceScreeningCompleted
-                      ? '发布前试映已完成'
-                      : '基础体检已完成'
-                    : preflightStepLabel
-                }}
-              </strong>
-              <span>{{ preflightReview.progressPercent }}%</span>
+              <strong>预览成片</strong>
+              <span>{{ formatBytes(processingPreviewAsset.fileSize) }}</span>
+            </div>
+            <video
+              ref="processingPreviewVideo"
+              controls
+              preload="metadata"
+              :src="processingAssetUrls[processingPreviewAsset.assetId]"
+            ></video>
+          </div>
+
+          <details class="preflight-options">
+            <summary>
+              处理设置
+              <span
+                >每 {{ processingOptions.frameIntervalSeconds }} 秒抽帧，{{
+                  processingOptions.includeAsr ? '识别人声' : '仅分析画面'
+                }}</span
+              >
+            </summary>
+            <div class="preflight-processing-options">
+              <label>
+                <span>抽帧间隔</span>
+                <select
+                  v-model="processingOptions.frameIntervalSeconds"
+                  :disabled="processingIsActive || processingBusy"
+                >
+                  <option :value="5">每 5 秒</option>
+                  <option :value="10">每 10 秒</option>
+                  <option :value="15">每 15 秒</option>
+                  <option :value="30">每 30 秒</option>
+                </select>
+              </label>
+              <label>
+                <span>分析清晰度</span>
+                <select
+                  v-model="processingOptions.resolution"
+                  :disabled="processingIsActive || processingBusy"
+                >
+                  <option value="P480">480p · 低成本</option>
+                  <option value="P720">720p · 平衡</option>
+                  <option value="P1080">1080p · 高细节</option>
+                </select>
+              </label>
+              <label>
+                <span>模型档位</span>
+                <select
+                  v-model="processingOptions.modelPlan"
+                  :disabled="processingIsActive || processingBusy"
+                >
+                  <option value="FLASH">Plus · 基础观察</option>
+                  <option value="FLASH_PLUS_REVIEW">Plus · 全片观察与抽样复核</option>
+                </select>
+              </label>
+              <label class="preflight-check-option">
+                <input
+                  v-model="processingOptions.includeAsr"
+                  type="checkbox"
+                  :disabled="processingIsActive || processingBusy"
+                />
+                <span>识别人声并生成字幕</span>
+              </label>
+            </div>
+          </details>
+
+          <div
+            v-if="processingEstimateMatchesOptions && processingEstimate"
+            class="preflight-cost-strip"
+          >
+            <div>
+              <span>预计图片</span><strong>{{ processingEstimate.estimatedFrameCount }} 张</strong>
+            </div>
+            <div>
+              <span>视觉 Token</span
+              ><strong>{{ processingEstimate.estimatedVisualInputTokens.toLocaleString() }}</strong>
+            </div>
+            <div>
+              <span>ASR 时长</span><strong>{{ processingEstimate.estimatedAsrSeconds }} 秒</strong>
+            </div>
+            <div>
+              <span>预计费用</span
+              ><strong>{{ formatCost(processingEstimate.estimatedTotalCostUsd) }}</strong>
+            </div>
+          </div>
+          <p
+            v-if="processingEstimateMatchesOptions && processingEstimate"
+            class="preflight-cost-note"
+          >
+            {{ processingEstimate.notice }}
+          </p>
+          <p v-if="processingError" class="preflight-processing-error" role="alert">
+            {{ processingError }}
+          </p>
+
+          <div v-if="processingJob" class="preflight-processing-status">
+            <div class="preflight-processing-status-head">
+              <strong>{{
+                processingJob.status === 'COMPLETED'
+                  ? '预览已生成'
+                  : processingJob.status === 'FAILED'
+                    ? '预处理失败'
+                    : processingStepLabel
+              }}</strong>
+              <span>{{ processingJob.progressPercent }}%</span>
             </div>
             <div class="preflight-progress-track">
-              <span :style="{ width: preflightReview.progressPercent + `%` }"></span>
+              <span :style="{ width: processingJob.progressPercent + `%` }"></span>
             </div>
-            <p class="preflight-cost-note">媒体检测事实、模型观察与三类观众假设分别解读；AI 观众不是真实反馈。报告只对应这个视频版本，发布文案变更后请另行核对。</p>
-            <p v-if="preflightReview.executiveSummary" class="preflight-cost-note">
-              {{ preflightReview.executiveSummary }}
-            </p>
-            <p v-if="preflightReview.errorMessage" class="preflight-processing-error">
-              {{ preflightReview.errorMessage }}
-            </p>
-            <p v-if="preflightSkippedNoSpeech" class="preflight-cost-note">
-              未检测到人声，已跳过字幕。当前试映不评鉴音乐与背景音内容。
+            <p v-if="processingJob.failureMessage" class="preflight-processing-error">
+              {{ processingJob.failureMessage }}
             </p>
           </div>
 
-          <dl class="preflight-review-facts">
-            <div>
-              <dt>ASR 任务 ID</dt>
-              <dd>{{ preflightProviderTaskId || '尚未提交' }}</dd>
-            </div>
-            <div>
-              <dt>实际用量</dt>
-              <dd>
-                {{
-                  preflightReview.usageSeconds == null
-                    ? preflightSkippedNoSpeech
-                      ? '供应商未返回'
-                      : '等待返回'
-                    : `${preflightReview.usageSeconds} 秒`
-                }}
-              </dd>
-            </div>
-            <div>
-              <dt>实际费用</dt>
-              <dd>
-                {{
-                  preflightReview.actualCostUsd == null
-                    ? preflightSkippedNoSpeech
-                      ? '供应商未返回'
-                      : '等待返回'
-                    : preflightSkippedNoSpeech &&
-                        preflightReview.usageSeconds == null &&
-                        preflightReview.actualCostUsd === 0
-                      ? '供应商未返回'
-                      : formatCost(preflightReview.actualCostUsd)
-                }}
-              </dd>
+          <dl v-if="processingSignalFacts.length" class="preflight-signal-strip">
+            <div v-for="fact in processingSignalFacts" :key="fact[0]">
+              <dt>{{ fact[0] }}</dt>
+              <dd>{{ fact[1] }}</dd>
             </div>
           </dl>
 
           <div class="preflight-actions">
             <button
-              v-if="preflightIsActive"
-              type="button"
-              class="preflight-ghost"
-              :disabled="preflightBusy || preflightReview.status === 'CANCEL_REQUESTED'"
-              @click="cancelCurrentPreflight"
-            >
-              {{ preflightReview.status === 'CANCEL_REQUESTED' ? '正在取消' : '取消任务' }}
-            </button>
-            <button
-              v-if="
-                !mediaDeleted &&
-                preflightReview.status === 'FAILED' &&
-                preflightReview.errorCode !== 'ASR_SUBMISSION_AMBIGUOUS'
-              "
+              v-if="canStartProcessing"
               type="button"
               class="preflight-primary"
-              :disabled="preflightBusy"
-              @click="retryCurrentPreflight"
+              :disabled="!processingEstimateMatchesOptions || processingBusy"
+              @click="startMediaProcessing"
             >
-              人工重试
-            </button>
-            <button
-              v-if="!mediaDeleted && preflightReview.status === 'CANCELLED'"
-              type="button"
-              class="preflight-primary"
-              :disabled="preflightBusy"
-              @click="prepareNewPreflight"
-            >
-              重新开始试映
+              {{
+                processingJob?.status === 'FAILED'
+                  ? '重新处理'
+                  : processingJob?.status === 'COMPLETED'
+                    ? '使用新设置重新生成'
+                    : '确认并开始处理'
+              }}
             </button>
           </div>
 
-          <section v-if="preflightReview.status === 'COMPLETED'" class="preflight-report">
-            <header class="preflight-report-head">
-              <div>
-                <span>发布前试映</span>
-                <h5>{{ preflightIssues.length ? `发现 ${preflightIssues.length} 个可定位问题` : '未发现明确问题' }}</h5>
-              </div>
-              <strong>{{ preflightIssues.filter((issue) => issue.severity === 'HIGH' || issue.severity === 'BLOCKER').length }} 个重点</strong>
-            </header>
+          <div
+            v-if="processingFrameAssets.length"
+            class="preflight-frame-grid"
+            role="region"
+            aria-label="视频关键画面，可横向滚动"
+            tabindex="0"
+          >
+            <figure v-for="asset in processingFrameAssets" :key="asset.assetId">
+              <img
+                v-if="processingAssetUrls[asset.assetId]"
+                :src="processingAssetUrls[asset.assetId]"
+                :alt="`视频 ${formatDuration(asset.timestampMs || 0)} 的关键画面`"
+                loading="lazy"
+              />
+              <figcaption>{{ formatDuration(asset.timestampMs || 0) }}</figcaption>
+            </figure>
+          </div>
+        </section>
+        <section
+          class="preflight-result-dock"
+          :class="`is-${resultPanelStatus}`"
+          aria-label="当前成片状态"
+          aria-live="polite"
+        >
+          <span class="preflight-result-icon" aria-hidden="true">
+            <CircleAlert v-if="resultPanelStatus === 'error'" :size="20" :stroke-width="1.8" />
+            <CircleCheck
+              v-else-if="resultPanelStatus === 'success'"
+              :size="20"
+              :stroke-width="1.8"
+            />
+            <LoaderCircle
+              v-else-if="resultPanelStatus === 'working'"
+              :size="20"
+              :stroke-width="1.8"
+            />
+            <Minus v-else :size="20" :stroke-width="1.8" />
+          </span>
+          <div class="preflight-result-copy">
+            <small v-if="completedDraft">
+              {{ completedDraft.versionName }} · {{ completedDraft.originalFileName }}
+            </small>
+            <small v-else>当前成片状态</small>
+            <strong>{{ resultPanelTitle }}</strong>
+            <p :role="resultPanelStatus === 'error' ? 'alert' : undefined">
+              {{ resultPanelDescription }}
+            </p>
+          </div>
+          <div class="preflight-result-actions">
+            <button
+              v-if="mediaStateRestoreFailed"
+              type="button"
+              class="preflight-secondary"
+              :disabled="isRestoringMediaState"
+              @click="retryMediaStateRestore"
+            >
+              <LoaderCircle
+                v-if="isRestoringMediaState"
+                :size="15"
+                :stroke-width="1.8"
+                aria-hidden="true"
+              />
+              {{ isRestoringMediaState ? '重新读取中...' : '重新读取' }}
+            </button>
+            <button
+              v-if="hasCompletedUpload"
+              type="button"
+              class="preflight-ghost-action"
+              @click="openStoredResult"
+            >
+              查看详情
+            </button>
+            <button
+              v-if="showProbeButton"
+              type="button"
+              class="preflight-secondary"
+              :disabled="!canUseProbeAction"
+              @click="handleProbeAction"
+            >
+              {{ probeButtonLabel }}
+            </button>
+            <button
+              v-if="hasStoredMedia && !mediaDeleted"
+              type="button"
+              class="preflight-danger-action creator-danger-action"
+              :disabled="!canDeleteMedia"
+              :title="canDeleteMedia ? '删除云端媒体' : '请等待当前媒体操作完成后再删除'"
+              @click="deleteCurrentMedia"
+            >
+              <LoaderCircle
+                v-if="mediaDeleteBusy"
+                :size="15"
+                :stroke-width="1.8"
+                aria-hidden="true"
+              />
+              <Trash2 v-else :size="15" :stroke-width="1.8" aria-hidden="true" />
+              {{ mediaDeleteBusy ? '删除中...' : '删除媒体' }}
+            </button>
+          </div>
+        </section>
+      </div>
+      <aside class="studio-screening-review" aria-label="试映结果与修改清单">
+        <section v-if="processingJob?.status === 'COMPLETED'" class="preflight-review-panel">
+          <div class="preflight-processing-head">
+            <div>
+              <span class="preflight-index">04</span>
+              <h4>完成发布前试映</h4>
+              <p>
+                页面关闭后任务仍会继续；系统会检查成片、按所选模型档位复核重点，再给出三类观众反馈。
+              </p>
+            </div>
+          </div>
 
-            <div v-if="needsAudienceCompletion" class="preflight-completion-card">
-              <div>
-                <span>旧版任务已完成基础体检</span>
-                <strong>补上重点片段复核和三类观众试映，就能得到完整修改清单。</strong>
-                <p>不会重新做 ASR 或全片粗审，只继续尚未完成的两步。</p>
-              </div>
+          <template v-if="!preflightReview && !mediaDeleted">
+            <label class="preflight-focus-field">
+              <span>后续试映重点（可选）</span>
+              <textarea
+                v-model="preflightReviewFocus"
+                maxlength="1000"
+                rows="3"
+                placeholder="例如：重点检查项目演示是否能让非技术观众看懂"
+                :disabled="preflightBusy"
+              ></textarea>
+            </label>
+            <label class="preflight-provider-consent">
+              <input
+                v-model="preflightDisclosureConfirmed"
+                type="checkbox"
+                :disabled="preflightBusy"
+              />
+              <span>我确认代理视频和音轨会通过短时私有 OSS 地址提交给 DashScope 处理。</span>
+            </label>
+            <div class="preflight-actions">
               <button
                 type="button"
                 class="preflight-primary"
-                :disabled="preflightBusy"
-                @click="completeAudienceScreening"
+                :disabled="!canStartPreflight || !preflightDisclosureConfirmed || preflightBusy"
+                @click="startPreflight"
               >
-                {{ preflightBusy ? '正在补全' : '补全观众试映' }}
+                {{ preflightBusy ? '正在创建任务' : '开始发布前试映' }}
+              </button>
+            </div>
+          </template>
+
+          <p v-else-if="!preflightReview" class="preflight-deleted-note">
+            媒体文件已删除，不能开始新的试映；已有的处理记录仍保留。
+          </p>
+
+          <template v-else>
+            <div class="preflight-processing-status" aria-live="polite">
+              <div class="preflight-processing-status-head">
+                <strong>
+                  {{
+                    preflightReview.status === 'COMPLETED'
+                      ? audienceScreeningCompleted
+                        ? '发布前试映已完成'
+                        : '基础体检已完成'
+                      : preflightStepLabel
+                  }}
+                </strong>
+                <span>{{ preflightReview.progressPercent }}%</span>
+              </div>
+              <div class="preflight-progress-track">
+                <span :style="{ width: preflightReview.progressPercent + `%` }"></span>
+              </div>
+              <p class="preflight-cost-note">
+                媒体检测事实、模型观察与三类观众假设分别解读；AI
+                观众不是真实反馈。报告只对应这个视频版本，发布文案变更后请另行核对。
+              </p>
+              <p v-if="preflightReview.executiveSummary" class="preflight-cost-note">
+                {{ preflightReview.executiveSummary }}
+              </p>
+              <p v-if="preflightReview.errorMessage" class="preflight-processing-error">
+                {{ preflightReview.errorMessage }}
+              </p>
+              <p v-if="preflightSkippedNoSpeech" class="preflight-cost-note">
+                未检测到人声，已跳过字幕。当前试映不评鉴音乐与背景音内容。
+              </p>
+            </div>
+
+            <details class="studio-screening-receipt">
+              <summary>用量与账单明细</summary>
+              <dl class="preflight-review-facts">
+                <div>
+                  <dt>ASR 任务 ID</dt>
+                  <dd>{{ preflightProviderTaskId || '尚未提交' }}</dd>
+                </div>
+                <div>
+                  <dt>实际用量</dt>
+                  <dd>
+                    {{
+                      preflightReview.usageSeconds == null
+                        ? preflightSkippedNoSpeech
+                          ? '供应商未返回'
+                          : '等待返回'
+                        : `${preflightReview.usageSeconds} 秒`
+                    }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>实际费用</dt>
+                  <dd>
+                    {{
+                      preflightReview.actualCostUsd == null
+                        ? preflightSkippedNoSpeech
+                          ? '供应商未返回'
+                          : '等待返回'
+                        : preflightSkippedNoSpeech &&
+                            preflightReview.usageSeconds == null &&
+                            preflightReview.actualCostUsd === 0
+                          ? '供应商未返回'
+                          : formatCost(preflightReview.actualCostUsd)
+                    }}
+                  </dd>
+                </div>
+              </dl>
+            </details>
+
+            <div class="preflight-actions">
+              <button
+                v-if="preflightIsActive"
+                type="button"
+                class="preflight-ghost"
+                :disabled="preflightBusy || preflightReview.status === 'CANCEL_REQUESTED'"
+                @click="cancelCurrentPreflight"
+              >
+                {{ preflightReview.status === 'CANCEL_REQUESTED' ? '正在取消' : '取消任务' }}
+              </button>
+              <button
+                v-if="
+                  !mediaDeleted &&
+                  preflightReview.status === 'FAILED' &&
+                  preflightReview.errorCode !== 'ASR_SUBMISSION_AMBIGUOUS'
+                "
+                type="button"
+                class="preflight-primary"
+                :disabled="preflightBusy"
+                @click="retryCurrentPreflight"
+              >
+                人工重试
+              </button>
+              <button
+                v-if="!mediaDeleted && preflightReview.status === 'CANCELLED'"
+                type="button"
+                class="preflight-primary"
+                :disabled="preflightBusy"
+                @click="prepareNewPreflight"
+              >
+                重新开始试映
               </button>
             </div>
 
-            <section v-if="audienceScreeningCompleted" class="preflight-audience-section">
-              <div class="preflight-section-title">
+            <section v-if="preflightReview.status === 'COMPLETED'" class="preflight-report">
+              <header class="preflight-report-head">
                 <div>
-                  <span>三类观众</span>
-                  <h6>同一份证据，不重复读取视频</h6>
+                  <span>发布前试映</span>
+                  <h5>
+                    {{
+                      preflightIssues.length
+                        ? `发现 ${preflightIssues.length} 个可定位问题`
+                        : '未发现明确问题'
+                    }}
+                  </h5>
                 </div>
-                <small>以下是试映假设，不代表真实用户调研</small>
-              </div>
-              <div class="preflight-audience-grid">
-                <article
-                  v-for="screening in audienceScreenings"
-                  :key="screening.screeningId"
-                  class="preflight-audience-card"
-                  :data-persona="screening.personaType"
+                <strong
+                  >{{
+                    preflightIssues.filter(
+                      (issue) => issue.severity === 'HIGH' || issue.severity === 'BLOCKER',
+                    ).length
+                  }}
+                  个重点</strong
                 >
-                  <header>
-                    <span>{{ personaLabel(screening.personaType) }}</span>
-                    <small>置信度 {{ Math.round(screening.confidence * 100) }}%</small>
-                  </header>
-                  <p>{{ screening.overallReaction }}</p>
-                  <dl>
-                    <div>
-                      <dt>可能感兴趣</dt>
-                      <dd>{{ screening.interestPoints.join('；') || '暂无明确兴趣点' }}</dd>
-                    </div>
-                    <div>
-                      <dt>可能困惑</dt>
-                      <dd>{{ screening.confusionPoints.join('；') || '暂无明显困惑' }}</dd>
-                    </div>
-                    <div>
-                      <dt>可能离开</dt>
-                      <dd>{{ screening.dropRisks.join('；') || '暂无明显流失点' }}</dd>
-                    </div>
-                  </dl>
-                </article>
-              </div>
-            </section>
+              </header>
 
-            <div class="preflight-section-title">
-              <div>
-                <span>问题确认</span>
-                <h6>只把你认可的问题放进修改清单</h6>
-              </div>
-              <small>每条都可以反悔</small>
-            </div>
-            <div v-if="preflightIssues.length" class="preflight-issue-list">
-              <article
-                v-for="issue in preflightIssues"
-                :key="issue.issueId"
-                class="preflight-issue-card"
-                :data-severity="issue.severity"
-              >
-                <div class="preflight-issue-meta">
-                  <span>{{ severityLabel(issue.severity) }}</span>
-                  <time>{{ formatDuration(issue.startMs) }} - {{ formatDuration(issue.endMs) }}</time>
-                  <small>{{ issue.dimension }} · 置信度 {{ Math.round(issue.confidence * 100) }}%</small>
+              <div v-if="needsAudienceCompletion" class="preflight-completion-card">
+                <div>
+                  <span>旧版任务已完成基础体检</span>
+                  <strong>补上重点片段复核和三类观众试映，就能得到完整修改清单。</strong>
+                  <p>不会重新做 ASR 或全片粗审，只继续尚未完成的两步。</p>
                 </div>
-                <h6>{{ issue.title }}</h6>
-                <p>{{ issue.description }}</p>
-                <div class="preflight-issue-action">
-                  <span>建议动作</span>
-                  <p>{{ issue.suggestedAction }}</p>
-                </div>
-                <p v-if="issue.affectedPersonas.length" class="preflight-affected-personas">
-                  可能影响：{{ issue.affectedPersonas.map(personaLabel).join('、') }}
-                </p>
                 <button
-                  v-if="!mediaDeleted"
                   type="button"
-                  class="preflight-issue-seek"
-                  @click="seekPreview(issue.startMs)"
+                  class="preflight-primary"
+                  :disabled="preflightBusy"
+                  @click="completeAudienceScreening"
                 >
-                  定位到 {{ formatDuration(issue.startMs) }} 播放
+                  {{ preflightBusy ? '正在补全' : '补全观众试映' }}
                 </button>
-                <small v-if="issue.needsHumanReview" class="preflight-human-review">需要作者人工确认</small>
-                <div
-                  v-if="audienceScreeningCompleted && issue.userDisposition === 'IGNORED'"
-                  class="preflight-decision-note"
-                >
-                  <span>已暂不采纳</span>
-                  <p>{{ issue.ignoreReason }}</p>
-                  <button
-                    type="button"
-                    class="preflight-text-button"
-                    :disabled="preflightBusy"
-                    @click="acceptPreflightIssue(issue.issueId)"
-                  >
-                    恢复到修改清单
-                  </button>
-                </div>
-                <div v-else-if="audienceScreeningCompleted" class="preflight-issue-decisions">
-                  <button
-                    type="button"
-                    class="preflight-compact-primary"
-                    :disabled="preflightBusy || issue.userDisposition === 'ACCEPTED'"
-                    @click="acceptPreflightIssue(issue.issueId)"
-                  >
-                    {{ issue.userDisposition === 'ACCEPTED' ? '已加入修改清单' : '加入修改清单' }}
-                  </button>
-                  <button
-                    type="button"
-                    class="preflight-text-button"
-                    :disabled="preflightBusy"
-                    @click="openIssueIgnoreId = openIssueIgnoreId === issue.issueId ? '' : issue.issueId"
-                  >
-                    这条不适用
-                  </button>
-                </div>
-                <div
-                  v-if="audienceScreeningCompleted && openIssueIgnoreId === issue.issueId"
-                  class="preflight-inline-reason"
-                >
-                  <textarea
-                    v-model="issueIgnoreReasons[issue.issueId]"
-                    maxlength="500"
-                    rows="2"
-                    placeholder="例如：这是我刻意保留的节奏，和频道风格一致"
-                    :disabled="preflightBusy"
-                  ></textarea>
-                  <div>
-                    <button type="button" class="preflight-text-button" @click="openIssueIgnoreId = ''">
-                      取消
-                    </button>
-                    <button
-                      type="button"
-                      class="preflight-compact-primary"
-                      :disabled="preflightBusy"
-                      @click="ignorePreflightIssue(issue.issueId)"
-                    >
-                      确认暂不采纳
-                    </button>
-                  </div>
-                </div>
-              </article>
-            </div>
-            <p v-else class="preflight-report-empty">当前粗审没有形成可验证的问题，仍建议发布前人工通看成片。</p>
+              </div>
 
-            <section v-if="audienceScreeningCompleted" class="preflight-edit-section">
+              <details v-if="audienceScreeningCompleted" class="preflight-audience-section">
+                <summary>
+                  AI 模拟观众反馈
+                  <span>{{ audienceScreenings.length }} 类视角，不代表真实观众调研</span>
+                </summary>
+                <div class="preflight-section-title">
+                  <div>
+                    <span>三类观众</span>
+                    <h6>同一份证据，不重复读取视频</h6>
+                  </div>
+                  <small>以下是试映假设，不代表真实用户调研</small>
+                </div>
+                <div class="preflight-audience-grid">
+                  <article
+                    v-for="screening in audienceScreenings"
+                    :key="screening.screeningId"
+                    class="preflight-audience-card"
+                    :data-persona="screening.personaType"
+                  >
+                    <header>
+                      <span>{{ personaLabel(screening.personaType) }}</span>
+                      <small>置信度 {{ Math.round(screening.confidence * 100) }}%</small>
+                    </header>
+                    <p>{{ screening.overallReaction }}</p>
+                    <dl>
+                      <div>
+                        <dt>可能感兴趣</dt>
+                        <dd>{{ screening.interestPoints.join('；') || '暂无明确兴趣点' }}</dd>
+                      </div>
+                      <div>
+                        <dt>可能困惑</dt>
+                        <dd>{{ screening.confusionPoints.join('；') || '暂无明显困惑' }}</dd>
+                      </div>
+                      <div>
+                        <dt>可能离开</dt>
+                        <dd>{{ screening.dropRisks.join('；') || '暂无明显流失点' }}</dd>
+                      </div>
+                    </dl>
+                  </article>
+                </div>
+              </details>
+
               <div class="preflight-section-title">
                 <div>
-                  <span>修改清单</span>
-                  <h6>{{ preflightEditTasks.length ? `${preflightEditTasks.length} 项待你安排` : '还没有加入修改项' }}</h6>
+                  <span>问题确认</span>
+                  <h6>只把你认可的问题放进修改清单</h6>
                 </div>
-                <small>从开始到完成，只需一次点击</small>
+                <small>每条都可以反悔</small>
               </div>
-              <div v-if="preflightEditTasks.length" class="preflight-edit-list">
+              <div
+                v-if="preflightIssues.length"
+                class="preflight-issue-list"
+                role="region"
+                aria-label="试映问题清单"
+                tabindex="0"
+              >
                 <article
-                  v-for="editTask in preflightEditTasks"
-                  :key="editTask.editTaskId"
-                  class="preflight-edit-card"
-                  :data-status="editTask.status"
+                  v-for="issue in preflightIssues"
+                  :key="issue.issueId"
+                  class="preflight-issue-card"
+                  :data-severity="issue.severity"
                 >
-                  <header>
-                    <div>
-                      <span>{{ editTaskStatusLabel(editTask.status) }}</span>
-                      <time>{{ formatDuration(editTask.startMs) }} - {{ formatDuration(editTask.endMs) }}</time>
-                    </div>
-                    <button
-                      v-if="!mediaDeleted"
-                      type="button"
-                      class="preflight-issue-seek"
-                      @click="seekPreview(editTask.startMs)"
+                  <div class="preflight-issue-meta">
+                    <span>{{ severityLabel(issue.severity) }}</span>
+                    <time
+                      >{{ formatDuration(issue.startMs) }} - {{ formatDuration(issue.endMs) }}</time
                     >
-                      去看这一段
-                    </button>
-                  </header>
-                  <h6>{{ editTask.title }}</h6>
-                  <p>{{ editTask.action }}</p>
-                  <small>完成标准：{{ editTask.targetOutcome }}</small>
-                  <p v-if="editTask.status === 'IGNORED' && editTask.userNote" class="preflight-edit-note">
-                    暂不处理原因：{{ editTask.userNote }}
+                    <small
+                      >{{ issue.dimension }} · 置信度
+                      {{ Math.round(issue.confidence * 100) }}%</small
+                    >
+                  </div>
+                  <h6>{{ issue.title }}</h6>
+                  <p>{{ issue.description }}</p>
+                  <div class="preflight-issue-action">
+                    <span>建议动作</span>
+                    <p>{{ issue.suggestedAction }}</p>
+                  </div>
+                  <p v-if="issue.affectedPersonas.length" class="preflight-affected-personas">
+                    可能影响：{{ issue.affectedPersonas.map(personaLabel).join('、') }}
                   </p>
-                  <div class="preflight-edit-actions">
+                  <button
+                    v-if="!mediaDeleted"
+                    type="button"
+                    class="preflight-issue-seek"
+                    @click="seekPreview(issue.startMs)"
+                  >
+                    定位到 {{ formatDuration(issue.startMs) }} 播放
+                  </button>
+                  <small v-if="issue.needsHumanReview" class="preflight-human-review"
+                    >需要作者人工确认</small
+                  >
+                  <div
+                    v-if="audienceScreeningCompleted && issue.userDisposition === 'IGNORED'"
+                    class="preflight-decision-note"
+                  >
+                    <span>已暂不采纳</span>
+                    <p>{{ issue.ignoreReason }}</p>
                     <button
-                      v-if="editTask.status === 'TODO'"
-                      type="button"
-                      class="preflight-compact-primary"
-                      :disabled="preflightBusy"
-                      @click="changeEditTaskStatus(editTask.editTaskId, 'IN_PROGRESS')"
-                    >
-                      开始修改
-                    </button>
-                    <button
-                      v-if="editTask.status === 'IN_PROGRESS'"
-                      type="button"
-                      class="preflight-compact-primary"
-                      :disabled="preflightBusy"
-                      @click="changeEditTaskStatus(editTask.editTaskId, 'COMPLETED')"
-                    >
-                      标记完成
-                    </button>
-                    <button
-                      v-if="editTask.status === 'TODO' || editTask.status === 'IN_PROGRESS'"
                       type="button"
                       class="preflight-text-button"
                       :disabled="preflightBusy"
-                      @click="openEditIgnoreId = openEditIgnoreId === editTask.editTaskId ? '' : editTask.editTaskId"
+                      @click="acceptPreflightIssue(issue.issueId)"
                     >
-                      暂不处理
-                    </button>
-                    <button
-                      v-if="editTask.status === 'IGNORED'"
-                      type="button"
-                      class="preflight-text-button"
-                      :disabled="preflightBusy"
-                      @click="changeEditTaskStatus(editTask.editTaskId, 'TODO')"
-                    >
-                      恢复
+                      恢复到修改清单
                     </button>
                   </div>
-                  <div v-if="openEditIgnoreId === editTask.editTaskId" class="preflight-inline-reason">
+                  <div v-else-if="audienceScreeningCompleted" class="preflight-issue-decisions">
+                    <button
+                      type="button"
+                      class="preflight-compact-primary"
+                      :disabled="preflightBusy || issue.userDisposition === 'ACCEPTED'"
+                      @click="acceptPreflightIssue(issue.issueId)"
+                    >
+                      {{ issue.userDisposition === 'ACCEPTED' ? '已加入修改清单' : '加入修改清单' }}
+                    </button>
+                    <button
+                      type="button"
+                      class="preflight-text-button"
+                      :disabled="preflightBusy"
+                      @click="
+                        openIssueIgnoreId = openIssueIgnoreId === issue.issueId ? '' : issue.issueId
+                      "
+                    >
+                      这条不适用
+                    </button>
+                  </div>
+                  <div
+                    v-if="audienceScreeningCompleted && openIssueIgnoreId === issue.issueId"
+                    class="preflight-inline-reason"
+                  >
                     <textarea
-                      v-model="editIgnoreReasons[editTask.editTaskId]"
-                      maxlength="1000"
+                      v-model="issueIgnoreReasons[issue.issueId]"
+                      maxlength="500"
                       rows="2"
-                      placeholder="简单写明为什么这次先不处理"
+                      placeholder="例如：这是我刻意保留的节奏，和频道风格一致"
                       :disabled="preflightBusy"
                     ></textarea>
                     <div>
-                      <button type="button" class="preflight-text-button" @click="openEditIgnoreId = ''">
+                      <button
+                        type="button"
+                        class="preflight-text-button"
+                        @click="openIssueIgnoreId = ''"
+                      >
                         取消
                       </button>
                       <button
                         type="button"
                         class="preflight-compact-primary"
                         :disabled="preflightBusy"
-                        @click="changeEditTaskStatus(editTask.editTaskId, 'IGNORED')"
+                        @click="ignorePreflightIssue(issue.issueId)"
                       >
-                        确认暂不处理
+                        确认暂不采纳
                       </button>
                     </div>
                   </div>
                 </article>
               </div>
-              <p v-else class="preflight-report-empty">认可某条问题后，它会立即出现在这里。</p>
+              <p v-else class="preflight-report-empty">
+                当前粗审没有形成可验证的问题，仍建议发布前人工通看成片。
+              </p>
+
+              <section v-if="audienceScreeningCompleted" class="preflight-edit-section">
+                <div class="preflight-section-title">
+                  <div>
+                    <span>修改清单</span>
+                    <h6>
+                      {{
+                        preflightEditTasks.length
+                          ? `${preflightEditTasks.length} 项待你安排`
+                          : '还没有加入修改项'
+                      }}
+                    </h6>
+                  </div>
+                  <small>从开始到完成，只需一次点击</small>
+                </div>
+                <div
+                  v-if="preflightEditTasks.length"
+                  class="preflight-edit-list"
+                  role="region"
+                  aria-label="视频修改清单"
+                  tabindex="0"
+                >
+                  <article
+                    v-for="editTask in preflightEditTasks"
+                    :key="editTask.editTaskId"
+                    class="preflight-edit-card"
+                    :data-status="editTask.status"
+                  >
+                    <header>
+                      <div>
+                        <span>{{ editTaskStatusLabel(editTask.status) }}</span>
+                        <time
+                          >{{ formatDuration(editTask.startMs) }} -
+                          {{ formatDuration(editTask.endMs) }}</time
+                        >
+                      </div>
+                      <button
+                        v-if="!mediaDeleted"
+                        type="button"
+                        class="preflight-issue-seek"
+                        @click="seekPreview(editTask.startMs)"
+                      >
+                        去看这一段
+                      </button>
+                    </header>
+                    <h6>{{ editTask.title }}</h6>
+                    <p>{{ editTask.action }}</p>
+                    <small>完成标准：{{ editTask.targetOutcome }}</small>
+                    <p
+                      v-if="editTask.status === 'IGNORED' && editTask.userNote"
+                      class="preflight-edit-note"
+                    >
+                      暂不处理原因：{{ editTask.userNote }}
+                    </p>
+                    <div class="preflight-edit-actions">
+                      <button
+                        v-if="editTask.status === 'TODO'"
+                        type="button"
+                        class="preflight-compact-primary"
+                        :disabled="preflightBusy"
+                        @click="changeEditTaskStatus(editTask.editTaskId, 'IN_PROGRESS')"
+                      >
+                        开始修改
+                      </button>
+                      <button
+                        v-if="editTask.status === 'IN_PROGRESS'"
+                        type="button"
+                        class="preflight-compact-primary"
+                        :disabled="preflightBusy"
+                        @click="changeEditTaskStatus(editTask.editTaskId, 'COMPLETED')"
+                      >
+                        标记完成
+                      </button>
+                      <button
+                        v-if="editTask.status === 'TODO' || editTask.status === 'IN_PROGRESS'"
+                        type="button"
+                        class="preflight-text-button"
+                        :disabled="preflightBusy"
+                        @click="
+                          openEditIgnoreId =
+                            openEditIgnoreId === editTask.editTaskId ? '' : editTask.editTaskId
+                        "
+                      >
+                        暂不处理
+                      </button>
+                      <button
+                        v-if="editTask.status === 'IGNORED'"
+                        type="button"
+                        class="preflight-text-button"
+                        :disabled="preflightBusy"
+                        @click="changeEditTaskStatus(editTask.editTaskId, 'TODO')"
+                      >
+                        恢复
+                      </button>
+                    </div>
+                    <div
+                      v-if="openEditIgnoreId === editTask.editTaskId"
+                      class="preflight-inline-reason"
+                    >
+                      <textarea
+                        v-model="editIgnoreReasons[editTask.editTaskId]"
+                        maxlength="1000"
+                        rows="2"
+                        placeholder="简单写明为什么这次先不处理"
+                        :disabled="preflightBusy"
+                      ></textarea>
+                      <div>
+                        <button
+                          type="button"
+                          class="preflight-text-button"
+                          @click="openEditIgnoreId = ''"
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          class="preflight-compact-primary"
+                          :disabled="preflightBusy"
+                          @click="changeEditTaskStatus(editTask.editTaskId, 'IGNORED')"
+                        >
+                          确认暂不处理
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+                <p v-else class="preflight-report-empty">认可某条问题后，它会立即出现在这里。</p>
+              </section>
             </section>
-          </section>
 
-          <div v-if="preflightTranscript.length" class="preflight-transcript-list">
-            <div class="preflight-processing-status-head">
-              <strong>带时间戳转写</strong>
-              <span>{{ preflightTranscript.length }} 段</span>
+            <div v-if="preflightTranscript.length" class="preflight-transcript-list">
+              <div class="preflight-processing-status-head">
+                <strong>带时间戳转写</strong>
+                <span>{{ preflightTranscript.length }} 段</span>
+              </div>
+              <ol tabindex="0" aria-label="带时间戳的转写内容">
+                <li v-for="segment in preflightTranscript" :key="segment.evidenceId">
+                  <time
+                    >{{ formatDuration(segment.startMs) }} -
+                    {{ formatDuration(segment.endMs) }}</time
+                  >
+                  <p>{{ segment.content }}</p>
+                </li>
+              </ol>
             </div>
-            <ol>
-              <li v-for="segment in preflightTranscript" :key="segment.evidenceId">
-                <time>{{ formatDuration(segment.startMs) }} - {{ formatDuration(segment.endMs) }}</time>
-                <p>{{ segment.content }}</p>
-              </li>
-            </ol>
-          </div>
-        </template>
+          </template>
 
-        <p v-if="preflightError" class="preflight-processing-error" role="alert">
-          {{ preflightError }}
-        </p>
-      </section>
+          <p v-if="preflightError" class="preflight-processing-error" role="alert">
+            {{ preflightError }}
+          </p>
+        </section>
+        <section v-else class="studio-screening-await">
+          <MonitorPlay :size="26" :stroke-width="1.3" aria-hidden="true" />
+          <h4>给作品一次试映</h4>
+          <p>完成画面与声音整理后，AI 会检查重点片段，生成可定位的修改建议。</p>
+          <span>你来决定哪些建议值得采纳。</span>
+        </section>
+      </aside>
     </div>
 
     <Teleport to="body">
@@ -2954,9 +3128,7 @@ button:disabled {
   gap: var(--s4);
   padding: var(--s5);
   color: #f2f6fa;
-  background:
-    linear-gradient(135deg, rgba(0, 174, 236, 0.16), transparent 42%),
-    #102235;
+  background: linear-gradient(135deg, rgba(0, 174, 236, 0.16), transparent 42%), #102235;
   border: 1px solid rgba(0, 174, 236, 0.3);
   border-radius: var(--r);
 }

@@ -2,23 +2,22 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { errorText } from '@/utils/error'
 import { ArrowRight, MonitorPlay, Sparkles } from '@lucide/vue'
-import {
-  createInteractiveTask,
-  getInteractiveTask,
-  uploadContextDocuments,
-} from '@/api/creator'
+import { createInteractiveTask, getInteractiveTask, uploadContextDocuments } from '@/api/creator'
 import { getRecordText, parseJsonArray } from '@/composables/creator/creatorWorkspaceUtils'
 import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
 import { useCreatorStore, type InteractiveCreationPanel } from '@/stores/creatorStore'
 import type { InteractiveTask } from '@/types/creator'
 
-const props = withDefaults(defineProps<{
-  skippingToPreflight?: boolean
-  resumeTaskId?: string
-}>(), {
-  skippingToPreflight: false,
-  resumeTaskId: '',
-})
+const props = withDefaults(
+  defineProps<{
+    skippingToPreflight?: boolean
+    resumeTaskId?: string
+  }>(),
+  {
+    skippingToPreflight: false,
+    resumeTaskId: '',
+  },
+)
 
 const emit = defineEmits<{
   confirmed: [taskId: string]
@@ -89,69 +88,96 @@ const previewText = ref('')
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const ALLOWED_EXTENSIONS = [
-  '.pdf', '.docx', '.doc', '.pptx', '.ppt', '.txt', '.md', '.markdown',
-  '.html', '.htm', '.rtf', '.odt', '.epub',
+  '.pdf',
+  '.docx',
+  '.doc',
+  '.pptx',
+  '.ppt',
+  '.txt',
+  '.md',
+  '.markdown',
+  '.html',
+  '.htm',
+  '.rtf',
+  '.odt',
+  '.epub',
 ]
 
-const isBusy = computed(() =>
-  isCreating.value ||
-  isUploading.value ||
-  isRestoring.value ||
-  generationRequestLocked.value ||
-  isLoadingWorkflow.value ||
-  isAligning.value ||
-  isGeneratingPlan.value ||
-  isConfirming.value ||
-  props.skippingToPreflight,
+const isBusy = computed(
+  () =>
+    isCreating.value ||
+    isUploading.value ||
+    isRestoring.value ||
+    generationRequestLocked.value ||
+    isLoadingWorkflow.value ||
+    isAligning.value ||
+    isGeneratingPlan.value ||
+    isConfirming.value ||
+    props.skippingToPreflight,
 )
 const canSubmitIdea = computed(() => form.idea.trim().length >= 10 && !isBusy.value)
-const alignmentMessages = computed(() => workflowMessages.value.filter((message) =>
-  message.role === 'USER' ||
-  (message.role === 'AGENT' && message.detailRefType === 'INTENT_ALIGNMENT'),
-))
-const hasAlignmentResponse = computed(() => alignmentMessages.value.some((message) =>
-  message.role === 'AGENT' && message.detailRefType === 'INTENT_ALIGNMENT',
-))
-const intentReady = computed(() =>
-  interactiveTask.value?.understandingStatus === 'READY' && hasAlignmentResponse.value,
+const alignmentMessages = computed(() =>
+  workflowMessages.value.filter(
+    (message) =>
+      message.role === 'USER' ||
+      (message.role === 'AGENT' && message.detailRefType === 'INTENT_ALIGNMENT'),
+  ),
+)
+const hasAlignmentResponse = computed(() =>
+  alignmentMessages.value.some(
+    (message) => message.role === 'AGENT' && message.detailRefType === 'INTENT_ALIGNMENT',
+  ),
+)
+const intentReady = computed(
+  () => interactiveTask.value?.understandingStatus === 'READY' && hasAlignmentResponse.value,
 )
 const planGenerationCount = computed(() => workflowSession.value?.planGenerationCount ?? 0)
-const latestAlignmentSequence = computed(() => Math.max(
-  0,
-  ...workflowMessages.value
-    .filter((message) => message.role === 'AGENT' && message.detailRefType === 'INTENT_ALIGNMENT')
-    .map((message) => message.sequenceNo),
-))
-const latestResultSequence = computed(() => Math.max(
-  0,
-  ...workflowMessages.value
-    .filter((message) => message.contentType === 'RESULT_CARD')
-    .map((message) => message.sequenceNo),
-))
-const clarificationRequired = computed(() =>
-  planGenerationCount.value >= 3 && latestAlignmentSequence.value > latestResultSequence.value,
+const latestAlignmentSequence = computed(() =>
+  Math.max(
+    0,
+    ...workflowMessages.value
+      .filter((message) => message.role === 'AGENT' && message.detailRefType === 'INTENT_ALIGNMENT')
+      .map((message) => message.sequenceNo),
+  ),
 )
-const canGeneratePlan = computed(() =>
-  !isBusy.value &&
-  workflowSession.value?.status !== 'RUNNING' &&
-  workflowSession.value?.status !== 'CONFIRMED' &&
-  workflowSession.value?.status !== 'CANCELLED',
+const latestResultSequence = computed(() =>
+  Math.max(
+    0,
+    ...workflowMessages.value
+      .filter((message) => message.contentType === 'RESULT_CARD')
+      .map((message) => message.sequenceNo),
+  ),
 )
-const canSendFeedback = computed(() =>
-  feedbackDraft.value.trim().length > 0 &&
-  Boolean(workflowSession.value) &&
-  canSendWorkflowMessage.value &&
-  !isBusy.value,
+const clarificationRequired = computed(
+  () =>
+    planGenerationCount.value >= 3 && latestAlignmentSequence.value > latestResultSequence.value,
+)
+const canGeneratePlan = computed(
+  () =>
+    !isBusy.value &&
+    workflowSession.value?.status !== 'RUNNING' &&
+    workflowSession.value?.status !== 'CONFIRMED' &&
+    workflowSession.value?.status !== 'CANCELLED',
+)
+const canSendFeedback = computed(
+  () =>
+    feedbackDraft.value.trim().length > 0 &&
+    Boolean(workflowSession.value) &&
+    canSendWorkflowMessage.value &&
+    !isBusy.value,
 )
 
-watch(() => suggestion.value?.suggestionId, (suggestionId, previousId) => {
-  if (!suggestionId || suggestionId === previousId) return
-  // 请求超时后后台仍可能完成；真实新结果到达时，不能继续提示用户付费重试。
-  if (noticeMessage.value === '发布方案仍在后台生成，完成后会自动显示，请勿重复提交。') {
-    errorMessage.value = ''
-    noticeMessage.value = '发布方案已经生成，你可以查看并确认。'
-  }
-})
+watch(
+  () => suggestion.value?.suggestionId,
+  (suggestionId, previousId) => {
+    if (!suggestionId || suggestionId === previousId) return
+    // 请求超时后后台仍可能完成；真实新结果到达时，不能继续提示用户付费重试。
+    if (noticeMessage.value === '发布方案仍在后台生成，完成后会自动显示，请勿重复提交。') {
+      errorMessage.value = ''
+      noticeMessage.value = '发布方案已经生成，你可以查看并确认。'
+    }
+  },
+)
 const statusText = computed(() => {
   if (isRestoring.value) return '正在恢复创作现场...'
   if (props.skippingToPreflight) return '正在进入成片试映...'
@@ -176,7 +202,8 @@ const generationBlockReason = computed(() => {
   if (!hasAlignmentResponse.value) return '请先让 AI 说明它对创作想法的理解。'
   if (!intentReady.value) return '资料或补充信息已经变化，请先重新进行想法对齐。'
   if (clarificationRequired.value) return '本轮已达到三次生成上限，请先回答 AI 的澄清问题。'
-  if (workflowSession.value?.status === 'RUNNING') return '服务端工作流仍在运行，页面会继续展示进度。'
+  if (workflowSession.value?.status === 'RUNNING')
+    return '服务端工作流仍在运行，页面会继续展示进度。'
   if (workflowSession.value?.status === 'CONFIRMED') return '当前发布方案已经确认。'
   return prePublishAnalyzeUnavailableReason.value
 })
@@ -198,31 +225,26 @@ const currentPlanSteps = computed(() => {
     return leftTime.localeCompare(rightTime)
   })
   const latestStartIndex = orderedSteps.reduce(
-    (result, step, index) => step.stepType === 'LOAD_CONTEXT' ? index : result,
+    (result, step, index) => (step.stepType === 'LOAD_CONTEXT' ? index : result),
     -1,
   )
   return latestStartIndex >= 0 ? orderedSteps.slice(latestStartIndex) : []
 })
-const latestCurrentPlanStep = computed(() =>
-  currentPlanSteps.value[currentPlanSteps.value.length - 1] ?? null,
+const latestCurrentPlanStep = computed(
+  () => currentPlanSteps.value[currentPlanSteps.value.length - 1] ?? null,
 )
 const hasRunningPlanGeneration = computed(() => {
   const latestStep = latestCurrentPlanStep.value
   return Boolean(
     workflowSession.value?.status === 'RUNNING' &&
     latestStep &&
-    (
-      latestStep.stepType === 'LOAD_CONTEXT' ||
-      planGenerationStepNames.has(latestStep.stepName)
-    ),
+    (latestStep.stepType === 'LOAD_CONTEXT' || planGenerationStepNames.has(latestStep.stepName)),
   )
 })
-const isPlanProgressVisible = computed(() =>
-  !isAligning.value && (
-    generationRequestLocked.value ||
-    isGeneratingPlan.value ||
-    hasRunningPlanGeneration.value
-  ),
+const isPlanProgressVisible = computed(
+  () =>
+    !isAligning.value &&
+    (generationRequestLocked.value || isGeneratingPlan.value || hasRunningPlanGeneration.value),
 )
 const planProgress = computed(() => {
   if (workflowSession.value?.status !== 'RUNNING') {
@@ -237,12 +259,15 @@ const planProgress = computed(() => {
   const runningIndex = steps.findIndex((step) => step.status === 'RUNNING')
   const currentIndex = runningIndex >= 0 ? runningIndex : steps.length - 1
   const currentStep = currentIndex >= 0 ? steps[currentIndex] : null
-  const hasEarlierCandidate = currentIndex > 0 && steps
-    .slice(0, currentIndex)
-    .some((step) =>
-      step.status === 'SUCCESS' &&
-      (step.stepType === 'AGENT_REASONING' || step.stepType === 'LLM_CALL'),
-    )
+  const hasEarlierCandidate =
+    currentIndex > 0 &&
+    steps
+      .slice(0, currentIndex)
+      .some(
+        (step) =>
+          step.status === 'SUCCESS' &&
+          (step.stepType === 'AGENT_REASONING' || step.stepType === 'LLM_CALL'),
+      )
 
   // 偏离后会动态增加重答与复查步骤，按固定业务阶段推进可避免总步骤数变化导致进度倒退。
   let stageIndex = 0
@@ -304,7 +329,8 @@ watch(
   [activePanel, feedbackDraft],
   ([panel, draft]) => {
     const taskId = interactiveTask.value?.taskId
-    if (taskId) creatorStore.setInteractiveTaskDraft(taskId, { activePanel: panel, feedbackDraft: draft })
+    if (taskId)
+      creatorStore.setInteractiveTaskDraft(taskId, { activePanel: panel, feedbackDraft: draft })
   },
   { flush: 'sync' },
 )
@@ -470,7 +496,8 @@ async function generatePlan() {
       noticeMessage.value = '发布方案仍在后台生成，完成后会自动显示，请勿重复提交。'
       return
     }
-    if (!errorMessage.value) errorMessage.value = generationError || '发布方案生成失败，请检查当前状态后重试。'
+    if (!errorMessage.value)
+      errorMessage.value = generationError || '发布方案生成失败，请检查当前状态后重试。'
   } catch (error) {
     showError(error)
   } finally {
@@ -564,7 +591,9 @@ function markIntentReady(summary: string) {
 function parseTextList(value: string | null) {
   // 标题建议现在是带 title 字段的对象，直接 stringify 会把整段 JSON 显示给用户；
   // 与 PrePublishSuggestionPanel 保持一致，优先取 title，取不到再退回原样展示
-  return parseJsonArray(value).map((item) => typeof item === 'string' ? item : (getRecordText(item, 'title') || JSON.stringify(item)))
+  return parseJsonArray(value).map((item) =>
+    typeof item === 'string' ? item : getRecordText(item, 'title') || JSON.stringify(item),
+  )
 }
 
 function clearMessages() {
@@ -604,38 +633,114 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
 function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
   return value === 'idea' || value === 'context' || value === 'alignment'
 }
+
+function handlePreparationTabKeydown(event: KeyboardEvent) {
+  const panels: InteractiveCreationPanel[] = ['idea', 'context', 'alignment']
+  const current = panels.indexOf(activePanel.value)
+  let next = current
+  if (event.key === 'ArrowRight') next = (current + 1) % panels.length
+  else if (event.key === 'ArrowLeft') next = (current + panels.length - 1) % panels.length
+  else if (event.key === 'Home') next = 0
+  else if (event.key === 'End') next = panels.length - 1
+  else return
+  event.preventDefault()
+  activePanel.value = panels[next]!
+  const buttons = (event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(
+    '[role="tab"]',
+  )
+  buttons[next]?.focus()
+}
 </script>
 
 <template>
-  <section class="ai-creation-console" aria-label="AI 创作台">
-    <div class="ai-creation-header">
+  <section
+    class="studio-creation-console"
+    :class="{ 'is-session': Boolean(interactiveTask) }"
+    aria-label="AI 创作台"
+  >
+    <div v-if="!interactiveTask" class="studio-invitation">
+      <span class="studio-invitation-symbol" aria-hidden="true"
+        ><svg viewBox="0 0 76 54" fill="none">
+          <rect
+            x="1"
+            y="1"
+            width="74"
+            height="52"
+            rx="5"
+            stroke="currentColor"
+            stroke-width="1.5"
+          />
+          <path d="m32 18 15 9-15 9V18Z" fill="currentColor" />
+          <path d="M8 8h5M63 8h5M8 46h5M63 46h5" stroke="currentColor" stroke-width="1.5" /></svg
+      ></span>
+      <h1>让一个想法，<br />成为一部作品。</h1>
+      <p>说说你想拍什么。一起理清方向，把剩下的工作逐步交给 AI。</p>
+    </div>
+    <div v-else class="studio-creation-header">
       <div>
-        <h3><Sparkles :size="19" :stroke-width="1.7" aria-hidden="true" />开始新创作</h3>
-        <p>先把想法聊清楚，准备好了再生成发布方案。</p>
+        <h3><Sparkles :size="20" :stroke-width="1.6" aria-hidden="true" />开始创作任务</h3>
+        <p>先说目标，AI 会结合你的资料理清方向，再生成发布方案。</p>
       </div>
-      <span class="ai-creation-status">{{ statusText }}</span>
+      <span class="studio-creation-status">{{ statusText }}</span>
     </div>
 
-    <nav class="ai-creation-tabs" aria-label="创作准备步骤" role="tablist">
-      <button type="button" :class="{ active: activePanel === 'idea' }" @click="activePanel = 'idea'">
+    <nav
+      v-if="interactiveTask"
+      class="studio-creation-tabs"
+      aria-label="创作准备步骤"
+      role="tablist"
+      @keydown="handlePreparationTabKeydown"
+    >
+      <button
+        id="creation-tab-idea"
+        type="button"
+        role="tab"
+        :tabindex="activePanel === 'idea' ? 0 : -1"
+        :aria-selected="activePanel === 'idea'"
+        aria-controls="creation-preparation-panel"
+        :class="{ active: activePanel === 'idea' }"
+        @click="activePanel = 'idea'"
+      >
         创作输入
       </button>
-      <button type="button" :class="{ active: activePanel === 'context' }" @click="activePanel = 'context'">
+      <button
+        id="creation-tab-context"
+        type="button"
+        role="tab"
+        :tabindex="activePanel === 'context' ? 0 : -1"
+        :aria-selected="activePanel === 'context'"
+        aria-controls="creation-preparation-panel"
+        :class="{ active: activePanel === 'context' }"
+        @click="activePanel = 'context'"
+      >
         补充资料
       </button>
-      <button type="button" :class="{ active: activePanel === 'alignment' }" @click="activePanel = 'alignment'">
+      <button
+        id="creation-tab-alignment"
+        type="button"
+        role="tab"
+        :tabindex="activePanel === 'alignment' ? 0 : -1"
+        :aria-selected="activePanel === 'alignment'"
+        aria-controls="creation-preparation-panel"
+        :class="{ active: activePanel === 'alignment' }"
+        @click="activePanel = 'alignment'"
+      >
         想法对齐
       </button>
     </nav>
 
-    <aside v-if="interactiveTask" class="ai-existing-video-entry" aria-labelledby="existing-video-entry-title">
+    <aside
+      v-if="interactiveTask"
+      class="studio-existing-video-entry"
+      aria-labelledby="existing-video-entry-title"
+    >
       <div>
         <strong id="existing-video-entry-title">已经做好视频？</strong>
         <p>跳过想法对齐、发布方案和制作蓝图，直接上传视频进行成片试映。</p>
       </div>
       <button
         type="button"
-        class="ai-existing-video-button"
+        class="studio-existing-video-button"
         :disabled="isBusy"
         @click="requestSkipToPreflight"
       >
@@ -644,42 +749,67 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
       </button>
     </aside>
 
-    <div class="ai-creation-panel" role="tabpanel">
-      <form v-if="activePanel === 'idea'" class="ai-creation-composer" @submit.prevent="submitIdea">
-        <label class="ai-creation-field ai-creation-field-main">
-          <span class="ai-creation-field-label">你想做什么视频<small aria-hidden="true">{{ form.idea.length }} / 3000</small></span>
+    <div
+      id="creation-preparation-panel"
+      class="studio-creation-panel"
+      role="tabpanel"
+      :aria-labelledby="`creation-tab-${activePanel}`"
+    >
+      <form
+        v-if="activePanel === 'idea'"
+        class="studio-creation-composer"
+        @submit.prevent="submitIdea"
+      >
+        <label class="studio-creation-field studio-creation-field-main">
+          <span class="sr-only">你想做什么视频</span>
           <textarea
             v-model="form.idea"
             rows="4"
             maxlength="3000"
             :disabled="interactiveTask !== null"
-            placeholder="聊聊你的选题、想表达的内容，或者一个还没成形的灵感…"
+            placeholder="我想做一期关于……的视频，想让观众……"
           />
         </label>
-        <div class="ai-creation-submit-row">
-          <label class="ai-creation-field">
+        <div class="studio-creation-submit-row">
+          <label class="studio-creation-field">
             <span>视频类型</span>
             <select v-model="form.videoType" :disabled="interactiveTask !== null">
-              <option v-for="option in videoTypeOptions" :key="option" :value="option">{{ option }}</option>
+              <option v-for="option in videoTypeOptions" :key="option" :value="option">
+                {{ option }}
+              </option>
             </select>
           </label>
-          <span class="ai-creation-submit-hint">先说想法，资料可以稍后补充</span>
-          <button v-if="!interactiveTask" type="submit" class="creator-primary-button" :disabled="!canSubmitIdea">
-            {{ isCreating ? '创建中...' : '提交想法' }}<ArrowRight :size="16" aria-hidden="true" />
+          <span class="studio-creation-submit-hint">先说想法，资料可以稍后补充</span>
+          <button
+            v-if="!interactiveTask"
+            type="submit"
+            class="creator-primary-button"
+            :disabled="!canSubmitIdea"
+          >
+            {{ isCreating ? '创建中...' : '开始创作' }}<ArrowRight :size="16" aria-hidden="true" />
           </button>
-          <button v-else type="button" class="creator-secondary-action" @click="activePanel = 'context'">继续补充资料</button>
+          <button
+            v-else
+            type="button"
+            class="creator-secondary-action"
+            @click="activePanel = 'context'"
+          >
+            继续补充资料
+          </button>
         </div>
       </form>
 
-      <div v-else-if="activePanel === 'context'" class="ai-creation-context-panel">
-        <div v-if="!interactiveTask" class="ai-creation-empty-panel">
+      <div v-else-if="activePanel === 'context'" class="studio-creation-context-panel">
+        <div v-if="!interactiveTask" class="studio-creation-empty-panel">
           <strong>先写下视频想法</strong>
           <p>创建任务后，可以上传项目文档、已有文稿或其它背景资料。</p>
-          <button type="button" class="creator-secondary-action" @click="activePanel = 'idea'">去填写</button>
+          <button type="button" class="creator-secondary-action" @click="activePanel = 'idea'">
+            去填写
+          </button>
         </div>
         <template v-else>
           <div
-            class="ai-creation-upload-zone"
+            class="studio-creation-upload-zone"
             :class="{ dragging: isDragging }"
             @dragover="onDragOver"
             @dragleave="onDragLeave"
@@ -687,7 +817,7 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
           >
             <div class="upload-zone-header">
               <span>补充资料（可选）</span>
-              <span class="upload-hint">这里是真实文件上传，系统会提取文件文字</span>
+              <span class="upload-hint">支持文稿、项目资料与参考文档，单个文件不超过 10 MB</span>
             </div>
             <label class="upload-zone-body">
               <input
@@ -701,54 +831,72 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
             </label>
             <ul v-if="uploadedFiles.length" class="uploaded-file-list">
               <li v-for="file in uploadedFiles" :key="file.documentId">
-                <button type="button" class="file-name-btn" @click="openPreview(file.fileName)">{{ file.fileName }}</button>
+                <button type="button" class="file-name-btn" @click="openPreview(file.fileName)">
+                  {{ file.fileName }}
+                </button>
                 <span class="file-size">{{ formatFileSize(file.fileSize) }}</span>
               </li>
             </ul>
-            <p v-if="isUploading" class="ai-creation-upload-warning" role="status">
+            <p v-if="isUploading" class="studio-creation-upload-warning" role="status">
               本地文件正在上传。请等待解析完成再离开，否则浏览器无法恢复这些文件。
             </p>
           </div>
-          <div class="ai-creation-understanding">
-            <button type="button" class="creator-primary-button" :disabled="isBusy" @click="startAlignment">
-              {{ isAligning ? '正在理解...' : intentReady ? '根据最新资料重新对齐' : '开始想法对齐' }}
+          <div class="studio-creation-understanding">
+            <button
+              type="button"
+              class="creator-primary-button"
+              :disabled="isBusy"
+              @click="startAlignment"
+            >
+              {{
+                isAligning ? '正在理解...' : intentReady ? '根据最新资料重新对齐' : '开始想法对齐'
+              }}
             </button>
-            <button v-if="hasAlignmentResponse" type="button" class="creator-secondary-action" @click="activePanel = 'alignment'">
+            <button
+              v-if="hasAlignmentResponse"
+              type="button"
+              class="creator-secondary-action"
+              @click="activePanel = 'alignment'"
+            >
               查看对话
             </button>
           </div>
         </template>
       </div>
 
-      <div v-else class="ai-creation-alignment-panel">
-        <div v-if="!interactiveTask" class="ai-creation-empty-panel">
+      <div v-else class="studio-creation-alignment-panel">
+        <div v-if="!interactiveTask" class="studio-creation-empty-panel">
           <strong>这里会显示你和 AI 的对齐过程</strong>
-          <button type="button" class="creator-secondary-action" @click="activePanel = 'idea'">先填写想法</button>
+          <button type="button" class="creator-secondary-action" @click="activePanel = 'idea'">
+            先填写想法
+          </button>
         </div>
-        <div v-else-if="!hasAlignmentResponse && !isAligning" class="ai-creation-empty-panel">
+        <div v-else-if="!hasAlignmentResponse && !isAligning" class="studio-creation-empty-panel">
           <strong>AI 还没有说明它的理解</strong>
           <p>可以先补充资料，也可以直接开始对齐。</p>
-          <button type="button" class="creator-primary-button" @click="startAlignment">开始想法对齐</button>
+          <button type="button" class="creator-primary-button" @click="startAlignment">
+            开始想法对齐
+          </button>
         </div>
         <template v-else>
-          <div class="ai-alignment-chat" aria-live="polite">
+          <div class="studio-alignment-chat" aria-live="polite">
             <article
               v-for="message in alignmentMessages"
               :key="message.messageId"
-              class="ai-alignment-message"
+              class="studio-alignment-message"
               :class="message.role === 'USER' ? 'user' : 'agent'"
             >
               <span>{{ message.role === 'USER' ? '你' : 'AI 当前理解' }}</span>
               <p>{{ message.content }}</p>
             </article>
-            <div v-if="isAligning" class="ai-creation-loading">
+            <div v-if="isAligning" class="studio-creation-loading">
               <span />
               <p>主 Agent 正在理解，审查 Agent 会检查它有没有偏离你的原话。</p>
             </div>
           </div>
 
-          <div class="ai-alignment-composer">
-            <label class="ai-creation-field">
+          <div class="studio-alignment-composer">
+            <label class="studio-creation-field">
               <span>哪里不对，直接告诉它</span>
               <textarea
                 v-model="feedbackDraft"
@@ -758,23 +906,30 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
                 placeholder="例如：我不是要教别人部署，我是想展示现在的流程为什么麻烦。"
               />
             </label>
-            <button type="button" class="creator-secondary-action" :disabled="!canSendFeedback" @click="sendFeedbackAndAlign">
+            <button
+              type="button"
+              class="creator-secondary-action"
+              :disabled="!canSendFeedback"
+              @click="sendFeedbackAndAlign"
+            >
               发送并重新对齐
             </button>
           </div>
 
-          <div class="ai-plan-action">
-            <div class="ai-plan-action-copy">
+          <div class="studio-plan-action">
+            <div class="studio-plan-action-copy">
               <strong>发布方案由你决定什么时候生成</strong>
               <p v-if="clarificationRequired">AI 已停止重复生成，请先回答上面的问题。</p>
-              <p v-else>当前上下文已生成 {{ planGenerationCount }}/3 次；你补充新信息后会重新计数。</p>
-              <div v-if="isPlanProgressVisible" class="ai-plan-progress">
-                <div class="ai-plan-progress-header">
+              <p v-else>
+                当前上下文已生成 {{ planGenerationCount }}/3 次；你补充新信息后会重新计数。
+              </p>
+              <div v-if="isPlanProgressVisible" class="studio-plan-progress">
+                <div class="studio-plan-progress-header">
                   <strong>发布方案生成中</strong>
                   <span>{{ planProgress.currentStep }}</span>
                 </div>
                 <div
-                  class="ai-plan-progress-track"
+                  class="studio-plan-progress-track"
                   role="progressbar"
                   aria-label="发布方案生成进度"
                   aria-valuemin="0"
@@ -784,17 +939,25 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
                 >
                   <span :style="{ width: `${planProgress.percent}%` }" />
                 </div>
-                <div class="ai-plan-progress-stages" aria-hidden="true">
+                <div class="studio-plan-progress-stages" aria-hidden="true">
                   <span
                     v-for="(stage, index) in planProgressStages"
                     :key="stage"
-                    :class="{ done: index < planProgress.stageIndex, current: index === planProgress.stageIndex }"
+                    :class="{
+                      done: index < planProgress.stageIndex,
+                      current: index === planProgress.stageIndex,
+                    }"
                   >
                     {{ stage }}
                   </span>
                 </div>
               </div>
-              <p v-if="generationBlockReason && !isPlanProgressVisible" class="ai-plan-block-reason">{{ generationBlockReason }}</p>
+              <p
+                v-if="generationBlockReason && !isPlanProgressVisible"
+                class="studio-plan-block-reason"
+              >
+                {{ generationBlockReason }}
+              </p>
             </div>
             <button
               type="button"
@@ -803,42 +966,63 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
               :title="generationBlockReason"
               @click="generatePlan"
             >
-              {{ isPlanProgressVisible ? '生成中...' : planGenerationCount >= 3 ? '让 AI 先问清楚' : suggestion ? '重新生成发布方案' : '生成发布方案' }}
+              {{
+                isPlanProgressVisible
+                  ? '生成中...'
+                  : planGenerationCount >= 3
+                    ? '让 AI 先问清楚'
+                    : suggestion
+                      ? '重新生成发布方案'
+                      : '生成发布方案'
+              }}
             </button>
           </div>
 
-          <article v-if="suggestion" class="ai-plan-result">
+          <article v-if="suggestion" class="studio-plan-result">
             <header>
               <div>
                 <span>当前发布方案</span>
-                <h4>{{ suggestion.contentPositioning || suggestion.contentSummary || '本期视频发布方案' }}</h4>
+                <h4>
+                  {{
+                    suggestion.contentPositioning || suggestion.contentSummary || '本期视频发布方案'
+                  }}
+                </h4>
               </div>
               <span>{{ suggestion.parseStatus === 'PARSED' ? '结构化结果' : '原始结果' }}</span>
             </header>
-            <div v-if="suggestion.audienceProfile" class="ai-plan-block">
+            <div v-if="suggestion.audienceProfile" class="studio-plan-block">
               <strong>给谁看</strong>
               <p>{{ suggestion.audienceProfile }}</p>
             </div>
-            <div v-if="parseTextList(suggestion.titleSuggestions).length" class="ai-plan-block">
+            <div v-if="parseTextList(suggestion.titleSuggestions).length" class="studio-plan-block">
               <strong>标题建议</strong>
               <ul>
-                <li v-for="title in parseTextList(suggestion.titleSuggestions)" :key="title">{{ title }}</li>
+                <li v-for="title in parseTextList(suggestion.titleSuggestions)" :key="title">
+                  {{ title }}
+                </li>
               </ul>
             </div>
-            <div v-if="suggestion.descriptionSuggestion" class="ai-plan-block">
+            <div v-if="suggestion.descriptionSuggestion" class="studio-plan-block">
               <strong>简介</strong>
               <p>{{ suggestion.descriptionSuggestion }}</p>
             </div>
-            <div v-if="parseTextList(suggestion.tagSuggestions).length" class="ai-plan-block">
+            <div v-if="parseTextList(suggestion.tagSuggestions).length" class="studio-plan-block">
               <strong>标签</strong>
               <p>{{ parseTextList(suggestion.tagSuggestions).join(' / ') }}</p>
             </div>
-            <div v-if="suggestion.riskPoints" class="ai-plan-block">
+            <div v-if="suggestion.riskPoints" class="studio-plan-block">
               <strong>需要注意</strong>
               <p>{{ parseTextList(suggestion.riskPoints).join('；') || suggestion.riskPoints }}</p>
             </div>
-            <pre v-if="suggestion.parseStatus !== 'PARSED'" class="understanding-content">{{ suggestion.rawOutput }}</pre>
-            <button type="button" class="creator-primary-button" :disabled="isBusy" @click="confirmPlan">
+            <pre v-if="suggestion.parseStatus !== 'PARSED'" class="understanding-content">{{
+              suggestion.rawOutput
+            }}</pre>
+            <button
+              type="button"
+              class="creator-primary-button"
+              :disabled="isBusy"
+              @click="confirmPlan"
+            >
               {{ isConfirming ? '确认中...' : '确认这个发布方案' }}
             </button>
           </article>
@@ -846,8 +1030,8 @@ function isInteractivePanel(value: unknown): value is InteractiveCreationPanel {
       </div>
     </div>
 
-    <p v-if="noticeMessage" class="ai-creation-notice">{{ noticeMessage }}</p>
-    <p v-if="errorMessage" class="ai-creation-error">{{ errorMessage }}</p>
+    <p v-if="noticeMessage" class="studio-creation-notice">{{ noticeMessage }}</p>
+    <p v-if="errorMessage" class="studio-creation-error">{{ errorMessage }}</p>
 
     <Teleport to="body">
       <div v-if="previewModalVisible" class="preview-modal-overlay" @click.self="closePreview">

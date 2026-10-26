@@ -85,18 +85,28 @@ watch(() => route.path, closeMobileNavigation)
 <template>
   <div
     class="surface-root workbench-app"
-    :class="{ 'surface-root-creator': route.path === '/creator', 'workbench-with-assistant': assistantOpen }"
+    :class="{
+      'surface-root-creator': route.path === '/creator',
+      'workbench-with-assistant': assistantOpen,
+    }"
   >
     <a class="workbench-skip-link" href="#workspace-content">跳到页面内容</a>
     <header class="workbench-topbar">
       <RouterLink to="/creator" class="workbench-brand" aria-label="LinkAgent 创作台">
         <span class="workbench-brand-mark" aria-hidden="true"
-          ><Clapperboard :size="24" :stroke-width="1.8"
-        /></span>
-        <strong>LinkAgent</strong>
+          ><svg viewBox="0 0 32 32" fill="none">
+            <path d="M7 5h18v22H7z" stroke="currentColor" stroke-width="1.8" />
+            <path
+              d="M3 10v17a4 4 0 0 0 4 4h13M13 11l8 5-8 5V11Z"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linejoin="round"
+            /></svg
+        ></span>
+        <span class="workbench-brand-copy"><strong>LinkAgent</strong><small>创作片场</small></span>
       </RouterLink>
       <nav class="workbench-breadcrumb" aria-label="当前位置">
-        <span>创作工作台</span><ChevronRight :size="14" aria-hidden="true" /><strong>{{
+        <span>我的工作空间</span><ChevronRight :size="14" aria-hidden="true" /><strong>{{
           routeLabel
         }}</strong>
       </nav>
@@ -152,6 +162,8 @@ watch(() => route.path, closeMobileNavigation)
           v-for="item in group.items"
           :key="item.path"
           :to="item.path"
+          :title="item.label"
+          :aria-label="item.label"
           class="workbench-nav-link"
         >
           <component :is="item.icon" :size="19" :stroke-width="1.7" aria-hidden="true" /><span>{{
@@ -159,11 +171,6 @@ watch(() => route.path, closeMobileNavigation)
           }}</span>
         </RouterLink>
       </nav>
-      <div class="workbench-sidebar-note">
-        <Clapperboard :size="18" :stroke-width="1.5" aria-hidden="true" /><span
-          >为每一次创作<br />加点灵感</span
-        >
-      </div>
     </aside>
 
     <div id="workspace-content" class="workbench-content" tabindex="-1">
@@ -308,7 +315,10 @@ watch(() => route.path, closeMobileNavigation)
         </div>
       </Transition>
     </Teleport>
-    <AgentFloatingWindow :developer-mode="developerMode" :background-inert="settingsOpen || guideOpen || mobileNavigationOpen" />
+    <AgentFloatingWindow
+      :developer-mode="developerMode"
+      :background-inert="settingsOpen || guideOpen || mobileNavigationOpen"
+    />
     <SystemStatusBar v-if="route.path !== '/usage-logs'" />
     <SettingsDrawer
       v-if="settingsDrawerMounted"

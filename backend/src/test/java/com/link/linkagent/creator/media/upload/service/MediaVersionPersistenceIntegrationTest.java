@@ -28,6 +28,14 @@ import com.link.linkagent.creator.media.probe.model.MediaProbeResult;
 import com.link.linkagent.creator.media.probe.service.FfprobeMediaProbeService;
 import com.link.linkagent.creator.creation.model.*;
 import com.link.linkagent.creator.creation.service.CreationRuntimeService;
+import com.link.linkagent.creator.creation.execution.ExecutionMapper;
+import com.link.linkagent.creator.creation.execution.ExecutionModels;
+import com.link.linkagent.creator.creation.execution.ExecutionPlanner;
+import com.link.linkagent.creator.creation.execution.ExecutionService;
+import com.link.linkagent.creator.creation.storyboard.mapper.StoryboardMapper;
+import com.link.linkagent.creator.creation.storyboard.service.StoryboardCodec;
+import com.link.linkagent.creator.creation.voice.service.CreationVoiceService;
+import com.link.linkagent.creator.creation.aivideo.service.CreationVideoService;
 import com.link.linkagent.creator.creation.model.CreationRuntimeModels.Run;
 import com.link.linkagent.creator.media.processing.service.MediaProcessingService;
 import com.link.linkagent.creator.media.processing.service.MediaProcessingCostEstimator;
@@ -122,6 +130,7 @@ class MediaVersionPersistenceIntegrationTest {
     static CreationWorkspaceMapper workspaceMapper;
     static CreationWorkspacePersistenceService selections;
     static CreationRuntimeMapper runtimeMapper;
+    static ExecutionMapper executionMapper;
     static CreationRuntimeService runtime;
     static GeneratedDraftPersistenceService generated;
     static GeneratedDraftMapper generatedMapper;
@@ -157,6 +166,7 @@ class MediaVersionPersistenceIntegrationTest {
         configuration.addMapper(GeneratedDraftMapper.class);
         configuration.addMapper(FixedProjectJobMapper.class);
         configuration.addMapper(AutomaticProductionMapper.class);
+        configuration.addMapper(ExecutionMapper.class);
         configuration.addMapper(com.link.linkagent.creator.creation.mapper.CreationMediaMapper.class);
         configuration.addMapper(com.link.linkagent.creator.creation.mapper.CreationPackageMapper.class);
         var factory = new SqlSessionFactoryBean();
@@ -170,6 +180,7 @@ class MediaVersionPersistenceIntegrationTest {
         proxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
         persistence = (MediaUploadPersistenceService) proxy.getProxy();
         var session = new SqlSessionTemplate(factory.getObject());
+        executionMapper = session.getMapper(ExecutionMapper.class);
         productionMapper = session.getMapper(ProductionPlanMapper.class);
         var taskProxy = new ProxyFactory(new com.link.linkagent.creator.task.service.CreatorTaskService(session.getMapper(CreatorTaskMapper.class)));
         taskProxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
@@ -525,6 +536,82 @@ class MediaVersionPersistenceIntegrationTest {
         runtime.updateBudget(task, "default", revision(task), cny("4"));
         reserve(run, "valid", "3");
         assertThat(runtime.snapshot(task, "default").budget().remainingCny()).isEqualByComparingTo("1");
+    }
+
+    @Test
+    void rearmingMustRespectReducedBudgetAndRecoverAfterBudgetIsRaised() {
+        var old = claimed(preparedRun(task(), "5"), "worker");
+        reserve(old, "released", "3");
+        var current = takeOver(old);
+        String task = current.taskId(), key = current.runId() + "released";
+        runtime.updateBudget(task, "default", revision(task), cny("1"));
+
+        assertThatThrownBy(() -> runtime.rearm(task, "default", current.runId(), current.leaseOwner(),
+                current.leaseGeneration(), key)).hasMessageContaining("任务剩余预算");
+        assertThat(runtimeMapper.charge(task, "default", key).orElseThrow().status()).isEqualTo("RELEASED");
+        assertThat(runtime.snapshot(task, "default").budget().reservedCny()).isZero();
+
+        runtime.updateBudget(task, "default", revision(task), cny("3"));
+        runtime.rearm(task, "default", current.runId(), current.leaseOwner(), current.leaseGeneration(), key);
+        reserve(current, "released", "3");
+        assertThat(runtime.markSent(task, "default", key, current.leaseOwner(), current.leaseGeneration())).isTrue();
+        assertThat(runtime.markSent(task, "default", key, current.leaseOwner(), current.leaseGeneration())).isFalse();
+        assertThat(runtime.snapshot(task, "default").budget().reservedCny()).isEqualByComparingTo("3");
+    }
+
+    @Test
+    void rearmingMustRespectTheRemainingApprovalAfterOtherCallsSettled() {
+        var old = claimed(preparedRun(task(), "5"), "worker");
+        reserve(old, "released", "3");
+        var current = takeOver(old);
+        reserve(current, "later", "3");
+        String task = current.taskId();
+        runtime.markSent(task, "default", current.runId() + "later", current.leaseOwner(), current.leaseGeneration());
+        runtime.settle(task, "default", current.runId() + "later", cny("3"), "PROVIDER_REPORTED", "later-bill");
+
+        assertThatThrownBy(() -> runtime.rearm(task, "default", current.runId(), current.leaseOwner(),
+                current.leaseGeneration(), current.runId() + "released")).hasMessageContaining("授权剩余金额");
+        assertThat(runtime.snapshot(task, "default").budget().reservedCny()).isZero();
+    }
+
+    @Test
+    void rearmingMustWaitForUnknownUsageToBeSettled() {
+        var old = claimed(preparedRun(task(), "5"), "worker");
+        reserve(old, "released", "2");
+        reserve(old, "unknown", "1");
+        String task = old.taskId(), key = old.runId() + "unknown";
+        runtime.markSent(task, "default", key, old.leaseOwner(), old.leaseGeneration());
+        var current = takeOver(old);
+
+        assertThatThrownBy(() -> runtime.rearm(task, "default", current.runId(), current.leaseOwner(),
+                current.leaseGeneration(), current.runId() + "released")).hasMessageContaining("暂停新增付费");
+        assertThat(runtime.snapshot(task, "default").budget().unknownCny()).isEqualByComparingTo("1");
+        assertThat(runtime.snapshot(task, "default").budget().reservedCny()).isZero();
+
+        runtime.settle(task, "default", key, cny("0.5"), "PROVIDER_REPORTED", "confirmed-bill");
+        runtime.rearm(task, "default", current.runId(), current.leaseOwner(), current.leaseGeneration(), current.runId() + "released");
+        assertThat(runtime.snapshot(task, "default").budget().reservedCny()).isEqualByComparingTo("2");
+    }
+
+    @Test
+    void rearmingMustNotBypassAnActualCostOverrun() {
+        var old = claimed(preparedRun(task(), "5"), "worker");
+        reserve(old, "released", "2");
+        var current = takeOver(old);
+        reserve(current, "overrun", "1");
+        String task = current.taskId(), key = current.runId() + "overrun";
+        runtime.markSent(task, "default", key, current.leaseOwner(), current.leaseGeneration());
+        runtime.settle(task, "default", key, cny("2"), "PROVIDER_REPORTED", "overrun-bill");
+
+        assertThatThrownBy(() -> runtime.rearm(task, "default", current.runId(), current.leaseOwner(),
+                current.leaseGeneration(), current.runId() + "released")).hasMessageContaining("暂停新增付费");
+        assertThat(runtime.snapshot(task, "default").budget().knownCny()).isEqualByComparingTo("2");
+        assertThat(runtime.snapshot(task, "default").budget().reservedCny()).isZero();
+    }
+
+    private static Run takeOver(Run run) {
+        jdbc.update("UPDATE creator_creation_run SET lease_expires_at=DATE_SUB(CURRENT_TIMESTAMP(6),INTERVAL 1 SECOND) WHERE run_id=?", run.runId());
+        return runtime.claim(run.taskId(), "default", run.runId(), "replacement", 60).orElseThrow();
     }
 
     @Test
@@ -2024,6 +2111,39 @@ class MediaVersionPersistenceIntegrationTest {
     private GeneratedDraftLease automaticLease(FixedProjectJob job) {
         var claimed = runtime.claim(job.taskId(), "default", job.runId(), "auto-test", 30).orElseThrow();
         return new GeneratedDraftLease(job.taskId(), "default", job.runId(), "auto-test", claimed.leaseGeneration());
+    }
+
+    @Test
+    void mediaBlockedRunMustPauseItsExecutionAndRetainTheFailureReason() throws Exception {
+        var job = queuedAutomaticJob(task(), fixedDocument());
+        fixedJobs.attach(job);
+        var lease = automaticLease(job);
+        runtime.holdForUser(job.taskId(), "default", job.runId(), lease.worker(), lease.generation(), "PREFLIGHT_FAILED");
+
+        // 从已受理的整片运行恢复外层检查点，不执行新的渲染或外部调用。
+        var executions = executionMapper;
+        String id = UUID.randomUUID().toString(), fingerprint = "f".repeat(64);
+        long revision = revision(job.taskId());
+        executions.insert(new ExecutionModels.Execution(id, job.taskId(), "default", "FULL", "ACTIVE", "FULL",
+                "board", "board", "[]", null, null, null, cny("5"), null, revision, id, "a".repeat(64), fingerprint, null, "[]", null));
+        executions.update(id, "ACTIVE", "FULL", "board", job.runId(), revision, null);
+        var planner = mock(ExecutionPlanner.class);
+        when(planner.fingerprint()).thenReturn(fingerprint);
+        try (var validators = jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            var codec = new StoryboardCodec(new ObjectMapper(), validators.getValidator());
+            var service = new ExecutionService(executions, planner, mapper, runtimeMapper, runtime, mock(StoryboardMapper.class),
+                    codec, mock(CreationVoiceService.class), mock(CreationVideoService.class), automaticPlans, mediaLinks, creationPackages);
+            ExecutionService.Work next = transactions.execute(status -> service.advance(job.taskId(), "default", id));
+            assertThat(next).isNull();
+            var view = service.get(job.taskId(), "default", id);
+            assertThat(view.status()).isEqualTo("WAITING_USER");
+            assertThat(view.errorCode()).isEqualTo("PREFLIGHT_FAILED");
+            assertThat(view.message()).isNotBlank();
+            assertThat(view.run().stage()).isEqualTo("MEDIA_BLOCKED");
+            assertThat(runtime.snapshot(job.taskId(), "default").activeRun().runId()).isEqualTo(job.runId());
+            ExecutionService.Work repeated = transactions.execute(status -> service.advance(job.taskId(), "default", id));
+            assertThat(repeated).isNull();
+        }
     }
 
     private GeneratedDraftAttempt prepareAutomatic(GeneratedDraftLease lease, String document) throws Exception {

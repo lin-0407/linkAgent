@@ -349,13 +349,8 @@ public class CreationRuntimeService {
             return charge;
         }
         var current = active(taskId, ownerId, runId); live(taskId, ownerId, runId, worker, generation);
-        var run = run(taskId, ownerId, runId); var approval = approval(taskId, ownerId, run.approvalId());
-        if (!"ACTIVE".equals(approval.status())) throw conflict("费用授权已撤销");
-        var totals = mapper.totals(taskId, ownerId);
-        if (blocked(totals)) throw conflict("存在待核实或超出预留的费用，暂停新增付费调用");
-        if (totals.occupied().add(amount).compareTo(current.budgetLimitCny()) > 0) throw conflict("任务剩余预算不足");
-        if (mapper.approvalTotals(taskId, ownerId, run.approvalId()).occupied().add(amount)
-                .compareTo(run.authorizationLimitCny()) > 0) throw conflict("本次授权剩余金额不足，重试不会扩大授权");
+        var run = run(taskId, ownerId, runId);
+        requireReservationCapacity(taskId, ownerId, current, run, amount);
         var charge = new Charge(newId(), chargeKey, taskId, ownerId, runId, run.approvalId(), generation, capability,
                 amount, null, "RESERVED", null, null, price, null);
         try { mapper.insertCharge(charge); }
@@ -380,7 +375,11 @@ public class CreationRuntimeService {
         var charge = charge(taskId, ownerId, chargeKey);
         if (!runId.equals(charge.runId())) throw conflict("费用预留不属于当前制作运行");
         if (charge.sentAt() != null) throw conflict("已发送的调用不能重新预留");
+        if (!"RELEASED".equals(charge.status())) throw conflict("该调用预留不能重新占用");
+        var current = active(taskId, ownerId, runId);
         live(taskId, ownerId, runId, worker, generation);
+        // 释放期间预算可能缩减或被其他调用占用，恢复旧调用也必须重新核对可用额度。
+        requireReservationCapacity(taskId, ownerId, current, run(taskId, ownerId, runId), charge.reservedCny());
         if (mapper.rearm(taskId, ownerId, chargeKey, generation) != 1) throw conflict("该调用预留不能重新占用");
         return charge(taskId, ownerId, chargeKey);
     }
@@ -412,14 +411,7 @@ public class CreationRuntimeService {
         var run = run(taskId, ownerId, runId);
         if (!Set.of("RUNNING", "WAITING_DEPENDENCY").contains(run.status()))
             throw conflict("运行已结束，不能发起新的付费调用");
-        var approval = approval(taskId, ownerId, run.approvalId());
-        if (!"ACTIVE".equals(approval.status())) throw conflict("费用授权已撤销");
-        var totals = mapper.totals(taskId, ownerId);
-        if (blocked(totals)) throw conflict("存在待核实或超出预留的费用，暂停新增付费调用");
-        if (totals.occupied().add(amount).compareTo(current.budgetLimitCny()) > 0) throw conflict("任务剩余预算不足");
-        if (mapper.approvalTotals(taskId, ownerId, run.approvalId()).occupied().add(amount)
-                .compareTo(run.authorizationLimitCny()) > 0)
-            throw conflict("本次授权剩余金额不足，重试不会扩大授权");
+        requireReservationCapacity(taskId, ownerId, current, run, amount);
         var charge = new Charge(newId(), chargeKey, taskId, ownerId, runId, run.approvalId(), run.leaseGeneration(),
                 capability, amount, null, "RESERVED", null, null, price, null);
         try { mapper.insertCharge(charge); }
@@ -521,6 +513,16 @@ public class CreationRuntimeService {
     private void lock(String taskId, String ownerId) {
         id(taskId);
         if (media.lockMediaTask(taskId, ownerId).isEmpty()) throw missing("创作任务不存在");
+    }
+    /** 新增和恢复预留共用额度检查，旧调用标识不能绕过当前预算与费用阻断。 */
+    private void requireReservationCapacity(String taskId, String ownerId, Workspace current, Run run, BigDecimal amount) {
+        var approval = approval(taskId, ownerId, run.approvalId());
+        if (!"ACTIVE".equals(approval.status())) throw conflict("费用授权已撤销");
+        var totals = mapper.totals(taskId, ownerId);
+        if (blocked(totals)) throw conflict("存在待核实或超出预留的费用，暂停新增付费调用");
+        if (totals.occupied().add(amount).compareTo(current.budgetLimitCny()) > 0) throw conflict("任务剩余预算不足");
+        if (mapper.approvalTotals(taskId, ownerId, run.approvalId()).occupied().add(amount)
+                .compareTo(run.authorizationLimitCny()) > 0) throw conflict("本次授权剩余金额不足，重试不会扩大授权");
     }
     private static boolean blocked(Totals totals) { return totals.unknownCny().signum() > 0 || totals.overrunCount() > 0; }
     private static void leaseSeconds(int seconds) { if (seconds < 5 || seconds > 600) throw conflict("执行租约应在 5 到 600 秒之间"); }

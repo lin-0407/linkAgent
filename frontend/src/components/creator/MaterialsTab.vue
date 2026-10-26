@@ -83,25 +83,6 @@ const {
           </option>
         </select>
       </label>
-      <label>
-        <span>现在想到的标题</span>
-        <input
-          v-model="taskForm.titleDraft"
-          type="text"
-          maxlength="200"
-          :disabled="isActiveStepReadOnly"
-          placeholder="先写一个粗标题，后面再优化"
-        />
-      </label>
-      <label>
-        <span>准备发到简介里的内容</span>
-        <textarea
-          v-model="taskForm.descriptionDraft"
-          maxlength="2000"
-          :disabled="isActiveStepReadOnly"
-          placeholder="可以先粘贴简介初稿、链接说明或补充信息"
-        ></textarea>
-      </label>
       <label class="span-full">
         <span>视频主要内容</span>
         <textarea
@@ -111,16 +92,39 @@ const {
           placeholder="粘贴脚本、口播稿或整理后的文稿"
         ></textarea>
       </label>
-      <label class="span-full">
-        <span>字幕 / 补充材料</span>
-        <textarea
-          v-model="taskForm.subtitle"
-          maxlength="20000"
-          :disabled="isActiveStepReadOnly"
-          placeholder="可选：粘贴字幕文本"
-        ></textarea>
-      </label>
+      <details class="creator-material-options span-full">
+        <summary>标题、简介与补充字幕 <span>已有资料可以直接粘贴</span></summary>
+        <div class="creator-form-grid">
+          <label>
+            <span>现在想到的标题</span>
+            <input
+              v-model="taskForm.titleDraft"
+              type="text"
+              maxlength="200"
+              :disabled="isActiveStepReadOnly"
+              placeholder="先写一个粗标题，后面再优化"
+            />
+          </label>
+          <label>
+            <span>准备发到简介里的内容</span>
+            <textarea
+              v-model="taskForm.descriptionDraft"
+              maxlength="2000"
+              :disabled="isActiveStepReadOnly"
+              placeholder="可以先粘贴简介初稿、链接说明或补充信息"
+            ></textarea>
+          </label>
+          <label class="span-full">
+            <span>字幕 / 补充材料</span>
+            <textarea
+              v-model="taskForm.subtitle"
+              maxlength="20000"
+              :disabled="isActiveStepReadOnly"
+              placeholder="可选：粘贴字幕文本"
+            ></textarea>
+          </label>
+        </div>
+      </details>
     </div>
-
   </section>
 </template>

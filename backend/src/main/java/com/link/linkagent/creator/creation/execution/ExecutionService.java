@@ -121,7 +121,7 @@ public class ExecutionService {
             var run=runtime.getRun(task,owner,e.currentRunId());
             if(Set.of("FAILED","CANCELLED").contains(run.status())) {waitForUser(e,run.errorCode()==null?"PREPARATION_FAILED":run.errorCode());return null;}
             if(!"COMPLETED".equals(run.status())) {
-                if("MEDIA_NEED_ATTENTION".equals(run.stage())) {waitForUser(e,run.errorCode());return null;}
+                if("MEDIA_BLOCKED".equals(run.stage())) {waitForUser(e,run.errorCode());return null;}
                 return new Work(e,"FULL".equals(e.stage())?"ATTACH":"SAMPLE".equals(e.stage())?"SAMPLE":"WAIT");
             }
             if("FULL".equals(e.stage())) {update(e,"COMPLETED","COMPLETED",e.storyboardId(),e.currentRunId(),runtime.snapshot(task,owner).workspaceRevision(),null);return null;}

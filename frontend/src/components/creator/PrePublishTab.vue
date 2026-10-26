@@ -1,15 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import {
-  FileText,
-  ListTree,
-  Save,
-  Send,
-  Settings2,
-  Sparkles,
-  X,
-} from '@lucide/vue'
+import { FileText, ListTree, Save, Send, Settings2, Sparkles, X } from '@lucide/vue'
 import PrePublishSuggestionPanel from '@/components/creator/PrePublishSuggestionPanel.vue'
+import CreatorStageState from '@/components/creator/CreatorStageState.vue'
 import {
   formatDate,
   getLatestWorkflowFailedStep,
@@ -19,6 +12,7 @@ import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorksp
 
 const {
   suggestion,
+  selectedTask,
   selectedTaskId,
   hasSelectedTask,
   hasConfirmedPrePublish,
@@ -73,15 +67,20 @@ const isSettingsOpen = ref(false)
 const messageListRef = ref<HTMLDivElement | null>(null)
 
 const currentWorkflowFailedStep = computed(() => getLatestWorkflowFailedStep(workflowSteps.value))
-const latestAiUnderstanding = computed(() => {
-  const messages = [...workflowMessages.value].reverse()
-  return messages.find((message) =>
-    message.role === 'AGENT' && message.detailRefType === 'INTENT_ALIGNMENT',
-  ) ?? messages.find((message) => message.role === 'AGENT') ?? null
-})
+const sourceManuscript = computed(
+  () =>
+    selectedTask.value?.materials
+      .filter(
+        (material) =>
+          material.materialType === 'MANUSCRIPT' || material.materialType === 'SUBTITLE',
+      )
+      .map((material) => (material.content || '').trim())
+      .filter(Boolean)
+      .join('\n\n') || '',
+)
 const visibleWorkflowMessages = computed(() => {
-  const collaborationMessages = workflowMessages.value.filter((message) =>
-    message.role === 'USER' || message.role === 'AGENT' || message.role === 'RESULT',
+  const collaborationMessages = workflowMessages.value.filter(
+    (message) => message.role === 'USER' || message.role === 'AGENT' || message.role === 'RESULT',
   )
   return collaborationMessages.length > 0 ? collaborationMessages : workflowMessages.value
 })
@@ -100,26 +99,28 @@ const compactWorkflowStatus = computed(() => {
 })
 const settingsSaveLabel = computed(() => {
   if (isSavingPrePublishSettings.value) return '保存中...'
-  if (!hasPrePublishSettingsChanges.value && prePublishSettingsSaveState.value === 'saved') return '已保存'
+  if (!hasPrePublishSettingsChanges.value && prePublishSettingsSaveState.value === 'saved')
+    return '已保存'
   if (prePublishSettingsErrorSource.value === 'save') return '重试保存'
   return '保存本次设置'
 })
-const generationDisabled = computed(() =>
-  isActiveStepReadOnly.value ||
-  hasConfirmedPrePublish.value ||
-  isLoadingWorkflow.value ||
-  isLoadingPrePublishSettings.value ||
-  Boolean(prePublishSettingsError.value) ||
-  isSavingPrePublishSettings.value ||
-  isPreparingPrePublishAnalyze.value ||
-  isSendingWorkflowMessage.value ||
-  isGeneratingPrePublishDraft.value ||
-  isConfirmingPrePublish.value ||
-  isAnalyzingPrePublish.value ||
-  workflowSession.value?.status === 'RUNNING' ||
-  workflowSession.value?.status === 'CANCELLED' ||
-  !hasPrePublishScriptMaterial.value ||
-  (workflowSession.value?.planGenerationCount ?? 0) >= 3,
+const generationDisabled = computed(
+  () =>
+    isActiveStepReadOnly.value ||
+    hasConfirmedPrePublish.value ||
+    isLoadingWorkflow.value ||
+    isLoadingPrePublishSettings.value ||
+    Boolean(prePublishSettingsError.value) ||
+    isSavingPrePublishSettings.value ||
+    isPreparingPrePublishAnalyze.value ||
+    isSendingWorkflowMessage.value ||
+    isGeneratingPrePublishDraft.value ||
+    isConfirmingPrePublish.value ||
+    isAnalyzingPrePublish.value ||
+    workflowSession.value?.status === 'RUNNING' ||
+    workflowSession.value?.status === 'CANCELLED' ||
+    !hasPrePublishScriptMaterial.value ||
+    (workflowSession.value?.planGenerationCount ?? 0) >= 3,
 )
 const generationHint = computed(() => {
   if (isLoadingPrePublishSettings.value) return '正在恢复当前任务的发布前设置。'
@@ -198,11 +199,11 @@ async function generateDraftFromConversation() {
 </script>
 
 <template>
-  <section class="creator-ai-prepublish-section" aria-label="发布前优化">
-    <header class="creator-ai-prepublish-head">
+  <section class="studio-collab-prepublish-section" aria-label="发布前优化">
+    <header class="studio-collab-prepublish-head">
       <div>
-        <p class="creator-kicker">发布前优化</p>
-        <h3>AI 协作与补充信息</h3>
+        <h3>发布方案</h3>
+        <p class="creator-stage-description">AI 整理标题、简介与内容建议，你来决定采用哪一版。</p>
       </div>
       <button
         type="button"
@@ -217,12 +218,15 @@ async function generateDraftFromConversation() {
     </header>
 
     <section
-      class="creator-ai-compact-status"
+      class="studio-collab-compact-status"
       :class="{ failed: currentWorkflowFailedStep }"
       role="status"
       aria-live="polite"
     >
-      <span class="creator-ai-connection-status" :class="{ active: workflowSseText === '实时连接' }">
+      <span
+        class="studio-collab-connection-status"
+        :class="{ active: workflowSseText === '实时连接' }"
+      >
         {{ workflowSseText }}
       </span>
       <p :class="{ failed: currentWorkflowFailedStep }">{{ compactWorkflowStatus }}</p>
@@ -237,87 +241,148 @@ async function generateDraftFromConversation() {
       </button>
     </section>
 
-    <nav v-if="suggestion" class="creator-ai-view-tabs" aria-label="发布前优化视图">
-      <button type="button" :class="{ active: activeView === 'chat' }" @click="activeView = 'chat'">
+    <nav class="studio-collab-view-tabs" aria-label="沟通与作品视图">
+      <button
+        type="button"
+        :class="{ active: activeView === 'chat' }"
+        :aria-pressed="activeView === 'chat'"
+        @click="activeView = 'chat'"
+      >
         AI 沟通
       </button>
-      <button type="button" :class="{ active: activeView === 'plan' }" @click="activeView = 'plan'">
-        发布方案
+      <button
+        type="button"
+        :class="{ active: activeView === 'plan' }"
+        :aria-pressed="activeView === 'plan'"
+        @click="activeView = 'plan'"
+      >
+        {{ suggestion ? '发布方案' : '创作底稿' }}
       </button>
     </nav>
 
-    <div class="creator-ai-main-workspace">
-      <section v-show="activeView === 'chat'" class="creator-ai-chat-workspace" aria-label="AI 沟通">
-        <header class="creator-ai-understanding">
-          <div>
-            <span>AI 当前理解</span>
-            <p>{{ latestAiUnderstanding?.content || 'AI 尚未形成新的理解，可直接补充这期视频的目标、受众或表达要求。' }}</p>
-          </div>
-          <b>{{ workflowSession?.planGenerationCount ?? 0 }}/3 次</b>
-        </header>
-
-        <div ref="messageListRef" class="creator-ai-message-list" aria-live="polite">
+    <div
+      class="studio-collab-main-workspace studio-dual-workspace"
+      :class="{ 'has-plan': Boolean(suggestion) }"
+    >
+      <section
+        class="studio-collab-chat-workspace"
+        :class="{ 'is-selected': activeView === 'chat' }"
+        aria-label="AI 沟通"
+      >
+        <div class="studio-pane-heading">
+          <span class="studio-agent-mark" aria-hidden="true">L</span
+          ><strong>一起把方向说清楚</strong>
+        </div>
+        <div
+          ref="messageListRef"
+          class="studio-collab-message-list"
+          role="region"
+          aria-label="创作沟通记录"
+          tabindex="0"
+          aria-live="polite"
+        >
           <article
             v-for="message in visibleWorkflowMessages"
             :key="message.messageId"
-            class="creator-ai-message"
+            class="studio-collab-message"
             :class="`role-${message.role.toLowerCase()}`"
           >
             <header>
-              <strong>{{ workflowRoleLabel(message.role) }}</strong>
-              <time>{{ formatDate(message.createTime) }}</time>
+              <strong>{{ workflowRoleLabel(message.role) }}</strong
+              ><time>{{ formatDate(message.createTime) }}</time>
             </header>
             <p>{{ message.content }}</p>
           </article>
-          <div v-if="isLoadingWorkflow && visibleWorkflowMessages.length === 0" class="creator-ai-message-empty">
-            正在恢复此前对话...
-          </div>
-          <div v-else-if="visibleWorkflowMessages.length === 0" class="creator-ai-message-empty">
-            还没有协作消息，可以在下方直接补充信息。
-          </div>
+          <CreatorStageState
+            v-if="!visibleWorkflowMessages.length"
+            :state="isLoadingWorkflow ? 'running' : 'waiting'"
+            :title="isLoadingWorkflow ? '正在读取此前的沟通' : '哪些内容，是你想保留的？'"
+            description="说说受众、表达方式或需要注意的细节。AI 会结合右侧底稿整理方案。"
+          />
         </div>
-
-        <div v-if="!hasPrePublishScriptMaterial" class="creator-ai-material-note">
-          <FileText :size="18" :stroke-width="1.8" aria-hidden="true" />
-          <p>当前材料还缺完整文稿或字幕。</p>
-          <button
-            type="button"
-            class="creator-secondary-action creator-mini-button"
-            :disabled="isActiveStepReadOnly || !canGeneratePrePublishDraft || isGeneratingPrePublishDraft"
-            @click="generateDraftFromConversation"
-          >
-            {{ isGeneratingPrePublishDraft ? '补稿中...' : '让 AI 补全文稿' }}
-          </button>
-        </div>
-
-        <form class="creator-ai-composer" @submit.prevent="sendMessage">
-          <label>
-            <span class="sr-only">给 AI 补充信息</span>
-            <textarea
+        <form
+          v-if="!isActiveStepReadOnly && !hasConfirmedPrePublish"
+          class="studio-collab-composer"
+          @submit.prevent="sendMessage"
+        >
+          <label
+            ><span class="sr-only">给 AI 补充信息</span
+            ><textarea
               :value="workflowMessageDraft"
               maxlength="2000"
               :disabled="isActiveStepReadOnly || isSendingWorkflowMessage"
-              placeholder="补充目标受众、表达边界或本期必须保留的信息"
+              placeholder="告诉 AI 你的想法，或补充需要调整的地方…"
               @input="updateMessageDraft"
             ></textarea>
           </label>
-          <button
-            type="submit"
-            class="creator-secondary-action creator-send-action"
-            :disabled="isActiveStepReadOnly || !canSendWorkflowMessage || !workflowMessageDraft.trim() || isSendingWorkflowMessage"
-          >
-            <Send :size="16" :stroke-width="1.8" aria-hidden="true" />
-            {{ isSendingWorkflowMessage ? '发送中...' : '发送给 AI' }}
-          </button>
+          <div class="studio-composer-bottom">
+            <span>你的判断，决定作品的方向</span
+            ><button
+              type="submit"
+              class="creator-primary-button creator-send-action"
+              :disabled="
+                isActiveStepReadOnly ||
+                !canSendWorkflowMessage ||
+                !workflowMessageDraft.trim() ||
+                isSendingWorkflowMessage
+              "
+            >
+              <Send :size="15" aria-hidden="true" />{{
+                isSendingWorkflowMessage ? '发送中' : '发送'
+              }}
+            </button>
+          </div>
         </form>
+        <div v-else class="studio-conversation-complete">方案已采用，沟通记录保留在这里。</div>
       </section>
-
-      <section v-if="suggestion" v-show="activeView === 'plan'" class="creator-ai-plan-workspace">
-        <PrePublishSuggestionPanel />
+      <section
+        class="studio-collab-plan-workspace"
+        :class="{ 'is-selected': activeView === 'plan' }"
+        aria-label="作品内容"
+      >
+        <PrePublishSuggestionPanel v-if="suggestion" />
+        <article v-else class="studio-source-document">
+          <header class="studio-document-heading">
+            <FileText :size="18" aria-hidden="true" /><strong>创作底稿</strong
+            ><span>{{ hasPrePublishScriptMaterial ? '可生成方案' : '等待完善文稿' }}</span>
+          </header>
+          <div class="studio-document-body" role="region" aria-label="当前创作文稿" tabindex="0">
+            <span class="studio-document-type">{{ selectedTask?.videoType || '本期视频' }}</span>
+            <h2>{{ selectedTask?.taskName }}</h2>
+            <p v-if="sourceManuscript" class="studio-manuscript">{{ sourceManuscript }}</p>
+            <p v-else class="studio-document-placeholder">
+              你提供的文稿和 AI 整理的内容将在这里逐步成形。可以回到“内容与资料”补充，也可以先与 AI
+              沟通。
+            </p>
+          </div>
+          <footer
+            v-if="!hasPrePublishScriptMaterial && !hasConfirmedPrePublish"
+            class="studio-document-footer"
+          >
+            <div>
+              <strong>先准备好完整文稿</strong><span>结合已有资料与本轮沟通，生成可编辑草稿。</span>
+            </div>
+            <button
+              type="button"
+              class="creator-primary-button"
+              :disabled="
+                isActiveStepReadOnly || !canGeneratePrePublishDraft || isGeneratingPrePublishDraft
+              "
+              @click="generateDraftFromConversation"
+            >
+              <Sparkles :size="16" aria-hidden="true" />{{
+                isGeneratingPrePublishDraft ? '补稿中…' : '让 AI 补全文稿'
+              }}
+            </button>
+          </footer>
+        </article>
       </section>
     </div>
 
-    <footer class="creator-ai-generation-bar">
+    <footer
+      v-if="!hasConfirmedPrePublish && !isActiveStepReadOnly && hasPrePublishScriptMaterial"
+      class="studio-collab-generation-bar"
+    >
       <p :class="{ failed: currentWorkflowFailedStep }">
         {{ generationHint || '生成时会使用当前表单值，并同步保存为本任务设置。' }}
       </p>
@@ -375,7 +440,11 @@ async function generateDraftFromConversation() {
                     :key="option.value"
                     type="button"
                     :class="{ active: prePublishForm.preferenceMode === option.value }"
-                    :disabled="isActiveStepReadOnly || isLoadingPrePublishSettings || isSavingPrePublishSettings"
+                    :disabled="
+                      isActiveStepReadOnly ||
+                      isLoadingPrePublishSettings ||
+                      isSavingPrePublishSettings
+                    "
                     @click="prePublishForm.preferenceMode = option.value"
                   >
                     <span>{{ option.label }}</span>
@@ -389,17 +458,28 @@ async function generateDraftFromConversation() {
                   <strong>历史偏好</strong>
                   <span v-if="historicalPreferenceCount">{{ historicalPreferenceCount }} 条</span>
                 </header>
-                <p v-if="prePublishForm.preferenceMode === 'IGNORE_HISTORY'" class="creator-history-state">
+                <p
+                  v-if="prePublishForm.preferenceMode === 'IGNORE_HISTORY'"
+                  class="creator-history-state"
+                >
                   本期不使用历史偏好
                 </p>
-                <p v-else-if="isLoadingCreatorPreferences" class="creator-history-state">正在读取历史偏好...</p>
+                <p v-else-if="isLoadingCreatorPreferences" class="creator-history-state">
+                  正在读取历史偏好...
+                </p>
                 <div v-else-if="creatorPreferencesError" class="creator-history-state is-error">
                   <span>历史偏好读取失败</span>
-                  <button type="button" class="creator-ghost-button creator-mini-button" @click="retryCreatorPreferences">
+                  <button
+                    type="button"
+                    class="creator-ghost-button creator-mini-button"
+                    @click="retryCreatorPreferences"
+                  >
                     重新读取
                   </button>
                 </div>
-                <p v-else-if="historicalPreferenceCount === 0" class="creator-history-state">暂无历史偏好</p>
+                <p v-else-if="historicalPreferenceCount === 0" class="creator-history-state">
+                  暂无历史偏好
+                </p>
                 <details v-else class="creator-history-details">
                   <summary>参考最近 {{ historicalPreferenceCount }} 条已采纳偏好</summary>
                   <section v-for="group in historicalPreferenceGroups" :key="group.key">
@@ -430,7 +510,11 @@ async function generateDraftFromConversation() {
                     <textarea
                       v-model="prePublishForm.creatorPreference"
                       maxlength="500"
-                      :disabled="isActiveStepReadOnly || isLoadingPrePublishSettings || isSavingPrePublishSettings"
+                      :disabled="
+                        isActiveStepReadOnly ||
+                        isLoadingPrePublishSettings ||
+                        isSavingPrePublishSettings
+                      "
                       placeholder="这期最想让观众记住什么？"
                     ></textarea>
                   </label>
@@ -440,7 +524,11 @@ async function generateDraftFromConversation() {
                       v-model="prePublishForm.titleStyle"
                       type="text"
                       maxlength="100"
-                      :disabled="isActiveStepReadOnly || isLoadingPrePublishSettings || isSavingPrePublishSettings"
+                      :disabled="
+                        isActiveStepReadOnly ||
+                        isLoadingPrePublishSettings ||
+                        isSavingPrePublishSettings
+                      "
                       placeholder="克制、教程感、故事感等"
                     />
                   </label>
@@ -449,7 +537,11 @@ async function generateDraftFromConversation() {
                     <textarea
                       v-model="prePublishForm.extraRequirement"
                       maxlength="500"
-                      :disabled="isActiveStepReadOnly || isLoadingPrePublishSettings || isSavingPrePublishSettings"
+                      :disabled="
+                        isActiveStepReadOnly ||
+                        isLoadingPrePublishSettings ||
+                        isSavingPrePublishSettings
+                      "
                       placeholder="补充标题、简介或标签要求"
                     ></textarea>
                   </label>
@@ -458,7 +550,11 @@ async function generateDraftFromConversation() {
                     <textarea
                       v-model="prePublishForm.customGuidance"
                       maxlength="2000"
-                      :disabled="isActiveStepReadOnly || isLoadingPrePublishSettings || isSavingPrePublishSettings"
+                      :disabled="
+                        isActiveStepReadOnly ||
+                        isLoadingPrePublishSettings ||
+                        isSavingPrePublishSettings
+                      "
                       placeholder="只用于当前任务的其它背景和表达边界"
                     ></textarea>
                   </label>
@@ -492,7 +588,11 @@ async function generateDraftFromConversation() {
 
             <footer class="creator-settings-footer">
               <p v-if="prePublishSettingsError" class="is-error">{{ prePublishSettingsError }}</p>
-              <p v-else-if="!hasPrePublishSettingsChanges && prePublishSettingsSaveState === 'saved'">本次设置已保存</p>
+              <p
+                v-else-if="!hasPrePublishSettingsChanges && prePublishSettingsSaveState === 'saved'"
+              >
+                本次设置已保存
+              </p>
               <span></span>
               <button
                 v-if="prePublishSettingsErrorSource === 'load' && !hasPrePublishSettingsChanges"
@@ -506,7 +606,12 @@ async function generateDraftFromConversation() {
               <button
                 type="button"
                 class="creator-primary-button"
-                :disabled="isActiveStepReadOnly || isLoadingPrePublishSettings || isSavingPrePublishSettings || (!hasPrePublishSettingsChanges && prePublishSettingsErrorSource !== 'save')"
+                :disabled="
+                  isActiveStepReadOnly ||
+                  isLoadingPrePublishSettings ||
+                  isSavingPrePublishSettings ||
+                  (!hasPrePublishSettingsChanges && prePublishSettingsErrorSource !== 'save')
+                "
                 @click="saveCurrentPrePublishSettings(prePublishSettingsErrorSource === 'save')"
               >
                 <Save :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -521,47 +626,6 @@ async function generateDraftFromConversation() {
 </template>
 
 <style scoped>
-.creator-ai-prepublish-section {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
-  min-width: 0;
-  min-height: calc(100dvh - var(--surface-topbar-height) - 40px);
-  gap: 12px;
-  padding: 16px;
-  background: var(--surface);
-}
-
-.creator-ai-prepublish-head,
-.creator-ai-compact-status,
-.creator-ai-generation-bar,
-.creator-ai-understanding,
-.creator-ai-composer,
-.creator-settings-head,
-.creator-settings-footer,
-.creator-settings-section > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.creator-ai-prepublish-head > div {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.creator-ai-prepublish-head h3,
-.creator-ai-prepublish-head p,
-.creator-settings-head h3 {
-  margin: 0;
-}
-
-.creator-ai-prepublish-head h3 {
-  color: var(--ink);
-  font-size: var(--fs-xl);
-}
-
 .creator-settings-trigger,
 .creator-process-trigger,
 .creator-send-action,
@@ -586,98 +650,6 @@ async function generateDraftFromConversation() {
   background: var(--warn);
   border: 2px solid var(--surface);
   border-radius: 50%;
-}
-
-.creator-ai-compact-status {
-  min-width: 0;
-  padding: 8px 10px;
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-}
-
-.creator-ai-compact-status.failed {
-  background: rgba(220, 38, 38, 0.04);
-  border-color: rgba(220, 38, 38, 0.22);
-}
-
-.creator-ai-compact-status p,
-.creator-ai-generation-bar p {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: var(--fs-sm);
-  line-height: 1.45;
-}
-
-.creator-ai-compact-status p.failed,
-.creator-ai-generation-bar p.failed,
-.creator-settings-footer .is-error {
-  color: var(--danger);
-}
-
-.creator-ai-connection-status {
-  flex: 0 0 auto;
-  padding: 5px 8px;
-  color: var(--muted);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  font-size: var(--fs-xs);
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.creator-ai-connection-status.active {
-  color: var(--ok);
-  background: rgba(22, 163, 74, 0.08);
-  border-color: rgba(22, 163, 74, 0.2);
-}
-
-.creator-ai-view-tabs {
-  display: inline-flex;
-  width: fit-content;
-  max-width: 100%;
-  gap: 4px;
-  padding: 4px;
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-}
-
-.creator-ai-view-tabs button {
-  min-height: 34px;
-  padding: 0 14px;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: var(--r-xs);
-  cursor: pointer;
-  font-size: var(--fs-sm);
-  font-weight: 700;
-}
-
-.creator-ai-view-tabs button.active {
-  color: var(--ink);
-  background: var(--surface);
-  box-shadow: 0 1px 3px rgba(23, 32, 51, 0.1);
-}
-
-.creator-ai-main-workspace,
-.creator-ai-chat-workspace,
-.creator-ai-plan-workspace {
-  min-width: 0;
-  min-height: 0;
-}
-
-.creator-ai-chat-workspace {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-  height: 100%;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
 }
 
 .creator-ai-understanding {
@@ -716,71 +688,6 @@ async function generateDraftFromConversation() {
   border-radius: var(--r-pill);
 }
 
-.creator-ai-message-list {
-  display: grid;
-  align-content: start;
-  min-height: 0;
-  gap: 10px;
-  padding: 16px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  background: var(--surface);
-}
-
-.creator-ai-message {
-  display: grid;
-  width: min(82%, 760px);
-  min-width: 0;
-  gap: 6px;
-  padding: 11px 13px;
-  background: var(--surface-sub);
-  border-left: 3px solid var(--border-strong);
-  border-radius: var(--r-xs);
-}
-
-.creator-ai-message.role-user {
-  justify-self: end;
-  background: rgba(23, 32, 51, 0.05);
-  border-left-color: var(--muted);
-}
-
-.creator-ai-message.role-agent,
-.creator-ai-message.role-result {
-  justify-self: start;
-  background: var(--accent-tint);
-  border-left-color: var(--accent);
-}
-
-.creator-ai-message header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.creator-ai-message strong,
-.creator-ai-message time {
-  color: var(--muted);
-  font-size: var(--fs-2xs);
-  font-weight: 700;
-}
-
-.creator-ai-message p {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  line-height: 1.6;
-  white-space: pre-wrap;
-}
-
-.creator-ai-message-empty {
-  display: grid;
-  min-height: 160px;
-  place-items: center;
-  color: var(--muted);
-  text-align: center;
-}
-
 .creator-ai-material-note {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -798,61 +705,9 @@ async function generateDraftFromConversation() {
   font-size: var(--fs-sm);
 }
 
-.creator-ai-composer {
-  align-items: end;
-  padding: 12px 14px;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-}
-
-.creator-ai-composer label {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.creator-ai-composer textarea {
-  width: 100%;
-  min-height: 84px;
-  max-height: 220px;
-  padding: 10px 12px;
-  resize: vertical;
-  color: var(--text);
-  background: var(--surface-sub);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  outline: none;
-  line-height: 1.55;
-}
-
-.creator-ai-composer textarea:focus-visible {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring);
-}
-
 .creator-send-action {
   min-width: 124px;
   min-height: 42px;
-}
-
-.creator-ai-plan-workspace,
-.creator-ai-plan-workspace :deep(.pre-publish-suggestion-panel) {
-  height: 100%;
-}
-
-.creator-ai-generation-bar {
-  position: sticky;
-  bottom: 0;
-  z-index: 5;
-  min-height: 64px;
-  padding: 10px 12px;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  box-shadow: 0 -8px 18px rgba(23, 32, 51, 0.05);
-}
-
-.creator-ai-generation-bar p {
-  max-width: 760px;
-  color: var(--muted);
 }
 
 .creator-generate-action {
@@ -1154,73 +1009,12 @@ async function generateDraftFromConversation() {
   min-width: 152px;
 }
 
-@media (min-width: 1080px) and (min-height: 680px) {
-  .creator-ai-prepublish-section {
-    height: calc(100dvh - var(--surface-topbar-height) - 40px);
-    overflow: hidden;
-  }
-}
-
-@media (max-width: 820px) {
-  .creator-ai-prepublish-section {
-    min-height: 0;
-    padding: 12px;
-  }
-
-  .creator-ai-main-workspace {
-    min-height: 560px;
-  }
-
-  .creator-ai-chat-workspace,
-  .creator-ai-plan-workspace {
-    height: auto;
-  }
-
-  .creator-ai-chat-workspace {
-    min-height: 560px;
-  }
-
-  .creator-ai-plan-workspace,
-  .creator-ai-plan-workspace :deep(.pre-publish-suggestion-panel) {
-    height: 560px;
-  }
-
-  .creator-ai-message-list {
-    max-height: 420px;
-  }
-
-  .creator-ai-generation-bar {
-    position: static;
-  }
-}
-
 @media (max-width: 640px) {
-  .creator-ai-prepublish-head,
-  .creator-ai-generation-bar,
-  .creator-ai-composer {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .creator-settings-trigger,
   .creator-send-action,
   .creator-generate-action {
     width: 100%;
     min-width: 0;
-  }
-
-  .creator-ai-compact-status {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .creator-ai-compact-status p {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-
-  .creator-ai-message {
-    width: 94%;
   }
 
   .creator-ai-material-note {

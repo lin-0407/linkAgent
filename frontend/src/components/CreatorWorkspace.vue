@@ -21,7 +21,6 @@ import {
 } from '@/api/media'
 import { getCurrentProductionPlan } from '@/api/creatorProduction'
 import NotificationToast from '@/components/NotificationToast.vue'
-import PageHeader from '@/components/common/PageHeader.vue'
 import CreatorDeleteConfirmModal from '@/components/creator/CreatorDeleteConfirmModal.vue'
 import CreatorDevTestModal from '@/components/creator/CreatorDevTestModal.vue'
 import CreatorResultModal from '@/components/creator/CreatorResultModal.vue'
@@ -93,7 +92,7 @@ const AiCreationConsole = defineAsyncComponent(() => import('@/components/creato
 const CreatorContextLibraryModal = defineAsyncComponent(
   () => import('@/components/creator/CreatorContextLibraryModal.vue'),
 )
-const CreatorFlowNav = defineAsyncComponent(() => import('@/components/creator/CreatorFlowNav.vue'))
+const CreatorStudioSidebar = defineAsyncComponent(() => import('@/components/creator/CreatorStudioSidebar.vue'))
 const FeedbackTab = defineAsyncComponent(() => import('@/components/creator/FeedbackTab.vue'))
 const GuidanceEditorModal = defineAsyncComponent(() => import('@/components/creator/GuidanceEditorModal.vue'))
 const MaterialsTab = defineAsyncComponent(() => import('@/components/creator/MaterialsTab.vue'))
@@ -330,19 +329,6 @@ const creatorStepMetas = computed<CreatorStepMeta[]>(() => {
   )
   return steps
 })
-const activeCreatorStepIndex = computed(() => {
-  const matchedIndex = creatorStepMetas.value.findIndex((step) => step.key === activeStep.value)
-  // 开销统计属于开发者辅助入口，不参与普通创作者五步流程；移动端进度条保持在复盘阶段。
-  if (activeStep.value === 'usage') {
-    return creatorStepMetas.value.length - 1
-  }
-  return matchedIndex >= 0 ? matchedIndex : 0
-})
-// 使用 ?? 兜底第一个步骤元信息；creatorStepMetas 会随媒体能力开关变化，但始终至少包含基础四步。
-const activeCreatorStepMeta = computed(
-  () => creatorStepMetas.value[activeCreatorStepIndex.value] ?? creatorStepMetas.value[0]!,
-)
-const creatorProgressPercent = computed(() => `${((activeCreatorStepIndex.value + 1) / creatorStepMetas.value.length) * 100}%`)
 const currentTaskProgressIndex = computed(() => {
   if (!selectedTask.value) {
     return 0
@@ -361,7 +347,7 @@ const hasTaskHistory = computed(() => tasks.value.length > 0)
 const recentTasks = computed(() =>
   [...tasks.value]
     .sort((left, right) => right.updateTime.localeCompare(left.updateTime))
-    .slice(0, 3),
+    .slice(0, 8),
 )
 const showDeveloperTools = computed(() => props.developerMode)
 const hasCompletedCreatorReport = computed(() =>
@@ -2135,38 +2121,36 @@ provideCreatorWorkspace({
 </script>
 
 <template>
-  <section class="creator-shell creator-workbench-shell">
+  <section class="creator-shell creator-workbench-shell" :class="{ 'studio-has-project': Boolean(selectedTask || isTaskComposerOpen) }">
     <NotificationToast
       type="success"
       :message="successMessage"
       @close="closeSuccessToast"
     />
 
-    <PageHeader
-      v-if="!isRestoringTask && !selectedTask && !isTaskComposerOpen"
-      class="creator-page-header"
-      kicker="创作空间"
-      title="今天，想创作点什么？"
-      description="从一个想法开始，把下一条视频慢慢打磨好。"
-    >
-      <template v-if="isTaskComposerOpen" #actions>
-        <div class="creator-status-strip" aria-label="创作进度">
-          <span :class="{ active: Boolean(selectedTask) }">视频资料</span>
-          <span :class="{ active: Boolean(suggestion) }">发布方案</span>
-          <span :class="{ active: activeStep === 'production' || productionPlanReady }">制作蓝图</span>
-          <span v-if="isMediaFeatureEnabled" :class="{ active: activeStep === 'preflight' }">成片试映</span>
-          <span :class="{ active: Boolean(feedback || feedbackDashboard) }">观众反馈</span>
-          <span :class="{ active: hasCompletedCreatorReport }">总体复盘</span>
-        </div>
-        <button
-          type="button"
-          class="creator-secondary-action creator-mini-button"
-          @click="openTaskManager"
-        >
-          继续历史项目
-        </button>
+    <header class="studio-project-bar">
+      <TaskListPanel v-if="selectedTask || isTaskComposerOpen" />
+      <template v-else>
+        <div class="studio-home-identity"><span class="studio-live-mark" aria-hidden="true"></span><strong>创作片场</strong><span>想法在这里成为作品</span></div>
+        <button type="button" class="creator-ghost-button" @click="openTaskManager"><FolderOpen :size="16" aria-hidden="true" />所有作品</button>
       </template>
-    </PageHeader>
+    </header>
+
+    <CreatorStudioSidebar
+      v-if="!isRestoringTask"
+      :active-step="activeStep"
+      :selected="Boolean(selectedTask || isTaskComposerOpen)"
+      :tasks="recentTasks"
+      :selected-task-id="selectedTaskId || activeInteractiveTaskId || ''"
+      :steps="creatorStepMetas"
+      :can-navigate="canNavigateCreatorStep"
+      :is-completed="isCreatorStepCompleted"
+      :status-label="statusLabel"
+      @navigate="navigateCreatorStep"
+      @select="selectTask"
+      @create="startAiCreationTask"
+      @browse="openTaskManager"
+    />
 
     <CreatorTaskManagerModal
       v-if="!isRestoringTask"
@@ -2219,7 +2203,7 @@ provideCreatorWorkspace({
 
     <section
       v-else-if="!selectedTask && !isTaskComposerOpen"
-      class="creator-start-screen"
+      class="studio-start-screen"
       aria-label="创作台入口"
     >
       <AiCreationConsole
@@ -2231,7 +2215,7 @@ provideCreatorWorkspace({
         @skip-to-preflight="handleSkipToPreflight"
         @task-created="handleInteractiveTaskCreated"
       />
-      <div class="creator-start-actions" aria-label="其他创建方式">
+      <div class="studio-start-actions" aria-label="其他创建方式">
         <button
           v-if="activeInteractiveTaskId"
           type="button"
@@ -2259,49 +2243,9 @@ provideCreatorWorkspace({
         </RouterLink>
       </div>
 
-      <section v-if="recentTasks.length" class="creator-recent" aria-labelledby="creator-recent-title">
-        <header class="creator-recent-head">
-          <h3 id="creator-recent-title">最近的创作</h3>
-          <span>接着上次的灵感，继续往前一步</span>
-        </header>
-        <div class="creator-recent-grid">
-          <button v-for="task in recentTasks" :key="task.taskId" type="button" class="creator-recent-card" @click="selectTask(task.taskId)">
-            <span class="creator-recent-icon" :data-complete="task.status === 'ANALYZED'" aria-hidden="true">
-              <FileText :size="23" :stroke-width="1.5" />
-            </span>
-            <span class="creator-recent-copy">
-              <strong>{{ task.taskName }}</strong>
-              <small>{{ task.videoType || '未分类' }}<span>{{ statusLabel(task.status) }}</span></small>
-            </span>
-            <ArrowRight :size="16" :stroke-width="1.7" aria-hidden="true" />
-          </button>
-        </div>
-      </section>
-
-      <ol class="creator-workflow-overview" aria-label="视频创作流程">
-        <li v-for="(label, index) in ['发布方案', '制作蓝图', '成片试映', '实际发布', '观众反馈', '总体复盘']" :key="label">
-          <span>{{ index + 1 }}</span>{{ label }}
-          <ArrowRight v-if="index < 5" :size="13" aria-hidden="true" />
-        </li>
-      </ol>
     </section>
 
-    <div v-else class="creator-layout">
-      <aside class="creator-task-rail">
-        <CreatorFlowNav
-          :active-step="activeStep"
-          :steps="creatorStepMetas"
-          :active-step-index="activeCreatorStepIndex"
-          :active-step-meta="activeCreatorStepMeta"
-          :progress-percent="creatorProgressPercent"
-          :can-navigate="canNavigateCreatorStep"
-          :is-completed="isCreatorStepCompleted"
-          @navigate="navigateCreatorStep"
-        />
-
-        <TaskListPanel />
-      </aside>
-
+    <div v-else class="creator-layout" :data-stage="activeStep">
       <section class="creator-main">
         <NotificationToast
           type="error"

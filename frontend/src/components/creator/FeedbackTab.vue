@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import BilibiliAccountPanel from '@/components/creator/BilibiliAccountPanel.vue'
 import BvBindingPanel from '@/components/creator/BvBindingPanel.vue'
+import CreatorStageState from '@/components/creator/CreatorStageState.vue'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 import type { BilibiliAccount, TaskVideoBinding } from '@/types/creator'
 
@@ -39,9 +40,7 @@ const taskVideoBinding = ref<TaskVideoBinding | null>(null)
 const bindingRefreshKey = ref(0)
 const feedbackBindingReady = computed(() => taskVideoBinding.value?.bindingStatus === 'BOUND')
 const feedbackBvMatchesBinding = computed(
-  () =>
-    feedbackBindingReady.value &&
-    feedbackScriptBv.value === taskVideoBinding.value?.bvid,
+  () => feedbackBindingReady.value && feedbackScriptBv.value === taskVideoBinding.value?.bvid,
 )
 
 watch(selectedTaskId, () => {
@@ -66,10 +65,13 @@ function refreshBindingAfterSync() {
 </script>
 
 <template>
-  <section class="creator-section">
+  <section class="creator-section creator-feedback-stage">
     <div class="creator-section-head">
       <div>
         <h3>观众反馈</h3>
+        <p class="creator-stage-description">
+          连接已发布的视频，让 AI 从评论和弹幕中整理下一期值得改进的内容。
+        </p>
       </div>
       <div class="creator-action-row">
         <button
@@ -97,6 +99,7 @@ function refreshBindingAfterSync() {
           查看反馈分析
         </button>
         <button
+          v-if="feedbackBindingReady && (canRunFeedbackAnalyze || isAnalyzingFeedback)"
           type="button"
           class="creator-primary-button"
           :disabled="isActiveStepReadOnly || !feedbackBindingReady || !canRunFeedbackAnalyze"
@@ -107,28 +110,50 @@ function refreshBindingAfterSync() {
       </div>
     </div>
 
-    <BilibiliAccountPanel
-      @account-ready="handleAccountReady"
-      @sync-completed="refreshBindingAfterSync"
+    <CreatorStageState
+      v-if="!feedbackBindingReady"
+      state="waiting"
+      :title="canEnterFeedback ? '连接这条已发布的视频' : '发布前的工作还没完成'"
+      :description="
+        canEnterFeedback
+          ? '首次使用填写 B 站 UID 和 BV 号，完成归属校验后即可读取观众反馈。'
+          : '完成成片试映并实际发布后，在这里绑定 BV；反馈读取和分析会在校验通过后开放。'
+      "
     />
-    <BvBindingPanel
-      v-if="selectedTaskId"
-      :key="[selectedTaskId, bindingRefreshKey].join(':')"
-      :task-id="selectedTaskId"
-      :bilibili-uid="bilibiliAccount?.bilibiliUid"
-      @binding-ready="handleBindingReady"
-      @bound="handleBindingReady"
-    />
-    <p v-if="!feedbackBindingReady" class="creator-inline-note">
-      请先实际发布视频并完成 BV 归属校验；校验通过后才会开放反馈采集、导入和分析。
-    </p>
 
-    <div class="creator-form-grid creator-feedback-form-grid">
+    <details class="creator-connection-details" :open="!feedbackBindingReady">
+      <summary>
+        <strong>{{ feedbackBindingReady ? '视频已连接' : '连接 B 站视频' }}</strong
+        ><span>{{ feedbackBindingReady ? taskVideoBinding?.bvid : '账号与视频归属校验' }}</span>
+      </summary>
+      <div class="creator-connection-body">
+        <BilibiliAccountPanel
+          @account-ready="handleAccountReady"
+          @sync-completed="refreshBindingAfterSync"
+        />
+        <details
+          class="creator-bv-connection"
+          :open="Boolean(bilibiliAccount) || feedbackBindingReady"
+        >
+          <summary>绑定已发布视频</summary>
+          <BvBindingPanel
+            v-if="selectedTaskId"
+            :key="[selectedTaskId, bindingRefreshKey].join(':')"
+            :task-id="selectedTaskId"
+            :bilibili-uid="bilibiliAccount?.bilibiliUid"
+            @binding-ready="handleBindingReady"
+            @bound="handleBindingReady"
+          />
+        </details>
+      </div>
+    </details>
+
+    <div v-if="feedbackBindingReady" class="creator-form-grid creator-feedback-form-grid">
       <article class="span-full creator-script-panel">
         <div class="creator-script-panel-head">
           <div>
-            <span>粘贴视频链接 / BV</span>
-            <p>输入单条视频链接或 BV 号后，系统会读取这条视频的评论和弹幕，并整理成反馈数据。</p>
+            <span>自动读取评论与弹幕</span>
+            <p>视频已绑定。读取反馈后，点击“读懂反馈”生成分析。</p>
           </div>
           <button
             type="button"
@@ -149,16 +174,9 @@ function refreshBindingAfterSync() {
             {{ isFetchingFeedback ? '读取中...' : '自动读取反馈' }}
           </button>
         </div>
-        <label class="creator-script-main-input">
-          <span>视频链接 / BV</span>
-          <input
-            v-model="feedbackScriptForm.bvInput"
-            type="text"
-            maxlength="200"
-            :disabled="isActiveStepReadOnly || feedbackBindingReady"
-            placeholder="BVxxxx 或 https://www.bilibili.com/video/BVxxxx"
-          />
-        </label>
+        <p class="creator-feedback-source">
+          <span>已绑定视频</span><strong>{{ taskVideoBinding?.bvid }}</strong>
+        </p>
         <details class="creator-advanced-panel">
           <summary>高级采集设置</summary>
           <div class="creator-script-grid">
@@ -203,48 +221,51 @@ function refreshBindingAfterSync() {
         </details>
       </article>
 
-      <article class="span-full creator-feedback-file-panel">
-        <div>
-          <span>上传文件</span>
-          <p>导入已经整理好的评论或弹幕文件，支持 JSON/TXT。</p>
-        </div>
-        <label class="creator-file-field">
-          <!-- 切换任务时重建文件输入框，避免浏览器保留上一个任务选择过的本地文件。 -->
-          <input
-            :key="selectedTaskId"
-            type="file"
-            accept=".json,.txt,application/json,text/plain"
-            aria-label="上传评论或弹幕文件"
+      <details class="span-full creator-feedback-import-options">
+        <summary>从文件导入反馈</summary>
+        <article class="creator-feedback-file-panel">
+          <div>
+            <span>上传文件</span>
+            <p>导入已经整理好的评论或弹幕文件，支持 JSON/TXT。</p>
+          </div>
+          <label class="creator-file-field">
+            <!-- 切换任务时重建文件输入框，避免浏览器保留上一个任务选择过的本地文件。 -->
+            <input
+              :key="selectedTaskId"
+              type="file"
+              accept=".json,.txt,application/json,text/plain"
+              aria-label="上传评论或弹幕文件"
+              :disabled="
+                isActiveStepReadOnly ||
+                !canEnterFeedback ||
+                !feedbackBindingReady ||
+                isImportingFeedback ||
+                isFetchingFeedback ||
+                isSavingFeedback ||
+                isAnalyzingFeedback
+              "
+              @change="handleFeedbackFileChange"
+            />
+          </label>
+          <button
+            type="button"
+            class="creator-secondary-action"
             :disabled="
               isActiveStepReadOnly ||
               !canEnterFeedback ||
               !feedbackBindingReady ||
+              !feedbackImportFile ||
               isImportingFeedback ||
               isFetchingFeedback ||
               isSavingFeedback ||
               isAnalyzingFeedback
             "
-            @change="handleFeedbackFileChange"
-          />
-        </label>
-        <button
-          type="button"
-          class="creator-secondary-action"
-          :disabled="
-            isActiveStepReadOnly ||
-            !canEnterFeedback ||
-            !feedbackBindingReady ||
-            !feedbackImportFile ||
-            isImportingFeedback ||
-            isFetchingFeedback ||
-            isSavingFeedback ||
-            isAnalyzingFeedback
-          "
-          @click="importFeedbackFile"
-        >
-          {{ isImportingFeedback ? '导入中...' : '导入文件' }}
-        </button>
-      </article>
+            @click="importFeedbackFile"
+          >
+            {{ isImportingFeedback ? '导入中...' : '导入文件' }}
+          </button>
+        </article>
+      </details>
 
       <details class="span-full creator-feedback-optional-panel">
         <summary>

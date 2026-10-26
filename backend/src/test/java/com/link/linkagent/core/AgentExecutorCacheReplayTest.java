@@ -4,6 +4,7 @@ import com.link.linkagent.llm.ChatReplayContext;
 import com.link.linkagent.llm.ChatRequestEnvelope;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.llm.LlmCallResult;
+import com.link.linkagent.llm.StructuredCallResult;
 import com.link.linkagent.llm.TokenCounter;
 import com.link.linkagent.memory.InMemoryShortTermMemoryStore;
 import com.link.linkagent.memory.LongTermMemory;
@@ -12,14 +13,23 @@ import com.link.linkagent.memory.LongTermMemoryRecord;
 import com.link.linkagent.memory.ShortTermMemory;
 import com.link.linkagent.memory.SummaryMemory;
 import com.link.linkagent.memory.SummaryMemoryProperties;
+import com.link.linkagent.memory.SummaryReviewer;
+import com.link.linkagent.memory.SummaryReviewOutput;
+import com.link.linkagent.core.plan.PlanAndExecuteAgent;
+import com.link.linkagent.core.multi.MultiAgentOrchestrator;
 import com.link.linkagent.prompt.StubPromptService;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.tool.ToolExecutionProperties;
 import com.link.linkagent.tool.ToolExecutor;
 import com.link.linkagent.tool.ToolRegistry;
+import com.link.linkagent.tool.Tool;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,8 +53,43 @@ class AgentExecutorCacheReplayTest {
     private static final int THRESHOLD = 30;
     private static final int RETAINED_BUDGET = 25;
 
+    @ParameterizedTest
+    @CsvSource({"PLAN_EXECUTE,false", "MULTI_AGENT,false", "PLAN_EXECUTE,true", "MULTI_AGENT,true"})
+    void shouldSendNewPlannedHistoryToBothSummaryAndReview(AgentExecutionMode mode, boolean streaming) {
+        var fixture = new SummaryFixture(new CapturingLlmService(), new ToolRegistry(List.of()));
+        fixture.run("第一轮问题", AgentExecutionMode.REACT, streaming);
+        String fact = "规划回合新增的重要事实";
+        fixture.run(fact, mode, streaming);
+        assertThat(fixture.memory.getRecentMessages(SESSION)).anyMatch(message -> fact.equals(message.content()));
+
+        fixture.run("第二轮问题", AgentExecutionMode.REACT, streaming);
+
+        fixture.assertIncludedBeforeTrimming(fact);
+    }
+
     @Test
-    void shouldReplayLastRealRequestEnvelopeWhenCompressing() {
+    void shouldIncludeToolResultsProducedAfterTheCachedRequest() {
+        String fact = "本轮工具查询得到的新证据";
+        Tool tool = new Tool() {
+            @Override public String getName() { return "evidence"; }
+            @Override public String getDescription() { return "返回审查回归用证据"; }
+            @Override public String execute(String input) { return fact; }
+        };
+        var llm = new CapturingLlmService(
+                "Thought:查询证据\nAction:evidence\nAction Input:查询",
+                "Thought:查询结束\nFinal Answer:已经处理");
+        var fixture = new SummaryFixture(llm, new ToolRegistry(List.of(tool)));
+        fixture.run("第一轮问题", AgentExecutionMode.REACT, false);
+        assertThat(fixture.memory.getRecentMessages(SESSION)).anyMatch(message -> fact.equals(message.content()));
+
+        fixture.run("第二轮问题", AgentExecutionMode.REACT, false);
+
+        fixture.assertIncludedBeforeTrimming(fact);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void shouldReplayLastRealRequestEnvelopeWhenCompressing(boolean streaming) {
         CapturingLlmService llm = new CapturingLlmService();
         AtomicReference<ChatRequestEnvelope> replayedEnvelope = new AtomicReference<>();
         AtomicReference<List<Message>> replayedMessages = new AtomicReference<>();
@@ -91,14 +136,16 @@ class AgentExecutorCacheReplayTest {
         memory.append(SESSION, "Human", "旧消息二");
         memory.append(SESSION, "AI", "旧回答二");
         memory.append(SESSION, "Human", "旧消息三");
-        executor.run(SESSION, "default", "第一轮问题");
+        if (streaming) executor.runStreaming(SESSION, "default", "第一轮问题", AgentExecutionMode.REACT, new SseEmitter());
+        else executor.run(SESSION, "default", "第一轮问题");
         String firstRequest = llm.lastUserMessage;
         String firstSystemPrompt = llm.lastSystemPrompt;
         assertThat(firstRequest).contains("Recent conversation:");
 
         // 再跑一轮就会过阈值：run() 已经把第一轮的 Human/AI 写回短期记忆，
         // 此时被压缩的是上一轮请求里已经存在的那批旧消息。
-        executor.run(SESSION, "default", "第二轮问题");
+        if (streaming) executor.runStreaming(SESSION, "default", "第二轮问题", AgentExecutionMode.REACT, new SseEmitter());
+        else executor.run(SESSION, "default", "第二轮问题");
 
         List<Message> messages = replayedMessages.get();
         assertThat(messages).as("摘要生成应该走信封重放").isNotNull().hasSize(2);
@@ -124,15 +171,19 @@ class AgentExecutorCacheReplayTest {
 
         private String lastSystemPrompt;
         private String lastUserMessage;
+        private final List<String> answers;
+        private int answerIndex;
 
-        CapturingLlmService() {
+        CapturingLlmService(String... answers) {
             super();
+            this.answers = List.of(answers);
         }
 
         @Override
         public String chat(String systemPrompt, String userMessage) {
             this.lastSystemPrompt = systemPrompt;
             this.lastUserMessage = userMessage;
+            if (answerIndex < answers.size()) return answers.get(answerIndex++);
             return """
                     Thought:信息已经够了
                     Final Answer:好的
@@ -145,6 +196,59 @@ class AgentExecutorCacheReplayTest {
             ChatReplayContext.record(ChatRequestEnvelope.main(systemPrompt,
                     List.of(new UserMessage(userMessage)), null));
             return new LlmCallResult(answer, "test-model", 3, 5, 8, 1L);
+        }
+    }
+
+    /** 只检查模型收到的原文与裁剪结果；模型和规划响应均为受控替身。 */
+    private static class SummaryFixture {
+        final ShortTermMemory memory = new ShortTermMemory(new InMemoryShortTermMemoryStore());
+        final AtomicReference<List<Message>> generated = new AtomicReference<>();
+        final AtomicReference<List<Message>> reviewed = new AtomicReference<>();
+        final AgentExecutor executor;
+
+        SummaryFixture(CapturingLlmService llm, ToolRegistry registry) {
+            registry.init();
+            LLMService summaryCalls = new LLMService() {
+                @Override public LlmCallResult replayChat(ChatRequestEnvelope envelope, List<Message> messages, Integer max) {
+                    generated.set(messages);
+                    return new LlmCallResult("已保留事实的摘要", "test-model", 10, 5, 15, 1L);
+                }
+                @Override public <T> StructuredCallResult<T> replayStructured(ChatRequestEnvelope envelope,
+                        List<Message> messages, Class<T> type, Integer max) {
+                    reviewed.set(messages);
+                    return new StructuredCallResult<>(type.cast(new SummaryReviewOutput(true, List.of(), List.of())), 10, 5, 15, 1L);
+                }
+            };
+            var prompts = new StubPromptService();
+            var summary = new SummaryMemory(new SummaryMemoryProperties(true, THRESHOLD, 1, 0, 80),
+                    prompt -> { throw new AssertionError("不应跳过模型请求封装"); }, prompts,
+                    new SummaryReviewer(summaryCalls, prompts), null, null, null, null, summaryCalls);
+            var longTerm = mock(LongTermMemory.class);
+            when(longTerm.retrieveForContext(anyString(), anyString())).thenReturn(List.of());
+            var settings = mock(RuntimeSettingService.class);
+            when(settings.isStructuredKernelEnabled()).thenReturn(false);
+            var planner = mock(PlanAndExecuteAgent.class);
+            when(planner.run(anyString(), anyString())).thenReturn(AgentRunResult.planExecute("规划结果", "COMPLETED", List.of(), null));
+            var multi = mock(MultiAgentOrchestrator.class);
+            when(multi.run(anyString(), anyString())).thenReturn(AgentRunResult.multiAgent("协作结果", "COMPLETED", List.of(), null, List.of()));
+            executor = new AgentExecutor(llm, registry, new ToolExecutor(registry, new ToolExecutionProperties(10, 0)),
+                    memory, summary, longTerm, null, prompts, settings, new AgentExecutionModeRouter(), planner, multi,
+                    null, null, tokenCounter(), null, null, mock(LongTermMemoryExtractionCoordinator.class));
+            memory.append(SESSION, "Human", "先前材料");
+            memory.append(SESSION, "AI", "先前回答");
+        }
+
+        void run(String text, AgentExecutionMode mode, boolean streaming) {
+            if (streaming) executor.runStreaming(SESSION, "default", text, mode, new SseEmitter());
+            else executor.run(SESSION, "default", text, mode);
+        }
+
+        void assertIncludedBeforeTrimming(String fact) {
+            assertThat(generated.get()).as("摘要生成必须拿到本次被裁剪的全部原文").isNotNull();
+            assertThat(generated.get().stream().map(Message::getText)).anyMatch(text -> text != null && text.contains(fact));
+            assertThat(reviewed.get()).as("复核必须独立看到相同原文").isNotNull();
+            assertThat(reviewed.get().stream().map(Message::getText)).anyMatch(text -> text != null && text.contains(fact));
+            assertThat(memory.getRecentMessages(SESSION)).noneMatch(message -> message.content().contains(fact));
         }
     }
 

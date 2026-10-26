@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { formatDate, shortId, statusLabel } from '@/composables/creator/creatorWorkspaceUtils'
+import { computed } from 'vue'
+import { FolderOpen, Plus, RefreshCw, Search, X } from '@lucide/vue'
+import { formatDate, statusLabel } from '@/composables/creator/creatorWorkspaceUtils'
+import { useModalDialog } from '@/composables/useModalDialog'
 import type { CreatorTaskSummary } from '@/types/creator'
 
 type TaskSummaryStats = {
@@ -49,12 +52,20 @@ const emit = defineEmits<{
   'update:statusFilter': [statusFilter: 'ALL' | CreatorTaskSummary['status']]
 }>()
 
+const { dialogRef, handleDialogKeydown } = useModalDialog(
+  computed(() => open),
+  () => emit('close'),
+)
+
 function updateSearchQuery(event: Event) {
   emit('update:searchQuery', (event.target as HTMLInputElement).value)
 }
 
 function updateStatusFilter(event: Event) {
-  emit('update:statusFilter', (event.target as HTMLSelectElement).value as 'ALL' | CreatorTaskSummary['status'])
+  emit(
+    'update:statusFilter',
+    (event.target as HTMLSelectElement).value as 'ALL' | CreatorTaskSummary['status'],
+  )
 }
 </script>
 
@@ -67,28 +78,39 @@ function updateStatusFilter(event: Event) {
         @click.self="emit('close')"
       >
         <section
+          ref="dialogRef"
           class="creator-task-manager-modal"
           role="dialog"
           aria-modal="true"
           aria-labelledby="creator-task-manager-title"
+          tabindex="-1"
+          @keydown="handleDialogKeydown"
         >
           <header class="creator-result-modal-head creator-task-manager-head">
             <div>
-              <span>项目列表</span>
-              <h3 id="creator-task-manager-title">
-                历史视频项目
-              </h3>
-              <p>{{ filteredTasks.length }} 个匹配项目，共 {{ summary.total }} 个项目</p>
+              <h3 id="creator-task-manager-title">我的创作</h3>
+              <p>{{ summary.total }} 个项目，接着上次的进度继续。</p>
             </div>
             <div class="creator-panel-actions">
-              <button type="button" class="creator-ghost-button" @click="emit('create')">
-                新建任务
+              <button type="button" class="creator-primary-button" @click="emit('create')">
+                <Plus :size="16" aria-hidden="true" />新建创作
               </button>
-              <button type="button" class="creator-ghost-button" @click="emit('refresh')">
-                {{ loading ? '读取中' : '刷新' }}
+              <button
+                type="button"
+                class="creator-ghost-button creator-icon-button"
+                :disabled="loading"
+                aria-label="刷新项目"
+                @click="emit('refresh')"
+              >
+                <RefreshCw :size="16" aria-hidden="true" />
               </button>
-              <button type="button" class="creator-ghost-button" @click="emit('close')">
-                关闭
+              <button
+                type="button"
+                class="creator-ghost-button creator-icon-button"
+                aria-label="关闭项目列表"
+                @click="emit('close')"
+              >
+                <X :size="18" aria-hidden="true" />
               </button>
             </div>
           </header>
@@ -96,22 +118,19 @@ function updateStatusFilter(event: Event) {
           <div class="creator-task-manager-body">
             <div class="creator-task-toolbar">
               <label class="creator-task-search">
-                <span>搜索</span>
+                <span class="sr-only">搜索项目</span>
+                <Search :size="16" aria-hidden="true" />
                 <input
                   :value="searchQuery"
                   type="search"
-                  placeholder="名称 / 项目编号 / 状态"
+                  placeholder="搜索创作名称、编号或状态"
                   @input="updateSearchQuery"
                 />
               </label>
               <label class="creator-task-filter">
-                <span>状态</span>
+                <span class="sr-only">项目状态</span>
                 <select :value="statusFilter" @change="updateStatusFilter">
-                  <option
-                    v-for="option in statusOptions"
-                    :key="option.value"
-                    :value="option.value"
-                  >
+                  <option v-for="option in statusOptions" :key="option.value" :value="option.value">
                     {{ option.label }}
                   </option>
                 </select>
@@ -119,9 +138,16 @@ function updateStatusFilter(event: Event) {
             </div>
 
             <div class="creator-task-overview" aria-label="项目概览">
-              <span><b>{{ summary.draft }}</b> 草稿</span>
-              <span><b>{{ summary.inProgress }}</b> 推进中</span>
-              <span><b>{{ summary.done }}</b> 已复盘</span>
+              <span
+                >草稿 <b>{{ summary.draft }}</b></span
+              >
+              <span
+                >进行中 <b>{{ summary.inProgress }}</b></span
+              >
+              <span
+                >已复盘 <b>{{ summary.done }}</b></span
+              >
+              <small>{{ filteredTasks.length }} 个匹配项目</small>
             </div>
 
             <div class="creator-task-list creator-task-manager-list">
@@ -131,10 +157,22 @@ function updateStatusFilter(event: Event) {
                 class="creator-task-item"
                 :class="{ active: task.taskId === selectedTaskId }"
               >
-                <button type="button" class="creator-task-select" @click="emit('select', task.taskId)">
-                  <strong>{{ task.taskName }}</strong>
-                  <span>{{ task.videoType }} · {{ statusLabel(task.status) }} · {{ task.materialCount }} 份材料</span>
-                  <small>{{ shortId(task.taskId) }} · {{ formatDate(task.updateTime) }}</small>
+                <button
+                  type="button"
+                  class="creator-task-select"
+                  @click="emit('select', task.taskId)"
+                >
+                  <span class="creator-task-list-symbol" aria-hidden="true"
+                    ><FolderOpen :size="19" :stroke-width="1.6"
+                  /></span>
+                  <span class="creator-task-list-copy">
+                    <strong :title="task.taskName">{{ task.taskName }}</strong>
+                    <span
+                      ><span>{{ statusLabel(task.status) }}</span
+                      ><span>{{ task.videoType || '未分类' }}</span
+                      ><time>{{ formatDate(task.updateTime) }}</time></span
+                    >
+                  </span>
                 </button>
                 <div class="creator-task-actions">
                   <button
@@ -164,7 +202,11 @@ function updateStatusFilter(event: Event) {
               <div v-if="!loading && tasks.length === 0" class="creator-task-empty-state">
                 <strong>还没有视频项目</strong>
                 <span>先新建一条视频资料，后续发布方案和复盘报告都会沉淀在这里。</span>
-                <button type="button" class="creator-primary-button creator-mini-button" @click="emit('create')">
+                <button
+                  type="button"
+                  class="creator-primary-button creator-mini-button"
+                  @click="emit('create')"
+                >
                   新建项目
                 </button>
               </div>

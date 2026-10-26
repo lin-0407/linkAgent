@@ -126,8 +126,9 @@ public class AgentExecutor {
      *
      * @param envelope 真实请求的出口、请求形状与当时的消息列表
      * @param summary  当次请求里摘要块的正文，用来验证信封没有过期
+     * @param history  当次上下文实际包含的历史，用来核对本次待压缩消息是否已在信封中
      */
-    private record LastRequest(ChatRequestEnvelope envelope, String summary) {
+    private record LastRequest(ChatRequestEnvelope envelope, String summary, List<MemoryMessage> history) {
     }
 
     /**
@@ -337,6 +338,7 @@ public class AgentExecutor {
         // 采集本轮第一次真实请求的信封；压缩会发生在下一轮组装上下文时，届时用它重放前缀。
         // 计划执行模式成功时本函数会提前返回，那种轮次没有可复用的真实对话请求，作用域留到计划模式之后再开启。
         ChatReplayContext.Scope replayScope = null;
+        List<MemoryMessage> replayHistory = List.of();
 
         try {
             // 拼接记忆 + 用户输入作为对话起点；token 超过阈值时在这里先压缩（设计文档 A2 / A5）
@@ -359,6 +361,7 @@ public class AgentExecutor {
             // 从这里开始才是真正发对话请求的路径：开启采集作用域，记下本轮请求与当时的摘要版本。
             replayScope = ChatReplayContext.begin();
             replayScope.summary(assembly.summary());
+            replayHistory = assembly.history();
 
             // === 结构化内核路径（阶段 5.4+） ===
             // 每步通过 chatStructured 产出受 JSON Schema 约束的 ReActStep，省去正则解析，降低格式错误率。
@@ -497,7 +500,7 @@ public class AgentExecutor {
             throw exception;
         } finally {
             // 把本轮第一次真实请求的信封留给下一轮压缩复用；异常轮也会保留（请求可能已经成功发出并进缓存）。
-            storeReplayEnvelope(resolvedSessionId, replayScope);
+            storeReplayEnvelope(resolvedSessionId, replayScope, replayHistory);
         }
     }
 
@@ -835,12 +838,12 @@ public class AgentExecutor {
         String currentSummary = assembled.summary();
         if (tokenCounter == null) {
             // 单测构造器不注入计量器：跳过压缩判断，行为与改造前一致。
-            return new ContextAssembly(context, null, currentSummary);
+            return new ContextAssembly(context, null, currentSummary, recentMessages);
         }
         int tokens = tokenCounter.count(context);
         int threshold = summaryMemory.getTokenThreshold();
         if (tokens < threshold) {
-            return new ContextAssembly(context, null, currentSummary);
+            return new ContextAssembly(context, null, currentSummary, recentMessages);
         }
         // 压缩失败冷却：失败后原文还在，等上下文再涨一段再重试，避免在阈值附近连续多轮烧生成/复核。
         Integer failedAt = compactionFailureTokens.get(sessionId);
@@ -848,7 +851,7 @@ public class AgentExecutor {
         if (retryDelta > 0 && failedAt != null && tokens < failedAt + retryDelta) {
             log.info("上次压缩失败，上下文尚未增长到重试线，本轮跳过压缩，sessionId={}, tokens={}, 重试线={}",
                     sessionId, tokens, failedAt + retryDelta);
-            return new ContextAssembly(context, null, currentSummary);
+            return new ContextAssembly(context, null, currentSummary, recentMessages);
         }
         int retainedCount = retainedMessageCountForTail(recentMessages);
         int compressibleCount = recentMessages.size() - retainedCount;
@@ -856,7 +859,7 @@ public class AgentExecutor {
             // 没有可压缩的历史消息：超长只可能来自本轮输入本身，压缩无从下手，交给 768k 硬上限兜底。
             log.warn("上下文超过压缩阈值但没有可压缩的历史消息，sessionId={}, tokens={}, threshold={}",
                     sessionId, tokens, threshold);
-            return new ContextAssembly(context, null, currentSummary);
+            return new ContextAssembly(context, null, currentSummary, recentMessages);
         }
         List<MemoryMessage> compressibleMessages = recentMessages.subList(0, compressibleCount);
         // 先发起事实点抽取再生成摘要：两次调用在同一批消息上独立工作，并行能省掉一次模型调用的等待。
@@ -866,14 +869,14 @@ public class AgentExecutor {
                 : null;
         // 摘要调用尽量复用上一轮真实请求的前缀：25 万 token 只有与上一轮请求逐字节一致时才会命中缓存，
         // 自己另拼一份摘要 prompt 等于每轮冷启动一次（2026-10 缓存命中率优化）。
-        SummaryReplayPrefix replay = buildReplayPrefix(sessionId, currentSummary);
+        SummaryReplayPrefix replay = buildReplayPrefix(sessionId, currentSummary, compressibleMessages);
         String summary = summaryMemory.summarize(sessionId, compressibleMessages, replay);
         if (TextUtil.isBlank(summary)) {
             // 摘要没通过（生成失败或复核不通过）时事实点也不落库：原文仍保留在短期记忆里，
             // 下一轮会重新抽取，现在写入只会让同一批消息重复进长期记忆。
             compactionFailureTokens.put(sessionId, tokens);
             log.warn("摘要生成或复核未通过，本轮不压缩（保留原文），sessionId={}, tokens={}", sessionId, tokens);
-            return new ContextAssembly(context, null, currentSummary);
+            return new ContextAssembly(context, null, currentSummary, recentMessages);
         }
         Long trimCursor = null;
         if (longTermMemoryEnabled) {
@@ -883,7 +886,7 @@ public class AgentExecutor {
             if (!factsResult.succeeded()) {
                 compactionFailureTokens.put(sessionId, tokens);
                 log.error("事实点抽取失败，本轮不压缩（保留原文），sessionId={}, tokens={}", sessionId, tokens);
-                return new ContextAssembly(context, null, currentSummary);
+                return new ContextAssembly(context, null, currentSummary, recentMessages);
             }
             saveHighImportanceFacts(userId, sessionId, factsResult.facts());
             // 这批消息已经抽过事实点，长期记忆游标跟着推进；返回的游标值同时是裁剪边界——
@@ -895,8 +898,9 @@ public class AgentExecutor {
         shortTermMemory.keepRecentMessages(sessionId, retainedCount, trimCursor);
         // 重拼时必须显式带上刚生成的摘要：检查点要等压缩后的计量结果才能写库，
         // 此刻 getSummary 读库拿到的还是上一版摘要，不传新摘要模型就看不到刚被压缩掉的历史（2026-09-19 联调实测）。
+        List<MemoryMessage> remainingMessages = shortTermMemory.getRecentMessages(sessionId);
         AssembledContext compressedContext = assembleContext(sessionId, userId,
-                shortTermMemory.getRecentMessages(sessionId), userMessage, summary, longTermMemories);
+                remainingMessages, userMessage, summary, longTermMemories);
         String compressed = compressedContext.text();
         int compressedTokens = tokenCounter.count(compressed);
         // 摘要同时写进会话历史（role=summary 的检查点）：刷新页面或重启后端后，仍然能看到"这里压缩过"和摘要正文。
@@ -907,7 +911,7 @@ public class AgentExecutor {
                 sessionId, tokens, compressedTokens, replay != null);
         return new ContextAssembly(compressed,
                 new CompactionNotice(summary, compressibleCount, tokens, compressedTokens),
-                compressedContext.summary());
+                compressedContext.summary(), remainingMessages);
     }
 
     /**
@@ -917,15 +921,19 @@ public class AgentExecutor {
      * 不按「被压缩消息」重新拼前缀：真实请求的消息 = 历史块 + 本轮用户输入，两者的分隔和空行无法从被压缩消息
      * 反推出来，拼出来的文本一定在某一处对不上，缓存就断了。
      *
-     * <p>两个放弃复用的条件：没有记录（评测首次压缩、进程刚重启）或摘要版本已经变过（上一轮之后
-     * 又压缩过一次）。这两种情况下前缀对不上，复用只会白费，退回冷启动 prompt 更安全。
+     * <p>摘要版本和历史覆盖范围都必须吻合。规划轮次不会更新信封，普通轮次的工具结果也可能产生在
+     * 首次请求之后；这些新增消息一旦进入压缩范围，必须改用完整原文，不能只拿旧前缀生成和复核后裁剪。
      */
-    private SummaryReplayPrefix buildReplayPrefix(String sessionId, String summary) {
+    private SummaryReplayPrefix buildReplayPrefix(String sessionId, String summary, List<MemoryMessage> messages) {
         LastRequest last = lastRequestPrefixes.get(sessionId);
         if (last == null || last.envelope() == null) {
             return null;
         }
         if (!TextUtil.trimToDefault(last.summary(), "").equals(TextUtil.trimToDefault(summary, ""))) {
+            return null;
+        }
+        if (last.history().size() < messages.size()
+                || !last.history().subList(0, messages.size()).equals(messages)) {
             return null;
         }
         return new SummaryReplayPrefix(last.envelope());
@@ -934,10 +942,9 @@ public class AgentExecutor {
     /**
      * 把本轮采集到的真实请求信封存给下一轮压缩复用，并关闭采集作用域。
      * <p>
-     * 没有信封（计划执行模式没记为可重放请求、结构化输出等）时保留上一份记录不动：
-     * 它最多是过期后缓存不命中，不会让摘要内容出错。
+     * 没有新信封时保留上一份记录；下一次只有它确实覆盖全部待压缩历史时才允许复用。
      */
-    private void storeReplayEnvelope(String sessionId, ChatReplayContext.Scope scope) {
+    private void storeReplayEnvelope(String sessionId, ChatReplayContext.Scope scope, List<MemoryMessage> history) {
         try {
             if (scope == null || scope.envelope() == null || TextUtil.isBlank(sessionId)) {
                 return;
@@ -947,7 +954,7 @@ public class AgentExecutor {
                 lastRequestPrefixes.keySet().stream().findFirst().ifPresent(lastRequestPrefixes::remove);
             }
             lastRequestPrefixes.put(sessionId, new LastRequest(scope.envelope(),
-                    TextUtil.trimToDefault(scope.usedSummary(), "")));
+                    TextUtil.trimToDefault(scope.usedSummary(), ""), history));
         } finally {
             if (scope != null) {
                 scope.close();
@@ -1194,12 +1201,16 @@ public class AgentExecutor {
     }
 
     /**
-     * 一次上下文组装的结果：文本、本次是否发生了压缩（供流式链路通知前端），以及本次使用的摘要正文。
+     * 一次上下文组装的结果：文本、压缩通知，以及本次使用的摘要和历史快照。
      * <p>
      * 带 summary 是为了让调用方在真正发请求前记住「这一轮用的哪版摘要」，
-     * 下一轮压缩时据此判断记录的前缀是否还能复用。
+     * 下一轮压缩时同时检查摘要版本与历史覆盖范围，避免重放遗漏首次请求之后才产生的消息。
      */
-    private record ContextAssembly(String text, CompactionNotice compaction, String summary) {
+    private record ContextAssembly(String text, CompactionNotice compaction, String summary, List<MemoryMessage> history) {
+        private ContextAssembly {
+            // 请求发出后会继续追加本轮结果，覆盖范围必须固定在组装上下文这一刻。
+            history = List.copyOf(history);
+        }
     }
 
     /** 一次 assembleContext 的产物：拼好的上下文文本 + 本次使用的摘要。 */
@@ -1892,6 +1903,7 @@ public class AgentExecutor {
         // 采集本轮第一次真实请求的信封，供下一轮压缩重放（流式请求同样走普通 ChatClient + tools 的形状）。
         // 计划执行成功时不会发对话请求，作用域留到计划模式之后再开启。
         ChatReplayContext.Scope replayScope = null;
+        List<MemoryMessage> replayHistory = List.of();
         try {
             resolvedSessionId = resolveSessionId(sessionId);
             resolvedUserId = resolveUserId(userId);
@@ -1932,6 +1944,7 @@ public class AgentExecutor {
             // 从这里开始才真正发对话请求：开启采集作用域，记下本轮请求与当时的摘要版本。
             replayScope = ChatReplayContext.begin();
             replayScope.summary(assembly.summary());
+            replayHistory = assembly.history();
 
             // === 结构化内核路径（阶段 5.4+） ===
             // 走结构化 schema 约束的 JSON ReAct，每步通过 chatStructured 产出 ReActStep
@@ -2008,7 +2021,7 @@ public class AgentExecutor {
             emitter.completeWithError(e);
         } finally {
             // 流式轮同样保存请求信封；客户端中途断开也保留，下一轮压缩仍可能吃到已写入的前缀缓存。
-            storeReplayEnvelope(resolvedSessionId, replayScope);
+            storeReplayEnvelope(resolvedSessionId, replayScope, replayHistory);
         }
     }
 
