@@ -373,7 +373,7 @@ function refreshSearchCards() {
 
 .knowledge-enhanced-label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -383,7 +383,7 @@ function refreshSearchCards() {
   background: var(--surface-sub);
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .knowledge-card-list {
@@ -415,8 +415,8 @@ function refreshSearchCards() {
   text-align: left;
   cursor: pointer;
   transition:
-    background-color 180ms ease,
-    box-shadow 180ms ease;
+    background-color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
 }
 
 .knowledge-card-button:hover:not(:disabled),
@@ -432,20 +432,20 @@ function refreshSearchCards() {
 
 .knowledge-card-title {
   color: var(--ink);
-  font-size: 15px;
+  font-size: var(--fs-md);
   font-weight: var(--fw-semibold);
   line-height: 1.45;
 }
 
 .knowledge-card small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
 }
 
 .knowledge-card > strong {
   color: var(--ink);
-  font-size: 15px;
+  font-size: var(--fs-md);
   line-height: 1.45;
 }
 
@@ -453,7 +453,7 @@ function refreshSearchCards() {
 .knowledge-card-summary {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.56;
 }
 
@@ -469,7 +469,7 @@ function refreshSearchCards() {
   background: transparent;
   border: 0;
   border-radius: 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
 }
 
@@ -482,7 +482,7 @@ function refreshSearchCards() {
 
 .knowledge-topic-hits-label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -496,13 +496,13 @@ function refreshSearchCards() {
   border: 0;
   border-left: 2px solid var(--accent-ring);
   border-radius: 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
 }
 
 .knowledge-topic-hit b {
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -514,7 +514,7 @@ function refreshSearchCards() {
   background: var(--accent-tint);
   border: 1px solid var(--accent-ring);
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
 }
 
@@ -535,7 +535,7 @@ function refreshSearchCards() {
 
 .knowledge-evidence-label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -546,13 +546,13 @@ function refreshSearchCards() {
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
 }
 
 .knowledge-evidence .knowledge-evidence-item > b {
   margin-right: 6px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -579,7 +579,7 @@ function refreshSearchCards() {
   gap: 14px;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 @media (max-width: 820px) {
@@ -617,7 +617,7 @@ function refreshSearchCards() {
 
   .knowledge-filter-chevron {
     margin-left: auto;
-    transition: transform 180ms ease;
+    transition: transform var(--dur-fast) ease;
   }
 
   .knowledge-filter-chevron.is-open {

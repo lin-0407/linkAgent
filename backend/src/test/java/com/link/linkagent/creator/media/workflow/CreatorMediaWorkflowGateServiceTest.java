@@ -41,6 +41,63 @@ import static org.mockito.Mockito.when;
 class CreatorMediaWorkflowGateServiceTest {
 
     @Test
+    void publishedVersionMustOverrideCurrentPointerForWritesAndInspection() {
+        var properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        var mapper = mock(MediaUploadMapper.class);
+        when(mapper.findPublishedVideoVersionId("task-1", "default")).thenReturn(Optional.of("version-1"));
+        when(mapper.findDraftVideoByVersion("task-1", "default", "version-1"))
+                .thenReturn(Optional.of(draft("READY_FOR_REVIEW")));
+        var service = service(properties, mapper, confirmedWorkflowMapper());
+
+        service.ensureReadyForPostPublish("task-1", "default", "观众反馈");
+        assertThat(service.inspectPostPublishReadiness("task-1", "default", "观众反馈").ready()).isTrue();
+        verify(mapper, never()).findDraftVideo("task-1", "default");
+    }
+
+    @Test
+    void missingPublishedVersionMustNotFallBackToReadyCurrentVideo() {
+        var properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        var mapper = mock(MediaUploadMapper.class);
+        when(mapper.findPublishedVideoVersionId("task-1", "default")).thenReturn(Optional.of("missing"));
+        when(mapper.findDraftVideo("task-1", "default")).thenReturn(Optional.of(draft("READY_FOR_REVIEW")));
+        var service = service(properties, mapper, confirmedWorkflowMapper());
+
+        assertThat(catchThrowableOfType(() -> service.ensureReadyForPostPublish("task-1", "default", "观众反馈"),
+                ResponseStatusException.class).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(service.inspectPostPublishReadiness("task-1", "default", "观众反馈").ready()).isFalse();
+        verify(mapper, never()).findDraftVideo("task-1", "default");
+    }
+
+    @Test
+    void explicitBindingMustCaptureCurrentReadyVersionAndRejectUnknownSyncVersion() {
+        var properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        var mapper = mock(MediaUploadMapper.class);
+        when(mapper.findDraftVideo("task-1", "default")).thenReturn(Optional.of(draft("READY_FOR_REVIEW")));
+        var service = service(properties, mapper, confirmedWorkflowMapper());
+
+        assertThat(service.requireReadyVersionForBinding("task-1", "default")).isEqualTo("version-1");
+        assertThat(catchThrowableOfType(() -> service.ensureBoundVersionReady("task-1", "default", null),
+                ResponseStatusException.class).getReason()).contains("未记录发布版本");
+    }
+
+    @Test
+    void delayedBindingMustNotUseCurrentReadyVideoWhenItsOwnVersionIsUnready() {
+        var properties = new CreatorMediaProperties();
+        properties.setEnabled(true);
+        var mapper = mock(MediaUploadMapper.class);
+        when(mapper.findDraftVideoByVersion("task-1", "default", "version-1"))
+                .thenReturn(Optional.of(draft("PROBE_FAILED")));
+        var service = service(properties, mapper, confirmedWorkflowMapper());
+
+        assertThat(catchThrowableOfType(() -> service.ensureBoundVersionReady("task-1", "default", "version-1"),
+                ResponseStatusException.class).getReason()).contains("尚未通过媒体探测");
+        verify(mapper, never()).findDraftVideo("task-1", "default");
+    }
+
+    @Test
     void shouldRejectBeforeReadingMediaWhenFeatureIsDisabled() {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.setEnabled(false);
@@ -340,7 +397,7 @@ class CreatorMediaWorkflowGateServiceTest {
     }
 
     @Test
-    void shouldRejectBeforeReadingDraftWhenPrePublishIsNotConfirmed() {
+    void shouldRejectUnconfirmedLegacyDraftAfterResolvingItsVersion() {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.setEnabled(true);
         MediaUploadMapper mapper = mock(MediaUploadMapper.class);
@@ -359,7 +416,7 @@ class CreatorMediaWorkflowGateServiceTest {
         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(exception.getReason()).contains("请先确认发布方案");
         verify(mapper).countPlanningSkippedTask("task-1", "default");
-        verify(mapper, never()).findDraftVideo("task-1", "default");
+        verify(mapper).findDraftVideo("task-1", "default");
     }
 
     @Test

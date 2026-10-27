@@ -108,7 +108,7 @@ function submitImport() {
 
 .knowledge-form label > span {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
 }
 

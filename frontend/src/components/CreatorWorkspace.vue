@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { storeToRefs } from 'pinia'
+import { ArrowRight, FileText, FolderOpen } from '@lucide/vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ApiError } from '@/api/http'
 import {
@@ -86,11 +88,11 @@ type ContextTermOption = {
   polarity: CreatorContextPolarity
 }
 
-const AiCreationConsole = defineAsyncComponent(() => import('@/components/creator/AiCreationConsole.vue'))
+const VideoCreationChat = defineAsyncComponent(() => import('@/components/creator/VideoCreationChat.vue'))
 const CreatorContextLibraryModal = defineAsyncComponent(
   () => import('@/components/creator/CreatorContextLibraryModal.vue'),
 )
-const CreatorFlowNav = defineAsyncComponent(() => import('@/components/creator/CreatorFlowNav.vue'))
+const CreatorStudioSidebar = defineAsyncComponent(() => import('@/components/creator/CreatorStudioSidebar.vue'))
 const FeedbackTab = defineAsyncComponent(() => import('@/components/creator/FeedbackTab.vue'))
 const GuidanceEditorModal = defineAsyncComponent(() => import('@/components/creator/GuidanceEditorModal.vue'))
 const MaterialsTab = defineAsyncComponent(() => import('@/components/creator/MaterialsTab.vue'))
@@ -277,7 +279,7 @@ useAssistantBusinessRefresh(['tasks.', 'creative.', 'workflow.', 'blueprint.', '
 const { activeStep, restoredTaskId, activeInteractiveTaskId } = storeToRefs(creatorStore)
 // 恢复期间使用稳定骨架隔离旧任务控件，避免异步状态陆续返回时暴露错误步骤或危险操作。
 const isRestoringTask = ref(
-  !isLayoutPreviewMode && Boolean(creatorStore.selectedTaskId || routeQueryText(route.query.taskId)),
+  !isLayoutPreviewMode && Boolean(creatorStore.selectedTaskId || creatorStore.activeInteractiveTaskId || routeQueryText(route.query.taskId)),
 )
 let taskRestoreVersion = 0
 const isPreparingPrePublishAnalyze = ref(false)
@@ -327,19 +329,6 @@ const creatorStepMetas = computed<CreatorStepMeta[]>(() => {
   )
   return steps
 })
-const activeCreatorStepIndex = computed(() => {
-  const matchedIndex = creatorStepMetas.value.findIndex((step) => step.key === activeStep.value)
-  // 开销统计属于开发者辅助入口，不参与普通创作者五步流程；移动端进度条保持在复盘阶段。
-  if (activeStep.value === 'usage') {
-    return creatorStepMetas.value.length - 1
-  }
-  return matchedIndex >= 0 ? matchedIndex : 0
-})
-// 使用 ?? 兜底第一个步骤元信息；creatorStepMetas 会随媒体能力开关变化，但始终至少包含基础四步。
-const activeCreatorStepMeta = computed(
-  () => creatorStepMetas.value[activeCreatorStepIndex.value] ?? creatorStepMetas.value[0]!,
-)
-const creatorProgressPercent = computed(() => `${((activeCreatorStepIndex.value + 1) / creatorStepMetas.value.length) * 100}%`)
 const currentTaskProgressIndex = computed(() => {
   if (!selectedTask.value) {
     return 0
@@ -354,6 +343,12 @@ const resultModalTarget = ref<ResultModalTarget | null>(null)
 const feedbackEvent = useCreatorFeedbackEvent(successMessage, errorMessage)
 
 const hasTaskHistory = computed(() => tasks.value.length > 0)
+// 最近创作只复用已经加载的任务，首页入口不再需要额外的统计接口。
+const recentTasks = computed(() =>
+  [...tasks.value]
+    .sort((left, right) => right.updateTime.localeCompare(left.updateTime))
+    .slice(0, 8),
+)
 const showDeveloperTools = computed(() => props.developerMode)
 const hasCompletedCreatorReport = computed(() =>
   ['ANALYZED', 'ARCHIVED'].includes(selectedTask.value?.status ?? ''),
@@ -626,6 +621,8 @@ async function initializeWorkspace() {
 
 function loadPrePublishLayoutPreview() {
   const fixture = createPrePublishLayoutPreviewFixture()
+  // 布局预览覆盖启用媒体后的完整步骤栏，避免六步时的拥挤只能依赖真实后端才能发现。
+  isMediaFeatureEnabled.value = true
   taskModule.tasks.value = [fixture.taskSummary]
   taskModule.selectedTask.value = fixture.task
   taskModule.fillTaskForm(fixture.task)
@@ -739,6 +736,11 @@ async function refreshTasks() {
   // 编排：检查是否有待恢复的任务，自动选中
   const targetTask = resolveRefreshTargetTask()
   if (!targetTask) {
+    if (activeInteractiveTaskId.value && isRestoringTask.value) {
+      // 旧页面可能只缓存了互动任务标识，先读取最新任务，才能识别已经跳过策划的状态。
+      await selectTask(activeInteractiveTaskId.value, { reload: true })
+      return
+    }
     if (activeInteractiveTaskId.value) {
       taskRestoreVersion += 1
       isRestoringTask.value = false
@@ -1046,13 +1048,15 @@ async function confirmDeleteTask() {
     creatorStore.clearInteractiveTaskDraft(targetTaskId)
   }
   creatorStore.clearWorkflowMessageDraft(targetTaskId)
+  creatorStore.clearVideoCreationDraft(targetTaskId)
   // 编排：删除成功后补充 toast，并刷新一次主壳状态，确保选中任务和历史列表保持一致。
   successMessage.value = '任务已删除，列表会自动刷新。'
   await refreshTasks()
 }
 
 async function selectTask(taskId: string, options: TaskSelectionOptions = {}) {
-  if (activeInteractiveTaskId.value === taskId && !hasPendingInteractiveUpload.value && !options.reload) {
+  // 刷新后缓存的任务标识不代表页面已经恢复，必须先读取实际任务再结束骨架状态。
+  if (activeInteractiveTaskId.value === taskId && !isRestoringTask.value && !hasPendingInteractiveUpload.value && !options.reload) {
     closeTaskManager()
     await finishSkippedTaskSelection(options)
     return
@@ -1088,7 +1092,7 @@ async function selectTask(taskId: string, options: TaskSelectionOptions = {}) {
     prePublishAnalyzeAttemptVersion += 1
     isPreparingPrePublishAnalyze.value = false
 
-    if (task.status === 'DRAFT') {
+    if (task.status === 'DRAFT' && !task.planningSkipped) {
       try {
         await getInteractiveTask(task.taskId)
         if (selectedTaskId.value !== task.taskId) return
@@ -1306,12 +1310,15 @@ async function handleSkipToPreflight(taskId: string) {
   successMessage.value = ''
   try {
     await skipCreatorTaskToPreflight(taskId)
-    creatorStore.setActiveInteractiveTaskId(null)
+    // 跳过策划会保留 DRAFT 状态，必须重新读取已更新的试映入口，不能命中同任务缓存。
+    await selectTask(taskId, { reload: true, requestedStep: 'preflight' })
+    if (
+      selectedTask.value?.taskId !== taskId ||
+      !selectedTask.value.planningSkipped ||
+      activeStep.value !== 'preflight'
+    ) return
     creatorStore.clearInteractiveTaskDraft(taskId)
     creatorStore.clearWorkflowMessageDraft(taskId)
-    await selectTask(taskId)
-    if (selectedTaskId.value !== taskId) return
-    activeStep.value = 'preflight'
     successMessage.value = '已跳过发布方案和制作蓝图，可以直接上传成片。'
   } catch (error) {
     showError(error)
@@ -1968,7 +1975,7 @@ function handleGuidanceBackdropClick(event: MouseEvent) {
 }
 
 function showError(error: unknown) {
-  errorMessage.value = error instanceof Error ? error.message : '请求失败'
+  errorMessage.value = errorText(error, '请求失败')
 }
 
 function updateWorkflowMessageDraft(draft: string) {
@@ -2123,45 +2130,48 @@ provideCreatorWorkspace({
 </script>
 
 <template>
-  <section class="creator-shell creator-workbench-shell">
+  <section class="creator-shell creator-workbench-shell" :class="{ 'studio-has-project': Boolean(selectedTask || isTaskComposerOpen) }">
     <NotificationToast
       type="success"
       :message="successMessage"
       @close="closeSuccessToast"
     />
 
-    <header v-if="!isRestoringTask && !selectedTask && !isTaskComposerOpen" class="creator-header">
-      <div>
-        <p class="creator-kicker">创作台</p>
-        <h2>视频发布与复盘助手</h2>
-        <p>围绕一条视频整理资料、生成发布方案、读懂观众反馈，并沉淀下一期行动。</p>
-      </div>
-      <div
-        v-if="selectedTask || isTaskComposerOpen"
-        class="creator-header-actions"
-      >
-        <div
-          v-if="selectedTask || isTaskComposerOpen"
-          class="creator-status-strip"
-          aria-label="创作进度"
-        >
-          <span :class="{ active: Boolean(selectedTask) }">视频资料</span>
-          <span :class="{ active: Boolean(suggestion) }">发布方案</span>
-          <span :class="{ active: activeStep === 'production' || productionPlanReady }">制作蓝图</span>
-          <span v-if="isMediaFeatureEnabled" :class="{ active: activeStep === 'preflight' }">成片试映</span>
-          <span :class="{ active: Boolean(feedback || feedbackDashboard) }">观众反馈</span>
-          <span :class="{ active: hasCompletedCreatorReport }">总体复盘</span>
+    <header class="studio-project-bar">
+      <TaskListPanel v-if="selectedTask || isTaskComposerOpen" />
+      <template v-else>
+        <div class="studio-home-identity"><span class="studio-live-mark" aria-hidden="true"></span><strong>创作片场</strong><span>想法在这里成为作品</span></div>
+        <div class="studio-home-actions">
+          <button
+            v-if="activeInteractiveTaskId"
+            type="button"
+            class="creator-ghost-button"
+            @click="startAiCreationTask"
+          >
+            新建任务
+          </button>
+          <button type="button" class="creator-ghost-button" @click="openTaskManager">
+            <FolderOpen :size="16" aria-hidden="true" />所有作品
+          </button>
         </div>
-        <button
-          v-if="selectedTask || isTaskComposerOpen"
-          type="button"
-          class="creator-secondary-action creator-mini-button"
-          @click="openTaskManager"
-        >
-          继续历史项目
-        </button>
-      </div>
+      </template>
     </header>
+
+    <CreatorStudioSidebar
+      v-if="!isRestoringTask"
+      :active-step="activeStep"
+      :selected="Boolean(selectedTask || isTaskComposerOpen)"
+      :tasks="recentTasks"
+      :selected-task-id="selectedTaskId || activeInteractiveTaskId || ''"
+      :steps="creatorStepMetas"
+      :can-navigate="canNavigateCreatorStep"
+      :is-completed="isCreatorStepCompleted"
+      :status-label="statusLabel"
+      @navigate="navigateCreatorStep"
+      @select="selectTask"
+      @create="startAiCreationTask"
+      @browse="openTaskManager"
+    />
 
     <CreatorTaskManagerModal
       v-if="!isRestoringTask"
@@ -2214,11 +2224,12 @@ provideCreatorWorkspace({
 
     <section
       v-else-if="!selectedTask && !isTaskComposerOpen"
-      class="creator-start-screen"
+      class="studio-start-screen"
+      :class="{ 'is-active-session': Boolean(activeInteractiveTaskId) }"
       aria-label="创作台入口"
     >
-      <AiCreationConsole
-        :key="`${activeInteractiveTaskId || 'new'}-${aiCreationInstance}`"
+      <VideoCreationChat
+        :key="aiCreationInstance"
         :resume-task-id="activeInteractiveTaskId || ''"
         :skipping-to-preflight="isSkippingToPreflight"
         @confirmed="handleCreativeOptionConfirmed"
@@ -2226,45 +2237,29 @@ provideCreatorWorkspace({
         @skip-to-preflight="handleSkipToPreflight"
         @task-created="handleInteractiveTaskCreated"
       />
-      <div class="creator-start-actions" aria-label="其他创建方式">
-        <button
-          v-if="activeInteractiveTaskId"
-          type="button"
-          class="creator-secondary-action creator-mini-button"
-          @click="startAiCreationTask"
-        >
-          新建任务
-        </button>
+      <div v-if="!activeInteractiveTaskId" class="studio-start-actions" aria-label="其他创建方式">
         <button
           v-if="hasTaskHistory"
           type="button"
           class="creator-start-link-action"
           @click="openTaskManager"
         >
-          继续上次复盘
+          继续最近的创作
         </button>
         <button type="button" class="creator-start-link-action" @click="startCreateTask">
+          <FileText :size="16" :stroke-width="1.7" aria-hidden="true" />
           手动填写资料
         </button>
+        <RouterLink to="/projects" class="creator-start-link-action">
+          <FolderOpen :size="16" :stroke-width="1.7" aria-hidden="true" />
+          查看全部项目
+          <ArrowRight :size="14" aria-hidden="true" />
+        </RouterLink>
       </div>
+
     </section>
 
-    <div v-else class="creator-layout">
-      <aside class="creator-task-rail">
-        <CreatorFlowNav
-          :active-step="activeStep"
-          :steps="creatorStepMetas"
-          :active-step-index="activeCreatorStepIndex"
-          :active-step-meta="activeCreatorStepMeta"
-          :progress-percent="creatorProgressPercent"
-          :can-navigate="canNavigateCreatorStep"
-          :is-completed="isCreatorStepCompleted"
-          @navigate="navigateCreatorStep"
-        />
-
-        <TaskListPanel />
-      </aside>
-
+    <div v-else class="creator-layout" :data-stage="activeStep">
       <section class="creator-main">
         <NotificationToast
           type="error"

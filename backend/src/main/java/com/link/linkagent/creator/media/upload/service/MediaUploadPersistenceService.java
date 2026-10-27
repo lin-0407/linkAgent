@@ -6,6 +6,8 @@ import com.link.linkagent.creator.media.upload.model.MediaUploadPartRecord;
 import com.link.linkagent.creator.media.upload.model.MediaUploadRecord;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -28,73 +30,60 @@ public class MediaUploadPersistenceService {
         this.mediaUploadMapper = mediaUploadMapper;
     }
 
-    /**
-     * 在事务内原子完成：成片记录创建/重置 + 上传会话插入 + 旧会话替换标记。
-     * <p>
-     * 复用已有成片时（createDraftVideo=false），必须先对旧上传会话加行级锁（FOR UPDATE），
-     * 防止并发创建两个上传会话同时争用同一个成片版本。
-     *
-     * @param draftVideo        成片记录（新建时 id 为 null）
-     * @param createDraftVideo  true=新建成片记录，false=重置已有成片记录
-     * @param previousObjectKey 旧尝试的对象键（仅复用成片时需要），用于行级锁定位和替换校验
-     * @param upload            新上传会话记录
-     * @return 被替换的旧上传会话（若存在），供调用方在事务外清理 OSS 资源
-     */
+    /** 新文件只增加版本；任务锁同时保护空工作区的首次分配和并发幂等请求。 */
     @Transactional
     public MediaUploadRecord saveCreatedUpload(DraftVideoRecord draftVideo,
-                                                boolean createDraftVideo,
-                                                String previousObjectKey,
-                                                MediaUploadRecord upload) {
-        MediaUploadRecord replacedUpload = null;
-        int draftRows; // 受影响的成片行数，必须为 1 才算成功
-
-        if (createDraftVideo) {
-            // 场景 1：该任务首次创建成片，直接 INSERT
-            draftRows = mediaUploadMapper.insertDraftVideo(draftVideo);
-        } else {
-            // 场景 2：已有成片记录需要重置（上传失败、取消或媒体探测失败）
-            // 先对旧上传会话加行级锁，防止并发覆盖
-            replacedUpload = mediaUploadMapper.lockUploadByObjectKey(
-                            draftVideo.versionId(),
-                            draftVideo.taskId(),
-                            draftVideo.ownerId(),
-                            previousObjectKey  // 用旧对象键精确定位，确保锁的是正确的行
-                    )
-                    .orElseThrow(() -> new IllegalStateException("原上传会话不存在，不能创建新的上传会话"));
-
-            // 根据旧会话状态决定是否允许替换
-            if ("FAILED".equals(replacedUpload.status()) || "COMPLETED".equals(replacedUpload.status())) {
-                // 失败会话或探测失败后的完整会话先标记为已替代，防止旧会话继续返回错误对象事实。
-                if (mediaUploadMapper.supersedeReplacedUpload(
-                        replacedUpload.taskId(),
-                        replacedUpload.ownerId(),
-                        replacedUpload.uploadSessionId()
-                ) != 1) {
-                    throw new IllegalStateException("原上传会话状态已经变化，不能创建新的上传会话");
-                }
-            } else if (!"ABORTED".equals(replacedUpload.status())
-                    && !"EXPIRED".equals(replacedUpload.status())) {
-                // VERIFYING 可能正在完成 OSS 对象，必须拒绝替换，避免两个成片同时争用当前版本
-                throw new IllegalStateException("原上传会话仍在处理，不能创建新的上传会话");
+                                                MediaUploadRecord upload,
+                                                long expectedWorkspaceRevision) {
+        lockTask(upload.taskId(), upload.ownerId());
+        var existing = mediaUploadMapper.findUploadByIdempotency(upload.taskId(), upload.ownerId(), upload.idempotencyKey());
+        if (existing.isPresent()) {
+            if (!existing.get().fileFingerprint().equals(upload.fileFingerprint())
+                    || !existing.get().contentType().equals(upload.contentType())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "同一幂等键已经用于另一个视频文件");
             }
-            // COMPLETED 只会在上层已确认成片为 PROBE_FAILED 时到达这里；原片已完整上传，
-            // 但不能进入试映，允许用新的对象键替换而不让无效视频卡死在当前任务中。
-
-            // 更新成片记录：对象键、版本名等字段替换为新值，状态重置为 UPLOADING
-            draftRows = mediaUploadMapper.resetDraftVideoForUpload(draftVideo, previousObjectKey);
+            return existing.get();
         }
-
-        // 校验成片操作受影响行数：必须恰好为 1
-        if (draftRows != 1) {
-            throw new IllegalStateException("成片状态已经变化，不能创建新的上传会话");
+        ensureNoVideoBinding(upload.taskId(), upload.ownerId());
+        if (mediaUploadMapper.countActiveCreationRuns(upload.taskId(), upload.ownerId()) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "制作运行尚未结束，请完成或取消后再上传覆盖视频");
         }
-
-        // 插入新的上传会话记录
+        if (mediaUploadMapper.findCurrentUpload(upload.taskId(), upload.ownerId()).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务仍有上传未结束，请先完成或取消原上传");
+        }
+        long currentRevision = mediaUploadMapper.findMediaWorkspace(upload.taskId(), upload.ownerId())
+                .map(workspace -> workspace.workspaceRevision()).orElse(-1L);
+        // OSS 创建期间可能已重新定位；即使新蓝图已生成，也不能把旧请求采纳为新方向的成片。
+        if (currentRevision != expectedWorkspaceRevision) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "视频制作上下文已经变化，请刷新后重新上传");
+        }
+        mediaUploadMapper.adoptMediaWorkspace(upload.taskId(), upload.ownerId());
+        var workspace = mediaUploadMapper.findMediaWorkspace(upload.taskId(), upload.ownerId()).orElseThrow();
+        if (workspace.nextVersionNo() == Integer.MAX_VALUE) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "成片版本序号已达到上限");
+        }
+        if (mediaUploadMapper.advanceMediaVersion(upload.taskId(), upload.ownerId(), workspace.nextVersionNo()) != 1
+                || mediaUploadMapper.insertDraftVideo(draftVideo.withVersionNo(workspace.nextVersionNo())) != 1) {
+            throw new IllegalStateException("成片版本分配失败，请刷新后重试");
+        }
         if (mediaUploadMapper.insertUpload(upload) != 1) {
             throw new IllegalStateException("媒体上传会话保存失败");
         }
+        if (mediaUploadMapper.captureUploadVersionContext(upload.taskId(), upload.ownerId(), upload.versionId()) != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "发布确认或制作蓝图已经变化，请确认后重新上传");
+        }
+        return upload;
+    }
 
-        return replacedUpload; // 返回被替换的旧会话，供调用方清理 OSS 资源
+    private void lockTask(String taskId, String ownerId) {
+        mediaUploadMapper.lockMediaTask(taskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+    }
+
+    private void ensureNoVideoBinding(String taskId, String ownerId) {
+        if (mediaUploadMapper.countPublishingFacts(taskId, ownerId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务已有发布标记或 BV 关联，请新建任务上传修订视频");
+        }
     }
 
     /**
@@ -134,6 +123,14 @@ public class MediaUploadPersistenceService {
                                     String contentType,
                                     long fileSize,
                                     LocalDateTime completedAt) {
+        lockTask(upload.taskId(), upload.ownerId());
+        var latest = mediaUploadMapper.findUpload(upload.taskId(), upload.ownerId(), upload.uploadSessionId())
+                .orElseThrow(() -> new IllegalStateException("媒体上传会话不存在"));
+        // 并发完成请求只能登记一次；旧请求重放不能再次把指针切回旧版。
+        if ("COMPLETED".equals(latest.status())) {
+            return;
+        }
+        ensureNoVideoBinding(upload.taskId(), upload.ownerId());
         // 步 1：标记上传会话为 COMPLETED（CAS：仅 VERIFYING → COMPLETED）
         if (mediaUploadMapper.completeUpload(
                 upload.taskId(),
@@ -154,6 +151,12 @@ public class MediaUploadPersistenceService {
                 fileSize               // 以对象存储实际大小为准
         ) != 1) {
             throw new IllegalStateException("成片上传完成状态保存失败");
+        }
+        mediaUploadMapper.adoptMediaWorkspace(upload.taskId(), upload.ownerId());
+        var workspace = mediaUploadMapper.findMediaWorkspace(upload.taskId(), upload.ownerId()).orElseThrow();
+        if (mediaUploadMapper.activateUploadedVersion(upload.taskId(), upload.ownerId(), upload.versionId(),
+                workspace.workspaceRevision()) != 1) {
+            throw new IllegalStateException("当前成片已变化，请刷新后重试");
         }
     }
 

@@ -2,7 +2,9 @@ package com.link.linkagent.creator.media.preflight.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
+import com.link.linkagent.creator.media.access.InternalMediaAcceptance;
 import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
 import com.link.linkagent.creator.media.preflight.model.CreatePreflightReviewRequest;
 import com.link.linkagent.creator.media.preflight.model.EditTaskRecord;
@@ -17,6 +19,7 @@ import com.link.linkagent.creator.media.processing.model.MediaProcessingJobRecor
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
 import com.link.linkagent.util.TextUtil;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -51,19 +54,41 @@ public class PreflightReviewService {
     private final MediaProcessingMapper processingMapper;
     private final PreflightEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final CreationCapabilityGate capabilities;
+    private final com.link.linkagent.creator.creation.execution.ManualReviewLedger manualLedger;
 
+    /** 测试和旧调用入口：默认媒体分析与制作能力开启。 */
     public PreflightReviewService(CreatorMediaProperties properties,
                                   PreflightReviewMapper mapper,
                                   MediaUploadMapper uploadMapper,
                                   MediaProcessingMapper processingMapper,
                                   PreflightEventPublisher eventPublisher,
                                   ObjectMapper objectMapper) {
+        this(properties, mapper, uploadMapper, processingMapper, eventPublisher, objectMapper,
+                CreationCapabilityGate.ALL_ENABLED);
+    }
+
+    public PreflightReviewService(CreatorMediaProperties properties,
+                                  PreflightReviewMapper mapper,
+                                  MediaUploadMapper uploadMapper,
+                                  MediaProcessingMapper processingMapper,
+                                  PreflightEventPublisher eventPublisher,
+                                  ObjectMapper objectMapper,
+                                  CreationCapabilityGate capabilities) {
+        this(properties,mapper,uploadMapper,processingMapper,eventPublisher,objectMapper,capabilities,null);
+    }
+    @Autowired
+    public PreflightReviewService(CreatorMediaProperties properties,PreflightReviewMapper mapper,MediaUploadMapper uploadMapper,
+            MediaProcessingMapper processingMapper,PreflightEventPublisher eventPublisher,ObjectMapper objectMapper,
+            CreationCapabilityGate capabilities,com.link.linkagent.creator.creation.execution.ManualReviewLedger manualLedger) {
         this.properties = properties;
         this.mapper = mapper;
         this.uploadMapper = uploadMapper;
         this.processingMapper = processingMapper;
         this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
+        this.capabilities = capabilities;
+        this.manualLedger=manualLedger;
     }
 
     @Transactional
@@ -71,8 +96,30 @@ public class PreflightReviewService {
                                           String taskId,
                                           String idempotencyKey,
                                           CreatePreflightReviewRequest request) {
+        return create(ownerId, taskId, idempotencyKey, request, null);
+    }
+
+    /**
+     * 内部受理：整片运行持有执行租约时创建完整试映。
+     * 只放宽“有活动制作运行即拒绝”这一条，成片必须已通过探测、预处理必须已完成等前置条件保持不变。
+     * 提交给云端 Provider 的告知义务由整片制作授权覆盖，不接受匿名内部调用。
+     */
+    @Transactional
+    public PreflightReviewResponse create(String ownerId,
+                                          String taskId,
+                                          String idempotencyKey,
+                                          CreatePreflightReviewRequest request,
+                                          InternalMediaAcceptance acceptance) {
+        requireMediaAnalysis();
+        lockTask(taskId, ownerId);
+        capabilities.requireStartReady();
         mapper.lockDraftVersion(taskId, ownerId, request.versionId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        if (acceptance == null) {
+            ensureNoCreationRun(taskId, ownerId);
+        } else {
+            acceptance.verify(taskId, ownerId, request.versionId());
+        }
         PreflightReviewRecord idempotent = mapper.findByIdempotency(taskId, ownerId, idempotencyKey)
                 .orElse(null);
         if (idempotent != null) {
@@ -142,6 +189,8 @@ public class PreflightReviewService {
                 )), capabilityGaps, null, processing.estimatedTotalCostUsd(), null, null,
                 "USD", null, null, null, null, null, null
         );
+        // 预算运行先受理，再在同一事务创建试映，避免新试映把自己的预算入口判成活动工作。
+        if(acceptance==null && manualLedger!=null)manualLedger.accept(taskId,ownerId,reviewId,request.versionId(),draft.durationMs()==null?0:draft.durationMs());
         if (mapper.insertReview(review) != 1) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "创建发布前试映任务失败");
         }
@@ -190,11 +239,15 @@ public class PreflightReviewService {
         if (mapper.requestCancel(taskId, ownerId, reviewId) != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "试映任务状态已变化，请刷新后重试");
         }
+        if(manualLedger!=null)manualLedger.cancel(taskId,ownerId,reviewId);
         return get(ownerId, taskId, reviewId);
     }
 
     @Transactional
     public PreflightReviewResponse retry(String ownerId, String taskId, String reviewId) {
+        requireMediaAnalysis();
+        lockTask(taskId, ownerId);
+        capabilities.requireStartReady();
         PreflightReviewRecord review = requireReview(ownerId, taskId, reviewId);
         if (!"FAILED".equals(review.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "只有失败的试映任务可以重试");
@@ -210,17 +263,23 @@ public class PreflightReviewService {
         if (!review.reviewId().equals(current.reviewId())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "只能重试当前成片的最新试映任务");
         }
+        if(manualLedger!=null)manualLedger.beforeRetry(taskId,ownerId,reviewId);
         requireMediaAvailableForNewWork(ownerId, taskId, review.versionId());
+        if(manualLedger!=null)manualLedger.accept(taskId,ownerId,reviewId,review.versionId(),duration(taskId,ownerId,review.versionId()));
         if (mapper.retryReview(taskId, ownerId, reviewId) != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "试映任务状态已变化，请刷新后重试");
         }
         mapper.resetFailedSteps(reviewId);
         return get(ownerId, taskId, reviewId);
     }
+    private long duration(String task,String owner,String version){return uploadMapper.findDraftVideoByVersion(task,owner,version).map(d->d.durationMs()==null?0:d.durationMs()).orElse(0L);}
 
     /** 已完成的 P0-4a 任务由作者显式补全，避免页面刷新后自动产生新的模型费用。 */
     @Transactional
     public PreflightReviewResponse completeScreening(String ownerId, String taskId, String reviewId) {
+        requireMediaAnalysis();
+        lockTask(taskId, ownerId);
+        capabilities.requireStartReady();
         PreflightReviewRecord review = requireReview(ownerId, taskId, reviewId);
         PreflightStepRecord audience = mapper.findStep(reviewId, "SCREEN_AUDIENCE").orElse(null);
         if (audience != null) {
@@ -236,9 +295,11 @@ public class PreflightReviewService {
                 .map(PreflightStepRecord::status).orElse(null))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务尚未完成全片体检");
         }
+        if(manualLedger!=null)manualLedger.beforeRetry(taskId,ownerId,reviewId);
         requireMediaAvailableForNewWork(ownerId, taskId, review.versionId());
         insertMissingStep(review, "REVIEW_SEGMENTS", 4);
         insertMissingStep(review, "SCREEN_AUDIENCE", 5);
+        if(manualLedger!=null)manualLedger.accept(taskId,ownerId,reviewId,review.versionId(),duration(taskId,ownerId,review.versionId()));
         if (mapper.queueScreeningCompletion(taskId, ownerId, reviewId) != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "试映任务状态已变化，请刷新后重试");
         }
@@ -249,11 +310,23 @@ public class PreflightReviewService {
     private void requireMediaAvailableForNewWork(String ownerId, String taskId, String versionId) {
         mapper.lockDraftVersion(taskId, ownerId, versionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        ensureNoCreationRun(taskId, ownerId);
         DraftVideoRecord draft = uploadMapper.findDraftVideoByVersion(taskId, ownerId, versionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
         if (draft.mediaDeletedAt() != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "媒体文件已删除，不能重新执行发布前试映");
         }
+    }
+
+    private void ensureNoCreationRun(String taskId, String ownerId) {
+        if (uploadMapper.countActiveCreationRuns(taskId, ownerId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "制作运行尚未结束，请使用制作入口管理试映任务");
+        }
+    }
+
+    private void lockTask(String taskId, String ownerId) {
+        uploadMapper.lockMediaTask(taskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
     }
 
     @Transactional
@@ -323,6 +396,15 @@ public class PreflightReviewService {
 
     public void publish(String reviewId, String eventType) {
         mapper.findReviewInternal(reviewId).ifPresent(review -> eventPublisher.publish(toResponse(review), eventType));
+    }
+
+    /** 关闭媒体付费分析后，新的试映、重试和补全都必须在发出任何模型请求前被拒绝。 */
+    private void requireMediaAnalysis() {
+        if (!capabilities.mediaAnalysisEnabled()) {
+            if(capabilities.disabledReason()!=null)throw new ResponseStatusException(HttpStatus.CONFLICT,capabilities.disabledReason());
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "媒体付费分析已在设置中关闭；重新开启后才能新建、重试或补全试映");
+        }
     }
 
     private PreflightReviewRecord requireReview(String ownerId, String taskId, String reviewId) {

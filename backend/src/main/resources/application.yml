@@ -146,9 +146,22 @@ agent:
       enabled: ${SUMMARY_MEMORY_ENABLED:true}
       # 触发压缩的 token 阈值（官方词表本地计量）。256k 占 1M 窗口的 25.6%，给输出（上限 384K）留足余量。
       trigger-token-threshold: ${SUMMARY_MEMORY_TRIGGER_TOKEN_THRESHOLD:256000}
+      # 压缩后保留尾部的 token 预算（官方词表本地计量），默认 16k：按整条消息从尾部往前累计。
+      # 工具执行结果进入会话历史后，固定留 2 条会把用户问题和本轮工具证据裁光，所以改成按 token 留。
+      # 设为 0 时退回 retained-message-count。
+      retained-token-budget: ${SUMMARY_MEMORY_RETAINED_TOKEN_BUDGET:16000}
+      # 只在拿不到 token 计量器（单测最小构造）或 token 预算为 0 时兜底：压缩后保留的消息条数。
       retained-message-count: ${SUMMARY_MEMORY_RETAINED_MESSAGE_COUNT:2}
+      # 摘要正文字数上限：0 表示不限制（作者 2026-10-18 取消 5000 字上限，压缩后原文不再保留，优先保信息）。
+      max-chars: ${SUMMARY_MEMORY_MAX_CHARS:0}
       # 压缩时抽取的事实点达到这个分数（1-100）才写入长期记忆；低于高分线的只留在摘要里，不单独占记忆条目。
       fact-importance-threshold: ${SUMMARY_MEMORY_FACT_IMPORTANCE_THRESHOLD:80}
+      # 摘要正文 token 预算：超过视为不合格（不落库、不裁剪），避免模型把爬取清单逐条搬进摘要导致输出膨胀/被截断。
+      max-summary-tokens: ${SUMMARY_MEMORY_MAX_SUMMARY_TOKENS:12000}
+      # 摘要生成请求的 max_tokens（包含思考 token）；0 表示不显式设置、交给供应商默认值。
+      max-output-tokens: ${SUMMARY_MEMORY_MAX_OUTPUT_TOKENS:32768}
+      # 压缩失败后的重试冷却：上下文再涨这么多 token 才允许下一次尝试；0 表示关闭冷却、每轮都可重试。
+      retry-token-delta: ${SUMMARY_MEMORY_RETRY_TOKEN_DELTA:16000}
     extract:
       # 递减预算初值：期望每 10 轮触发一次 × 平均每轮重要性 20（1-100 口径）＝ 200，见设计文档 D17.3 / 9.3 的 V2 起步值。
       # 预算与游标都存在 Redis，重启不丢；想更快看到触发效果就调小这个值。
@@ -205,6 +218,44 @@ mybatis:
     map-underscore-to-camel-case: true
 
 creator:
+  creation:
+    worker:
+      # 仅推进作者已明确授权的制作，预算初始化不等于授权执行。
+      enabled: ${CREATOR_CREATION_WORKER_ENABLED:false}
+      poll-interval-ms: ${CREATOR_CREATION_WORKER_POLL_INTERVAL_MS:2000}
+      lease-seconds: ${CREATOR_CREATION_WORKER_LEASE_SECONDS:30}
+      heartbeat-seconds: ${CREATOR_CREATION_WORKER_HEARTBEAT_SECONDS:5}
+      max-attempts: ${CREATOR_CREATION_WORKER_MAX_ATTEMPTS:3}
+    # 整片媒体闭环：成片登记后自动进入预处理与完整试映，并生成最小发布包。
+    # 与媒体总开关、固定工程执行器同时开启才生效；未开启时运行停留在等待依赖。
+    media:
+      enabled: ${CREATOR_CREATION_MEDIA_ENABLED:false}
+      poll-interval-ms: ${CREATOR_CREATION_MEDIA_POLL_INTERVAL_MS:5000}
+      lease-seconds: ${CREATOR_CREATION_MEDIA_LEASE_SECONDS:60}
+      heartbeat-seconds: ${CREATOR_CREATION_MEDIA_HEARTBEAT_SECONDS:15}
+      max-attempts: ${CREATOR_CREATION_MEDIA_MAX_ATTEMPTS:3}
+      # 自动工程的媒体处理档位；与人工入口分别配置，避免相互影响。
+      frame-interval-seconds: ${CREATOR_CREATION_MEDIA_FRAME_INTERVAL_SECONDS:10}
+      resolution: ${CREATOR_CREATION_MEDIA_RESOLUTION:P720}
+      model-plan: ${CREATOR_CREATION_MEDIA_MODEL_PLAN:FLASH_PLUS_REVIEW}
+      include-asr: ${CREATOR_CREATION_MEDIA_INCLUDE_ASR:true}
+    # 制作费用台账的计价口径。台账按人民币记账，媒体供应商按美元计价；
+    # 新调用使用当前汇率，并把当时的折算率写入价格快照，旧调用不会被后续汇率改写。
+    billing:
+      usd-to-cny: ${CREATOR_CREATION_USD_TO_CNY:7.20}
+      # 实时汇率只影响新调用；每次预留仍把当时的折算率写入价格快照。
+      # 公开接口通常每日更新，失败时回退 usd-to-cny，并在设置页明确标注。
+      fx:
+        enabled: ${CREATOR_BILLING_FX_ENABLED:true}
+        url: ${CREATOR_BILLING_FX_URL:https://open.er-api.com/v6/latest/USD}
+        refresh-interval: ${CREATOR_BILLING_FX_REFRESH_INTERVAL:30m}
+        connect-timeout: ${CREATOR_BILLING_FX_CONNECT_TIMEOUT:2s}
+        read-timeout: ${CREATOR_BILLING_FX_READ_TIMEOUT:3s}
+      segment-review-usd-upper-bound: ${CREATOR_CREATION_SEGMENT_REVIEW_USD_UPPER_BOUND:0.05}
+      video-usd-upper-bound: ${CREATOR_CREATION_VIDEO_USD_UPPER_BOUND:0.30}
+      text-screening-usd-upper-bound: ${CREATOR_CREATION_TEXT_SCREENING_USD_UPPER_BOUND:0.05}
+      text-input-usd-per-million-tokens: ${CREATOR_CREATION_TEXT_INPUT_USD_PER_MILLION_TOKENS:0.20}
+      text-output-usd-per-million-tokens: ${CREATOR_CREATION_TEXT_OUTPUT_USD_PER_MILLION_TOKENS:0.80}
   # ========== 阶段 7 P0：私有媒体能力 ==========
   # 注意：媒体能力默认关闭。只有 OSS 和后续视频分析 Provider 配置完成后才显式开启，
   # 避免未配置对象存储时暴露不可用的大文件上传入口。
@@ -298,6 +349,10 @@ knowledge:
     max-category-adjustment: ${KNOWLEDGE_QUALITY_MAX_CATEGORY_ADJUSTMENT:5}
   rag:
     enabled: ${KNOWLEDGE_RAG_ENABLED:false}
+    # 定时补齐未索引记录；只保留单批大小，不限制总处理条数。
+    auto-index-enabled: ${KNOWLEDGE_RAG_AUTO_INDEX_ENABLED:true}
+    auto-index-interval-ms: ${KNOWLEDGE_RAG_AUTO_INDEX_INTERVAL_MS:30000}
+    max-index-items: ${KNOWLEDGE_RAG_MAX_INDEX_ITEMS:200}
     collection-name: ${KNOWLEDGE_RAG_COLLECTION_NAME:creator_reference_video}
     # 5.2c 子集合：存优质评论弹幕原文（small 端），与父集合物理隔离；与父集合共用同一 Milvus 连接与维度，仅集合名不同
     child-collection-name: ${KNOWLEDGE_RAG_CHILD_COLLECTION_NAME:creator_reference_video_item}

@@ -34,6 +34,10 @@ public record PreflightReviewResponse(
         List<AudienceScreening> audienceScreenings,
         List<EditTask> editTasks
 ) {
+    @com.fasterxml.jackson.annotation.JsonProperty("reviewScope")
+    public String reviewScope(){return "VERSION_MEDIA_ONLY";}
+    @com.fasterxml.jackson.annotation.JsonProperty("publishingContextIncluded")
+    public boolean publishingContextIncluded(){return false;}
     public record Step(String stepId,
                        String stepType,
                        int sequenceNo,
@@ -53,6 +57,9 @@ public record PreflightReviewResponse(
                            String assetId,
                            boolean assetAvailable,
                            String metadataJson) {
+        @com.fasterxml.jackson.annotation.JsonProperty("claimType")
+        public String claimType(){return sourceType!=null && java.util.Set.of("AUDIO_TRACK","KEY_FRAME","BLACK","SILENCE","FREEZE","VOLUME")
+                .contains(sourceType)?"DETERMINISTIC_FACT":"MODEL_OBSERVATION";}
     }
 
     public record Issue(String issueId,
@@ -70,6 +77,8 @@ public record PreflightReviewResponse(
                         List<String> affectedPersonas,
                         String userDisposition,
                         String ignoreReason) {
+        @com.fasterxml.jackson.annotation.JsonProperty("claimType")
+        public String claimType(){return "MODEL_OBSERVATION";}
     }
 
     public record AudienceScreening(String screeningId,
@@ -80,6 +89,8 @@ public record PreflightReviewResponse(
                                     List<String> dropRisks,
                                     List<String> evidenceRefs,
                                     BigDecimal confidence) {
+        @com.fasterxml.jackson.annotation.JsonProperty("claimType")
+        public String claimType(){return "AUDIENCE_HYPOTHESIS";}
     }
 
     public record EditTask(String editTaskId,

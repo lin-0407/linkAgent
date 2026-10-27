@@ -92,7 +92,7 @@ const summaryText = computed(() => {
   word-break: break-word;
   background: rgba(15, 23, 42, 0.05);
   border-left: 2px solid rgba(15, 23, 42, 0.15);
-  border-radius: 4px;
+  border-radius: var(--r-xs);
   font-family: inherit;
   font-size: 0.86em;
   line-height: 1.6;

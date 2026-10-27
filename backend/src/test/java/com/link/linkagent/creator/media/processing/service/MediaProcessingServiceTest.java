@@ -34,6 +34,7 @@ class MediaProcessingServiceTest {
         properties.setEnabled(true);
         MediaProcessingMapper processingMapper = mock(MediaProcessingMapper.class);
         MediaUploadMapper uploadMapper = mock(MediaUploadMapper.class);
+        when(uploadMapper.lockMediaTask("task-1", "default")).thenReturn(Optional.of("task-1"));
         MediaProcessingJobRecord previous = mock(MediaProcessingJobRecord.class);
         when(previous.status()).thenReturn("COMPLETED");
         when(previous.frameIntervalSeconds()).thenReturn(10);
@@ -85,6 +86,7 @@ class MediaProcessingServiceTest {
         properties.setEnabled(true);
         MediaProcessingMapper processingMapper = mock(MediaProcessingMapper.class);
         MediaUploadMapper uploadMapper = mock(MediaUploadMapper.class);
+        when(uploadMapper.lockMediaTask("task-1", "default")).thenReturn(Optional.of("task-1"));
         when(processingMapper.lockDraftVersion("task-1", "default", "version-1"))
                 .thenReturn(Optional.of("version-1"));
         when(uploadMapper.findDraftVideoByVersion("task-1", "default", "version-1"))

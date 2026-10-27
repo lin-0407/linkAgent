@@ -8,8 +8,8 @@
 
 <table>
 <tr>
-<td width="50%"><img src="frontend/public/screenshots/creator-publishing-plan.png" alt="创作台：发布前优化与发布方案"/><br/><sub>创作台：材料、历史偏好、发布方案和风险判断放在同一页</sub></td>
-<td width="50%"><img src="frontend/public/screenshots/media-preflight.png" alt="成片试映与修改清单"/><br/><sub>成片试映：转写、分段审查和可追踪的修改清单</sub></td>
+<td width="50%"><img src="assets/readme/screenshots/creator-publishing-plan.png" alt="创作台：发布前优化与发布方案"/><br/><sub>创作台：材料、历史偏好、发布方案和风险判断放在同一页</sub></td>
+<td width="50%"><img src="assets/readme/screenshots/media-preflight.png" alt="成片试映与修改清单"/><br/><sub>成片试映：转写、分段审查和可追踪的修改清单</sub></td>
 </tr>
 </table>
 

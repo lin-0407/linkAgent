@@ -20,12 +20,17 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 
 /**
  * 通过 ffprobe 读取视频元信息。
@@ -57,18 +62,23 @@ public class FfprobeMediaProbeService {
      * @return ffprobe 解析后的媒体元信息
      */
     public MediaProbeResult probe(String mediaUrl) {
+        return probe(mediaUrl, () -> false);
+    }
+
+    public MediaProbeResult probe(String mediaUrl, BooleanSupplier cancelled) {
         validateMediaUrl(mediaUrl);
+        checkCancelled(cancelled);
         if (!probeSlots.tryAcquire()) {
             throw new MediaProbeException(HttpStatus.SERVICE_UNAVAILABLE, "媒体探测任务较多，请稍后重试");
         }
         try {
-            return executeProbe(mediaUrl);
+            return executeProbe(mediaUrl, cancelled);
         } finally {
             probeSlots.release();
         }
     }
 
-    private MediaProbeResult executeProbe(String mediaUrl) {
+    private MediaProbeResult executeProbe(String mediaUrl, BooleanSupplier cancelled) {
         List<String> command = new ArrayList<>();
         command.add(mediaProperties.getProcessing().getFfprobePath());
         command.add("-v");
@@ -77,7 +87,9 @@ public class FfprobeMediaProbeService {
         command.add("-f");
         command.add("mov");
         command.add("-protocol_whitelist");
-        command.add("http,https,tcp,tls");
+        // HTTPS 经已配置的 HTTP 代理回源时，FFmpeg 内部需要 httpproxy 协议。
+        // 仍只允许网络协议，输入仍由上面的固定 MP4 解复用器解析。
+        command.add("http,https,tcp,tls,httpproxy");
         command.add("-print_format");
         command.add("json");
         command.add("-show_entries");
@@ -86,6 +98,7 @@ public class FfprobeMediaProbeService {
 
         Process process;
         try {
+            checkCancelled(cancelled);
             ProcessBuilder processBuilder = new ProcessBuilder(command);
             // FFREPORT 会记录完整命令行，其中包含短签 URL，必须从子进程环境中移除。
             processBuilder.environment().remove("FFREPORT");
@@ -94,34 +107,44 @@ public class FfprobeMediaProbeService {
             throw new MediaProbeException(HttpStatus.SERVICE_UNAVAILABLE, "ffprobe 命令不可用，请检查运行环境是否安装 FFmpeg", exception);
         }
 
-        CompletableFuture<String> stdout = readAsync(process.getInputStream(), MAX_PROBE_OUTPUT_BYTES);
-        CompletableFuture<String> stderr = readAsync(process.getErrorStream(), MAX_PROBE_ERROR_BYTES);
-        boolean finished;
+        CompletableFuture<String> stdout = null, stderr = null;
+        Set<ProcessHandle> children = new HashSet<>();
+        Runnable observeChildren = () -> process.descendants().forEach(children::add);
         try {
+            stdout = readAsync(process.getInputStream(), MAX_PROBE_OUTPUT_BYTES);
+            stderr = readAsync(process.getErrorStream(), MAX_PROBE_ERROR_BYTES);
             Duration timeout = mediaProperties.getProcessing().getProbeTimeout();
-            finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            long deadline = System.nanoTime() + timeout.toNanos();
+            while (true) {
+                observeChildren.run();
+                checkCancelled(cancelled);
+                checkDeadline(deadline);
+                // 输出已超限时及时停进程，不能等到总超时才释放媒体执行槽。
+                if (stdout.isCompletedExceptionally()) join(stdout, deadline, cancelled, observeChildren);
+                if (stderr.isCompletedExceptionally()) join(stderr, deadline, cancelled, observeChildren);
+                if (process.waitFor(100, TimeUnit.MILLISECONDS)) break;
+            }
+            checkCancelled(cancelled);
+            String output = join(stdout, deadline, cancelled, observeChildren);
+            String errorOutput = join(stderr, deadline, cancelled, observeChildren);
+            if (process.exitValue() != 0) {
+                if (isStorageReadFailure(errorOutput)) {
+                    throw new MediaProbeException(HttpStatus.SERVICE_UNAVAILABLE, "对象存储媒体读取失败，请稍后重试");
+                }
+                throw new MediaProbeException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "ffprobe 无法解析该视频，请确认文件是有效 MP4");
+            }
+            if (output.isBlank()) {
+                throw new MediaProbeException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "ffprobe 没有返回可解析的媒体信息");
+            }
+            return parseProbeJson(output);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            terminateProcess(process);
             throw new MediaProbeException(HttpStatus.SERVICE_UNAVAILABLE, "媒体探测被中断", exception);
+        } finally {
+            terminateProcess(process, children);
+            if (stdout != null) stdout.cancel(true);
+            if (stderr != null) stderr.cancel(true);
         }
-        if (!finished) {
-            terminateProcess(process);
-            throw new MediaProbeException(HttpStatus.GATEWAY_TIMEOUT, "媒体探测超时，请检查 OSS 回源速度或视频文件结构");
-        }
-
-        String output = join(stdout);
-        String errorOutput = join(stderr);
-        if (process.exitValue() != 0) {
-            if (isStorageReadFailure(errorOutput)) {
-                throw new MediaProbeException(HttpStatus.SERVICE_UNAVAILABLE, "对象存储媒体读取失败，请稍后重试");
-            }
-            throw new MediaProbeException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "ffprobe 无法解析该视频，请确认文件是有效 MP4");
-        }
-        if (output.isBlank()) {
-            throw new MediaProbeException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "ffprobe 没有返回可解析的媒体信息");
-        }
-        return parseProbeJson(output);
     }
 
     private CompletableFuture<String> readAsync(InputStream stream, int maxBytes) {
@@ -145,30 +168,61 @@ public class FfprobeMediaProbeService {
         }, outputReaderExecutor);
     }
 
-    private String join(CompletableFuture<String> future) {
-        try {
-            return future.join();
-        } catch (CompletionException exception) {
-            if (exception.getCause() instanceof ProbeOutputLimitException) {
-                throw new MediaProbeException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "ffprobe 返回的媒体信息过大，无法安全处理");
+    private String join(CompletableFuture<String> future, long deadline, BooleanSupplier cancelled, Runnable observeChildren) throws InterruptedException {
+        while (true) {
+            observeChildren.run();
+            checkCancelled(cancelled);
+            checkDeadline(deadline);
+            try {
+                return future.get(100, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException ignored) {
+                // 流读取也遵守同一截止时间与取消信号，避免子进程退出后继续无界等待管道。
+            } catch (ExecutionException exception) {
+                Throwable cause = exception.getCause();
+                if (cause instanceof CompletionException wrapped) cause = wrapped.getCause();
+                if (cause instanceof ProbeOutputLimitException) {
+                    throw new MediaProbeException(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "ffprobe 返回的媒体信息过大，无法安全处理");
+                }
+                throw new MediaProbeException(HttpStatus.SERVICE_UNAVAILABLE, "读取 ffprobe 输出失败");
             }
-            throw new MediaProbeException(HttpStatus.SERVICE_UNAVAILABLE, "读取 ffprobe 输出失败", exception);
         }
     }
 
-    private void terminateProcess(Process process) {
-        process.destroyForcibly();
+    private void terminateProcess(Process process, Set<ProcessHandle> children) {
+        // 中断不能跳过进程回收；先暂存标记，结束有界清理后再还给调用线程。
+        boolean interrupted = Thread.interrupted();
         try {
-            if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                process.getInputStream().close();
-                process.getErrorStream().close();
+            process.descendants().forEach(children::add);
+            // 包装进程退出后后代可能已被托管给其他父进程，因此保留本次运行中观察到的精确句柄。
+            children.forEach(child -> { if (child.isAlive()) child.destroyForcibly(); });
+            if (process.isAlive()) process.destroyForcibly();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (process.isAlive() && System.nanoTime() < deadline) {
+                try { process.waitFor(100, TimeUnit.MILLISECONDS); }
+                catch (InterruptedException ignored) { interrupted = true; }
             }
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new MediaProbeException(HttpStatus.SERVICE_UNAVAILABLE, "媒体探测被中断", exception);
-        } catch (IOException ignored) {
-            // 子进程已退出时关闭流可能失败；此时不影响超时或中断的既定处理结果。
+            for (var child : children) if (child.isAlive()) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining > 0) try { child.onExit().get(remaining, TimeUnit.NANOSECONDS); }
+                catch (InterruptedException ignored) { interrupted = true; }
+                catch (ExecutionException | TimeoutException ignored) { }
+            }
+        } finally {
+            try { process.getInputStream().close(); } catch (IOException ignored) { }
+            try { process.getErrorStream().close(); } catch (IOException ignored) { }
+            try { process.getOutputStream().close(); } catch (IOException ignored) { }
+            if (interrupted) Thread.currentThread().interrupt();
         }
+    }
+
+    private static void checkCancelled(BooleanSupplier cancelled) {
+        if (Thread.currentThread().isInterrupted() || cancelled.getAsBoolean())
+            throw new MediaProbeException(HttpStatus.SERVICE_UNAVAILABLE, "本次媒体探测已停止");
+    }
+
+    private static void checkDeadline(long deadline) {
+        if (System.nanoTime() - deadline >= 0)
+            throw new MediaProbeException(HttpStatus.GATEWAY_TIMEOUT, "媒体探测超时，请检查 OSS 回源速度或视频文件结构");
     }
 
     MediaProbeResult parseProbeJson(String output) {

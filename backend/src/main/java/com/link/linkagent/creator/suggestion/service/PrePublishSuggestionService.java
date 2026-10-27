@@ -550,14 +550,19 @@ public class PrePublishSuggestionService {
             record.setContentSummary(LlmJsonUtil.text(rootNode, "contentSummary"));
             record.setCreatorDilemma(LlmJsonUtil.text(rootNode, "creatorDilemma"));
             record.setAudienceProfile(LlmJsonUtil.text(rootNode, "audienceProfile"));
-            record.setAudienceHook(LlmJsonUtil.text(rootNode, "audienceHook"));
+            record.setAudienceHook(LlmJsonUtil.text(rootNode,
+                    rootNode.hasNonNull("audienceHook") ? "audienceHook" : "audienceHooks"));
             record.setContentPositioning(LlmJsonUtil.text(rootNode, "contentPositioning"));
             record.setSellingPoints(LlmJsonUtil.json(objectMapper, rootNode, "sellingPoints"));
-            record.setRiskPoints(LlmJsonUtil.json(objectMapper, rootNode, "riskPoints"));
+            record.setRiskPoints(LlmJsonUtil.json(objectMapper, rootNode,
+                    rootNode.hasNonNull("riskPoints") ? "riskPoints" : "expressionRisks"));
             record.setTitleSuggestions(LlmJsonUtil.json(objectMapper, rootNode, "titleSuggestions"));
-            record.setDescriptionSuggestion(LlmJsonUtil.text(rootNode, "descriptionSuggestion"));
+            // 真实 Agent 输出使用过这些简写；已有内容不能因字段名不同而静默丢失。
+            record.setDescriptionSuggestion(LlmJsonUtil.text(rootNode,
+                    rootNode.hasNonNull("descriptionSuggestion") ? "descriptionSuggestion" : "description"));
             record.setActionableRevisionPlan(LlmJsonUtil.json(objectMapper, rootNode, "actionableRevisionPlan"));
-            record.setTagSuggestions(LlmJsonUtil.json(objectMapper, rootNode, "tagSuggestions"));
+            record.setTagSuggestions(LlmJsonUtil.json(objectMapper, rootNode,
+                    rootNode.hasNonNull("tagSuggestions") ? "tagSuggestions" : "tags"));
             record.setPartitionSuggestion(LlmJsonUtil.text(rootNode, "partitionSuggestion"));
             record.setMissingInfo(LlmJsonUtil.json(objectMapper, rootNode, "missingInfo"));
             record.setParseStatus("PARSED");
@@ -860,6 +865,17 @@ public class PrePublishSuggestionService {
 
     /** 将数据库记录转为前端响应对象 */
     private CreatorSuggestionResponse toResponse(CreatorSuggestionRecord record) {
+        if (TextUtil.hasText(record.getRawOutput()) && (record.getDescriptionSuggestion() == null
+                || record.getTagSuggestions() == null || record.getAudienceHook() == null
+                || record.getRiskPoints() == null)) {
+            // 只从这份已保存的原始结果补缺，不重跑模型，也不覆盖已有字段或回写历史数据。
+            CreatorSuggestionRecord recovered = new CreatorSuggestionRecord();
+            fillParsedFields(recovered, record.getRawOutput());
+            if (record.getDescriptionSuggestion() == null) record.setDescriptionSuggestion(recovered.getDescriptionSuggestion());
+            if (record.getTagSuggestions() == null) record.setTagSuggestions(recovered.getTagSuggestions());
+            if (record.getAudienceHook() == null) record.setAudienceHook(recovered.getAudienceHook());
+            if (record.getRiskPoints() == null) record.setRiskPoints(recovered.getRiskPoints());
+        }
         return new CreatorSuggestionResponse(
                 record.getId(),
                 record.getSuggestionId(),

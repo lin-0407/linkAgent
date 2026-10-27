@@ -5,6 +5,7 @@ import com.link.linkagent.creator.bilibili.mapper.CreatorBilibiliMapper;
 import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
 import com.link.linkagent.creator.feedback.mapper.CreatorFeedbackMapper;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalyzeRequest;
+import com.link.linkagent.creator.feedback.model.CreatorFeedbackDashboardStatRecord;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackAnalysisOutput;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackFetchRequest;
 import com.link.linkagent.creator.feedback.model.CreatorFeedbackRecord;
@@ -31,7 +32,9 @@ import com.link.linkagent.creator.workflow.model.CreatorWorkflowStage;
 import com.link.linkagent.creator.workflow.model.CreatorWorkflowStatus;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.prompt.service.PromptService;
+import com.link.linkagent.support.TestTransactions;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
@@ -68,7 +71,7 @@ class CreatorFeedbackServiceTest {
         CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
         LLMService llmService = mock(LLMService.class);
         ObjectMapper objectMapper = mock(ObjectMapper.class);
-        TransactionTemplate transactionTemplate = mock(TransactionTemplate.class);
+        TransactionTemplate transactionTemplate = TestTransactions.directTemplate();
         CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService =
                 mock(CreatorFeedbackEvidenceRetrievalService.class);
         PromptService promptService = mock(PromptService.class);
@@ -96,7 +99,8 @@ class CreatorFeedbackServiceTest {
                 evidenceRetrievalService,
                 promptService,
                 mediaWorkflowGateService
-        );
+        ,
+                org.mockito.Mockito.mock(com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService.class));
 
         // 四个入口都会让任务进入或准备进入反馈阶段，关闭试映能力时必须统一返回冲突错误。
         assertThatThrownBy(() -> service.saveFeedback(
@@ -136,7 +140,7 @@ class CreatorFeedbackServiceTest {
         CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
         LLMService llmService = mock(LLMService.class);
         ObjectMapper objectMapper = mock(ObjectMapper.class);
-        TransactionTemplate transactionTemplate = mock(TransactionTemplate.class);
+        TransactionTemplate transactionTemplate = TestTransactions.directTemplate();
         CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService =
                 mock(CreatorFeedbackEvidenceRetrievalService.class);
         PromptService promptService = mock(PromptService.class);
@@ -170,7 +174,8 @@ class CreatorFeedbackServiceTest {
                         suggestionMapper,
                         new DraftVideoProbeRecoveryService(mediaProperties, mediaUploadMapper)
                 )
-        );
+        ,
+                org.mockito.Mockito.mock(com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService.class));
 
         assertThatThrownBy(() -> service.saveFeedback(
                 "task-1",
@@ -195,7 +200,7 @@ class CreatorFeedbackServiceTest {
         CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
         CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
         LLMService llmService = mock(LLMService.class);
-        TransactionTemplate transactionTemplate = mock(TransactionTemplate.class);
+        TransactionTemplate transactionTemplate = TestTransactions.directTemplate();
         CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService =
                 mock(CreatorFeedbackEvidenceRetrievalService.class);
         PromptService promptService = mock(PromptService.class);
@@ -235,7 +240,8 @@ class CreatorFeedbackServiceTest {
                 evidenceRetrievalService,
                 promptService,
                 mediaWorkflowGateService
-        );
+        ,
+                org.mockito.Mockito.mock(com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService.class));
 
         CreatorFeedbackReportResponse response = service.analyze(
                 "task-1",
@@ -251,6 +257,9 @@ class CreatorFeedbackServiceTest {
                 anyString(),
                 eq(CreatorFeedbackAnalysisOutput.class)
         );
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        verify(llmService).chatStructured(anyString(), prompt.capture(), eq(CreatorFeedbackAnalysisOutput.class));
+        assertThat(prompt.getValue()).contains("评论条数无法确认", "弹幕条数无法确认", "不得按换行");
         verify(llmService, never()).chat(anyString(), anyString());
         verify(reviewInvalidationMapper).invalidateCompetitorReport("task-1");
         verify(reviewInvalidationMapper).invalidateCreatorReport("task-1");
@@ -288,7 +297,8 @@ class CreatorFeedbackServiceTest {
                 mock(CreatorFeedbackEvidenceRetrievalService.class),
                 mock(PromptService.class),
                 mock(CreatorMediaWorkflowGateService.class)
-        );
+        ,
+                org.mockito.Mockito.mock(com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService.class));
 
         CreatorFeedbackResponse response = service.saveFeedback(
                 "task-1",
@@ -321,7 +331,8 @@ class CreatorFeedbackServiceTest {
                 mock(CreatorFeedbackEvidenceRetrievalService.class),
                 mock(PromptService.class),
                 mock(CreatorMediaWorkflowGateService.class)
-        );
+        ,
+                org.mockito.Mockito.mock(com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService.class));
 
         assertThatThrownBy(() -> service.saveFeedback(
                 "task-1",
@@ -353,7 +364,8 @@ class CreatorFeedbackServiceTest {
                 mock(CreatorFeedbackEvidenceRetrievalService.class),
                 mock(PromptService.class),
                 mock(CreatorMediaWorkflowGateService.class)
-        );
+        ,
+                org.mockito.Mockito.mock(com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService.class));
 
         assertThatThrownBy(() -> service.fetchFeedback(
                 "task-1",
@@ -365,6 +377,97 @@ class CreatorFeedbackServiceTest {
 
         verifyNoInteractions(feedbackMapper);
     }
+
+    @Test
+    void shouldUseImportedCountsInsteadOfCountingMultilineComments() {
+        FeedbackAnalysisFixture fixture = feedbackAnalysisFixture();
+        fixture.task().setTaskName("黑洞形成原理课堂");
+        fixture.feedback().setCommentSamples("一条评论的第一行\n第二行\n还有其他评论");
+        fixture.feedback().setDanmakuSamples(null);
+        when(fixture.mapper().listDashboardStats("task-1"))
+                .thenReturn(List.of(sourceCount("COMMENT", 6)));
+
+        fixture.service().analyze("task-1", new CreatorFeedbackAnalyzeRequest(null, null, null));
+
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        verify(fixture.llm()).chatStructured(system.capture(), prompt.capture(), eq(CreatorFeedbackAnalysisOutput.class));
+        assertThat(prompt.getValue())
+                .contains("评论6条，弹幕0条", "不是该视频在平台上的反馈总量", "本次样本文本未截断",
+                        "task-1", "任务名称仅作管理标识")
+                .doesNotContain("黑洞形成原理课堂");
+        assertThat(system.getValue()).contains("不得推断具体题材", "不得凭管理用名补出选题",
+                "只序列化一次", "合法反斜杠必须保持不变");
+    }
+
+    @Test
+    void shouldKeepImportedCountsSeparateFromTruncatedAnalysisText() {
+        FeedbackAnalysisFixture fixture = feedbackAnalysisFixture();
+        fixture.feedback().setCommentSamples("长评论".repeat(5000));
+        when(fixture.mapper().listDashboardStats("task-1"))
+                .thenReturn(List.of(sourceCount("COMMENT", 2000)));
+
+        fixture.service().analyze("task-1", new CreatorFeedbackAnalyzeRequest(null, null, null));
+
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        verify(fixture.llm()).chatStructured(anyString(), prompt.capture(), eq(CreatorFeedbackAnalysisOutput.class));
+        assertThat(prompt.getValue()).contains("评论2000条", "样本文本已截断", "不得把导入总数当作实际阅读条数");
+    }
+
+    @Test
+    void shouldDiscardAnalysisIfImportedCountsChangedDuringInference() {
+        FeedbackAnalysisFixture fixture = feedbackAnalysisFixture();
+        when(fixture.mapper().listDashboardStats("task-1"))
+                .thenReturn(List.of(sourceCount("COMMENT", 6)), List.of(sourceCount("COMMENT", 7)));
+
+        assertThatThrownBy(() -> fixture.service().analyze("task-1", new CreatorFeedbackAnalyzeRequest(null, null, null)))
+                .isInstanceOfSatisfying(ResponseStatusException.class, exception ->
+                        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+
+        verify(fixture.mapper(), never()).upsertReport(any());
+    }
+
+    private CreatorFeedbackDashboardStatRecord sourceCount(String name, long count) {
+        CreatorFeedbackDashboardStatRecord stat = new CreatorFeedbackDashboardStatRecord();
+        stat.setStatScope("SOURCE");
+        stat.setName(name);
+        stat.setCount(count);
+        return stat;
+    }
+
+    private FeedbackAnalysisFixture feedbackAnalysisFixture() {
+        CreatorTaskMapper taskMapper = mock(CreatorTaskMapper.class);
+        CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
+        CreatorFeedbackMapper feedbackMapper = mock(CreatorFeedbackMapper.class);
+        LLMService llm = mock(LLMService.class);
+        PromptService prompts = mock(PromptService.class);
+        CreatorFeedbackRecord feedback = feedback();
+        AtomicReference<CreatorFeedbackReportRecord> report = new AtomicReference<>();
+        CreatorTaskRecord taskRecord = task("task-1");
+        when(taskMapper.findTaskByTaskId("task-1")).thenReturn(Optional.of(taskRecord));
+        when(bilibiliMapper.findBindingByTaskId("task-1")).thenReturn(Optional.of(boundBinding("BV1xx411c7mD")));
+        when(feedbackMapper.findFeedbackByTaskId("task-1")).thenReturn(Optional.of(feedback));
+        when(feedbackMapper.upsertReport(any())).thenAnswer(invocation -> {
+            report.set(invocation.getArgument(0));
+            return 1;
+        });
+        when(feedbackMapper.findReportByTaskId("task-1"))
+                .thenAnswer(invocation -> Optional.ofNullable(report.get()));
+        when(prompts.get("feedback_analyze.system")).thenReturn("分析反馈");
+        // 模拟仍引用 taskName 的旧模板，核对真实变量不会泄露管理用名。
+        when(prompts.render(eq("feedback_analyze.user"), anyMap()))
+                .thenAnswer(invocation -> invocation.getArgument(1).toString());
+        when(llm.chatStructured(anyString(), anyString(), eq(CreatorFeedbackAnalysisOutput.class)))
+                .thenReturn(analysisOutput());
+        CreatorFeedbackService service = new CreatorFeedbackService(taskMapper, bilibiliMapper, feedbackMapper,
+                mock(CreatorReviewInvalidationMapper.class), llm, new ObjectMapper(), TestTransactions.directTemplate(),
+                mock(CreatorFeedbackEvidenceRetrievalService.class), prompts, mock(CreatorMediaWorkflowGateService.class),
+                org.mockito.Mockito.mock(com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService.class));
+        return new FeedbackAnalysisFixture(service, feedbackMapper, llm, feedback, taskRecord);
+    }
+
+    private record FeedbackAnalysisFixture(CreatorFeedbackService service, CreatorFeedbackMapper mapper,
+                                           LLMService llm, CreatorFeedbackRecord feedback, CreatorTaskRecord task) { }
 
     private CreatorTaskRecord task(String taskId) {
         CreatorTaskRecord task = new CreatorTaskRecord();

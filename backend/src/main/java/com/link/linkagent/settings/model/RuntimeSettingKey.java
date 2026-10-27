@@ -40,7 +40,19 @@ public enum RuntimeSettingKey {
     DEEPSEEK_REASONING_EFFORT(
             "deepseek.thinking.reasoning-effort",
             "DeepSeek 思考强度",
-            "DeepSeek Flash 思考强度，仅允许 low、high、max");
+            "DeepSeek Flash 思考强度，仅允许 low、high、max"),
+    CREATION_VOICE_ENABLED(
+            "creator.creation.voice.enabled",
+            "配音生成（TTS）",
+            "只对作者选择 TTS 的镜头合成配音并转写对齐字幕；关闭后不再领取新的配音运行"),
+    CREATION_VIDEO_ENABLED(
+            "creator.creation.video.enabled",
+            "AI 视频生成",
+            "按镜头提交 AI 视频生成；关闭后不再领取新的视频运行，已提交任务仍会查询并结算"),
+    CREATION_MEDIA_ENABLED(
+            "creator.media.enabled",
+            "媒体付费分析",
+            "ASR、视频理解、片段复核和观众试映的总闸门；关闭后暂停新的试映分析，上传与渲染基础设施仍由启动配置决定");
 
     private final String key;
     private final String name;

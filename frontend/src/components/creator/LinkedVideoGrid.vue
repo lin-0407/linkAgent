@@ -5,6 +5,7 @@
  * 在视频分析页使用，只展示和任务关联的视频，不是账号下全部视频。
  */
 import { ref, watch, onMounted } from 'vue'
+import { errorText } from '@/utils/error'
 import { listLinkedVideos } from '@/api/creator'
 import type { BilibiliVideo } from '@/types/creator'
 import LinkedVideoCard from './LinkedVideoCard.vue'
@@ -33,8 +34,8 @@ async function loadVideos() {
   error.value = ''
   try {
     videos.value = await listLinkedVideos(props.bilibiliUid)
-  } catch (e: any) {
-    error.value = e?.message || '加载视频列表失败'
+  } catch (e) {
+    error.value = errorText(e, '加载视频列表失败')
     videos.value = []
   } finally {
     loading.value = false
@@ -93,14 +94,14 @@ defineExpose({ refresh: loadVideos })
 
 .grid-title {
   margin: 0 0 16px;
-  font-size: 18px;
+  font-size: var(--fs-lg);
   font-weight: 600;
-  color: var(--creator-text, #1d1d1f);
+  color: var(--creator-text, var(--ink));
 }
 
 .grid-status {
-  font-size: 14px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-base);
+  color: var(--creator-muted-ink, var(--muted));
 }
 
 .grid-error {
@@ -115,8 +116,8 @@ defineExpose({ refresh: loadVideos })
 
 .grid-error p {
   margin: 0;
-  font-size: 14px;
-  color: #c93400;
+  font-size: var(--fs-base);
+  color: var(--danger);
 }
 
 /* 空状态：给用户明确指引下一步做什么 */
@@ -126,14 +127,14 @@ defineExpose({ refresh: loadVideos })
 }
 
 .grid-empty-text {
-  font-size: 16px;
-  color: var(--creator-text, #1d1d1f);
+  font-size: var(--fs-md);
+  color: var(--creator-text, var(--ink));
   margin: 0 0 8px;
 }
 
 .grid-empty-hint {
-  font-size: 13px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-sm);
+  color: var(--creator-muted-ink, var(--muted));
   margin: 0;
   max-width: 360px;
   margin-left: auto;

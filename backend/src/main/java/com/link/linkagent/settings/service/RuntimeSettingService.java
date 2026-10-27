@@ -1,10 +1,18 @@
 package com.link.linkagent.settings.service;
 
+import com.link.linkagent.creator.creation.aivideo.service.CreationVideoProperties;
+import com.link.linkagent.creator.creation.billing.BillingExchangeRate;
+import com.link.linkagent.creator.creation.service.CreationBillingProperties;
+import com.link.linkagent.creator.creation.service.CreationCapabilityService;
+import com.link.linkagent.creator.creation.voice.service.CreationVoiceProperties;
 import com.link.linkagent.creator.feedback.config.CreatorFeedbackRagProperties;
+import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.knowledge.config.KnowledgeRagProperties;
 import com.link.linkagent.llm.DeepSeekThinkingProperties;
 import com.link.linkagent.llm.LlmCallGuardProperties;
 import com.link.linkagent.memory.SummaryMemoryProperties;
+import com.link.linkagent.settings.dto.BillingSettingsResponse;
+import com.link.linkagent.settings.dto.PriceRangeResponse;
 import com.link.linkagent.settings.dto.ReadonlySettingResponse;
 import com.link.linkagent.settings.dto.RuntimeToggleResponse;
 import com.link.linkagent.settings.dto.RuntimeValueResponse;
@@ -21,6 +29,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.format.DateTimeFormatter;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +53,12 @@ public class RuntimeSettingService {
     private final KnowledgeRagProperties knowledgeRagProperties;
     private final CreatorFeedbackRagProperties creatorFeedbackRagProperties;
     private final DeepSeekThinkingProperties deepSeekThinkingProperties;
+    private final CreationCapabilityService capabilities;
+    private final CreationVoiceProperties voiceProperties;
+    private final CreationVideoProperties videoProperties;
+    private final CreatorMediaProperties mediaProperties;
+    private final CreationBillingProperties billingProperties;
+    private final BillingExchangeRate exchangeRate;
     private final Environment environment;
 
     public RuntimeSettingService(RuntimeSettingMapper runtimeSettingMapper,
@@ -50,6 +67,12 @@ public class RuntimeSettingService {
                                  KnowledgeRagProperties knowledgeRagProperties,
                                  CreatorFeedbackRagProperties creatorFeedbackRagProperties,
                                  DeepSeekThinkingProperties deepSeekThinkingProperties,
+                                 CreationCapabilityService capabilities,
+                                 CreationVoiceProperties voiceProperties,
+                                 CreationVideoProperties videoProperties,
+                                 CreatorMediaProperties mediaProperties,
+                                 CreationBillingProperties billingProperties,
+                                 BillingExchangeRate exchangeRate,
                                  Environment environment) {
         this.runtimeSettingMapper = runtimeSettingMapper;
         this.llmCallGuardProperties = llmCallGuardProperties;
@@ -57,11 +80,23 @@ public class RuntimeSettingService {
         this.knowledgeRagProperties = knowledgeRagProperties;
         this.creatorFeedbackRagProperties = creatorFeedbackRagProperties;
         this.deepSeekThinkingProperties = deepSeekThinkingProperties;
+        this.capabilities = capabilities;
+        this.voiceProperties = voiceProperties;
+        this.videoProperties = videoProperties;
+        this.mediaProperties = mediaProperties;
+        this.billingProperties = billingProperties;
+        this.exchangeRate = exchangeRate;
         this.environment = environment;
     }
 
     public SettingsStatusResponse status() {
-        return new SettingsStatusResponse(dynamicToggles(), dynamicValues(), readonlySettings());
+        return new SettingsStatusResponse(dynamicToggles(), dynamicValues(), readonlySettings(),
+                productionToggles(), billing());
+    }
+
+    public BillingSettingsResponse refreshBilling() {
+        exchangeRate.refresh();
+        return billing();
     }
 
     public void updateToggle(String settingKey, boolean enabled) {
@@ -69,6 +104,18 @@ public class RuntimeSettingService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "不支持动态修改的设置项: " + settingKey));
         if (key == RuntimeSettingKey.DEEPSEEK_REASONING_EFFORT) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "该设置项需要使用枚举值接口修改: " + settingKey);
+        }
+        // 媒体对象存储、上传与渲染在启动期装配，不能在运行期凭空创建；只允许关闭或重新打开已装配的能力。
+        if (key == RuntimeSettingKey.CREATION_MEDIA_ENABLED && enabled && !capabilities.mediaInfrastructureEnabled()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "媒体基础设施在启动时未启用；请配置对象存储并设置 creator.media.enabled=true 后重启一次");
+        }
+        if ((key == RuntimeSettingKey.CREATION_VOICE_ENABLED || key == RuntimeSettingKey.CREATION_VIDEO_ENABLED)
+                && enabled && !capabilities.mediaEnabled()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    capabilities.mediaInfrastructureEnabled()
+                            ? "媒体付费分析未启用，请先打开媒体开关"
+                            : "媒体基础设施在启动时未启用；需要配置对象存储并重启一次后才能打开配音或 AI 视频");
         }
         runtimeSettingMapper.upsert(key.key(), Boolean.toString(enabled), key.description());
     }
@@ -156,8 +203,70 @@ public class RuntimeSettingService {
                 key.key(),
                 key.displayName(),
                 isEnabled(key, defaults.getOrDefault(key, false)),
-                key.description()
+                key.description(),
+                false,
+                ""
         );
+    }
+
+    private List<RuntimeToggleResponse> productionToggles() {
+        boolean mediaStartup = capabilities.mediaInfrastructureEnabled();
+        boolean media = capabilities.mediaEnabled();
+        String mediaLock = mediaStartup ? ""
+                : "媒体基础设施在启动时未启用；需要配置对象存储并设置 creator.media.enabled=true 后重启一次";
+        String dependentLock = media ? "" : "媒体付费分析未启用，配音和 AI 视频依赖私有对象存储";
+        return List.of(
+                new RuntimeToggleResponse(RuntimeSettingKey.CREATION_VOICE_ENABLED.key(),
+                        RuntimeSettingKey.CREATION_VOICE_ENABLED.displayName(),
+                        capabilities.voiceEnabled(), RuntimeSettingKey.CREATION_VOICE_ENABLED.description(),
+                        !media, dependentLock),
+                new RuntimeToggleResponse(RuntimeSettingKey.CREATION_VIDEO_ENABLED.key(),
+                        RuntimeSettingKey.CREATION_VIDEO_ENABLED.displayName(),
+                        capabilities.videoEnabled(), RuntimeSettingKey.CREATION_VIDEO_ENABLED.description(),
+                        !media, dependentLock),
+                new RuntimeToggleResponse(RuntimeSettingKey.CREATION_MEDIA_ENABLED.key(),
+                        RuntimeSettingKey.CREATION_MEDIA_ENABLED.displayName(),
+                        media, RuntimeSettingKey.CREATION_MEDIA_ENABLED.description(),
+                        !mediaStartup, mediaLock)
+        );
+    }
+
+    private BillingSettingsResponse billing() {
+        BillingExchangeRate.Rate rate = exchangeRate.current();
+        BigDecimal fx = rate.usdToCny();
+        String note = rate.source() == BillingExchangeRate.Source.CONFIG_FALLBACK
+                ? "未能获取公开汇率，当前使用部署配置的折算率；可在设置中重新获取"
+                : "公开参考汇率，通常每日更新；用于估算和价格快照，不代表银行成交价或供应商账单";
+        return new BillingSettingsResponse(fx, rate.source().name(),
+                rate.fetchedAt() == null ? "尚未获取" : DateTimeFormatter.ISO_INSTANT.format(rate.fetchedAt()),
+                rate.source() != BillingExchangeRate.Source.LIVE, note,
+                List.of(
+                        range("voice", "配音 TTS", "每 1000 字符",
+                                voiceProperties.getUsdPerMillionCharacters().divide(new BigDecimal("1000"),
+                                        12, RoundingMode.HALF_UP), fx),
+                        range("asr", "语音转写", "每分钟",
+                                mediaProperties.getProcessing().getAsrUsdPerSecond().multiply(BigDecimal.valueOf(60)), fx),
+                        range("video", "AI 视频生成", "每 " + minimumVideoSeconds() + " 秒",
+                                videoProperties.getUsdPerSecond().multiply(BigDecimal.valueOf(minimumVideoSeconds())), fx),
+                        range("video_understanding", "视频理解", "每次完整试映",
+                                billingProperties.getVideoUsdUpperBound(), fx),
+                        range("segment_review", "重点片段复核", "每个片段",
+                                billingProperties.getSegmentReviewUsdUpperBound(), fx),
+                        range("storyboard_text", "故事板文本", "每次（按 2 万输入 / 4 千输出估算）",
+                                billingProperties.getTextInputUsdPerMillionTokens().multiply(BigDecimal.valueOf(20000))
+                                        .add(billingProperties.getTextOutputUsdPerMillionTokens().multiply(BigDecimal.valueOf(4000)))
+                                        .divide(new BigDecimal("1000000"), 12, RoundingMode.HALF_UP), fx)
+                ));
+    }
+
+    private PriceRangeResponse range(String key, String name, String unit, BigDecimal usd, BigDecimal fx) {
+        BigDecimal low = usd.multiply(fx).setScale(4, RoundingMode.HALF_UP);
+        BigDecimal high = low.multiply(new BigDecimal("1.5")).setScale(4, RoundingMode.HALF_UP);
+        return new PriceRangeResponse(key, name, unit, low, high, "配置单价 × 当前汇率；上限按 1.5 倍估算");
+    }
+
+    private int minimumVideoSeconds() {
+        return videoProperties.durations().stream().min(Integer::compareTo).orElse(5);
     }
 
     private Map<RuntimeSettingKey, Boolean> dynamicDefaults() {

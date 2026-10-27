@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -69,6 +70,9 @@ public class PrePublishAgentGoldenQualityTest {
     @Autowired
     private PromptService promptService;
 
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
     @Test
     void shouldMeetGoldenQualityBarWithRealPrePublishAgent() throws Exception {
         List<GoldenCase> cases = selectCases(readGoldenCases());
@@ -111,7 +115,8 @@ public class PrePublishAgentGoldenQualityTest {
                 objectMapper,
                 promptService,
                 null,
-                null
+                null,
+                transactionTemplate
         );
 
         return service.generateSuggestionByAgent(goldenCase.taskId(), buildAnalyzeRequest(goldenCase));
@@ -484,6 +489,16 @@ public class PrePublishAgentGoldenQualityTest {
         @Override
         public Optional<CreatorTaskRecord> findTaskByTaskId(String taskId) {
             return Optional.of(taskRecord);
+        }
+
+        @Override
+        public Optional<CreatorTaskRecord> lockTaskForDeletion(String taskId) {
+            return findTaskByTaskId(taskId);
+        }
+
+        @Override
+        public int countDeletionBlockers(String taskId, String ownerId) {
+            return 0;
         }
 
         @Override

@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { storeToRefs } from 'pinia'
+import { useAppStore } from '@/stores/appStore'
+import { useModalDialog } from '@/composables/useModalDialog'
+import type { AssistantAction, AssistantPlan } from '@/api/assistant'
 import { useCreatorStore } from '@/stores/creatorStore'
 import CreatorAssistantPanel from '@/components/CreatorAssistantPanel.vue'
-import { MessageCircle, X } from '@lucide/vue'
+import { ChevronRight, History, Sparkles, SquarePen, X } from '@lucide/vue'
 import ChatComposer from '@/components/ChatComposer.vue'
 import NotificationToast from '@/components/NotificationToast.vue'
-import MessageBubble from '@/components/MessageBubble.vue'
 import {
   chunkTypeLabel,
   formatKnowledgeCount,
@@ -29,47 +32,27 @@ import {
   type KnowledgeVideoContextEventDetail,
 } from '@/utils/agentContext'
 
-type WindowRect = {
-  left: number
-  top: number
-  width: number
-  height: number
-}
-
-type DragState = {
-  pointerId: number
-  offsetX: number
-  offsetY: number
-}
-
-type ResizeState = {
-  pointerId: number
-  direction: ResizeDirection
-  startX: number
-  startY: number
-  startLeft: number
-  startTop: number
-  startWidth: number
-  startHeight: number
-}
-
-type ResizeDirection = 'n' | 'e' | 's' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+// 消息气泡独占 markdown-it + KaTeX（约 190 kB）。改为异步组件后，这两个库只在真正出现
+// 聊天消息时才加载，首屏不必为一条还不存在的消息付出体积；气泡本身是纯展示组件，
+// 不参与全局事件监听，异步化不影响任何交互时序。
+const MessageBubble = defineAsyncComponent(() => import('@/components/MessageBubble.vue'))
 
 const props = withDefaults(
   defineProps<{
     developerMode?: boolean
+    backgroundInert?: boolean
   }>(),
   {
     developerMode: false,
+    backgroundInert: false,
   },
 )
 
 const promptExamples = [
   '帮我创建一期视频任务',
-  '检查这期任务，列出下一步计划',
-  '帮我分析反馈并生成复盘',
+  '检查当前工作，列出下一步计划',
+  '我已有成片，应该从哪里开始？',
 ]
-const capabilityTags = ['平台操作', '连续执行', '确认后执行']
 const route = useRoute()
 const creatorStore = useCreatorStore()
 const assistantTaskId = computed(() => {
@@ -87,20 +70,31 @@ const executionModeOptions: Array<{
   { value: 'PLAN_EXECUTE', label: 'PaE', description: '先计划后执行' },
   { value: 'MULTI_AGENT', label: 'Multi', description: '多 Agent 协作' },
 ]
-const viewportMargin = 18
-const statusBarViewportMargin = 48
-const minWindowWidth = 520
-const minWindowHeight = 420
-const maxWindowWidth = 1040
-const maxWindowHeight = 760
-const resizeDirections: ResizeDirection[] = ['n', 'e', 's', 'w', 'ne', 'nw', 'sw']
-
+const appStore = useAppStore()
+const { assistantOpen: isOpen } = storeToRefs(appStore)
 const composerRef = ref<InstanceType<typeof ChatComposer> | null>(null)
-// 默认只展示入口按钮，避免 AI 交互台一进入页面就遮挡创作工作流。
-const isOpen = ref(false)
-const isMinimized = ref(false)
-const isDragging = ref(false)
-const isResizing = ref(false)
+const businessPanelRef = ref<InstanceType<typeof CreatorAssistantPanel> | null>(null)
+const planListRef = ref<HTMLElement | null>(null)
+const assistantView = ref<'chat' | 'plans'>('chat')
+const attentionPlans = ref<AssistantPlan[]>([])
+const attentionActions = ref<AssistantAction[]>([])
+const pendingPlans = computed(() => attentionPlans.value.filter(plan => plan.status === 'PENDING'))
+const pendingActions = computed(() => attentionActions.value.filter(action => action.status === 'PENDING'))
+const attentionCount = computed(() => attentionPlans.value.length + attentionActions.value.length)
+const needsConfirmation = computed(() => pendingPlans.value.length > 0 || pendingActions.value.length > 0)
+const attentionLabel = computed(() => pendingPlans.value.length
+  ? pendingPlans.value.length + ' 份计划待确认'
+  : pendingActions.value.length ? pendingActions.value.length + ' 项操作待确认'
+    : attentionPlans.value.some(plan => plan.status === 'WAIT_INPUT') ? '计划等你补充信息' : '有操作正在处理')
+const attentionTitle = computed(() => (pendingPlans.value[0] || attentionPlans.value[0])?.title
+  || (pendingActions.value[0] || attentionActions.value[0])?.description)
+const dockMedia = window.matchMedia('(min-width: 1280px)')
+const isDocked = ref(dockMedia.matches)
+const modalOpen = computed(() => isOpen.value && !isDocked.value)
+const { dialogRef, handleDialogKeydown } = useModalDialog(modalOpen, closeFloatingWindow)
+const panelStyle = computed(() => ({ '--assistant-bottom': route.path === '/usage-logs' ? '0px' : '36px' }))
+
+const assistantStatus = ref<'loading' | 'ready' | 'error'>('loading')
 const knowledgeContext = ref<ReferenceVideoAnalysisContext | null>(null)
 const knowledgeContextQuery = ref('')
 watch(() => [route.path, assistantTaskId.value], () => {
@@ -109,22 +103,6 @@ watch(() => [route.path, assistantTaskId.value], () => {
     knowledgeContextQuery.value = ''
   }
 })
-const windowRect = ref<WindowRect>({
-  left: 0,
-  top: 0,
-  width: 560,
-  height: 680,
-})
-
-let dragState: DragState | null = null
-let resizeState: ResizeState | null = null
-let activePointerElement: HTMLElement | null = null
-let activePointerId: number | null = null
-let pendingDragEvent: PointerEvent | null = null
-let pendingResizeEvent: PointerEvent | null = null
-let dragFrameId = 0
-let resizeFrameId = 0
-
 const {
   activeSessionLabel,
   canSend,
@@ -153,13 +131,6 @@ const {
 } = useAgentChat(() => ({ page: route.path, taskId: assistantTaskId.value,
   step: route.path === '/creator' ? creatorStore.activeStep : undefined }))
 
-const floatingWindowStyle = computed(() => ({
-  left: `${windowRect.value.left}px`,
-  top: `${windowRect.value.top}px`,
-  width: `${windowRect.value.width}px`,
-  height: isMinimized.value ? 'auto' : `${windowRect.value.height}px`,
-}))
-
 const floatingWindowSubtitle = computed(() => {
   const title = knowledgeContext.value?.video.title
   if (title) {
@@ -172,7 +143,7 @@ const floatingWindowSubtitle = computed(() => {
   if (isLoading.value) {
     return 'AI 正在整理建议'
   }
-  return props.developerMode ? activeSessionLabel.value : '读懂当前工作，确认计划后连续执行'
+  return props.developerMode ? activeSessionLabel.value : '聊想法、查进度，操作前先确认'
 })
 
 /**
@@ -189,39 +160,53 @@ const isStreamingIdle = computed(
 const visibleKnowledgeTopics = computed(() => knowledgeContext.value?.topics.slice(0, 4) ?? [])
 const visibleKnowledgeEvidence = computed(() => knowledgeContext.value?.evidenceItems.slice(0, 5) ?? [])
 
+function updateDockMode() { isDocked.value = dockMedia.matches }
 onMounted(() => {
-  placeWindowAtDefaultPosition()
-  window.addEventListener('resize', keepWindowInsideViewport)
+  dockMedia.addEventListener('change', updateDockMode)
   window.addEventListener(KNOWLEDGE_VIDEO_CONTEXT_EVENT, handleKnowledgeVideoContext)
 })
-
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', keepWindowInsideViewport)
+  dockMedia.removeEventListener('change', updateDockMode)
   window.removeEventListener(KNOWLEDGE_VIDEO_CONTEXT_EVENT, handleKnowledgeVideoContext)
-  removePointerListeners()
 })
 
-function openFloatingWindow() {
-  isOpen.value = true
-  isMinimized.value = false
-  keepWindowInsideViewport()
-  focusComposer()
-  // 浮窗关闭时消息列表整个被销毁，重开后滚动位置从 0 开始；
-  // 这里补一次贴底，避免"重开浮窗后停在最旧的一条消息上"。
-  void scrollToBottom()
-}
+watch(isOpen, async open => {
+  if (open) {
+    await nextTick()
+    // 打开助手不抢输入焦点，也不把主页面滚到表单底部。
+    dialogRef.value?.focus({ preventScroll: true })
+    if (assistantView.value === 'chat') {
+      composerRef.value?.adjustInputHeight()
+      void scrollToBottom()
+    }
+  } else {
+    isSessionsOpen.value = false
+    // 从并排切到抽屉后，弹层记录的旧焦点可能已被移除，统一回到稳定入口。
+    await nextTick()
+    document.getElementById('workbench-assistant-toggle')?.focus({ preventScroll: true })
+  }
+})
 
-function closeFloatingWindow() {
-  isOpen.value = false
+function openFloatingWindow() { isOpen.value = true }
+function closeFloatingWindow() { isOpen.value = false }
+function handlePanelKeydown(event: KeyboardEvent) {
+  if (modalOpen.value) handleDialogKeydown(event)
+  else if (event.key === 'Escape') { event.preventDefault(); closeFloatingWindow() }
+}
+async function showPlans() {
+  assistantView.value = 'plans'
   isSessionsOpen.value = false
-}
-
-function toggleMinimized() {
-  isMinimized.value = !isMinimized.value
-  keepWindowInsideViewport()
+  await nextTick()
+  const list = planListRef.value
+  // 单项操作和多步计划共用入口，直接定位待处理卡片，避免历史记录把按钮挤到下方。
+  const target = list?.querySelector(pendingPlans.value.length ? '.assistant-plan[data-status="PENDING"]'
+    : pendingActions.value.length ? '.assistant-action[data-status="PENDING"]' : '.assistant-plan')
+  list?.scrollTo({ top: target && list ? target.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop - 16 : 0 })
+  list?.focus({ preventScroll: true })
 }
 
 function startNewConversation() {
+  assistantView.value = 'chat'
   startNewSession()
   knowledgeContext.value = null
   knowledgeContextQuery.value = ''
@@ -230,6 +215,8 @@ function startNewConversation() {
 }
 
 async function openAgentSession(session: SessionListItem) {
+  assistantView.value = 'chat'
+  isSessionsOpen.value = false
   knowledgeContext.value = null
   knowledgeContextQuery.value = ''
   await openSession(session)
@@ -242,11 +229,13 @@ function usePromptExample(example: string) {
 }
 
 async function sendFloatingMessage() {
+  if (assistantStatus.value !== 'ready') return
   const displayMessage = inputMessage.value.trim()
   await sendMessage({
     displayMessage,
     outboundMessage: buildKnowledgeContextMessage(displayMessage),
   })
+  await businessPanelRef.value?.reload()
   await nextTick()
   composerRef.value?.adjustInputHeight()
 }
@@ -261,6 +250,7 @@ function handleKnowledgeVideoContext(event: Event) {
   startNewSession()
   knowledgeContext.value = detail.context
   knowledgeContextQuery.value = detail.query.trim()
+  assistantView.value = 'chat'
   inputMessage.value = '基于这个视频的主题和观众反馈，分析它值得参考的点，并给我 3 条可直接改到我新视频里的建议。'
   openFloatingWindow()
 }
@@ -297,269 +287,6 @@ function buildKnowledgeContextMessage(userMessage: string) {
 
 function formatKnowledgeQuality(video: ReferenceVideo) {
   return typeof video.qualityScore === 'number' ? video.qualityScore.toFixed(2) : '统计待更新'
-}
-
-function startDrag(event: PointerEvent) {
-  if (event.button !== 0 || shouldIgnorePointerDown(event.target)) {
-    return
-  }
-
-  isDragging.value = true
-  dragState = {
-    pointerId: event.pointerId,
-    offsetX: event.clientX - windowRect.value.left,
-    offsetY: event.clientY - windowRect.value.top,
-  }
-  capturePointer(event)
-  window.addEventListener('pointermove', handleDrag)
-  window.addEventListener('pointerup', stopDrag)
-  window.addEventListener('pointercancel', stopDrag)
-  event.preventDefault()
-}
-
-function handleDrag(event: PointerEvent) {
-  if (!dragState || event.pointerId !== dragState.pointerId) {
-    return
-  }
-
-  pendingDragEvent = event
-  if (dragFrameId === 0) {
-    dragFrameId = requestAnimationFrame(applyPendingDrag)
-  }
-}
-
-function applyPendingDrag() {
-  dragFrameId = 0
-  const event = pendingDragEvent
-  pendingDragEvent = null
-  if (!dragState || !event || event.pointerId !== dragState.pointerId) {
-    return
-  }
-
-  windowRect.value = constrainRect({
-    ...windowRect.value,
-    left: event.clientX - dragState.offsetX,
-    top: event.clientY - dragState.offsetY,
-  })
-}
-
-function stopDrag(event?: PointerEvent) {
-  if (event && dragState && event.pointerId !== dragState.pointerId) {
-    return
-  }
-
-  isDragging.value = false
-  dragState = null
-  pendingDragEvent = null
-  if (dragFrameId !== 0) {
-    cancelAnimationFrame(dragFrameId)
-    dragFrameId = 0
-  }
-  releasePointer()
-  window.removeEventListener('pointermove', handleDrag)
-  window.removeEventListener('pointerup', stopDrag)
-  window.removeEventListener('pointercancel', stopDrag)
-}
-
-function startResize(event: PointerEvent, direction: ResizeDirection = 'se') {
-  if (event.button !== 0) {
-    return
-  }
-
-  isMinimized.value = false
-  isResizing.value = true
-  resizeState = {
-    pointerId: event.pointerId,
-    direction,
-    startX: event.clientX,
-    startY: event.clientY,
-    startLeft: windowRect.value.left,
-    startTop: windowRect.value.top,
-    startWidth: windowRect.value.width,
-    startHeight: windowRect.value.height,
-  }
-  capturePointer(event)
-  window.addEventListener('pointermove', handleResize)
-  window.addEventListener('pointerup', stopResize)
-  window.addEventListener('pointercancel', stopResize)
-  event.preventDefault()
-}
-
-function handleResize(event: PointerEvent) {
-  if (!resizeState || event.pointerId !== resizeState.pointerId) {
-    return
-  }
-
-  pendingResizeEvent = event
-  if (resizeFrameId === 0) {
-    resizeFrameId = requestAnimationFrame(applyPendingResize)
-  }
-}
-
-function applyPendingResize() {
-  resizeFrameId = 0
-  const event = pendingResizeEvent
-  pendingResizeEvent = null
-  if (!resizeState || !event || event.pointerId !== resizeState.pointerId) {
-    return
-  }
-
-  windowRect.value = constrainResizeRect(resizeState, event)
-}
-
-function stopResize(event?: PointerEvent) {
-  if (event && resizeState && event.pointerId !== resizeState.pointerId) {
-    return
-  }
-
-  isResizing.value = false
-  resizeState = null
-  pendingResizeEvent = null
-  if (resizeFrameId !== 0) {
-    cancelAnimationFrame(resizeFrameId)
-    resizeFrameId = 0
-  }
-  releasePointer()
-  window.removeEventListener('pointermove', handleResize)
-  window.removeEventListener('pointerup', stopResize)
-  window.removeEventListener('pointercancel', stopResize)
-}
-
-function placeWindowAtDefaultPosition() {
-  const maxSize = getViewportBoundedSize()
-  const width = clampNumber(560, minWindowWidth, maxSize.width)
-  const height = clampNumber(680, minWindowHeight, maxSize.height)
-  windowRect.value = constrainRect({
-    left: window.innerWidth - width - 28,
-    top: window.innerHeight - height - 28,
-    width,
-    height,
-  })
-}
-
-function keepWindowInsideViewport() {
-  windowRect.value = constrainRect(windowRect.value)
-}
-
-function constrainRect(rect: WindowRect): WindowRect {
-  const maxSize = getViewportBoundedSize()
-  const width = clampNumber(rect.width, minWindowWidth, maxSize.width)
-  const height = clampNumber(rect.height, minWindowHeight, maxSize.height)
-  const visibleHeight = isMinimized.value ? 66 : height
-  const maxLeft = Math.max(viewportMargin, window.innerWidth - width - viewportMargin)
-  const maxTop = Math.max(
-    viewportMargin,
-    window.innerHeight - visibleHeight - getViewportBottomMargin(),
-  )
-
-  return {
-    left: clampNumber(rect.left, viewportMargin, maxLeft),
-    top: clampNumber(rect.top, viewportMargin, maxTop),
-    width,
-    height,
-  }
-}
-
-function constrainResizeRect(state: ResizeState, event: PointerEvent): WindowRect {
-  const deltaX = event.clientX - state.startX
-  const deltaY = event.clientY - state.startY
-  const direction = state.direction
-  const maxSize = getViewportBoundedSize()
-  const right = state.startLeft + state.startWidth
-  const bottom = state.startTop + state.startHeight
-
-  let left = state.startLeft
-  let top = state.startTop
-  let width = state.startWidth
-  let height = state.startHeight
-
-  if (direction.includes('e')) {
-    width = clampNumber(state.startWidth + deltaX, minWindowWidth, maxSize.width)
-  }
-
-  if (direction.includes('s')) {
-    height = clampNumber(state.startHeight + deltaY, minWindowHeight, maxSize.height)
-  }
-
-  if (direction.includes('w')) {
-    const nextLeft = clampNumber(
-      state.startLeft + deltaX,
-      viewportMargin,
-      right - minWindowWidth,
-    )
-    left = nextLeft
-    width = clampNumber(right - nextLeft, minWindowWidth, maxSize.width)
-  }
-
-  if (direction.includes('n')) {
-    const nextTop = clampNumber(
-      state.startTop + deltaY,
-      viewportMargin,
-      bottom - minWindowHeight,
-    )
-    top = nextTop
-    height = clampNumber(bottom - nextTop, minWindowHeight, maxSize.height)
-  }
-
-  return constrainRect({
-    left,
-    top,
-    width,
-    height,
-  })
-}
-
-function getViewportBoundedSize() {
-  // 拖拽和缩放共用底部边界，避免桌面状态栏压住浮窗输入区。
-  const availableWidth = Math.max(320, window.innerWidth - viewportMargin * 2)
-  const availableHeight = Math.max(
-    minWindowHeight,
-    window.innerHeight - viewportMargin - getViewportBottomMargin(),
-  )
-  return {
-    width: Math.min(maxWindowWidth, availableWidth),
-    height: Math.min(maxWindowHeight, availableHeight),
-  }
-}
-
-function getViewportBottomMargin() {
-  return window.innerWidth <= 640 ? viewportMargin : statusBarViewportMargin
-}
-
-function clampNumber(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max)
-}
-
-function shouldIgnorePointerDown(target: EventTarget | null) {
-  // 关闭按钮里是 <X /> 图标，点到图标笔画时事件目标是最内层的 SVGElement 而不是 HTMLElement；
-  // 原来只判 HTMLElement，会让这一下漏判成拖拽，指针被 header 捕获后 click 就落不到按钮上，
-  // 表现就是"按关闭没反应、反而把窗口拖走了"。所以这里放宽到 Element，让按钮内的图标一并被排除。
-  return target instanceof Element && Boolean(target.closest('button, textarea, input, select, a'))
-}
-
-function capturePointer(event: PointerEvent) {
-  activePointerElement = event.currentTarget as HTMLElement
-  activePointerId = event.pointerId
-  activePointerElement.setPointerCapture(event.pointerId)
-}
-
-function releasePointer() {
-  if (!activePointerElement) {
-    activePointerId = null
-    return
-  }
-
-  if (activePointerId !== null && activePointerElement.hasPointerCapture(activePointerId)) {
-    activePointerElement.releasePointerCapture(activePointerId)
-  }
-
-  activePointerElement = null
-  activePointerId = null
-}
-
-function removePointerListeners() {
-  stopDrag()
-  stopResize()
 }
 
 function focusComposer() {
@@ -607,52 +334,52 @@ function clipText(value: string, maxLength: number) {
 </script>
 
 <template>
-  <div class="agent-floating-layer">
-    <button
-      v-if="!isOpen"
-      type="button"
-      class="agent-floating-launcher"
-      aria-label="打开创作助手"
-      title="创作助手"
-      @click="openFloatingWindow"
-    >
-      <MessageCircle :size="21" :stroke-width="1.8" aria-hidden="true" />
-    </button>
-
+  <Teleport to="body">
+  <div v-if="isOpen" class="assistant-workspace-layer" :class="{ 'assistant-workspace-modal': modalOpen }" :style="panelStyle" @click.self="modalOpen && closeFloatingWindow()">
     <section
-      v-else
+      id="workbench-assistant-panel"
+      ref="dialogRef"
       class="agent-floating-window"
-      :class="{ minimized: isMinimized, dragging: isDragging, resizing: isResizing }"
-      :style="floatingWindowStyle"
-      aria-label="创作助手浮窗"
+      :inert="props.backgroundInert"
+      :role="modalOpen ? 'dialog' : 'complementary'"
+      :aria-modal="modalOpen || undefined"
+      aria-label="创作助手"
+      tabindex="-1"
+      @keydown="handlePanelKeydown"
     >
-      <header class="agent-floating-head" @pointerdown="startDrag">
+      <header class="agent-floating-head">
         <div class="agent-floating-title">
-          <span class="agent-floating-status" :class="{ running: isLoading }"></span>
+          <span class="agent-floating-status" :class="{ running: isLoading, unavailable: assistantStatus === 'error', checking: assistantStatus === 'loading' }" :title="assistantStatus === 'ready' ? '助手已就绪' : assistantStatus === 'error' ? '助手暂时不可用' : '正在连接助手'"></span>
           <div>
             <strong>创作助手</strong>
             <small>{{ floatingWindowSubtitle }}</small>
           </div>
         </div>
         <div class="agent-floating-actions">
-          <button type="button" title="切换会话" @click.stop="isSessionsOpen = !isSessionsOpen">
-            会话
+          <button type="button" title="历史会话" aria-label="历史会话" :aria-expanded="isSessionsOpen" @click.stop="assistantView = 'chat'; isSessionsOpen = !isSessionsOpen">
+            <History :size="17" aria-hidden="true" />
           </button>
-          <button type="button" title="新建会话" @click.stop="startNewConversation">新建</button>
-          <button
-            type="button"
-            :title="isMinimized ? '展开浮窗' : '最小化浮窗'"
-            @click.stop="toggleMinimized"
-          >
-            {{ isMinimized ? '展开' : '收起' }}
-          </button>
-          <button type="button" title="关闭浮窗" aria-label="关闭创作助手" @click.stop="closeFloatingWindow">
+          <button type="button" title="新建会话" aria-label="新建会话" @click.stop="startNewConversation"><SquarePen :size="17" aria-hidden="true" /></button>
+          <button type="button" title="收起创作助手" aria-label="关闭创作助手" @click.stop="closeFloatingWindow">
             <X :size="16" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </div>
       </header>
 
-      <div v-if="!isMinimized" class="agent-floating-body">
+      <nav class="assistant-view-tabs" aria-label="助手工作区">
+        <button type="button" :class="{ active: assistantView === 'chat' }" :aria-pressed="assistantView === 'chat'" @click="assistantView = 'chat'">对话</button>
+        <button type="button" :class="{ active: assistantView === 'plans' }" :aria-pressed="assistantView === 'plans'" @click="showPlans">操作计划 <span v-if="attentionCount">{{ attentionCount }}</span></button>
+      </nav>
+      <div class="agent-floating-body">
+        <div v-show="assistantView === 'plans'" ref="planListRef" class="agent-floating-content assistant-plan-content" tabindex="-1" aria-label="操作计划列表">
+          <CreatorAssistantPanel ref="businessPanelRef"
+            :task-id="assistantTaskId" :page="route.path" :generating="isStreaming"
+            :step-count="streamingSteps.length" @status="assistantStatus = $event"
+            @attention="attentionPlans = $event"
+            @action-attention="attentionActions = $event"
+          />
+        </div>
+        <div v-show="assistantView === 'chat'" ref="messageListRef" class="agent-floating-content">
         <section v-if="isSessionsOpen" class="agent-floating-session-panel" aria-label="AI 会话列表">
           <button v-if="isSessionsLoading" type="button" class="agent-floating-session-item muted" disabled>
             正在读取会话...
@@ -678,11 +405,6 @@ function clipText(value: string, maxLength: number) {
             @close="sessionsError = ''"
           />
         </section>
-
-        <CreatorAssistantPanel
-          :task-id="assistantTaskId" :page="route.path" :generating="isStreaming"
-          :step-count="streamingSteps.length" @ask="usePromptExample"
-        />
 
         <section v-if="knowledgeContext" class="agent-floating-context-panel" aria-label="已加载的视频上下文">
           <div class="agent-floating-context-head">
@@ -714,12 +436,11 @@ function clipText(value: string, maxLength: number) {
           </div>
         </section>
 
-        <div ref="messageListRef" class="message-list agent-floating-message-list">
+        <div class="message-list agent-floating-message-list">
           <div v-if="messages.length === 0" class="agent-floating-empty">
-            <p>描述你想完成的工作。我会查询当前状态、补问缺少的信息，并展示待确认的具体计划。</p>
-            <div class="agent-floating-tags">
-              <span v-for="tag in capabilityTags" :key="tag">{{ tag }}</span>
-            </div>
+            <span class="assistant-welcome-mark" aria-hidden="true"><Sparkles :size="26" :stroke-width="1.6" /></span>
+            <h3>今天想完成什么？</h3>
+            <p>从一个想法开始，或让我帮你看看下一步。</p>
             <div class="agent-floating-prompts">
               <button
                 v-for="example in promptExamples"
@@ -728,6 +449,7 @@ function clipText(value: string, maxLength: number) {
                 @click="usePromptExample(example)"
               >
                 {{ example }}
+                <ChevronRight :size="15" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -808,14 +530,15 @@ function clipText(value: string, maxLength: number) {
             </div>
           </div>
         </div>
+        </div>
 
-        <div class="agent-floating-meta">
+        <div v-if="props.developerMode && assistantView === 'chat'" class="agent-floating-meta">
           <span>{{ messages.length }} 条消息</span>
           <span v-if="props.developerMode">{{ latestStepCount }} 个推理步骤</span>
           <span>{{ sessionId && props.developerMode ? '当前会话' : '当前对话' }}</span>
         </div>
 
-        <div v-if="props.developerMode" class="agent-mode-switch" aria-label="AI 执行模式">
+        <div v-if="props.developerMode && assistantView === 'chat'" class="agent-mode-switch" aria-label="AI 执行模式">
           <button
             v-for="option in executionModeOptions"
             :key="option.value"
@@ -842,11 +565,16 @@ function clipText(value: string, maxLength: number) {
           @close="errorMessage = ''"
         />
 
-        <ChatComposer
+        <div v-if="assistantView === 'chat' && attentionCount" class="assistant-plan-attention" role="status">
+          <div><strong>{{ attentionLabel }}</strong><span>{{ attentionTitle }}</span></div>
+          <button type="button" @click="showPlans">{{ needsConfirmation ? '查看并确认' : '查看计划' }}<ChevronRight :size="14" aria-hidden="true" /></button>
+        </div>
+        <div v-if="assistantView === 'chat' && assistantStatus === 'error'" class="assistant-connection-notice" role="alert">助手连接异常 <button type="button" @click="showPlans">查看原因与重试</button></div>
+        <ChatComposer v-show="assistantView === 'chat'"
           ref="composerRef"
           placeholder="描述你想完成的工作，我会先列出具体计划…"
           v-model="inputMessage"
-          :can-send="canSend"
+          :can-send="canSend && assistantStatus === 'ready'"
           :is-loading="isLoading"
           :is-streaming="isStreaming"
           @send-message="sendFloatingMessage"
@@ -854,26 +582,7 @@ function clipText(value: string, maxLength: number) {
         />
       </div>
 
-      <button
-        v-if="!isMinimized"
-        type="button"
-        class="agent-floating-resize agent-floating-resize-se"
-        aria-label="拖动调整 AI 交互台大小"
-        title="拖动调整大小"
-        @pointerdown.stop="startResize($event, 'se')"
-      ></button>
-      <template v-if="!isMinimized">
-        <button
-          v-for="direction in resizeDirections"
-          :key="direction"
-          type="button"
-          class="agent-floating-resize-edge"
-          :class="`agent-floating-resize-${direction}`"
-          aria-label="拖动调整 AI 交互台大小"
-          title="拖动调整大小"
-          @pointerdown.stop="startResize($event, direction)"
-        ></button>
-      </template>
     </section>
   </div>
+  </Teleport>
 </template>

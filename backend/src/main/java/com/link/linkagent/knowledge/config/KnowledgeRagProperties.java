@@ -22,6 +22,17 @@ public class KnowledgeRagProperties {
      */
     private boolean enabled = false;
 
+    /** 只自动推进待索引记录，失败项保留给作者明确重试，避免定时任务重复扣费。 */
+    private boolean autoIndexEnabled = true;
+
+    public boolean isAutoIndexEnabled() {
+        return autoIndexEnabled;
+    }
+
+    public void setAutoIndexEnabled(boolean autoIndexEnabled) {
+        this.autoIndexEnabled = autoIndexEnabled;
+    }
+
     /**
      * 知识库专用 Milvus 集合名。与反馈集合分开，避免两套语义不同的向量混在一个集合里。
      */

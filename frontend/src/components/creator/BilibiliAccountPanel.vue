@@ -5,6 +5,7 @@
  * 已绑定时展示 UID、昵称和同步状态，未绑定时展示输入区。
  */
 import { ref, onMounted } from 'vue'
+import { errorText } from '@/utils/error'
 import { getBilibiliAccount, bindBilibiliAccount, syncBilibiliVideos } from '@/api/creator'
 import { ApiError } from '@/api/http'
 import type { BilibiliAccount, SyncVideosResult } from '@/types/creator'
@@ -50,7 +51,7 @@ async function loadAccount(showLoading = false) {
     } else {
       // 网络或服务异常时保留上次成功结果，不能把故障伪装成账号未绑定。
       account.value = previousAccount
-      loadError.value = loadFailure instanceof Error ? loadFailure.message : String(loadFailure)
+      loadError.value = errorText(loadFailure, '加载失败，请稍后重试')
     }
   } finally {
     if (showLoading) loading.value = false
@@ -72,8 +73,8 @@ async function handleBind() {
     })
     account.value = result
     emit('accountReady', result)
-  } catch (e: any) {
-    error.value = e?.message || '绑定失败'
+  } catch (e) {
+    error.value = errorText(e, '绑定失败')
   } finally {
     saving.value = false
   }
@@ -93,8 +94,8 @@ async function handleSync() {
     syncMessage.value = `${result.message}：读取 ${result.syncedCount} 条，校验通过 ${result.linkedCount} 条，异常 ${result.anomalyCount} 条。${pageHint}`
     await loadAccount()
     emit('syncCompleted', result)
-  } catch (e: any) {
-    syncMessage.value = e?.message || '同步失败'
+  } catch (e) {
+    syncMessage.value = errorText(e, '同步失败')
     syncTone.value = 'error'
     await loadAccount()
   } finally {
@@ -222,28 +223,28 @@ async function handleSync() {
 
 .account-panel-title {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--fs-md);
   font-weight: 600;
-  color: var(--creator-text, #1d1d1f);
+  color: var(--creator-text, var(--ink));
 }
 
 .account-status-tag {
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 500;
   padding: 2px 8px;
-  border-radius: 100px;
+  border-radius: var(--r-pill);
   background: rgba(0, 0, 0, 0.06);
-  color: var(--creator-muted-ink, #86868b);
+  color: var(--creator-muted-ink, var(--muted));
 }
 
 .account-status-tag.is-active {
   background: rgba(52, 199, 89, 0.12);
-  color: #248a3d;
+  color: var(--ok);
 }
 
 .account-status-tag.is-failed {
   background: rgba(255, 59, 48, 0.1);
-  color: #c93400;
+  color: var(--danger);
 }
 
 .account-info {
@@ -259,14 +260,14 @@ async function handleSync() {
 }
 
 .account-info-label {
-  font-size: 13px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-sm);
+  color: var(--creator-muted-ink, var(--muted));
   min-width: 64px;
 }
 
 .account-info-value {
-  font-size: 14px;
-  color: var(--creator-text, #1d1d1f);
+  font-size: var(--fs-base);
+  color: var(--creator-text, var(--ink));
 }
 
 .account-actions {
@@ -274,14 +275,14 @@ async function handleSync() {
 }
 
 .account-sync-message {
-  font-size: 13px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-sm);
+  color: var(--creator-muted-ink, var(--muted));
   margin: 4px 0 0;
   line-height: 1.5;
 }
 
 .account-sync-message.is-success {
-  color: #248a3d;
+  color: var(--ok);
 }
 
 .account-sync-message.is-warning {
@@ -289,13 +290,13 @@ async function handleSync() {
 }
 
 .account-sync-message.is-error {
-  color: #c93400;
+  color: var(--danger);
 }
 
 .account-sync-warnings {
   margin: 0;
   padding-left: 18px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: #9a5b00;
 }
@@ -313,20 +314,20 @@ async function handleSync() {
 }
 
 .account-bind-label {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 500;
-  color: var(--creator-text, #1d1d1f);
+  color: var(--creator-text, var(--ink));
 }
 
 .account-error {
-  font-size: 13px;
-  color: #ff3b30;
+  font-size: var(--fs-sm);
+  color: var(--danger);
   margin: 0;
 }
 
 .account-loading {
-  font-size: 14px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-base);
+  color: var(--creator-muted-ink, var(--muted));
   margin: 0;
 }
 
@@ -340,7 +341,7 @@ async function handleSync() {
   background: rgba(220, 38, 38, 0.06);
   border: 1px solid rgba(220, 38, 38, 0.16);
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
 }
 </style>

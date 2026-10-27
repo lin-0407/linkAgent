@@ -27,17 +27,19 @@ function handleValueChange(key: string, event: Event) {
 
 <template>
   <section class="creator-section settings-section">
-    <button
-      type="button"
-      class="settings-section-toggle"
-      :aria-expanded="!collapsed"
-      @click="emit('toggleSection')"
-    >
-      <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
-      <h3>运行期开关</h3>
-      <span class="settings-section-hint" v-if="collapsed">
-        {{ toggles.filter(t => t.enabled).length }}/{{ toggles.length }} 已开启
-      </span>
+    <div class="settings-section-heading">
+      <button
+        type="button"
+        class="settings-section-toggle"
+        :aria-expanded="!collapsed"
+        @click="emit('toggleSection')"
+      >
+        <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
+        <span class="settings-section-title">运行期开关</span>
+        <span class="settings-section-hint" v-if="collapsed">
+          {{ toggles.filter(t => t.enabled).length }}/{{ toggles.length }} 已开启
+        </span>
+      </button>
       <button
         type="button"
         class="creator-secondary-action"
@@ -46,7 +48,7 @@ function handleValueChange(key: string, event: Event) {
       >
         {{ loading ? '刷新中…' : '刷新' }}
       </button>
-    </button>
+    </div>
 
     <div v-if="!collapsed" class="settings-section-body">
       <div v-if="error" class="creator-alert error-alert">
@@ -121,7 +123,7 @@ function handleValueChange(key: string, event: Event) {
 
 .settings-section-toggle h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   flex: 0 0 auto;
 }
@@ -131,10 +133,10 @@ function handleValueChange(key: string, event: Event) {
   place-items: center;
   width: 20px;
   height: 20px;
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1;
   color: var(--muted);
-  transition: transform 180ms ease;
+  transition: transform var(--dur-fast) ease;
 }
 
 .settings-section-chevron.open {
@@ -148,7 +150,7 @@ function handleValueChange(key: string, event: Event) {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-regular);
 }
 
@@ -181,7 +183,7 @@ function handleValueChange(key: string, event: Event) {
 
 .settings-value-card strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
 }
 
@@ -189,13 +191,13 @@ function handleValueChange(key: string, event: Event) {
   display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .settings-value-card p {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
 }
 
@@ -208,7 +210,7 @@ function handleValueChange(key: string, event: Event) {
   border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
   font-family: var(--font-code);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .settings-value-select:disabled {
@@ -230,7 +232,7 @@ function handleValueChange(key: string, event: Event) {
 
 .settings-toggle-card strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
 }
 
@@ -238,13 +240,13 @@ function handleValueChange(key: string, event: Event) {
   display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .settings-toggle-card p {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
 }
 
@@ -258,11 +260,11 @@ function handleValueChange(key: string, event: Event) {
   border-radius: var(--r-sm);
   cursor: pointer;
   font-weight: var(--fw-semibold);
-  font-size: 14px;
+  font-size: var(--fs-base);
   transition:
-    background 180ms ease,
-    color 180ms ease,
-    border-color 180ms ease;
+    background var(--dur-fast) ease,
+    color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
 }
 
 .settings-switch.enabled {

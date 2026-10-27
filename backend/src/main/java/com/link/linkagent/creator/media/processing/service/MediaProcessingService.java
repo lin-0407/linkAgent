@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.NullNode;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
+import com.link.linkagent.creator.media.access.InternalMediaAcceptance;
 import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingAssetReadUrlResponse;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingAssetRecord;
@@ -67,6 +68,25 @@ public class MediaProcessingService {
         this.objectMapper = objectMapper;
     }
 
+    private void ensureNoCreationRun(String taskId, String ownerId) {
+        if (mediaUploadMapper.countActiveCreationRuns(taskId, ownerId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "制作运行尚未结束，请使用制作入口管理媒体任务");
+        }
+    }
+
+    /**
+     * 内部受理：整片运行持有执行租约时创建子任务。
+     * 必须由调用方核对运行、版本与租约，普通人工入口不会走这条分支。
+     */
+    private void ensureInternalAcceptance(String taskId, String ownerId, String versionId,
+                                          InternalMediaAcceptance acceptance) {
+        if (acceptance == null) {
+            ensureNoCreationRun(taskId, ownerId);
+            return;
+        }
+        acceptance.verify(taskId, ownerId, versionId);
+    }
+
     public MediaProcessingEstimate estimate(String ownerId,
                                             String taskId,
                                             String versionId,
@@ -84,9 +104,21 @@ public class MediaProcessingService {
                                                 String taskId,
                                                 String versionId,
                                                 MediaProcessingOptionsRequest options) {
+        return createJob(ownerId, taskId, versionId, options, null);
+    }
+
+    @Transactional
+    public MediaProcessingJobResponse createJob(String ownerId,
+                                                String taskId,
+                                                String versionId,
+                                                MediaProcessingOptionsRequest options,
+                                                InternalMediaAcceptance acceptance) {
         validateEnabledConfiguration();
+        mediaUploadMapper.lockMediaTask(taskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
         processingMapper.lockDraftVersion(taskId, ownerId, versionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        ensureInternalAcceptance(taskId, ownerId, versionId, acceptance);
         DraftVideoRecord draft = requireReadyDraft(ownerId, taskId, versionId);
         MediaProcessingJobRecord current = processingMapper.findCurrentJob(taskId, ownerId, versionId)
                 .orElse(null);
@@ -177,8 +209,11 @@ public class MediaProcessingService {
                                                String versionId,
                                                String jobId) {
         // 重试也锁定成片记录，避免用户删除媒体的同时把失败任务重新排队。
+        mediaUploadMapper.lockMediaTask(taskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
         processingMapper.lockDraftVersion(taskId, ownerId, versionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
+        ensureNoCreationRun(taskId, ownerId);
         requireReadyDraft(ownerId, taskId, versionId);
         MediaProcessingJobRecord job = requireJob(ownerId, taskId, versionId, jobId);
         if (!"FAILED".equals(job.status())) {

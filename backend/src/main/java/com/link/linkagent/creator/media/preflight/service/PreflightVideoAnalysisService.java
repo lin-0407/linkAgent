@@ -42,6 +42,7 @@ public class PreflightVideoAnalysisService {
     private final Supplier<String> callIdSupplier;
     private final Supplier<String> evidenceIdSupplier;
     private final Supplier<String> issueIdSupplier;
+    private final MediaCallChargeGate chargeGate;
 
     @Autowired
     public PreflightVideoAnalysisService(CreatorMediaProperties properties,
@@ -49,10 +50,11 @@ public class PreflightVideoAnalysisService {
                                          MediaProcessingMapper processingMapper,
                                          ObjectStorageService storage,
                                          VideoUnderstandingProvider provider,
-                                         ObjectMapper objectMapper) {
+                                         ObjectMapper objectMapper,
+                                         MediaCallChargeGate chargeGate) {
         this(properties, mapper, processingMapper, storage, provider, objectMapper,
                 () -> UUID.randomUUID().toString(), () -> UUID.randomUUID().toString(),
-                () -> UUID.randomUUID().toString());
+                () -> UUID.randomUUID().toString(), chargeGate);
     }
 
     PreflightVideoAnalysisService(CreatorMediaProperties properties,
@@ -64,6 +66,20 @@ public class PreflightVideoAnalysisService {
                                   Supplier<String> callIdSupplier,
                                   Supplier<String> evidenceIdSupplier,
                                   Supplier<String> issueIdSupplier) {
+        this(properties, mapper, processingMapper, storage, provider, objectMapper,
+                callIdSupplier, evidenceIdSupplier, issueIdSupplier, MediaCallChargeGate.NOOP);
+    }
+
+    PreflightVideoAnalysisService(CreatorMediaProperties properties,
+                                  PreflightReviewMapper mapper,
+                                  MediaProcessingMapper processingMapper,
+                                  ObjectStorageService storage,
+                                  VideoUnderstandingProvider provider,
+                                  ObjectMapper objectMapper,
+                                  Supplier<String> callIdSupplier,
+                                  Supplier<String> evidenceIdSupplier,
+                                  Supplier<String> issueIdSupplier,
+                                  MediaCallChargeGate chargeGate) {
         this.properties = properties;
         this.mapper = mapper;
         this.processingMapper = processingMapper;
@@ -73,6 +89,7 @@ public class PreflightVideoAnalysisService {
         this.callIdSupplier = callIdSupplier;
         this.evidenceIdSupplier = evidenceIdSupplier;
         this.issueIdSupplier = issueIdSupplier;
+        this.chargeGate = chargeGate;
     }
 
     public Result analyze(PreflightReviewRecord review, PreflightStepRecord step) {
@@ -93,10 +110,20 @@ public class PreflightVideoAnalysisService {
                 estimatedVideoCost(review)) != 1) {
             throw new VideoAnalysisException("视频理解调用记录创建失败");
         }
+        // 先预留再发送：响应丢失时这笔预留保留为待核实，不会被当作零费用。
+        // 预处理任务已给出预估时用精确值，否则退回该能力的保守上界。
+        BigDecimal estimate = estimatedVideoCost(review);
+        if (estimate == null) estimate = chargeGate.upperBound("MEDIA_VIDEO");
+        String chargeKey = "video-" + review.reviewId() + "-" + callId;
+        boolean sent = false;
         try {
+            var charge = chargeGate.reserve(review.reviewId(), "MEDIA_VIDEO", chargeKey,
+                    estimate, "视频理解 " + properties.getPreflight().getVideoModel());
             String videoUrl = storage.presignGetObject(
                     preview.bucketName(), preview.objectKey(), properties.getProcessing().getProviderReadTtl()
             ).url();
+            if (!charge.markSent()) throw new VideoAnalysisException("视频理解调用已发送，不能重复提交");
+            sent = true;
             VideoUnderstandingProvider.AnalysisResult providerResult = provider.analyze(
                     videoUrl, buildPrompt(review, preview.durationMs(), existingEvidence)
             );
@@ -133,9 +160,13 @@ public class PreflightVideoAnalysisService {
                     actualCost, issueCount) != 1) {
                 throw new VideoAnalysisException("视频理解用量保存失败");
             }
+            if (actualCost == null) chargeGate.unknown(review.reviewId(), chargeKey);
+            else chargeGate.settle(review.reviewId(), chargeKey, actualCost, "video-" + callId);
             return new Result(parsed.executiveSummary(), issueCount, actualCost);
         } catch (RuntimeException exception) {
             mapper.failVideoCall(callId, "VIDEO_ANALYSIS_FAILED", truncate(exception.getMessage()));
+            // 只有真正发出过请求才可能是未知费用；未发送的预留由运行收尾释放。
+            if (sent) chargeGate.unknown(review.reviewId(), chargeKey);
             throw exception instanceof VideoAnalysisException
                     ? exception : new VideoAnalysisException("视频理解调用失败", exception);
         }
@@ -171,7 +202,8 @@ public class PreflightVideoAnalysisService {
                 JsonNode refsNode = node.path("evidenceRefs");
                 if (refsNode.isArray()) {
                     refsNode.forEach(ref -> {
-                        if (ref.isTextual() && validEvidenceIds.contains(ref.asText())) refs.add(ref.asText());
+                        if (ref.isTextual() && validEvidenceIds.contains(ref.asText()) && existingEvidence.stream()
+                                .anyMatch(e->e.evidenceId().equals(ref.asText()) && e.startMs()<=endMs && e.endMs()>=startMs)) refs.add(ref.asText());
                     });
                 }
                 BigDecimal confidence = BigDecimal.valueOf(node.path("confidence").asDouble(-1));
@@ -183,7 +215,7 @@ public class PreflightVideoAnalysisService {
                         requiredText(node, "issueType"), requiredText(node, "dimension"),
                         requiredText(node, "title"), requiredText(node, "description"),
                         startMs, endMs, severity, confidence, refs, suggestedAction,
-                        node.path("needsHumanReview").asBoolean(false)
+                        refs.isEmpty() || node.path("needsHumanReview").asBoolean(false)
                 ));
             }
             return new ParsedAnalysis(summary.trim(), issues);
@@ -249,10 +281,11 @@ public class PreflightVideoAnalysisService {
     }
 
     private BigDecimal actualVideoCost(Long inputTokens, Long outputTokens) {
-        if (inputTokens == null && outputTokens == null) return null;
-        BigDecimal input = BigDecimal.valueOf(inputTokens == null ? 0 : inputTokens)
+        // 缺失的计费维度必须保留未知，不能用部分用量结清整次调用。
+        if (inputTokens == null || outputTokens == null) return null;
+        BigDecimal input = BigDecimal.valueOf(inputTokens)
                 .multiply(properties.getProcessing().getPlusInputUsdPerMillionTokens());
-        BigDecimal output = BigDecimal.valueOf(outputTokens == null ? 0 : outputTokens)
+        BigDecimal output = BigDecimal.valueOf(outputTokens)
                 .multiply(properties.getProcessing().getPlusOutputUsdPerMillionTokens());
         return input.add(output).divide(BigDecimal.valueOf(1_000_000L), 8, RoundingMode.HALF_UP);
     }

@@ -29,17 +29,19 @@ function statusLabel(status: string) {
 
 <template>
   <section class="creator-section settings-section">
-    <button
-      type="button"
-      class="settings-section-toggle"
-      :aria-expanded="!collapsed"
-      @click="emit('toggleSection')"
-    >
-      <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
-      <h3>连通性检测</h3>
-      <span class="settings-section-hint" v-if="collapsed">
-        点击展开后可检测 MySQL、Redis、向量库和模型连接
-      </span>
+    <div class="settings-section-heading">
+      <button
+        type="button"
+        class="settings-section-toggle"
+        :aria-expanded="!collapsed"
+        @click="emit('toggleSection')"
+      >
+        <span class="settings-section-chevron" :class="{ open: !collapsed }">▸</span>
+        <span class="settings-section-title">连通性检测</span>
+        <span class="settings-section-hint" v-if="collapsed">
+          点击展开后可检测 MySQL、Redis、向量库和模型连接
+        </span>
+      </button>
       <button
         type="button"
         class="creator-secondary-action"
@@ -48,7 +50,7 @@ function statusLabel(status: string) {
       >
         {{ loading ? '检测中…' : '检测连接' }}
       </button>
-    </button>
+    </div>
 
     <div v-if="!collapsed" class="settings-section-body">
       <div v-if="error" class="creator-alert error-alert">
@@ -98,7 +100,7 @@ function statusLabel(status: string) {
 
 .settings-section-toggle h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   flex: 0 0 auto;
 }
@@ -108,10 +110,10 @@ function statusLabel(status: string) {
   place-items: center;
   width: 20px;
   height: 20px;
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1;
   color: var(--muted);
-  transition: transform 180ms ease;
+  transition: transform var(--dur-fast) ease;
 }
 
 .settings-section-chevron.open {
@@ -125,7 +127,7 @@ function statusLabel(status: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-regular);
 }
 
@@ -153,7 +155,7 @@ function statusLabel(status: string) {
   width: fit-content;
   padding: 2px 8px;
   border-radius: var(--r-pill);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -186,14 +188,14 @@ function statusLabel(status: string) {
 
 .settings-connectivity-card strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
 }
 
 .settings-connectivity-card p {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
 }
 </style>

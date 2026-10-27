@@ -338,7 +338,8 @@ public interface CreatorBilibiliMapper {
                 bilibili_uid,
                 bvid,
                 binding_status,
-                verify_message
+                verify_message,
+                published_version_id
             )
             VALUES (
                 #{bindingId},
@@ -347,7 +348,8 @@ public interface CreatorBilibiliMapper {
                 #{bilibiliUid},
                 #{bvid},
                 #{bindingStatus},
-                #{verifyMessage}
+                #{verifyMessage},
+                #{publishedVersionId}
             )
             """)
     int insertBinding(TaskVideoBindingRecord record);
@@ -365,6 +367,8 @@ public interface CreatorBilibiliMapper {
                    bvid,
                    binding_status,
                    verify_message,
+                   published_version_id,
+                   published_snapshot_json,
                    create_time,
                    update_time
             FROM creator_task_video_binding
@@ -381,10 +385,62 @@ public interface CreatorBilibiliMapper {
             @Result(column = "bvid", property = "bvid"),
             @Result(column = "binding_status", property = "bindingStatus"),
             @Result(column = "verify_message", property = "verifyMessage"),
+            @Result(column = "published_version_id", property = "publishedVersionId"),
+            @Result(column = "published_snapshot_json", property = "publishedSnapshotJson"),
             @Result(column = "create_time", property = "createTime"),
             @Result(column = "update_time", property = "updateTime")
     })
     Optional<TaskVideoBindingRecord> findBindingByTaskId(@Param("taskId") String taskId);
+
+    /** 同步结果落库前读取最新绑定，避免事务快照仍返回同步开始前的 BV。 */
+    @Select("""
+            SELECT * FROM creator_task_video_binding
+            WHERE task_id = #{taskId} AND is_deleted = 0
+            LIMIT 1 FOR UPDATE
+            """)
+    @ResultMap("TaskVideoBindingRecordMap")
+    Optional<TaskVideoBindingRecord> lockBindingByTaskId(@Param("taskId") String taskId);
+
+    /** 仅新模式的已核验绑定可以首次冻结，重同步不覆盖文案，旧未知版本不补造历史。 */
+    @Update("""
+            UPDATE creator_task_video_binding b
+            JOIN creator_bilibili_video v ON v.bvid = b.bvid AND v.bilibili_uid = b.bilibili_uid
+                AND v.sync_status = 'SYNCED' AND v.is_deleted = 0
+            SET b.published_snapshot_json = JSON_OBJECT('schemaVersion', 1, 'source', 'BILIBILI_PUBLIC_CACHE',
+                'bvid', b.bvid, 'uid', b.bilibili_uid, 'versionId', b.published_version_id,
+                'title', v.title, 'publishTime', v.publish_time, 'capturedAt', CURRENT_TIMESTAMP,
+                'raw', JSON_OBJECT('desc', v.raw_snapshot->'$.desc', 'description', v.raw_snapshot->'$.description',
+                    'tname', v.raw_snapshot->'$.tname', 'tid', v.raw_snapshot->'$.tid',
+                    'typeid', v.raw_snapshot->'$.typeid',
+                    'tname_v2', v.raw_snapshot->'$.tname_v2', 'tid_v2', v.raw_snapshot->'$.tid_v2',
+                    'tags', v.raw_snapshot->'$.tags', 'tag', v.raw_snapshot->'$.tag'))
+            WHERE b.binding_id = #{bindingId} AND b.binding_status = 'BOUND' AND b.is_deleted = 0
+                AND b.published_version_id IS NOT NULL AND b.published_snapshot_json IS NULL
+                AND (NULLIF(v.raw_snapshot->>'$.bvid', 'null') IS NULL OR v.raw_snapshot->>'$.bvid' IN ('', b.bvid))
+                AND (NULLIF(v.raw_snapshot->>'$.owner.mid', 'null') IS NULL OR v.raw_snapshot->>'$.owner.mid' IN ('', b.bilibili_uid))
+                AND (NULLIF(v.raw_snapshot->>'$.mid', 'null') IS NULL OR v.raw_snapshot->>'$.mid' IN ('', b.bilibili_uid))
+            """)
+    int freezePublishedSnapshot(@Param("bindingId") String bindingId);
+
+    /** 归属核验通过就是历史发布事实，后续同步异常不能把已发布视频重新变成未发布。 */
+    @Update("""
+            UPDATE creator_draft_video d JOIN creator_task_video_binding b
+                ON b.published_version_id = d.version_id AND b.task_id = d.task_id AND b.user_id = d.owner_id
+            SET d.published_flag = 1
+            WHERE b.binding_id = #{bindingId} AND b.binding_status = 'BOUND' AND b.is_deleted = 0
+                AND d.is_deleted = 0 AND d.published_flag = 0
+            """)
+    int markBoundVersionPublished(@Param("bindingId") String bindingId);
+
+    @Select("""
+            SELECT COUNT(*) FROM creator_task_video_binding b
+            WHERE b.binding_id = #{bindingId} AND b.is_deleted = 0
+                AND (b.published_snapshot_json IS NOT NULL OR EXISTS (
+                    SELECT 1 FROM creator_draft_video d WHERE d.version_id = b.published_version_id
+                    AND d.task_id = b.task_id AND d.owner_id = b.user_id AND d.published_flag = 1
+                    AND d.is_deleted = 0))
+            """)
+    int countPermanentPublishingFact(@Param("bindingId") String bindingId);
 
     /**
      * 更新绑定状态和校验说明。
@@ -413,6 +469,8 @@ public interface CreatorBilibiliMapper {
                 bvid = #{bvid},
                 binding_status = #{bindingStatus},
                 verify_message = #{verifyMessage},
+                published_version_id = #{publishedVersionId},
+                published_snapshot_json = NULL,
                 update_time = CURRENT_TIMESTAMP
             WHERE binding_id = #{bindingId}
               AND is_deleted = 0
@@ -422,7 +480,8 @@ public interface CreatorBilibiliMapper {
                              @Param("bilibiliUid") String bilibiliUid,
                              @Param("bvid") String bvid,
                              @Param("bindingStatus") String bindingStatus,
-                             @Param("verifyMessage") String verifyMessage);
+                             @Param("verifyMessage") String verifyMessage,
+                             @Param("publishedVersionId") String publishedVersionId);
 
     /**
      * 按 BV 号查所有未删除绑定，用于冲突检测。
@@ -437,6 +496,8 @@ public interface CreatorBilibiliMapper {
                    bvid,
                    binding_status,
                    verify_message,
+                   published_version_id,
+                   published_snapshot_json,
                    create_time,
                    update_time
             FROM creator_task_video_binding
@@ -459,6 +520,8 @@ public interface CreatorBilibiliMapper {
                    bvid,
                    binding_status,
                    verify_message,
+                   published_version_id,
+                   published_snapshot_json,
                    create_time,
                    update_time
             FROM creator_task_video_binding
@@ -484,6 +547,8 @@ public interface CreatorBilibiliMapper {
                    bvid,
                    binding_status,
                    verify_message,
+                   published_version_id,
+                   published_snapshot_json,
                    create_time,
                    update_time
             FROM creator_task_video_binding

@@ -99,7 +99,7 @@ function formatCount(n: number | null): string {
   border-radius: var(--r);
   overflow: hidden;
   cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s;
+  transition: background-color var(--dur-fast), border-color var(--dur-fast);
   display: flex;
   flex-direction: column;
 }
@@ -146,10 +146,10 @@ function formatCount(n: number | null): string {
 
 .card-title {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: 500;
   line-height: 1.4;
-  color: var(--creator-text, #1d1d1f);
+  color: var(--creator-text, var(--ink));
   /* 最多两行，超出省略 */
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -166,16 +166,16 @@ function formatCount(n: number | null): string {
 
 .card-bv {
   font-family: 'SF Mono', 'Cascadia Code', monospace;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   color: var(--creator-accent, #0071e3);
   background: var(--creator-surface-sub, #f5f5f7);
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: var(--r-xs);
 }
 
 .card-time {
-  font-size: 12px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-xs);
+  color: var(--creator-muted-ink, var(--muted));
 }
 
 /* 指标 */
@@ -188,8 +188,8 @@ function formatCount(n: number | null): string {
   display: flex;
   align-items: center;
   gap: 2px;
-  font-size: 12px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-xs);
+  color: var(--creator-muted-ink, var(--muted));
 }
 
 .card-stat-icon {
@@ -206,11 +206,11 @@ function formatCount(n: number | null): string {
 }
 
 .card-task-tag {
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   color: var(--creator-accent, #0071e3);
   background: rgba(0, 113, 227, 0.08);
   padding: 2px 8px;
-  border-radius: 100px;
+  border-radius: var(--r-pill);
   max-width: 140px;
   overflow: hidden;
   white-space: nowrap;
@@ -218,11 +218,11 @@ function formatCount(n: number | null): string {
 }
 
 .card-analysis-tag {
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   padding: 2px 8px;
-  border-radius: 100px;
+  border-radius: var(--r-pill);
   background: rgba(0, 0, 0, 0.05);
-  color: var(--creator-muted-ink, #86868b);
+  color: var(--creator-muted-ink, var(--muted));
 }
 
 </style>

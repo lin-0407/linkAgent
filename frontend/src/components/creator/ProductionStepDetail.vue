@@ -125,21 +125,21 @@ header {
 .production-detail-kicker {
   margin: 0 0 6px;
   color: var(--accent-strong);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
 }
 
 h3 {
   margin: 0;
   color: var(--ink);
-  font-size: 22px;
+  font-size: var(--fs-2xl);
   letter-spacing: 0;
 }
 
 .production-status {
   flex: 0 0 auto;
   color: var(--accent-strong);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   white-space: nowrap;
 }
@@ -173,7 +173,7 @@ h3 {
 h4 {
   margin: 0 0 8px;
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 ul,
@@ -181,7 +181,7 @@ ol {
   margin: 0;
   padding-left: 19px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.7;
 }
 
@@ -209,14 +209,14 @@ ol {
 
 .tool-verified {
   color: var(--ok);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .tool-source_required,
 .tool-stale,
 .tool-failed {
   color: var(--warn);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 footer {
@@ -268,7 +268,7 @@ footer .muted-action {
 
 .production-empty-detail span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 @media (max-width: 680px) {

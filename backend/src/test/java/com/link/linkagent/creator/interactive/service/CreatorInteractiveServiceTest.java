@@ -6,6 +6,7 @@ import com.link.linkagent.creator.interactive.mapper.CreatorInteractiveMapper;
 import com.link.linkagent.creator.interactive.model.InteractiveSessionRecord;
 import com.link.linkagent.creator.task.service.CreatorTaskService;
 import com.link.linkagent.llm.LLMService;
+import com.link.linkagent.support.TestTransactions;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -34,7 +35,8 @@ class CreatorInteractiveServiceTest {
                 mock(CreatorTaskService.class),
                 mock(LLMService.class),
                 new ObjectMapper(),
-                mock(DocumentExtractionService.class)
+                mock(DocumentExtractionService.class),
+                TestTransactions.directTemplate()
         );
 
         var response = service.getInteractiveTask("task-1");
@@ -62,7 +64,8 @@ class CreatorInteractiveServiceTest {
                 mock(CreatorTaskService.class),
                 mock(LLMService.class),
                 new ObjectMapper(),
-                mock(DocumentExtractionService.class)
+                mock(DocumentExtractionService.class),
+                TestTransactions.directTemplate()
         );
 
         var response = service.getInteractiveTask("task-1");

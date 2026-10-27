@@ -10,6 +10,7 @@
  * 内联会使 KnowledgeWorkspace 的 script 和 template 过于臃肿。
  */
 import { computed, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { analyzeCompetitorByReference, listCreatorTasks } from '@/api/creator'
 import type { ReferenceVideo } from '@/types/knowledge'
 import type { CreatorCompetitorReport, CreatorTaskSummary } from '@/types/creator'
@@ -43,7 +44,7 @@ async function loadTasks() {
       .filter((task) => eligibleStatuses.has(task.status))
   } catch (err) {
     tasks.value = []
-    tasksError.value = err instanceof Error ? err.message : String(err)
+    tasksError.value = errorText(err, '读取任务列表失败，请稍后重试')
   } finally {
     tasksLoading.value = false
   }
@@ -87,7 +88,7 @@ async function startAnalysis() {
     })
     hasAnalyzed.value = true
   } catch (err) {
-    analyzeError.value = err instanceof Error ? err.message : String(err)
+    analyzeError.value = errorText(err, '分析失败，请稍后重试')
   } finally {
     analyzing.value = false
   }
@@ -327,7 +328,7 @@ function formatJsonField(value: string | null): string {
 
 .competitor-analysis-target strong {
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .competitor-analysis-target span {
@@ -335,7 +336,7 @@ function formatJsonField(value: string | null): string {
 }
 
 .competitor-analysis-target small {
-  color: var(--text-secondary, #666);
+  color: var(--text-secondary, var(--muted));
 }
 
 .competitor-analysis-fieldset {
@@ -354,7 +355,7 @@ function formatJsonField(value: string | null): string {
 
 .competitor-analysis-label > span {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
 }
 
@@ -367,13 +368,13 @@ function formatJsonField(value: string | null): string {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .competitor-analysis-select:focus,
 .competitor-analysis-input:focus {
   outline: none;
-  border-color: var(--accent, #1a73e8);
+  border-color: var(--accent);
 }
 
 .competitor-analysis-actions {
@@ -390,7 +391,7 @@ function formatJsonField(value: string | null): string {
 }
 
 .competitor-analysis-result-title {
-  font-size: 16px;
+  font-size: var(--fs-md);
   font-weight: var(--fw-semibold);
   margin: 0 0 var(--s3) 0;
 }
@@ -400,7 +401,7 @@ function formatJsonField(value: string | null): string {
 }
 
 .competitor-analysis-section h5 {
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   color: var(--text);
   margin: 0 0 var(--s2) 0;
@@ -420,7 +421,7 @@ function formatJsonField(value: string | null): string {
   padding: var(--s3);
   background: var(--surface-dim, #f8f9fa);
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
@@ -433,6 +434,6 @@ function formatJsonField(value: string | null): string {
 }
 
 .error-text {
-  color: var(--danger, #d93025);
+  color: var(--danger);
 }
 </style>

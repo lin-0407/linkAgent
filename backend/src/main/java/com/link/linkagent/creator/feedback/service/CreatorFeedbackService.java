@@ -1,5 +1,7 @@
 package com.link.linkagent.creator.feedback.service;
 
+import com.link.linkagent.creator.bilibili.service.CreatorPublishedVideoContextService;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -157,6 +159,7 @@ public class CreatorFeedbackService {
     private final CreatorTaskMapper creatorTaskMapper;
     /** 任务视频绑定数据访问层，用于保证反馈只发生在已发布视频完成 BV 校验之后 */
     private final CreatorBilibiliMapper creatorBilibiliMapper;
+    private final CreatorPublishedVideoContextService publishedVideoContextService;
     /** 反馈数据访问层，负责评论弹幕明细、报告、指标的 CRUD */
     private final CreatorFeedbackMapper creatorFeedbackMapper;
     /** 复盘链路失效访问层，反馈变化后清理不再可信的下游分析结果 */
@@ -183,7 +186,8 @@ public class CreatorFeedbackService {
                                   TransactionTemplate transactionTemplate,
                                   CreatorFeedbackEvidenceRetrievalService evidenceRetrievalService,
                                   PromptService promptService,
-                                  CreatorMediaWorkflowGateService mediaWorkflowGateService) {
+                                  CreatorMediaWorkflowGateService mediaWorkflowGateService,
+                                  CreatorPublishedVideoContextService publishedVideoContextService) {
         this.creatorTaskMapper = creatorTaskMapper;
         this.creatorBilibiliMapper = creatorBilibiliMapper;
         this.creatorFeedbackMapper = creatorFeedbackMapper;
@@ -194,6 +198,7 @@ public class CreatorFeedbackService {
         this.evidenceRetrievalService = evidenceRetrievalService;
         this.promptService = promptService;
         this.mediaWorkflowGateService = mediaWorkflowGateService;
+        this.publishedVideoContextService = publishedVideoContextService;
     }
 
     /**
@@ -1737,7 +1742,8 @@ public class CreatorFeedbackService {
         ));
         // 在模板之外补充统计，已有数据库模板和用户自定义模板也能立即获得真实条数。
         return renderedPrompt + "\n\n" + buildFeedbackSampleContext(taskRecord.getTaskId(), feedbackRecord)
-                + "\n\n【任务标识与反馈内容依据】\n" + TASK_NAME_EVIDENCE_BOUNDARY;
+                + "\n\n【任务标识与反馈内容依据】\n" + TASK_NAME_EVIDENCE_BOUNDARY
+                + "\n\n【已绑定视频的正式发布资料】\n" + publishedVideoContextService.buildPrompt(taskRecord);
     }
 
     /** 导入条数取自当前有效明细；手动粘贴没有条目边界，不能按换行猜测数量。 */

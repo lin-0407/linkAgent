@@ -3,6 +3,7 @@ package com.link.linkagent.llm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.llm.usage.LlmApiUsageService;
+import com.link.linkagent.llm.usage.LlmUsageFields;
 import com.link.linkagent.settings.service.RuntimeSettingService;
 import com.link.linkagent.tool.Tool;
 import com.link.linkagent.util.LlmJsonUtil;
@@ -31,6 +32,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -237,16 +239,20 @@ public class LLMService {
         validatePromptLength(systemPrompt, userMessage);
         long startNanos = System.nanoTime();
         try {
+            OpenAiChatOptions options = defaultThinkingOptions();
             ChatResponse chatResponse = chatClient
                     .prompt()
                     .system(systemPrompt)
                     .user(userMessage)
-                    .options(defaultThinkingOptions())
+                    .options(options)
                     .call()
                     .chatResponse();
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
             LlmCallResult result = toCallResult(chatResponse, elapsedMs);
             recordTextSuccess(result);
+            // 记录真实请求形状与消息供下一轮摘要压缩重放；只有 AgentExecutor 打开了轮次作用域时才生效。
+            ChatReplayContext.record(ChatRequestEnvelope.main(systemPrompt,
+                    List.of(new UserMessage(userMessage == null ? "" : userMessage)), options));
             return result;
         } catch (RuntimeException exception) {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
@@ -375,6 +381,36 @@ public class LLMService {
         return chatStructuredWithUsage(systemPrompt, userMessage, type, false, null);
     }
 
+    /** 原生消息列表版：返回结构化结果，调用方拿到 usage（含缓存命中 token）用于统计。 */
+    public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, List<Message> messages, Class<T> type) {
+        return chatStructuredWithUsage(systemPrompt, messages, type, false, null);
+    }
+
+    /** 原生消息列表版：只取结构化实体。 */
+    public <T> T chatStructured(String systemPrompt, List<Message> messages, Class<T> type) {
+        return chatStructuredWithUsage(systemPrompt, messages, type).entity();
+    }
+
+    /**
+     * 复用已有消息前缀的结构化调用：不挂 strict 结果函数、也不设置 response_format。
+     * <p>
+     * 摘要复核要复用生成调用的完整消息前缀，但 strict 链路会给请求挂一个「结果函数」，工具声明会被渲染进
+     * prompt 前缀；response_format=json_object 同样会被供应商渲染进前缀（2026-10-18 实测：同一段 13k 原文，
+     * 带 json_object 的复核请求 cached_tokens=0，不带的缓存命中 98.5%）。所以复核两条都不能用，
+     * 只能靠末尾的格式说明 + converter 解析 + 解析失败重试保证 JSON。
+     * <p>
+     * 代价是不再依赖服务端对结果函数做 Schema 校验，改由 converter 解析和 DTO 校验兜底；
+     * 复核失败仍然是 fail-closed（不裁剪原文），可靠性不降低。
+     */
+    public <T> T chatStructuredWithPrefixReuse(String systemPrompt, List<Message> messages, Class<T> type) {
+        String messageText = messages == null ? "" : messages.stream()
+                .map(Message::getText)
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining("\n"));
+        validatePromptLength(systemPrompt, messageText);
+        return chatStructuredLegacyWithUsage(systemPrompt, messages, type, false, null, false).entity();
+    }
+
     /**
      * 带「关思考 / 输出上限」的结构化调用。
      *
@@ -384,15 +420,33 @@ public class LLMService {
     public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, String userMessage, Class<T> type,
                                                                boolean disableThinking, Integer maxTokens) {
         validatePromptLength(systemPrompt, userMessage);
+        return chatStructuredWithUsage(systemPrompt,
+                List.of(new UserMessage(userMessage == null ? "" : userMessage)), type, disableThinking, maxTokens);
+    }
+
+    /**
+     * 带原生消息列表的结构化调用：给「需要复用上一次请求前缀」的调用方用（摘要复核要接在摘要生成之后）。
+     * <p>
+     * strict 路径直接把消息列表发出去，system 与消息前缀保持不变，模型侧 KV cache 才能命中；
+     * 旧 json_object 链路只在末尾追加一条格式说明，不重写前面的消息。
+     */
+    public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, List<Message> messages,
+                                                               Class<T> type, boolean disableThinking,
+                                                               Integer maxTokens) {
+        String messageText = messages == null ? "" : messages.stream()
+                .map(Message::getText)
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining("\n"));
+        validatePromptLength(systemPrompt, messageText);
         if (isStrictFunctionCallingEnabled()) {
             try {
-                return chatStructuredStrictWithUsage(systemPrompt, userMessage, type, disableThinking, maxTokens);
+                return chatStructuredStrictWithUsage(systemPrompt, messages, type, disableThinking, maxTokens);
             } catch (RuntimeException strictException) {
                 // strict 目前依赖 DeepSeek Beta；端点异常或业务校验未通过时回旧链路，不能让结构化能力整体中断。
                 log.warn("严格结构化调用未获得有效结果，回退 json_object：{}", strictException.getMessage());
             }
         }
-        return chatStructuredLegacyWithUsage(systemPrompt, userMessage, type, disableThinking, maxTokens);
+        return chatStructuredLegacyWithUsage(systemPrompt, messages, type, disableThinking, maxTokens, true);
     }
 
     /**
@@ -401,7 +455,7 @@ public class LLMService {
      * DTO 构造器中的现有校验继续负责非空内容、列表数量等业务语义。
      */
     private <T> StructuredCallResult<T> chatStructuredStrictWithUsage(String systemPrompt,
-                                                                       String userMessage,
+                                                                       List<Message> messages,
                                                                        Class<T> type,
                                                                        boolean disableThinking,
                                                                        Integer maxTokens) {
@@ -425,7 +479,7 @@ public class LLMService {
             try {
                 chatResponse = strictFunctionCallingClient.call(
                         systemPrompt,
-                        List.of(new UserMessage(userMessage == null ? "" : userMessage)),
+                        messages == null ? List.of() : messages,
                         List.of(resultTool),
                         toolChoice,
                         disableThinking,
@@ -519,8 +573,193 @@ public class LLMService {
         throw lastError;
     }
 
+    /**
+     * 原生消息列表版结构化回退：前面的消息原样发出，只在末尾追加格式说明。
+     * <p>
+     * 不把格式说明拼进第一条用户消息，是为了让前缀保持不变。
+     *
+     * @param jsonObjectMode 是否设置 response_format=json_object；摘要复核必须传 false，
+     *                       否则供应商把 JSON 模式渲染进 prompt，前面再一致的原文也命中不了缓存
+     */
+    private <T> StructuredCallResult<T> chatStructuredLegacyWithUsage(String systemPrompt,
+                                                                       List<Message> messages,
+                                                                       Class<T> type,
+                                                                       boolean disableThinking,
+                                                                       Integer maxTokens,
+                                                                       boolean jsonObjectMode) {
+        OpenAiChatOptions options = thinkingOptions(disableThinking);
+        if (maxTokens != null) {
+            options.setMaxTokens(maxTokens);
+        }
+        if (jsonObjectMode) {
+            options.setResponseFormat(new ResponseFormat(ResponseFormat.Type.JSON_OBJECT, null));
+        }
+        BeanOutputConverter<T> outputConverter = new BeanOutputConverter<>(type);
+        List<Message> requestMessages = new ArrayList<>(messages == null ? List.of() : messages);
+        requestMessages.add(new UserMessage(outputConverter.getFormat()));
+        RuntimeException lastError = null;
+        for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
+            long startNanos = System.nanoTime();
+            try {
+                ChatResponse chatResponse = chatClient
+                        .prompt()
+                        .system(systemPrompt)
+                        .messages(requestMessages)
+                        .options(options)
+                        .call()
+                        .chatResponse();
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+                LlmCallResult callResult = toCallResult(chatResponse, elapsedMs);
+                T entity = parseStructuredEntity(callResult.content(), type);
+                recordTextSuccess(callResult);
+                return new StructuredCallResult<>(
+                        entity,
+                        callResult.promptTokens(),
+                        callResult.completionTokens(),
+                        callResult.totalTokens(),
+                        elapsedMs
+                );
+            } catch (RuntimeException ex) {
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+                recordTextFailure(null, elapsedMs, ex);
+                lastError = ex;
+                log.warn("结构化输出第 {}/{} 次解析失败：{}", attempt, STRUCTURED_MAX_ATTEMPTS, ex.getMessage());
+            }
+        }
+        throw lastError;
+    }
+
     public boolean isStrictFunctionCallingEnabled() {
         return strictFunctionCallingClient != null && strictFunctionCallingClient.isEnabled();
+    }
+
+    /**
+     * 用采集到的真实请求信封重放一次文本调用。
+     * <p>
+     * 调用方负责传入与真实请求一致的开头消息（通常是「上一轮对话前缀」），再在末尾追加压缩/复核指令。
+     * 信封里的 system、tools、thinking、tool_choice 必须与真实请求逐字节一致，供应商才可能命中前缀缓存；
+     * 这也是摘要压缩能省掉 25 万 token 冷启动的唯一前提。
+     *
+     * @param envelope 上一轮真实请求的信封
+     * @param messages 重放用的消息列表（前缀 + 追加指令）
+     * @return 模型返回内容与用量
+     */
+    public LlmCallResult replayChat(ChatRequestEnvelope envelope, List<Message> messages) {
+        return replayChat(envelope, messages, null);
+    }
+
+    /**
+     * 带输出上限的信封重放：摘要生成用它把输出钉在预算内。
+     * <p>
+     * max_tokens 只是解码参数，不进入 prompt，所以不影响前缀缓存命中；它只防止模型跑飞写出几万 token。
+     */
+    public LlmCallResult replayChat(ChatRequestEnvelope envelope, List<Message> messages, Integer maxOutputTokens) {
+        validatePromptLength(envelope.systemPrompt(), joinMessageText(messages));
+        long startNanos = System.nanoTime();
+        try {
+            ChatResponse response = sendReplayRequest(envelope, messages, maxOutputTokens);
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            LlmCallResult result = toCallResult(response, elapsedMs);
+            recordTextSuccess(result);
+            return result;
+        } catch (RuntimeException exception) {
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            recordTextFailure(null, elapsedMs, exception);
+            throw exception;
+        }
+    }
+
+    /**
+     * 用真实请求信封重放一次结构化调用：末尾追加输出格式说明，JSON 解析失败重试。
+     * <p>
+     * 不挂 strict 结果函数、也不设置 response_format：这两个都会改写请求形状，让前面的前缀缓存失效。
+     * 模型侧靠末尾的格式说明产出 JSON，解析交给 converter 和 DTO 校验，失败三次后抛出由调用方 fail-closed。
+     */
+    public <T> StructuredCallResult<T> replayStructured(ChatRequestEnvelope envelope, List<Message> messages,
+                                                         Class<T> type) {
+        return replayStructured(envelope, messages, type, null);
+    }
+
+    /** 带输出上限的信封结构化重放：复核 JSON 很小，钉上限可以防止思考/输出跑飞。 */
+    public <T> StructuredCallResult<T> replayStructured(ChatRequestEnvelope envelope, List<Message> messages,
+                                                         Class<T> type, Integer maxOutputTokens) {
+        BeanOutputConverter<T> converter = new BeanOutputConverter<>(type);
+        List<Message> requestMessages = new ArrayList<>(messages == null ? List.of() : messages);
+        requestMessages.add(new UserMessage(converter.getFormat()));
+        validatePromptLength(envelope.systemPrompt(), joinMessageText(requestMessages));
+        RuntimeException lastError = null;
+        for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
+            long startNanos = System.nanoTime();
+            try {
+                ChatResponse response = sendReplayRequest(envelope, requestMessages, maxOutputTokens);
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+                LlmCallResult callResult = toCallResult(response, elapsedMs);
+                if (callResult.truncatedByOutputLimit()) {
+                    // 输出被截断时 JSON 必然不完整，不再进入解析/重试，直接把失败交给调用方 fail-closed。
+                    throw new IllegalArgumentException("重放结构化输出被 max_tokens 截断（finishReason="
+                            + callResult.finishReason() + "）");
+                }
+                T entity = parseStructuredEntity(callResult.content(), type);
+                recordTextSuccess(callResult);
+                return new StructuredCallResult<>(
+                        entity,
+                        callResult.promptTokens(),
+                        callResult.completionTokens(),
+                        callResult.totalTokens(),
+                        elapsedMs
+                );
+            } catch (RuntimeException exception) {
+                long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+                recordTextFailure(null, elapsedMs, exception);
+                lastError = exception;
+                log.warn("信封重放结构化输出第 {}/{} 次解析失败：{}", attempt, STRUCTURED_MAX_ATTEMPTS,
+                        exception.getMessage());
+            }
+        }
+        throw lastError;
+    }
+
+    /** 按信封选择出口发一次请求；strict 与普通出口的请求形状必须与真实请求完全一致。 */
+    private ChatResponse sendReplayRequest(ChatRequestEnvelope envelope, List<Message> messages) {
+        return sendReplayRequest(envelope, messages, null);
+    }
+
+    /**
+     * @param maxOutputTokens 本次重放的输出上限；null 表示沿用真实请求/默认值。
+     *                        它只影响解码，不影响 prompt 前缀缓存。
+     */
+    private ChatResponse sendReplayRequest(ChatRequestEnvelope envelope, List<Message> messages,
+                                           Integer maxOutputTokens) {
+        if (envelope.strictTransport()) {
+            Integer maxTokens = maxOutputTokens != null ? maxOutputTokens : envelope.maxTokens();
+            return strictFunctionCallingClient.call(
+                    envelope.systemPrompt(),
+                    messages == null ? List.of() : messages,
+                    envelope.tools(),
+                    envelope.toolChoice(),
+                    envelope.disableThinking(),
+                    maxTokens
+            );
+        }
+        // options 为 null 表示真实请求没显式覆盖选项（走 ChatClient 默认），重放时同样不传 options。
+        ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
+                .system(envelope.systemPrompt())
+                .messages(messages == null ? List.of() : messages);
+        if (envelope.options() != null) {
+            org.springframework.ai.openai.OpenAiChatOptions replayOptions = envelope.options().copy();
+            if (maxOutputTokens != null) {
+                replayOptions.setMaxTokens(maxOutputTokens);
+            }
+            spec = spec.options(replayOptions);
+        }
+        return spec.call().chatResponse();
+    }
+
+    private String joinMessageText(List<Message> messages) {
+        return messages == null ? "" : messages.stream()
+                .map(Message::getText)
+                .filter(Objects::nonNull)
+                .collect(Collectors.joining("\n"));
     }
 
     /**
@@ -681,6 +920,10 @@ public class LLMService {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
             LlmCallResult callResult = toCallResult(lastResponse.get(), elapsedMs);
             recordTextSuccess(callResult);
+            // 记录真实请求形状（含流式工具循环的 tools/tool_choice/thinking 选项）与消息，
+            // 下一轮摘要压缩重放时才能和这次请求共享同一段 prompt 前缀。
+            ChatReplayContext.record(ChatRequestEnvelope.main(systemPrompt,
+                    messages == null ? List.of() : messages, options));
 
             List<AssistantMessage.ToolCall> mergedToolCalls = buildMergedToolCalls(toolIds, toolNames, toolArguments);
             AssistantMessage assistantMessage = AssistantMessage.builder()
@@ -1024,8 +1267,35 @@ public class LLMService {
                 extractPromptTokens(usage),
                 extractCompletionTokens(usage),
                 extractTotalTokens(usage),
+                extractCachedPromptTokens(usage),
+                extractFinishReason(chatResponse),
                 elapsedMs
         );
+    }
+
+    /**
+     * 提取供应商的结束原因。
+     * <p>
+     * 摘要生成必须据此识别 {@code length}：输出被 max_tokens 截断时不能当作完整摘要继续复核。
+     * 取不到时返回 null（老供应商/流式末帧缺字段），按“未知、不据此拦截”处理。
+     */
+    String extractFinishReason(ChatResponse chatResponse) {
+        if (chatResponse == null || chatResponse.getResult() == null
+                || chatResponse.getResult().getMetadata() == null) {
+            return null;
+        }
+        return TextUtil.trimToNull(chatResponse.getResult().getMetadata().getFinishReason());
+    }
+
+    /**
+     * 提取命中前缀缓存的输入 token 数，读不到时返回 null。
+     * <p>
+     * DeepSeek 的 usage 里带 {@code prompt_tokens_details.cached_tokens}，Spring AI 1.1.4 的
+     * {@code OpenAiApi.Usage.PromptTokensDetails} 已经解析了这个字段；这里只做一层安全取值。
+     * 供应商不返回（或返回非 OpenAI 形状）时保持 null，不能让「没有缓存信息」被当成「命中 0」。
+     */
+    Integer extractCachedPromptTokens(Usage usage) {
+        return LlmUsageFields.cachedPromptTokens(usage);
     }
 
     /**
@@ -1033,21 +1303,21 @@ public class LLMService {
      * 包级可见：同包测试可以验证 Usage 提取逻辑的正确性。
      */
     Integer extractPromptTokens(Usage usage) {
-        return isMissingUsage(usage) ? null : usage.getPromptTokens();
+        return LlmUsageFields.promptTokens(usage);
     }
 
     /**
      * 安全提取 Completion Token 数量：Usage 缺失或为 EmptyUsage 时返回 null。
      */
     Integer extractCompletionTokens(Usage usage) {
-        return isMissingUsage(usage) ? null : usage.getCompletionTokens();
+        return LlmUsageFields.completionTokens(usage);
     }
 
     /**
      * 安全提取 Total Token 数量：Usage 缺失或为 EmptyUsage 时返回 null。
      */
     Integer extractTotalTokens(Usage usage) {
-        return isMissingUsage(usage) ? null : usage.getTotalTokens();
+        return LlmUsageFields.totalTokens(usage);
     }
 
     /**
@@ -1063,20 +1333,7 @@ public class LLMService {
      * @return true 表示 Usage 不可用，应视为 null
      */
     private boolean isMissingUsage(Usage usage) {
-        if (usage == null) {
-            return true;
-        }
-        // Spring AI 的 EmptyUsage 会把未知 usage 表达成 0；这里转回 null，避免把”供应商未返回”误统计成”真实消耗为 0”。
-        return isZeroOrNull(usage.getPromptTokens())
-                && isZeroOrNull(usage.getCompletionTokens())
-                && isZeroOrNull(usage.getTotalTokens());
-    }
-
-    /**
-     * 判断 Integer 值是否为 null 或 0——两者都视为”缺失”。
-     */
-    private boolean isZeroOrNull(Integer value) {
-        return value == null || value == 0;
+        return LlmUsageFields.isMissing(usage);
     }
 
     /**
@@ -1124,17 +1381,31 @@ public class LLMService {
                 result.promptTokens(),
                 result.completionTokens(),
                 result.totalTokens(),
+                result.cachedPromptTokens(),
                 reasoningEffort,
                 result.elapsedMs()
         );
         log.info("LLM 调用成功：model={}, reasoningEffort={}, promptTokens={}, completionTokens={}, "
-                        + "totalTokens={}, elapsedMs={}",
+                        + "totalTokens={}, cachedPromptTokens={}, cacheHitRate={}, elapsedMs={}",
                 modelName,
                 reasoningEffort,
                 result.promptTokens(),
                 result.completionTokens(),
                 result.totalTokens(),
+                result.cachedPromptTokens(),
+                cacheHitRate(result.cachedPromptTokens(), result.promptTokens()),
                 result.elapsedMs());
+    }
+
+    /**
+     * 缓存命中率：命中 token / 输入 token。
+     * 供应商没返回缓存字段时返回 "unknown"，不能显示成 0%——那是两种不同的状态。
+     */
+    private String cacheHitRate(Integer cachedPromptTokens, Integer promptTokens) {
+        if (cachedPromptTokens == null || promptTokens == null || promptTokens <= 0) {
+            return "unknown";
+        }
+        return String.format(java.util.Locale.ROOT, "%.1f%%", cachedPromptTokens * 100.0 / promptTokens);
     }
 
     /**

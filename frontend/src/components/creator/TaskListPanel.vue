@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Plus } from '@lucide/vue'
+import { Ellipsis, FolderOpen, Pencil, Plus, Trash2 } from '@lucide/vue'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 
 const {
@@ -14,76 +14,49 @@ const {
 </script>
 
 <template>
-  <div v-if="selectedTask" class="creator-panel compact-panel creator-current-task-card">
-    <div class="creator-panel-title">
-      <div>
-        <span>当前视频</span>
-        <b>{{ selectedTask.taskName }}</b>
+  <div class="creator-project-identity">
+    <div class="creator-project-copy">
+      <h1 class="creator-project-title" :title="selectedTask?.taskName">
+        {{ selectedTask?.taskName || '新的创作' }}
+      </h1>
+      <div class="creator-project-meta">
+        <span>{{ selectedTask?.videoType || '从一个想法开始' }}</span>
+        <span v-if="selectedTask">{{ selectedTask.materials.length }} 份资料</span>
       </div>
-      <div class="creator-panel-actions">
+    </div>
+    <span v-if="selectedTask" class="creator-project-state">{{
+      statusLabel(selectedTask.status)
+    }}</span>
+  </div>
+  <div class="creator-project-actions">
+    <button type="button" class="creator-ghost-button" @click="openTaskManager">
+      <FolderOpen :size="16" aria-hidden="true" /><span>作品库</span>
+    </button>
+    <button
+      type="button"
+      class="creator-secondary-action"
+      aria-label="新建创作"
+      @click="startAiCreationTask"
+    >
+      <Plus :size="16" aria-hidden="true" /><span>新建</span>
+    </button>
+    <details v-if="selectedTask" class="creator-project-menu">
+      <summary aria-label="更多项目操作"><Ellipsis :size="18" aria-hidden="true" /></summary>
+      <div class="creator-project-edit-actions">
+        <span class="studio-menu-meta">{{ formatDate(selectedTask.updateTime) }} 更新</span>
         <button
           type="button"
-          class="creator-secondary-action creator-mini-button"
+          :disabled="selectedTask.status !== 'DRAFT'"
           @click="startEditTask(selectedTask.taskId)"
         >
-          编辑
+          <Pencil :size="15" aria-hidden="true" />{{
+            selectedTask.status !== 'DRAFT' ? '资料只读' : '编辑资料'
+          }}
         </button>
-        <button
-          type="button"
-          class="creator-danger-action creator-mini-button"
-          @click="askDeleteSelectedTask"
-        >
-          删除
+        <button type="button" class="creator-project-delete-button" @click="askDeleteSelectedTask">
+          <Trash2 :size="15" aria-hidden="true" />删除作品
         </button>
       </div>
-    </div>
-    <div class="creator-current-task-meta">
-      <span>{{ selectedTask.videoType || '未分类' }}</span>
-      <span>{{ statusLabel(selectedTask.status) }}</span>
-      <span>{{ selectedTask.materials.length }} 份材料</span>
-      <span>{{ formatDate(selectedTask.updateTime) }}</span>
-    </div>
+    </details>
   </div>
-  <button
-    type="button"
-    class="creator-secondary-action creator-task-new-action"
-    @click="startAiCreationTask"
-  >
-    <Plus :size="17" :stroke-width="1.9" aria-hidden="true" />
-    新建任务
-  </button>
-  <button
-    type="button"
-    class="creator-panel compact-panel creator-task-empty-panel creator-history-entry"
-    aria-label="打开任务列表管理"
-    @click="openTaskManager"
-  >
-    <span class="creator-history-entry-icon" aria-hidden="true">
-      <svg viewBox="0 0 24 24">
-        <path d="M7 3.5h7l3.5 3.5v13.5h-11v-17z" />
-        <path d="M14 3.5v4h3.5" />
-        <path d="M9 12h6M9 16h4" />
-      </svg>
-    </span>
-    <span class="creator-history-entry-copy">
-      <strong>任务列表管理</strong>
-      <small>切换、编辑或删除项目</small>
-    </span>
-    <span class="creator-history-entry-arrow" aria-hidden="true">
-      <svg viewBox="0 0 24 24">
-        <path d="M9 5l7 7-7 7" />
-      </svg>
-    </span>
-  </button>
 </template>
-
-<style scoped>
-.creator-task-new-action {
-  display: inline-flex;
-  width: 100%;
-  min-height: 44px;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-</style>

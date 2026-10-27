@@ -32,6 +32,11 @@ export function useSystemStatus() {
   const lastCheckError = ref('')
   const lastCheckTime = ref<number | null>(null)
 
+  // 混合检索是可选增强项；未启用时不应把已就绪的普通向量检索标成故障。
+  const activeConnectivityItems = computed(() => connectivityItems.value.filter((item) =>
+    item.key !== 'knowledge-hybrid-vector' || item.status !== 'DISABLED',
+  ))
+
   // SSE 连接状态从全局 store 读取，避免重复建连
   const workflowStore = useWorkflowStore()
   const { connectionStatus, isConnected } = storeToRefs(workflowStore)
@@ -46,7 +51,7 @@ export function useSystemStatus() {
    */
   const overallHealth = computed<ServiceHealth>(() => {
     if (lastCheckError.value || connectivityItems.value.length === 0) return 'unknown'
-    const items = connectivityItems.value
+    const items = activeConnectivityItems.value
     // 硬依赖 DOWN → 离线
     const criticalDown = items.some(
       (item) =>
@@ -72,7 +77,7 @@ export function useSystemStatus() {
   /** 向量库专项状态：知识库检索依赖 */
   const vectorHealth = computed<ServiceHealth>(() => {
     if (lastCheckError.value || connectivityItems.value.length === 0) return 'unknown'
-    const vectorItems = connectivityItems.value.filter((item) =>
+    const vectorItems = activeConnectivityItems.value.filter((item) =>
       item.key.includes('vector'),
     )
     if (vectorItems.length === 0) return 'unknown'
@@ -90,17 +95,19 @@ export function useSystemStatus() {
     if (connectivityItems.value.length === 0) {
       return isLoadingConnectivity.value ? '正在检查系统状态' : '系统状态尚未检查'
     }
-    const failed = connectivityItems.value.filter((item) => item.status === 'DOWN')
+    const failed = activeConnectivityItems.value.filter((item) => item.status === 'DOWN')
     // 取首个失败项做摘要：length>0 已保证存在，解构收窄类型让 TS 满意
     const [firstFailed] = failed
     if (failed.length > 0 && firstFailed) {
       return `${firstFailed.name} 不可用${failed.length > 1 ? ` 等 ${failed.length} 项` : ''}`
     }
-    const disabled = connectivityItems.value.filter((item) => item.status === 'DISABLED')
+    const disabled = activeConnectivityItems.value.filter((item) => item.status === 'DISABLED')
     if (disabled.length > 0) {
       return `${disabled.length} 项服务降级运行`
     }
-    return '全部服务正常'
+    return activeConnectivityItems.value.length < connectivityItems.value.length
+      ? '创作服务正常'
+      : '全部服务正常'
   })
 
   /** SSE 连接的中文描述，供状态栏显示实时通道状态 */

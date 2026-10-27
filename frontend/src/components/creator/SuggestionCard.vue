@@ -1,17 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import SuggestionRejectPanel from './SuggestionRejectPanel.vue'
 import type { CreatorRejectReason } from '@/types/creator'
 
 /**
- * 可复用的建议卡片。
- *
- * 设计目标：把"标题建议/标签建议/简介建议"等不同类型的结果，
- * 统一成同一种"卡片 + 元信息 + 操作区"的展示形态，告别原来的纯文本列表。
- *
- * 卡片只做三件事：展示建议内容、展示元信息、把用户的操作意图通过事件抛给父组件。
+ * 单条候选文案，理由与反馈操作放在同一条记录中，避免遮住作品主体。
  * 数据解析（把 JSON 字符串拆成 title/reason 等字段）由父组件完成，
- * 这样卡片不依赖具体的数据结构，能同时承载标题、标签、简介等多种建议。
+ * 这样展示层不依赖具体的数据结构，能同时承载标题、标签、简介等多种建议。
  *
  * 反馈（采纳/复制/不太好）的事件由父组件统一调用 useCreatorFeedbackEvent 上报后端，
  * 卡片本身不直接调接口，保持展示与数据解耦。
@@ -78,9 +73,7 @@ const copied = ref(false)
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
 
 // 是否展示"推荐"角标：仅标题类建议且排名第一时
-const showRecommendBadge = computed(
-  () => props.type === 'title' && props.rank === 1,
-)
+const showRecommendBadge = computed(() => props.type === 'title' && props.rank === 1)
 
 // 拒绝事件类型由父组件根据 type 决定，这里只透传原因
 function onRejectSubmit(reason: CreatorRejectReason, reasonText: string) {
@@ -97,6 +90,11 @@ function onCopy() {
     copied.value = false
   }, 2000)
 }
+
+// 卡片可能在提示未消失时被父组件移除，定时器随组件一起清掉
+onBeforeUnmount(() => {
+  if (copiedTimer) clearTimeout(copiedTimer)
+})
 </script>
 
 <template>
@@ -111,20 +109,33 @@ function onCopy() {
     <p class="card-content">{{ item.content }}</p>
 
     <!-- 元信息区：按需展示，没有就不渲染，避免空行 -->
-    <div v-if="item.viewerPsychology || item.clickReason || item.trustRisk || item.bestScenario || item.reason || item.risk" class="card-meta">
-      <p v-if="item.viewerPsychology"><span>观众心理</span>{{ item.viewerPsychology }}</p>
-      <p v-if="item.clickReason"><span>点击理由</span>{{ item.clickReason }}</p>
-      <p v-if="item.trustRisk"><span>信任风险</span>{{ item.trustRisk }}</p>
-      <p v-if="item.bestScenario"><span>适用场景</span>{{ item.bestScenario }}</p>
-      <p v-if="item.reason"><span>理由</span>{{ item.reason }}</p>
-      <p v-if="item.risk" class="meta-risk"><span>风险</span>{{ item.risk }}</p>
-    </div>
+    <details
+      v-if="
+        item.viewerPsychology ||
+        item.clickReason ||
+        item.trustRisk ||
+        item.bestScenario ||
+        item.reason ||
+        item.risk
+      "
+      class="card-meta-disclosure"
+    >
+      <summary>选择理由与风险</summary>
+      <div class="card-meta">
+        <p v-if="item.viewerPsychology"><span>观众心理</span>{{ item.viewerPsychology }}</p>
+        <p v-if="item.clickReason"><span>点击理由</span>{{ item.clickReason }}</p>
+        <p v-if="item.trustRisk"><span>信任风险</span>{{ item.trustRisk }}</p>
+        <p v-if="item.bestScenario"><span>适用场景</span>{{ item.bestScenario }}</p>
+        <p v-if="item.reason"><span>理由</span>{{ item.reason }}</p>
+        <p v-if="item.risk" class="meta-risk"><span>风险</span>{{ item.risk }}</p>
+      </div>
+    </details>
 
     <!-- 操作区：采纳 / 复制 / 不太好 -->
     <div v-if="feedbackEnabled" class="card-actions">
       <button
         type="button"
-        class="creator-primary-button creator-mini-button"
+        class="creator-secondary-action creator-mini-button"
         :disabled="reporting || accepted"
         @click="emit('accept', item)"
       >
@@ -170,7 +181,9 @@ function onCopy() {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast);
 }
 
 .suggestion-card:hover {
@@ -200,7 +213,7 @@ function onCopy() {
   align-items: center;
   padding: 2px var(--s2);
   border-radius: var(--r-pill);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
   line-height: 1.6;
 }
@@ -217,7 +230,7 @@ function onCopy() {
 
 .card-content {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   line-height: 1.52;
   color: var(--ink);
@@ -226,7 +239,7 @@ function onCopy() {
 
 /* 标签类建议更紧凑，像 chip */
 .type-tag .card-content {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
 }
 
@@ -239,7 +252,7 @@ function onCopy() {
 
 .card-meta p {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--muted);
 }

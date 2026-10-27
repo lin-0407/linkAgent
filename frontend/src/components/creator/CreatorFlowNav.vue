@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import {
   ArrowRight,
   BarChart3,
+  Check,
   Clapperboard,
   FileText,
   ListChecks,
@@ -52,15 +53,34 @@ const emit = defineEmits<{
 }>()
 
 const nextStep = computed(() => steps[activeStepIndex + 1] ?? null)
+const navigation = ref<HTMLElement | null>(null)
+let navigationResizeObserver: ResizeObserver | null = null
+async function revealCurrentStep() {
+  await nextTick()
+  const nav = navigation.value
+  const current = nav?.querySelector<HTMLElement>('[aria-current="step"]')
+  if (nav && current && nav.scrollWidth > nav.clientWidth) {
+    const currentBounds = current.getBoundingClientRect()
+    const navigationBounds = nav.getBoundingClientRect()
+    nav.scrollLeft =
+      nav.scrollLeft +
+      currentBounds.left -
+      navigationBounds.left -
+      (nav.clientWidth - currentBounds.width) / 2
+  }
+}
+onMounted(() => {
+  void revealCurrentStep()
+  // 屏幕缩窄或助手展开时，仍让当前阶段保留在可见区域。
+  navigationResizeObserver = new ResizeObserver(() => void revealCurrentStep())
+  if (navigation.value) navigationResizeObserver.observe(navigation.value)
+})
+onBeforeUnmount(() => navigationResizeObserver?.disconnect())
+watch(() => activeStep, revealCurrentStep)
 </script>
 
 <template>
   <section class="creator-flow-card" aria-label="视频发布流程">
-    <header class="creator-flow-head">
-      <strong>视频发布流程</strong>
-      <span>完成以下步骤，高效发布视频</span>
-    </header>
-
     <div
       class="creator-mobile-progress"
       aria-label="当前创作进度"
@@ -86,7 +106,12 @@ const nextStep = computed(() => steps[activeStepIndex + 1] ?? null)
       </button>
     </div>
 
-    <nav class="creator-tabs creator-tabs-vertical" aria-label="创作步骤">
+    <nav
+      ref="navigation"
+      class="creator-tabs creator-tabs-vertical"
+      aria-label="创作步骤"
+      :style="{ '--creator-step-total': steps.length }"
+    >
       <button
         v-for="(step, index) in steps"
         :key="step.key"
@@ -94,11 +119,22 @@ const nextStep = computed(() => steps[activeStepIndex + 1] ?? null)
         :disabled="!canNavigate(step.key)"
         :class="{ active: activeStep === step.key, completed: isCompleted(step.key) }"
         :aria-current="activeStep === step.key ? 'step' : undefined"
+        :title="step.description"
         @click="emit('navigate', step.key)"
       >
-        <span class="creator-step-count">{{ index + 1 }}</span>
-        <span class="creator-step-icon" aria-hidden="true">
-          <component :is="stepIcons[step.key]" :size="17" :stroke-width="1.7" />
+        <span class="creator-step-count" aria-hidden="true">
+          <Check
+            v-if="isCompleted(step.key) && activeStep !== step.key"
+            :size="15"
+            :stroke-width="2"
+          />
+          <component
+            v-else-if="activeStep === step.key"
+            :is="stepIcons[step.key]"
+            :size="17"
+            :stroke-width="1.8"
+          />
+          <span v-else>{{ index + 1 }}</span>
         </span>
         <span class="creator-step-text">
           <strong>{{ step.label }}</strong>

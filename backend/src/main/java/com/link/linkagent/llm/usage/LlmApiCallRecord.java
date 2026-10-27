@@ -24,6 +24,8 @@ public class LlmApiCallRecord {
     private Integer promptTokens;
     private Integer completionTokens;
     private Integer totalTokens;
+    /** 命中供应商前缀缓存的输入 token 数；用于直接算缓存命中率和真实成本。 */
+    private Integer cachedPromptTokens;
     private Long elapsedMs;
     private String status;
     private String errorMessage;
@@ -156,6 +158,14 @@ public class LlmApiCallRecord {
 
     public void setTotalTokens(Integer totalTokens) {
         this.totalTokens = totalTokens;
+    }
+
+    public Integer getCachedPromptTokens() {
+        return cachedPromptTokens;
+    }
+
+    public void setCachedPromptTokens(Integer cachedPromptTokens) {
+        this.cachedPromptTokens = cachedPromptTokens;
     }
 
     public Long getElapsedMs() {

@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { errorText } from '@/utils/error'
 import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 useAssistantBusinessRefresh(['references.', 'collection.', 'maintenance.'], () => loadList())
 import { ChevronDown, Plus } from '@lucide/vue'
+import PageHeader from '@/components/common/PageHeader.vue'
 import {
   fetchImportReferenceVideo,
   getReferenceVideoAnalysisContext,
@@ -37,7 +39,7 @@ const props = withDefaults(
 
 const developerMode = computed(() => props.developerMode)
 
-const PAGE_SIZE = 8
+const pageSize = ref(0)
 const TOPIC_SEARCH_PAGE_SIZE = 5
 
 const importing = ref(false)
@@ -62,6 +64,7 @@ const filterTier = ref('')
 const filterCategory = ref('')
 const listLoading = ref(false)
 const listError = ref('')
+let listRequestVersion = 0
 
 // 单卡回源会启动 Python 进程，因此页面自动补齐严格限制为两个并发任务。
 const PUBLIC_METADATA_REFRESH_CONCURRENCY = 2
@@ -119,13 +122,15 @@ async function submitFetchImport(videoId: string, tier: string, category: string
     page.value = 1
     await loadList()
   } catch (error) {
-    showNotice('error', '采集失败', error instanceof Error ? error.message : String(error))
+    showNotice('error', '采集失败', errorText(error, '采集失败，请稍后重试'))
   } finally {
     importing.value = false
   }
 }
 
 async function loadList() {
+  if (!pageSize.value) return
+  const requestVersion = ++listRequestVersion
   listLoading.value = true
   listError.value = ''
   try {
@@ -133,17 +138,29 @@ async function loadList() {
       category: filterCategory.value,
       tier: filterTier.value,
       page: page.value,
-      size: PAGE_SIZE,
+      size: pageSize.value,
     })
+    // 窗口缩放和筛选可能同时请求，只有最后一次请求可以更新当前分页。
+    if (requestVersion !== listRequestVersion) return
     items.value = result.items
     total.value = result.total
     page.value = result.page
   } catch (error) {
-    listError.value = error instanceof Error ? error.message : String(error)
+    if (requestVersion !== listRequestVersion) return
+    listError.value = errorText(error, '操作失败，请稍后重试')
     showNotice('error', '列表加载失败', listError.value)
   } finally {
-    listLoading.value = false
+    if (requestVersion === listRequestVersion) listLoading.value = false
   }
+}
+
+function handlePageSizeChange(size: number) {
+  if (size === pageSize.value) return
+  // 让缩放前当前页的第一条案例仍落在新页内，避免读到一半突然回到第一页。
+  const firstItemIndex = (page.value - 1) * pageSize.value
+  pageSize.value = size
+  page.value = Math.floor(firstItemIndex / size) + 1
+  void loadList()
 }
 
 function mergeReferenceVideo(updated: ReferenceVideo) {
@@ -194,7 +211,7 @@ function handleFilterChange(tier: string, category: string) {
 }
 
 function handlePageChange(targetPage: number) {
-  if (targetPage < 1 || targetPage > Math.max(1, Math.ceil(total.value / PAGE_SIZE)) || targetPage === page.value) {
+  if (targetPage < 1 || targetPage > Math.max(1, Math.ceil(total.value / pageSize.value)) || targetPage === page.value) {
     return
   }
   page.value = targetPage
@@ -227,7 +244,7 @@ async function submitSearch(query: string, tier: string, category: string, strat
     })
   } catch (error) {
     searchResult.value = null
-    searchError.value = error instanceof Error ? error.message : String(error)
+    searchError.value = errorText(error, '操作失败，请稍后重试')
     showNotice('error', '检索失败', searchError.value)
   } finally {
     searching.value = false
@@ -251,31 +268,31 @@ async function openVideoAnalysis(hit: ReferenceVideo) {
     }
     window.dispatchEvent(new CustomEvent(KNOWLEDGE_VIDEO_CONTEXT_EVENT, { detail }))
   } catch (error) {
-    showNotice('error', '案例内容加载失败', error instanceof Error ? error.message : String(error))
+    showNotice('error', '案例内容加载失败', errorText(error, '案例内容加载失败，请稍后重试'))
   } finally {
     analysisLoadingVideoId.value = ''
   }
 }
 
-onMounted(() => {
-  void loadList()
+onBeforeUnmount(() => {
+  // 离开页面后不再接收旧列表结果，避免卸载期间弹出过期错误。
+  listRequestVersion += 1
 })
 </script>
 
 <template>
-  <div class="creator-shell">
-    <header class="creator-header">
-      <div>
-        <p class="creator-kicker">参考案例</p>
-        <h2>案例检索</h2>
-        <p>用一句话描述想借鉴的方向，查看相近视频为什么值得参考，以及观众是怎么反馈的。</p>
-      </div>
-      <div class="creator-header-actions">
+  <div class="creator-shell knowledge-shell">
+    <PageHeader
+      kicker="参考案例"
+      title="给下一条视频，找点灵感"
+      description="看看同分区的好内容，找到值得借鉴的表达。"
+    >
+      <template #actions>
         <div class="creator-status-strip">
           <span class="active">共 {{ total }} 条案例</span>
         </div>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <section class="creator-section knowledge-workspace-section">
       <NotificationToast
@@ -296,9 +313,10 @@ onMounted(() => {
         :error="listError"
         :tier="filterTier"
         :category="filterCategory"
-        :page-size="PAGE_SIZE"
+        :page-size="pageSize"
         :developer-mode="developerMode"
         @page-change="handlePageChange"
+        @page-size-change="handlePageSizeChange"
         @filter-change="handleFilterChange"
         @refresh="loadList"
         @refresh-public-metadata="schedulePublicMetadataRefresh"
@@ -397,7 +415,7 @@ onMounted(() => {
 }
 
 .knowledge-import-chevron {
-  transition: transform 180ms ease;
+  transition: transform var(--dur-fast) ease;
 }
 
 .knowledge-import-chevron.is-open {

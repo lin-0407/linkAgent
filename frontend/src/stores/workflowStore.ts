@@ -25,6 +25,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
         return '重连中'
       case 'disconnected':
         return '连接中断'
+      default:
+        // 状态机新增枚举后旧代码仍要能渲染，不能返回 undefined 让界面空白。
+        return '未连接'
     }
   })
 

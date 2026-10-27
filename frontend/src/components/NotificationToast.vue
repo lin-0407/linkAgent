@@ -138,7 +138,7 @@ onBeforeUnmount(() => {
   position: fixed;
   top: calc(var(--surface-topbar-height, 0px) + 16px);
   right: 22px;
-  z-index: 2200;
+  z-index: var(--z-toast);
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -174,14 +174,14 @@ onBeforeUnmount(() => {
 }
 
 .notification-toast__title {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 650;
   line-height: 1.35;
 }
 
 .notification-toast__message {
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.55;
   /* 长错误信息自动折行 */
   word-break: break-word;
@@ -200,7 +200,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
   cursor: pointer;
-  font-size: 18px;
+  font-size: var(--fs-lg);
   font-weight: var(--fw-semibold);
   line-height: 1;
 }
@@ -214,8 +214,8 @@ onBeforeUnmount(() => {
 .notification-toast-enter-active,
 .notification-toast-leave-active {
   transition:
-    opacity 180ms ease,
-    transform 180ms ease;
+    opacity var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
 }
 
 .notification-toast-enter-from,

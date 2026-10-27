@@ -16,6 +16,9 @@ import java.util.List;
  *   <li><b>不按条数裁剪</b>：2026-09 记忆重构删除了 10 条滑动窗口（设计文档 A1）。
  *       原来的窗口会让早期对话在既没进摘要、也没进长期记忆的情况下直接消失；
  *       现在消息一直保留，是否压缩由「本次请求的 token 数」决定。</li>
+ *   <li><b>角色包含 Tool</b>：每轮执行过的工具步骤按原生协议写成两条消息——assistant 工具调用一条
+ *       （渲染为 {@code ToolCall: 工具名(参数)}），Tool 结果一条；两条用 toolCallId 配对，
+ *       让下一轮模型能看到 agent 自己的执行证据，和用户贴材料区分开。摘要提示词明确工具调用/结果不是用户本人陈述。</li>
  *   <li><b>压缩后裁剪，且只裁游标走过的</b>：摘要成功生成后由调用方调用裁剪；
  *       长期记忆提取是攒批异步推进的，压缩那一刻可能还有消息没被提取，
  *       这些消息留在短期记忆里，避免出现「原文已裁、长期记忆还没写」的空档（设计文档 A6 / D6）。</li>
@@ -25,6 +28,15 @@ import java.util.List;
  */
 @Component
 public class ShortTermMemory {
+
+    /**
+     * 工具结果消息的短期记忆角色。
+     * <p>
+     * 会话历史按原生协议拆成两条：assistant 的工具调用消息（渲染为 {@code ToolCall: 工具名(参数)}）在前，
+     * 这条 Tool 消息紧跟其后保存工具结果，两条用 toolCallId 配对。裁剪时必须成对保留，
+     * 不能只留下调用或只留下结果。
+     */
+    public static final String ROLE_TOOL = "Tool";
 
     /**
      * 短期记忆的存储实现，由 {@code agent.memory.short-term.store-type} 决定注入内存版还是 Redis 版。
@@ -51,11 +63,21 @@ public class ShortTermMemory {
      * 这里不再做任何裁剪：条数上限已删除，防膨胀由请求级 token 计量与摘要压缩负责（设计文档 A1 / A2）。
      *
      * @param sessionId 会话标识
-     * @param role      消息角色，如 "Human" 或 "AI"
+     * @param role      消息角色，如 "Human"、"AI" 或 {@link #ROLE_TOOL}
      * @param content   消息正文
      */
     public void append(String sessionId, String role, String content) {
         append(sessionId, role, content, null);
+    }
+
+    /**
+     * 追加一条完整消息对象（含工具调用配对字段）。
+     * <p>
+     * 工具调用和工具结果要携带 toolCallId/toolArguments，不能退化成只有 role/content；
+     * 渲染、裁剪边界判断和摘要提示词都依赖这些字段。
+     */
+    public void append(String sessionId, MemoryMessage message) {
+        memoryStore.append(sessionId, message);
     }
 
     /**

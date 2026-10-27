@@ -22,7 +22,6 @@ import type { DraftVideo, MediaProcessingJob, PreflightReviewStatus } from '@/ty
 import type { useCreatorFeedbackEvent } from './useCreatorFeedbackEvent'
 import type { useCreatorGuidance } from './useCreatorGuidance'
 import type { useCreatorTask } from './useCreatorTask'
-import type { useCreatorUsage } from './useCreatorUsage'
 
 type WorkspaceRef<T> = Ref<T> | ComputedRef<T>
 type TaskModule = ReturnType<typeof useCreatorTask>

@@ -12,7 +12,7 @@ public record InteractiveTaskCreateRequest(
         String userId,
 
         @NotBlank(message = "创作想法不能为空")
-        @Size(min = 10, max = 3000, message = "创作想法长度必须在10到3000个字符之间")
+        @Size(max = 3000, message = "创作想法不能超过3000个字符")
         String idea,
 
         @Size(max = 64, message = "视频类型长度不能超过64个字符")

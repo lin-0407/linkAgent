@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { errorText } from '@/utils/error'
 import {
   getReferenceVideoChunkIndexStatus,
   getReferenceVideoHybridIndexStatus,
@@ -60,7 +61,7 @@ async function loadIndexStatus() {
   try {
     indexStatus.value = await getReferenceVideoIndexStatus()
   } catch (error) {
-    indexStatusError.value = error instanceof Error ? error.message : String(error)
+    indexStatusError.value = errorText(error, '读取索引状态失败，请稍后重试')
   } finally {
     indexLoading.value = false
   }
@@ -77,7 +78,7 @@ async function rebuildIndex() {
     indexResult.value = await rebuildReferenceVideoIndex()
     await loadIndexStatus()
   } catch (error) {
-    indexError.value = error instanceof Error ? error.message : String(error)
+    indexError.value = errorText(error, '索引操作失败，请稍后重试')
   } finally {
     indexing.value = false
   }
@@ -89,7 +90,7 @@ async function loadChunkIndexStatus() {
   try {
     chunkIndexStatus.value = await getReferenceVideoChunkIndexStatus()
   } catch (error) {
-    chunkIndexStatusError.value = error instanceof Error ? error.message : String(error)
+    chunkIndexStatusError.value = errorText(error, '读取分块索引状态失败，请稍后重试')
   } finally {
     chunkIndexLoading.value = false
   }
@@ -106,7 +107,7 @@ async function rebuildChunkIndex() {
     chunkIndexResult.value = await rebuildReferenceVideoChunkIndex()
     await loadChunkIndexStatus()
   } catch (error) {
-    chunkIndexError.value = error instanceof Error ? error.message : String(error)
+    chunkIndexError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     chunkIndexing.value = false
   }
@@ -118,7 +119,7 @@ async function loadItemIndexStatus() {
   try {
     itemIndexStatus.value = await getReferenceVideoItemIndexStatus()
   } catch (error) {
-    itemIndexStatusError.value = error instanceof Error ? error.message : String(error)
+    itemIndexStatusError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     itemIndexLoading.value = false
   }
@@ -135,7 +136,7 @@ async function rebuildItemIndex() {
     itemIndexResult.value = await rebuildReferenceVideoItemIndex()
     await loadItemIndexStatus()
   } catch (error) {
-    itemIndexError.value = error instanceof Error ? error.message : String(error)
+    itemIndexError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     itemIndexing.value = false
   }
@@ -147,7 +148,7 @@ async function loadHybridIndexStatus() {
   try {
     hybridIndexStatus.value = await getReferenceVideoHybridIndexStatus()
   } catch (error) {
-    hybridIndexStatusError.value = error instanceof Error ? error.message : String(error)
+    hybridIndexStatusError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     hybridIndexLoading.value = false
   }
@@ -165,7 +166,7 @@ async function rebuildHybridIndex() {
     hybridIndexResult.value = await rebuildReferenceVideoHybridIndex()
     await loadHybridIndexStatus()
   } catch (error) {
-    hybridIndexError.value = error instanceof Error ? error.message : String(error)
+    hybridIndexError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     hybridIndexing.value = false
   }
@@ -177,7 +178,7 @@ async function loadChildHybridIndexStatus() {
   try {
     childHybridIndexStatus.value = await getReferenceVideoItemHybridIndexStatus()
   } catch (error) {
-    childHybridIndexStatusError.value = error instanceof Error ? error.message : String(error)
+    childHybridIndexStatusError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     childHybridIndexLoading.value = false
   }
@@ -194,7 +195,7 @@ async function rebuildChildHybridIndex() {
     childHybridIndexResult.value = await rebuildReferenceVideoItemHybridIndex()
     await loadChildHybridIndexStatus()
   } catch (error) {
-    childHybridIndexError.value = error instanceof Error ? error.message : String(error)
+    childHybridIndexError.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     childHybridIndexing.value = false
   }
@@ -204,17 +205,28 @@ function retrievalModeLabel(mode: string) {
   return mode === 'VECTOR' ? '向量检索' : 'SQL 检索'
 }
 
+let statusTimer: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
   void loadIndexStatus()
   void loadChunkIndexStatus()
   void loadItemIndexStatus()
   void loadHybridIndexStatus()
   void loadChildHybridIndexStatus()
+  statusTimer = setInterval(() => {
+    if (document.visibilityState === 'hidden') return
+    if (!indexLoading.value) void loadIndexStatus()
+    if (!chunkIndexLoading.value) void loadChunkIndexStatus()
+    if (!itemIndexLoading.value) void loadItemIndexStatus()
+  }, 30_000)
+})
+onBeforeUnmount(() => {
+  if (statusTimer) clearInterval(statusTimer)
 })
 </script>
 
 <template>
   <div class="knowledge-index-panels">
+    <p class="creator-inline-note">后台自动索引会分批补齐待索引记录，单批大小不限制总处理条数。此面板每 30 秒刷新状态，失败项可点击重建重试。</p>
     <section class="creator-section settings-index-section">
       <div class="creator-section-head">
         <h3>向量索引</h3>
@@ -251,7 +263,7 @@ onMounted(() => {
       </div>
 
       <div v-if="indexResult" class="creator-alert success-alert">
-        <strong>重建完成</strong>
+        <strong>本批处理完成</strong>
         <span>
           本次索引 {{ indexResult.indexedCount }} 条<template v-if="indexResult.failedCount > 0">，失败 {{ indexResult.failedCount }} 条</template>。
         </span>
@@ -301,7 +313,7 @@ onMounted(() => {
       </div>
 
       <div v-if="chunkIndexResult" class="creator-alert success-alert">
-        <strong>重建完成</strong>
+        <strong>本批处理完成</strong>
         <span>
           本次索引 {{ chunkIndexResult.indexedCount }} 条主题中块<template v-if="chunkIndexResult.failedCount > 0">，失败 {{ chunkIndexResult.failedCount }} 条</template>。
         </span>
@@ -350,7 +362,7 @@ onMounted(() => {
       </div>
 
       <div v-if="itemIndexResult" class="creator-alert success-alert">
-        <strong>重建完成</strong>
+        <strong>本批处理完成</strong>
         <span>
           本次索引 {{ itemIndexResult.indexedCount }} 条子条目<template v-if="itemIndexResult.failedCount > 0">，失败 {{ itemIndexResult.failedCount }} 条</template>。
         </span>
@@ -486,7 +498,7 @@ onMounted(() => {
   margin: 0;
   padding-left: 18px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
 }
 </style>

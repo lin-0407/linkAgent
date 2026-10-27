@@ -26,6 +26,10 @@ public class RedisShortTermMemoryStore implements ShortTermMemoryStore {
 
     private static final String KEY_PREFIX = "link-agent:memory:short-term:";
     private static final String FIELD_SEPARATOR = "\t";
+    /** 序列化格式版本标记：第三列写 v2 表示带工具调用配对字段的新格式；旧数据没有这一列。 */
+    private static final String FORMAT_VERSION = "v2";
+    /** null 字段占位：反斜杠会被 escape 成两个，因此 \\N 不会与正文内容冲突。 */
+    private static final String NULL_FIELD = "\\N";
 
     /**
      * 「删旧 + 写新」的原子替换脚本（F3）。
@@ -137,45 +141,66 @@ public class RedisShortTermMemoryStore implements ShortTermMemoryStore {
         }
         String sessionId = key.substring(KEY_PREFIX.length());
         MemoryMessage latest = messages.get(messages.size() - 1);
-        return new SessionInfo(sessionId, TextUtil.preview(latest.content(), 48, "Empty session"), messages.size());
+        // 工具调用消息正文为空，预览要用渲染后的 ToolCall 文本，否则会话列表显示「Empty session」。
+        return new SessionInfo(sessionId, TextUtil.preview(latest.promptText(), 48, "Empty session"), messages.size());
     }
 
     /**
-     * 序列化格式：{@code 消息id \t 角色 \t 正文}。
+     * 序列化格式（v2）：{@code 消息id \t v2 \t 角色 \t toolCallId \t toolName \t toolArguments \t 正文}。
      * <p>
      * 第一列留给消息表主键，是长期记忆游标判断「这条消息走过没有」的依据（设计文档 A6 / C4）；
-     * 没有落库的消息写空串。角色与正文里的制表符会被 escape，不会和分隔符混淆。
+     * 没有落库的消息写空串。第三列固定写 {@code v2} 用来和旧的三列格式区分
+     * （正文里的制表符/换行都 escape 过，不会和分隔符混淆）。
+     * Tool 调用与结果必须带 toolCallId/toolName/toolArguments，否则重启后从 Redis 读回来只剩 role/content，
+     * 渲染和裁剪配对判断都会失效。
      */
     private String serialize(MemoryMessage message) {
         String messageId = message.messageId() == null ? "" : message.messageId().toString();
-        return messageId + FIELD_SEPARATOR + escape(message.role()) + FIELD_SEPARATOR + escape(message.content());
+        return String.join(FIELD_SEPARATOR,
+                messageId,
+                FORMAT_VERSION,
+                escape(message.role()),
+                encodeNullable(message.toolCallId()),
+                encodeNullable(message.toolName()),
+                encodeNullable(message.toolArguments()),
+                escape(message.content()));
     }
 
     /**
-     * 反序列化，同时兼容没有消息 id 的旧数据。
-     * <p>
-     * 判断方式：第一列是数字或空串说明是带 id 的新格式；否则第一列就是角色名，按旧格式解析。
+     * 反序列化，兼容三种历史格式：
+     * <ul>
+     *   <li>v2 新格式（7 列，第三列为 v2）：带工具调用配对字段；</li>
+     *   <li>带消息 id 的旧格式（3 列：id / 角色 / 正文）；</li>
+     *   <li>最早的旧格式（2 列：角色 / 正文）。</li>
+     * </ul>
      * 兼容旧数据是必要的——Redis 列表里的历史消息不会因为这次改造被重写，读不出来等于丢历史。
      */
     private MemoryMessage deserialize(String value) {
-        int firstSeparator = value.indexOf(FIELD_SEPARATOR);
-        if (firstSeparator < 0) {
-            return null;
+        String[] fields = value.split(FIELD_SEPARATOR, -1);
+        if (fields.length == 7 && FORMAT_VERSION.equals(fields[1])) {
+            return new MemoryMessage(
+                    unescape(fields[2]),
+                    unescape(fields[6]),
+                    parseMessageId(fields[0]),
+                    decodeNullable(fields[3]),
+                    decodeNullable(fields[4]),
+                    decodeNullable(fields[5]));
         }
-        String firstField = value.substring(0, firstSeparator);
-        if (isMessageIdField(firstField)) {
-            int secondSeparator = value.indexOf(FIELD_SEPARATOR, firstSeparator + FIELD_SEPARATOR.length());
-            if (secondSeparator < 0) {
-                return null;
-            }
-            Long messageId = parseMessageId(firstField);
-            String role = unescape(value.substring(firstSeparator + FIELD_SEPARATOR.length(), secondSeparator));
-            String content = unescape(value.substring(secondSeparator + FIELD_SEPARATOR.length()));
-            return new MemoryMessage(role, content, messageId);
+        if (fields.length == 3) {
+            return new MemoryMessage(unescape(fields[1]), unescape(fields[2]), parseMessageId(fields[0]));
         }
-        String role = unescape(firstField);
-        String content = unescape(value.substring(firstSeparator + FIELD_SEPARATOR.length()));
-        return new MemoryMessage(role, content);
+        if (fields.length == 2) {
+            return new MemoryMessage(unescape(fields[0]), unescape(fields[1]));
+        }
+        return null;
+    }
+
+    private String encodeNullable(String value) {
+        return value == null ? NULL_FIELD : escape(value);
+    }
+
+    private String decodeNullable(String value) {
+        return NULL_FIELD.equals(value) ? null : unescape(value);
     }
 
     /** 解析消息 id 列；空串或超出 long 范围时返回 null，不让一条脏数据打断整段上下文组装。 */
@@ -188,19 +213,6 @@ public class RedisShortTermMemoryStore implements ShortTermMemoryStore {
         } catch (NumberFormatException exception) {
             return null;
         }
-    }
-
-    /** 消息 id 列只可能是空串或纯数字；角色名不会是这个形状，因此可以用来区分新旧格式。 */
-    private boolean isMessageIdField(String field) {
-        if (field.isEmpty()) {
-            return true;
-        }
-        for (int i = 0; i < field.length(); i++) {
-            if (!Character.isDigit(field.charAt(i))) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private String escape(String value) {

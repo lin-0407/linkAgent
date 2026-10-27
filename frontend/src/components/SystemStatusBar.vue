@@ -103,11 +103,11 @@ function sseHealth(): 'online' | 'degraded' | 'offline' {
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 60;
+  z-index: var(--z-chrome);
   display: block;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--muted);
 }
 

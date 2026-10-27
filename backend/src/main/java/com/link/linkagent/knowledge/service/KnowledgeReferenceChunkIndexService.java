@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 案例库主题中块向量索引服务 — Pipeline 中「三层分块」中间层的索引器。
@@ -47,6 +48,9 @@ import java.util.Map;
 public class KnowledgeReferenceChunkIndexService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeReferenceChunkIndexService.class);
+
+    // 手动入口与自动任务共用锁，避免同一条记录同时向量化两次。
+    private final ReentrantLock indexLock = new ReentrantLock();
 
     /** 单次索引硬上限，与接口校验 @Max(1000) 对齐，二次防御高成本 Embedding。 */
     private static final int MAX_INDEX_HARD_LIMIT = 1000;
@@ -101,6 +105,25 @@ public class KnowledgeReferenceChunkIndexService {
      * @return 索引结果，含 indexed/failed 计数和 warnings 列表
      */
     public ReferenceVideoIndexResponse rebuildChunks(ReferenceVideoIndexRequest request) {
+        return index(request, true);
+    }
+
+    public ReferenceVideoIndexResponse indexPending() {
+        return index(null, false);
+    }
+
+    private ReferenceVideoIndexResponse index(ReferenceVideoIndexRequest request, boolean includeFailed) {
+        if (!indexLock.tryLock()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "该层索引正在处理中，请稍后刷新");
+        }
+        try {
+            return doIndex(request, includeFailed);
+        } finally {
+            indexLock.unlock();
+        }
+    }
+
+    private ReferenceVideoIndexResponse doIndex(ReferenceVideoIndexRequest request, boolean includeFailed) {
         if (!knowledgeRagProperties.isEnabled()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "知识库 RAG 业务开关未启用，请先设置 knowledge.rag.enabled=true");
@@ -116,8 +139,12 @@ public class KnowledgeReferenceChunkIndexService {
         int batchSize = Math.max(1, knowledgeRagProperties.getIndexBatchSize());
         List<String> warnings = new ArrayList<>();
         backfillMissingChunks(maxItems, warnings);
-        List<ReferenceVideoChunkIndexRow> rows = knowledgeReferenceVideoMapper.listIndexableChunks(maxItems);
+        List<ReferenceVideoChunkIndexRow> rows = includeFailed
+                ? knowledgeReferenceVideoMapper.listIndexableChunks(maxItems)
+                : knowledgeReferenceVideoMapper.listIndexableChunks(maxItems, false);
         if (rows.isEmpty()) {
+            if (!includeFailed) return new ReferenceVideoIndexResponse(
+                    true, true, 0, 0, 0, 0, List.of(), LocalDateTime.now());
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "没有待索引的主题中块（PENDING / FAILED），请先导入案例，或确认是否已全部索引完成");
         }
@@ -125,6 +152,7 @@ public class KnowledgeReferenceChunkIndexService {
         int indexed = 0;
         int failed = 0;
         for (int start = 0; start < rows.size(); start += batchSize) {
+            if (Thread.currentThread().isInterrupted()) break;
             int end = Math.min(start + batchSize, rows.size());
             List<ReferenceVideoChunkIndexRow> chunk = rows.subList(start, end);
             try {
@@ -150,7 +178,7 @@ public class KnowledgeReferenceChunkIndexService {
         }
 
         return new ReferenceVideoIndexResponse(
-                true, true, rows.size(), indexed, 0, failed, warnings, LocalDateTime.now());
+                true, true, rows.size(), indexed, rows.size() - indexed - failed, failed, warnings, LocalDateTime.now());
     }
 
     /**

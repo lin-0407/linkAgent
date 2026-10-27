@@ -39,9 +39,11 @@ CREATE TABLE IF NOT EXISTS t_conversation_message
     id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
     session_id  VARCHAR(64) NOT NULL COMMENT '关联 t_conversation_session.session_id',
     user_id     VARCHAR(64) NOT NULL DEFAULT 'default' COMMENT '归属用户；冗余存一份是为了按用户捞取记忆增量时不必 JOIN 会话表（设计文档 C5）',
-    role        VARCHAR(16) NOT NULL COMMENT '角色：user / assistant / system / tool / summary（摘要检查点，代表这里压缩过历史）',
-    content     LONGTEXT    NOT NULL COMMENT '消息内容；role=summary 时是摘要正文',
-    tool_name   VARCHAR(64)          DEFAULT NULL COMMENT '工具名称（role=tool 时有值）',
+    role        VARCHAR(16) NOT NULL COMMENT '角色：user / assistant / system / tool / summary（摘要检查点，代表这里压缩过历史）；assistant 工具调用消息靠 tool_call_id 与 tool 结果配对',
+    content     LONGTEXT    NOT NULL COMMENT '消息内容；role=summary 时是摘要正文；assistant 工具调用消息为空串（调用信息在 tool_name/tool_arguments 列）',
+    tool_name   VARCHAR(64)          DEFAULT NULL COMMENT '工具名称（assistant 工具调用与 tool 结果消息都有值）',
+    tool_call_id VARCHAR(64)         DEFAULT NULL COMMENT '原生协议工具调用 id：assistant 的 tool_call 消息与 tool 结果消息共用一个值，普通消息为 NULL',
+    tool_arguments TEXT              DEFAULT NULL COMMENT 'assistant 工具调用参数摘要（≤300 字）；tool 结果消息和普通消息为 NULL',
     token_count INT         NOT NULL DEFAULT 0 COMMENT '本条消息消耗的 token 数；role=summary 时记录本次压缩释放的 token 数',
     create_time DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     is_deleted  TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除',
@@ -959,6 +961,7 @@ CREATE TABLE IF NOT EXISTS llm_api_call_log
     reasoning_effort  VARCHAR(16)           DEFAULT NULL COMMENT 'DeepSeek Flash 思考强度：low、high、max；未发送时为空',
     prompt_tokens     INT                   DEFAULT NULL COMMENT '输入 token 数；只有供应商返回精确 usage 时才填写',
     completion_tokens INT                   DEFAULT NULL COMMENT '输出 token 数；Embedding 和 Rerank 通常为空',
+    cached_prompt_tokens INT                DEFAULT NULL COMMENT '命中前缀缓存的输入 token 数（DeepSeek prompt_tokens_details.cached_tokens）；用于算缓存命中率和真实成本',
     total_tokens      INT                   DEFAULT NULL COMMENT '总 token 数；未知时保持为空，避免把未知误认为零消耗',
     elapsed_ms        BIGINT                DEFAULT NULL COMMENT '本次调用耗时毫秒；用于定位慢调用',
     status            VARCHAR(32)  NOT NULL COMMENT '调用状态：SUCCESS=成功，FAILED=失败，SKIPPED=因开关或候选不足跳过',
@@ -1178,10 +1181,30 @@ importance：这条记忆的重要性分数，1 到 100 的整数。80 分以上
      '用户消息：{userMessage}\n\nAgent 回答：{finalAnswer}\n\n请给这一轮对话打 1 到 100 的重要性分数。',
      '长期记忆重要性打分用户提示词：userMessage 与 finalAnswer 构成一轮对话'),
 
-    -- 对话摘要记忆（阶段 5.3）
+    -- 对话摘要记忆（阶段 5.3）；2026-10 起会话历史里多了 Tool 消息（agent 自己的工具执行记录）。
+    -- 2026-10 晚重构：压缩目标从「尽量全保留」改为 DSH 式「结构化检查点」，明确要求合并重复工具调用、
+    -- 不搬原始爬取清单，否则工具证据型会话会把摘要撑到几万 token 再被输出上限截断。
     ('summary_memory.system', 'SYSTEM', '记忆-摘要记忆',
-     '你是 LinkAgent 的对话摘要助手。你的任务是把一段对话历史压缩为摘要，保留关键决策、用户偏好变更、事实结论和待跟进事项。摘要控制在 5000 字以内：这是压缩后原文不再保留的唯一载体，宁可多留信息，也不要为了简短丢掉关键数字、结论和用户原话。省略纯工具调用过程和重复确认。如果输入中带有"已有摘要"，必须把它包含的关键信息合并进新摘要，不能丢弃。只输出摘要正文本身：不要写修改说明、生成过程，也不要回应复核意见。输出纯文本，不要套 JSON 或 Markdown 代码块。',
-     '对话摘要记忆系统提示词：压缩对话历史保留关键信息'),
+     '你是 LinkAgent 的对话压缩器。把上方对话压缩成一份结构化检查点，让另一个模型读完后能接着干活，不丢关键上下文。
+
+只输出下面的 Markdown 结构，保留每个小节（没有内容写「（无）」），用简短要点，不要写成段落、不要输出代码块：
+## 用户目标与意图
+## 用户偏好、约束与更正
+## 关键决策与理由
+## 已确认的事实、数字与结论（只保留最新版本）
+## 工具证据摘要（合并重复调用，保留最终结论、关键数字、路径、错误与日期；不要逐条复述原始列表、BV 号、评论明细和中间过程）
+## 未决问题与待办
+## 当前进度与下一步
+
+规则：
+- 这是压缩，不是转录：同构的工具结果、重复的爬取清单、过时的中间版本只保留结论和代表性样本，禁止把整份原始清单搬进摘要。摘要必须明显短于被压缩的原文。
+- 同一事实出现多个版本时只保留最新一版，并记录它替代了什么旧结论；被用户更正的旧说法不要保留（除非更正本身重要）。
+- 保留影响后续协作的精确数值、日期、名称、文件路径和错误信息；日期一律写完整年份（如 2026-10-24 20:00），不要只写「10 月 24 日」；不要编造输入里没有的内容。
+- 项目记录、工具结果里查到且未被更晚记录否定的明确事实，直接写成「已确认记录」并注明来源日期；只有原文本身含糊、或用户明确说待定时才标「待确认」，不要给所有事实都加不确定性。
+- Human 是用户本人；AI 是助手建议或执行说明；ToolCall/Tool 是执行证据，不是用户事实，不能写成用户偏好或用户确认。
+- 输入里如果已有「Conversation summary」或「已有摘要」块，那是上一版摘要：保留仍然成立的信息，删掉过时的，合并成一份，不要逐字复制。
+- 不要写修改说明或生成过程，不要回应复核意见，不要调用任何工具。',
+     '对话摘要系统提示词：DSH 式结构化检查点；合并重复工具调用，不要求保留原始爬取清单'),
 
     -- 摘要事实点抽取（记忆重构步骤 4 / B2 / D5）
     ('summary_fact.system', 'SYSTEM', '记忆-摘要事实点',
@@ -1198,28 +1221,34 @@ fact：一句话概括这条事实。
 original：支撑这条事实的用户原话，逐字摘录，不要改写；找不到明确原话时给空字符串。
 importance：1 到 100 的整数。80 分以上表示丢了会明显影响后续协作或经历回忆的稳定画像、约束或具体事件；闲聊寒暄给 1-10 分；无法判断给 40 分。
 
-只抽用户明确说过的事实、偏好与真实发生且值得以后回忆的事件。个人车辆首次保养后 GPS 故障、某月两次维护的先后属于可回忆事件；普通一次性排障细节、短期进度、AI 的回答和工具过程不要抽。事件记录对象、发生的事及结果；日期和先后只在原文明确或可由带日期的消息可靠推出时写，不能用提取日期替代事件日期，也不能编造年份或顺序。
+只抽用户明确说过的事实、偏好与真实发生且值得以后回忆的事件。个人车辆首次保养后 GPS 故障、某月两次维护的先后属于可回忆事件；普通一次性排障细节、短期进度、AI 的回答和工具过程不要抽。消息角色要分清来源：Human 才是用户本人说的话；AI 是助手建议或执行说明；以 ToolCall: 开头的 assistant 消息是工具调用（工具名 + 参数）；Tool 消息是对应的执行结果。AI 建议、工具调用参数和工具结果都不是用户本人陈述，不能写成用户偏好、用户身份、用户约束或用户确认过的事实；original 必须逐字来自 Human 消息，找不到时给空字符串。事件记录对象、发生的事及结果；日期和先后只在原文明确或可由带日期的消息可靠推出时写，不能用提取日期替代事件日期，也不能编造年份或顺序。
 事件的关联安排若由用户明确给出具体对象与日期，且属于重要会议、预约或发布等，可保留并标注「计划/待进行」；只记录已确认安排，不把尚未发生的活动写成已经发生，不保存笼统愿望或助手建议。
 没有值得长期保留的事实时输出 {"facts":[]}。只输出 JSON，不要输出 Markdown 或解释。',
-     '摘要压缩时抽取长期记忆事实点的系统提示词：要求 memoryKey / fact / original / importance 四个字段'),
+     '摘要压缩时抽取长期记忆事实点的系统提示词：要求 memoryKey / fact / original / importance，且 AI/Tool 内容不算用户事实'),
     ('summary_fact.user', 'USER', '记忆-摘要事实点',
      '待压缩的对话消息如下：\n{messages}\n\n请抽取其中值得长期保留的用户事实点。',
      '摘要事实点抽取用户提示词：messages 为本次被压缩的消息文本'),
-    -- 摘要复核（记忆重构步骤 4 / B4）
+    -- 摘要复核（记忆重构步骤 4 / B4）。2026-10 晚改为「压缩是否可继续工作」口径：
+    -- 工具证据只要求结论/关键数值，不要求逐条保留原始列表，避免把合并概括判成漏抽。
     ('summary_review.system', 'SYSTEM', '记忆-摘要复核',
-     '你是摘要复核器。输入包含「上一版摘要」「新摘要」和「本次被压缩的原始对话消息」，请核对新摘要是否忠实反映原文，输出 JSON。
+     '你是 LinkAgent 的摘要复核器。输入依次是「上一版摘要」「新摘要」「本次被压缩的原始对话消息」，请判断新摘要是否能让另一个模型接着工作，输出 JSON。
 
-判断依据是前两部分合起来的全部内容：上一版摘要在上一轮已经通过复核，属于有依据的历史结论，新摘要合并上一版摘要的内容不算编造；只有在新摘要里出现「上一版摘要和本次原始对话消息都没有」的内容，才算编造。
+判断基准：上一版摘要已经通过复核，属于有依据的历史结论；新摘要合并上一版摘要的内容不算编造。只有新摘要里出现「上一版摘要和本次原始消息都没有」的内容，才算编造。
 
-检查三件事：
-1. 漏抽：上一版摘要与本次原始对话消息里的关键决策、用户偏好变更、事实结论、待跟进事项，新摘要里是否缺失；
-2. 编造：新摘要里出现的内容，在上一版摘要或本次原始对话消息中是否有依据；
-3. 篡改：上一版摘要里的事实被改写成相反或不一致的结论。
+只检查三项：
+1. 用户意图与更正：用户明确提出的目标、约束、偏好及后续更正是否保留；被更正的旧说法是否已被新说法替代（旧说法残留算篡改）。
+2. 关键事实与最新结论：影响后续协作的精确数值、日期、名单、文件路径、错误信息是否保留；同一事实存在多个版本时，是否取了更晚或更明确的一版。
+3. 编造与归因：新摘要的内容是否有依据；AI 建议、ToolCall 参数、Tool 结果是否被写成用户偏好、用户身份或用户确认；原始对话没有的具体数值或结论不得出现。
 
-输出格式：passed 为 true 表示没有需要返工的问题；发现问题时 passed 为 false，missing 列出漏掉的信息，fabricated 列出没有依据的内容，每条一句话。没有问题时两个数组都返回空数组。只输出 JSON，不要输出 Markdown 或解释。',
-     '摘要复核系统提示词：以「上一版摘要 + 本次消息」为基准检查漏抽、编造与篡改'),
+注意：
+- 摘要的目标是压缩后能无缝继续工作，不是保留所有原始数据。合并重复工具调用、只保留代表性样本、删除原始爬取清单和中间过程，都不算漏抽。
+- 只有会影响后续协作、或用户明确要求保留的信息缺失，才算漏抽；纯过程性工具调用、同构列表、重复的 BV 号/评论明细不算。
+- 上一版摘要里的旧信息如果已被更晚的消息取代，新摘要舍弃它是正确的，不算漏抽或篡改。
+
+输出 JSON：{"passed": true 或 false, "missing": ["..."], "fabricated": ["..."]}；没有问题时两个数组都为空。只输出 JSON，不要输出 Markdown 或解释。',
+     '摘要复核系统提示词：以「能否继续工作」为口径，合并概括/删除重复清单不算漏抽'),
     ('summary_review.user', 'USER', '记忆-摘要复核',
-     '上一版摘要（（无）表示这是第一次压缩，其内容已通过上一轮复核，不要判为编造）：\n{existingSummary}\n\n新摘要：\n{summary}\n\n本次被压缩的原始对话消息：\n{messages}\n\n请核对新摘要是否漏抽、编造或篡改。',
+     '上一版摘要（（无）表示这是第一次压缩，其内容已通过上一轮复核，不要判为编造）：\n{existingSummary}\n\n新摘要：\n{summary}\n\n本次被压缩的原始对话消息：\n{messages}\n\n请按三项检查核对新摘要是否漏抽、编造或篡改；合并概括和删除重复清单不算漏抽。',
      '摘要复核用户提示词：existingSummary 为上一版摘要，summary 为待复核摘要，messages 为被压缩的原始消息'),
 
     -- HyDE 假设文档生成（知识库 RAG）
@@ -1307,6 +1336,11 @@ ON DUPLICATE KEY UPDATE
             AND content LIKE '%摘要限定在 300 字以内%'
         )
         OR (
+            -- 摘要提示词：没有「结构化检查点」说明还是「尽量全保留」的旧版；工具证据会话会因此把摘要撑爆。
+            prompt_key = 'summary_memory.system'
+            AND content NOT LIKE '%结构化检查点%'
+        )
+        OR (
             -- 摘要提示词：没有「不要写修改说明」说明还是旧版。2026-09-19 实测：返工时模型会把
             -- 「已按某问题修正」写进摘要正文，复核判成编造，压缩永远过不了，必须补这一句。
             prompt_key = 'summary_memory.system'
@@ -1349,14 +1383,15 @@ ON DUPLICATE KEY UPDATE
             AND content NOT LIKE '%importance%'
         )
         OR (
-            -- 摘要复核提示词：没有「篡改」就说明还是只看单次消息的旧版（会把累积合并来的真实信息判成编造），必须覆盖。
+            -- 摘要复核提示词：没有「篡改」说明还是只看单次消息的旧版；
+            -- 没有「合并重复工具调用」说明还是要求逐条保留工具证据的旧版（会把合并概括判成漏抽），必须覆盖。
             prompt_key = 'summary_review.system'
-            AND content NOT LIKE '%篡改%'
+            AND (content NOT LIKE '%篡改%' OR content NOT LIKE '%合并重复工具调用%')
         )
         OR (
-            -- 复核用户提示词：没有 {existingSummary} 占位符就说明还是旧版，必须覆盖。
+            -- 复核用户提示词：没有 {existingSummary} 占位符，或没有「三项检查」的旧口径，必须覆盖。
             prompt_key = 'summary_review.user'
-            AND content NOT LIKE '%{existingSummary}%'
+            AND (content NOT LIKE '%{existingSummary}%' OR content NOT LIKE '%三项检查%')
         )
         OR (
             -- 长期记忆系统提示词：还在说「本轮对话」说明是单轮版本，与步骤 5 的批量抽取输入不匹配。
@@ -1470,6 +1505,8 @@ CREATE TABLE IF NOT EXISTS creator_task_video_binding
     bvid            VARCHAR(20)  NOT NULL COMMENT '任务绑定的 BV 号，用于视频分析页筛选和自动采集触发',
     binding_status  VARCHAR(32)  NOT NULL DEFAULT 'WAITING_VERIFY' COMMENT '绑定状态：WAITING_VERIFY=等待校验，BOUND=已绑定校验通过，UID_MISMATCH=BV不属于该UID，VIDEO_NOT_FOUND=BV查不到视频',
     verify_message  VARCHAR(500)          DEFAULT NULL COMMENT '校验说明，用于前端展示绑定异常原因给用户',
+    published_version_id VARCHAR(64)      DEFAULT NULL COMMENT '用户绑定BV时明确选择且通过试映的成片版本，旧数据未知时为空',
+    published_snapshot_json JSON          DEFAULT NULL COMMENT '首次归属核验通过时冻结的公开发布资料，旧数据未知时为空',
     create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted      TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
@@ -1480,6 +1517,17 @@ CREATE TABLE IF NOT EXISTS creator_task_video_binding
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '任务视频绑定表';
+
+SET @binding_snapshot_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_task_video_binding' AND COLUMN_NAME='published_snapshot_json')=0, 'ALTER TABLE creator_task_video_binding ADD COLUMN published_snapshot_json JSON DEFAULT NULL COMMENT ''首次归属核验通过时冻结的公开发布资料，旧数据未知时为空''', 'SELECT 1');
+PREPARE binding_snapshot_stmt FROM @binding_snapshot_ddl;
+EXECUTE binding_snapshot_stmt;
+DEALLOCATE PREPARE binding_snapshot_stmt;
+
+-- 旧库仅增加可空字段，不用当前指针或最大版本号推测历史发布归属。
+SET @binding_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_task_video_binding' AND COLUMN_NAME='published_version_id')=0, 'ALTER TABLE creator_task_video_binding ADD COLUMN published_version_id VARCHAR(64) DEFAULT NULL COMMENT ''用户绑定BV时明确选择且通过试映的成片版本，旧数据未知时为空''', 'SELECT 1');
+PREPARE binding_stmt FROM @binding_ddl;
+EXECUTE binding_stmt;
+DEALLOCATE PREPARE binding_stmt;
 
 -- ------------------------------------------------------------
 -- 30. 视频分析报告表
@@ -1540,9 +1588,178 @@ CREATE TABLE IF NOT EXISTS user_llm_config
   COMMENT = '用户LLM配置表';
 
 -- ------------------------------------------------------------
--- 32. 发布前成片表（阶段 7 P0）
---     保存单版本成片的归属、私有对象位置和媒体处理状态。
---     P0 每个任务固定一个 V1（version_no=1），后续版本对比阶段再扩展多版本。
+-- 自动制作 S1：先保存当前成片指针和序号，尚未使用的制作字段按后续阶段增量增加。
+CREATE TABLE IF NOT EXISTS creator_creation_workspace
+(
+    id                       BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    task_id                  VARCHAR(64) NOT NULL COMMENT '创作任务标识，一条任务只有一个工作区',
+    owner_id                 VARCHAR(64) NOT NULL COMMENT '沿用创作任务和私有媒体归属',
+    workspace_revision       BIGINT NOT NULL DEFAULT 0 COMMENT '业务乐观锁版本，不随逐帧进度变化',
+    current_video_version_id VARCHAR(64) DEFAULT NULL COMMENT '当前完整成片，未完成上传不能切换到此处',
+    next_version_no          INT NOT NULL DEFAULT 1 COMMENT '下一成片序号，在任务锁内递增且不复用历史序号',
+    active_run_id            VARCHAR(64) DEFAULT NULL COMMENT '唯一活动制作运行，取消请求尚未完成时仍占用',
+    budget_limit_cny         DECIMAL(18,6) DEFAULT NULL COMMENT '明确设置的制作预算，为空表示未初始化',
+    budget_init_key          VARCHAR(128) DEFAULT NULL COMMENT '显式初始化预算的幂等键',
+    budget_init_hash         CHAR(64) DEFAULT NULL COMMENT '初始化请求摘要，不因重放覆盖已有预算',
+    create_time              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    update_time              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted               TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除：0为正常，1为已删除',
+    UNIQUE KEY uk_creation_workspace_task (task_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '视频创作工作区与当前版本';
+
+SET @creation_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_creation_workspace' AND COLUMN_NAME='active_run_id')=0, 'ALTER TABLE creator_creation_workspace ADD COLUMN active_run_id VARCHAR(64) DEFAULT NULL COMMENT ''唯一活动制作运行，取消请求尚未完成时仍占用''', 'SELECT 1');
+PREPARE creation_stmt FROM @creation_ddl; EXECUTE creation_stmt; DEALLOCATE PREPARE creation_stmt;
+SET @creation_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_creation_workspace' AND COLUMN_NAME='budget_limit_cny')=0, 'ALTER TABLE creator_creation_workspace ADD COLUMN budget_limit_cny DECIMAL(18,6) DEFAULT NULL COMMENT ''明确设置的制作预算，为空表示未初始化''', 'SELECT 1');
+PREPARE creation_stmt FROM @creation_ddl; EXECUTE creation_stmt; DEALLOCATE PREPARE creation_stmt;
+SET @creation_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_creation_workspace' AND COLUMN_NAME='budget_init_key')=0, 'ALTER TABLE creator_creation_workspace ADD COLUMN budget_init_key VARCHAR(128) DEFAULT NULL COMMENT ''显式初始化预算的幂等键''', 'SELECT 1');
+PREPARE creation_stmt FROM @creation_ddl; EXECUTE creation_stmt; DEALLOCATE PREPARE creation_stmt;
+SET @creation_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_creation_workspace' AND COLUMN_NAME='budget_init_hash')=0, 'ALTER TABLE creator_creation_workspace ADD COLUMN budget_init_hash CHAR(64) DEFAULT NULL COMMENT ''初始化请求摘要，不因重放覆盖已有预算''', 'SELECT 1');
+PREPARE creation_stmt FROM @creation_ddl; EXECUTE creation_stmt; DEALLOCATE PREPARE creation_stmt;
+
+CREATE TABLE IF NOT EXISTS creator_creation_approval
+(
+    approval_id VARCHAR(64) PRIMARY KEY COMMENT '真实动作取得的执行授权标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '个人工作台媒体归属',
+    approval_kind VARCHAR(32) NOT NULL COMMENT '准备或整片执行授权，均不替代发布方案确认',
+    input_fingerprint CHAR(64) NOT NULL COMMENT '不可变输入摘要',
+    max_additional_cost_cny DECIMAL(18,6) NOT NULL COMMENT '此授权全部运行合计的费用上限',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '授权动作幂等键',
+    request_hash CHAR(64) NOT NULL COMMENT '授权动作请求摘要',
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE' COMMENT '有效或已撤销，撤销不删除历史',
+    approved_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '服务端保存真实授权动作的时间',
+    UNIQUE KEY uk_creation_approval_key (task_id, owner_id, idempotency_key)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '制作执行授权及跨运行费用边界';
+
+CREATE TABLE IF NOT EXISTS creator_creation_run
+(
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '内部排序主键',
+    run_id VARCHAR(64) NOT NULL COMMENT '不可变运行标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '媒体归属',
+    kind VARCHAR(32) NOT NULL COMMENT '运行类型，当前准备授权仅允许文本和准备',
+    status VARCHAR(32) NOT NULL DEFAULT 'QUEUED' COMMENT '排队、运行、等待依赖、取消请求或终态',
+    stage VARCHAR(64) NOT NULL DEFAULT 'QUEUED' COMMENT '可展示的当前阶段',
+    parent_run_id VARCHAR(64) DEFAULT NULL COMMENT '显式重试的原运行，不重置费用',
+    approval_id VARCHAR(64) NOT NULL COMMENT '精确执行授权',
+    authorization_limit_cny DECIMAL(18,6) NOT NULL COMMENT '启动时授权限额快照，不能随任务预算上调扩大',
+    input_fingerprint CHAR(64) NOT NULL COMMENT '运行实际输入摘要',
+    request_json LONGTEXT NOT NULL COMMENT '已校验的不可变输入，不包含部署密钥',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '受理运行的幂等键',
+    request_hash CHAR(64) NOT NULL COMMENT '受理正文摘要',
+    run_revision BIGINT NOT NULL DEFAULT 0 COMMENT '状态与阶段修订号',
+    lease_owner VARCHAR(64) DEFAULT NULL COMMENT '本次执行者身份',
+    lease_generation BIGINT NOT NULL DEFAULT 0 COMMENT '每次领取递增，隔离旧执行者',
+    lease_expires_at DATETIME(6) DEFAULT NULL COMMENT '数据库时钟计算的租约到期时间',
+    dependency_id VARCHAR(64) DEFAULT NULL COMMENT '等待中的精确依赖标识',
+    attempt_count INT NOT NULL DEFAULT 0 COMMENT '实际领取次数',
+    result_json LONGTEXT DEFAULT NULL COMMENT '可验证的准备结果，不等同于视频产物',
+    error_code VARCHAR(64) DEFAULT NULL COMMENT '受控失败原因，不持久化供应商敏感异常正文',
+    started_at DATETIME(6) DEFAULT NULL COMMENT '首次开始时间',
+    completed_at DATETIME(6) DEFAULT NULL COMMENT '真实终态时间',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '受理时间',
+    active_task_key VARCHAR(64) GENERATED ALWAYS AS
+        (IF(status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED'), task_id, NULL)) STORED COMMENT '数据库兜底单任务唯一活动运行',
+    UNIQUE KEY uk_creation_run_id (run_id),
+    UNIQUE KEY uk_creation_run_key (task_id, owner_id, idempotency_key),
+    UNIQUE KEY uk_creation_run_active (owner_id, active_task_key),
+    KEY idx_creation_run_claim (status, lease_expires_at, id),
+    KEY idx_creation_run_approval (task_id, owner_id, approval_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '制作运行及持久化租约';
+
+CREATE TABLE IF NOT EXISTS creator_creation_cost_entry
+(
+    entry_id VARCHAR(64) PRIMARY KEY COMMENT '费用流水标识',
+    charge_key VARCHAR(128) NOT NULL COMMENT '一次物理调用的全局唯一身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '任务总预算归属',
+    owner_id VARCHAR(64) NOT NULL COMMENT '媒体归属',
+    run_id VARCHAR(64) NOT NULL COMMENT '实际发起调用的运行',
+    approval_id VARCHAR(64) NOT NULL COMMENT '跨运行累计执行授权',
+    lease_generation BIGINT NOT NULL COMMENT '预留时的执行租约代数',
+    capability VARCHAR(32) NOT NULL COMMENT '真实调用能力，不把语音合成伪装为语音识别',
+    reserved_cny DECIMAL(18,6) NOT NULL COMMENT '发起前的保守预留',
+    known_cost_cny DECIMAL(18,6) DEFAULT NULL COMMENT '有依据的费用，未知保持为空',
+    status VARCHAR(32) NOT NULL DEFAULT 'RESERVED' COMMENT '预留、未知、已结算或有证据释放',
+    settlement_kind VARCHAR(32) DEFAULT NULL COMMENT '按用量估算或供应商返回金额',
+    evidence_ref VARCHAR(128) DEFAULT NULL COMMENT '受控日志标识或未发送证明，不保存供应商原文',
+    price_snapshot_json LONGTEXT NOT NULL COMMENT '保守费用上界的价格依据',
+    sent_at DATETIME(6) DEFAULT NULL COMMENT '先持久化发送意图，再执行实际调用',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '预留时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近核对时间',
+    UNIQUE KEY uk_creation_charge_key (charge_key),
+    KEY idx_creation_cost_task (task_id, owner_id, status),
+    KEY idx_creation_cost_approval (task_id, owner_id, approval_id),
+    KEY idx_creation_cost_run (run_id, status)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '制作费用预留及未知用量保留';
+
+CREATE TABLE IF NOT EXISTS creator_creation_auto_step
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '本次完整制作运行',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    production_plan_id VARCHAR(64) NOT NULL COMMENT '本运行专属的系统制作蓝图',
+    step_code VARCHAR(32) NOT NULL COMMENT '代码定义的固定制作阶段，不包含平台试映或实际发布',
+    step_id VARCHAR(64) NOT NULL COMMENT '原制作步骤表的精确身份，不能绑定人工步骤',
+    evidence_json JSON DEFAULT NULL COMMENT '实际完成依据及不可变产物引用，未执行时为空',
+    lease_generation BIGINT DEFAULT NULL COMMENT '写入产物证据的执行代数，授权证据不依赖执行租约',
+    attempt_id VARCHAR(64) DEFAULT NULL COMMENT '产生实际文件的尝试身份',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '自动步骤绑定时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近证据变化时间',
+    PRIMARY KEY (run_id,step_code),
+    UNIQUE KEY uk_auto_production_step (step_id),
+    KEY idx_auto_step_plan (task_id,owner_id,production_plan_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='自动蓝图步骤归属与真实产物证据';
+
+CREATE TABLE IF NOT EXISTS creator_creation_fixed_job
+(
+    run_id VARCHAR(64) PRIMARY KEY COMMENT '已受理整片运行，只有附加真实工程后才由固定执行器领取',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    source_attempt_id VARCHAR(64) NOT NULL COMMENT '工作目录内已准备的源工程目录身份',
+    project_json LONGTEXT NOT NULL COMMENT '冻结的受控渲染输入，资产使用相对路径和内容摘要，不含密钥',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '工程冻结时间',
+    KEY idx_fixed_job_task (task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='固定工程执行输入，重启后不依赖内存任务队列';
+
+CREATE TABLE IF NOT EXISTS creator_creation_render_attempt
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '明确的整片制作运行',
+    attempt_id VARCHAR(64) NOT NULL COMMENT '每次执行独立的尝试标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    lease_generation BIGINT NOT NULL COMMENT '创建清单时的租约代数，接管不能复用旧尝试',
+    version_id VARCHAR(64) NOT NULL COMMENT '后端预分配的视频身份，登记前不创建成片行',
+    production_plan_id VARCHAR(64) NOT NULL COMMENT '本运行专属制作蓝图',
+    input_hash CHAR(64) NOT NULL COMMENT '完整渲染输入摘要',
+    bundle_hash CHAR(64) NOT NULL COMMENT '本地固定文件清单摘要',
+    bucket_name VARCHAR(255) NOT NULL COMMENT '由部署配置选择的私有存储桶',
+    objects_json JSON NOT NULL COMMENT '上传前冻结的固定文件、对象键、类型、字节数和摘要',
+    status VARCHAR(32) NOT NULL DEFAULT 'UPLOADING' COMMENT '上传中或已登记为成片；未登记不能视为完整版本',
+    registered_run_key VARCHAR(64) GENERATED ALWAYS AS (IF(status='REGISTERED',run_id,NULL)) STORED COMMENT '同一运行最多登记一个输出版本',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '清单登记时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近状态变化',
+    PRIMARY KEY (run_id,attempt_id),
+    UNIQUE KEY uk_render_attempt_version (version_id),
+    UNIQUE KEY uk_render_registered_run (registered_run_key),
+    KEY idx_render_attempt_task (task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统渲染产物上传清单及版本登记事实';
+
+CREATE TABLE IF NOT EXISTS creator_video_version_context
+(
+    version_id VARCHAR(64) PRIMARY KEY COMMENT '实际成片版本，不允许原地覆盖上下文',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '沿用私有媒体归属',
+    planning_skipped TINYINT NOT NULL DEFAULT 0 COMMENT '该上传版本当时真实保存的已有成片跳过事实',
+    publishing_session_id VARCHAR(64) DEFAULT NULL COMMENT '上传时已确认的发布方案会话',
+    publishing_result_id VARCHAR(64) DEFAULT NULL COMMENT '上传时确认的具体建议结果',
+    production_plan_id VARCHAR(64) DEFAULT NULL COMMENT '上传时已就绪且步骤完成的蓝图',
+    snapshot_json JSON NOT NULL COMMENT '冻结的方案、蓝图和材料，不能冒充正式发布文案',
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '实际捕获时间',
+    KEY idx_version_context_task (task_id, owner_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '成片不可变制作上下文';
+
+-- 32. 发布前成片表
+--     新文件分配独立版本，完整历史视频及报告不因新上传而重置。
 --
 --     设计要点：
 --     1. object_key 由后端根据 {ownerId}/{taskId}/{versionId}/{uploadSessionId} 规则生成，
@@ -1558,7 +1775,7 @@ CREATE TABLE IF NOT EXISTS creator_draft_video
     version_id          VARCHAR(64)   NOT NULL COMMENT '成片版本唯一标识（UUID）',
     task_id             VARCHAR(64)   NOT NULL COMMENT '关联 creator_task.task_id',
     owner_id            VARCHAR(64)   NOT NULL DEFAULT 'default' COMMENT '可信媒体归属；P0 固定从服务端会话读取 default',
-    version_no          INT           NOT NULL DEFAULT 1 COMMENT '成片版本号；P0 固定为1，后续版本对比阶段再扩展',
+    version_no          INT           NOT NULL DEFAULT 1 COMMENT '任务内成片序号，在工作区事务内分配，历史序号不复用',
     version_name        VARCHAR(128)  NOT NULL COMMENT '用户填写的成片版本名称',
     original_file_name  VARCHAR(255)  NOT NULL COMMENT '原文件展示名称；不参与对象路径生成，避免路径注入',
     bucket_name         VARCHAR(255)  NOT NULL COMMENT '原片所在私有对象存储桶名称',
@@ -1608,6 +1825,220 @@ CREATE TABLE IF NOT EXISTS creator_draft_video
 --        与本地 upload_session_id 一一对应但分属不同系统
 --     5. expires_at 在 abandonedTtl（默认24h）后过期，超时由读取时被动检查并标记
 -- ------------------------------------------------------------
+-- 简报与故事板不可变保存；候选工程不切换当前成片，也不代替制作授权。
+CREATE TABLE IF NOT EXISTS creator_creation_brief
+(
+    brief_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '简报版本标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    revision INT NOT NULL COMMENT '任务内递增简报版本',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '创建简报的幂等键',
+    request_hash CHAR(64) NOT NULL COMMENT '原始受理请求摘要',
+    document_json JSON NOT NULL COMMENT '本条视频的明确意图与素材选择',
+    source_json JSON NOT NULL COMMENT '保存时真实任务材料与发布依据，不引用后续可变结果',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '保存时间',
+    UNIQUE KEY uk_creation_brief_revision(task_id,owner_id,revision),
+    UNIQUE KEY uk_creation_brief_key(task_id,owner_id,idempotency_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='不可变视频任务简报';
+
+CREATE TABLE IF NOT EXISTS creator_creation_storyboard
+(
+    storyboard_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '故事板版本标识',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    revision INT NOT NULL COMMENT '任务内递增故事板版本',
+    brief_id VARCHAR(64) NOT NULL COMMENT '对应不可变简报',
+    parent_storyboard_id VARCHAR(64) DEFAULT NULL COMMENT '明确关联的父故事板，不覆盖父版本',
+    run_id VARCHAR(64) DEFAULT NULL COMMENT '真实准备运行，人工保存时为空',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '保存版本的幂等键',
+    request_hash CHAR(64) NOT NULL COMMENT '保存请求摘要',
+    document_hash CHAR(64) NOT NULL COMMENT '完整故事板内容摘要',
+    document_json JSON NOT NULL COMMENT '受控场景、文稿、实际素材引用与字幕来源',
+    asset_snapshot_json JSON NOT NULL COMMENT '精确原始素材与规范化文件摘要，不含短签',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '保存时间',
+    UNIQUE KEY uk_creation_storyboard_revision(task_id,owner_id,revision),
+    UNIQUE KEY uk_creation_storyboard_key(task_id,owner_id,idempotency_key),
+    UNIQUE KEY uk_creation_storyboard_run(run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='不可变视频故事板';
+
+CREATE TABLE IF NOT EXISTS creator_creation_storyboard_asset
+(
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '引用的历史故事板',
+    asset_id VARCHAR(64) NOT NULL COMMENT '输入素材身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    PRIMARY KEY(storyboard_id,asset_id),
+    KEY idx_storyboard_asset_reference(task_id,owner_id,asset_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='素材的历史工程引用';
+
+CREATE TABLE IF NOT EXISTS creator_creation_storyboard_job
+(
+    run_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '沿用准备运行及预算，不另建执行状态机',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '冻结的简报版本',
+    request_hash CHAR(64) NOT NULL COMMENT '受理参数摘要',
+    storyboard_id VARCHAR(64) DEFAULT NULL COMMENT '成功保存的候选故事板',
+    KEY idx_storyboard_job_task(task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='故事板生成的准备运行归属';
+
+-- 配音准备沿用准备运行和费用台账，只记录本运行实际处理的场景，不新建第二套执行状态机。
+CREATE TABLE IF NOT EXISTS creator_creation_voice_job
+(
+    run_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '沿用准备运行及预算，不另建执行状态机',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '发起配音时的不可变简报',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '发起配音的故事板版本，不被本运行覆盖',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '配音受理幂等键，同键不同请求必须拒绝',
+    request_hash CHAR(64) NOT NULL COMMENT '受理参数摘要',
+    storyboard_result_id VARCHAR(64) DEFAULT NULL COMMENT '字幕对齐后保存的新故事板版本，待作者处理时为空',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '受理时间',
+    UNIQUE KEY uk_voice_job_key(task_id,owner_id,idempotency_key),
+    KEY idx_voice_job_task(task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='配音准备的运行归属';
+
+-- 每个场景独立记录供应商身份、参数、文稿摘要、真实音频事实和转写对齐结果。
+-- 文稿摘要用于阻止改词后继续沿用旧配音；音频摘要与时长来自实际文件，不按字数推算。
+CREATE TABLE IF NOT EXISTS creator_creation_voice
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '生成的准备运行',
+    scene_id VARCHAR(64) NOT NULL COMMENT '故事板场景身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '不可变简报',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '来源故事板版本',
+    position INT NOT NULL COMMENT '场景在故事板中的顺序，执行和展示都不重排',
+    status VARCHAR(32) NOT NULL DEFAULT 'QUEUED' COMMENT '排队、合成、已合成、转写、已对齐、待作者确认、失败或取消',
+    text_content TEXT NOT NULL COMMENT '用户确认的场景文稿，供应商返回不能改写该事实',
+    text_sha256 CHAR(64) NOT NULL COMMENT '文稿摘要，改词后必须重新生成配音',
+    characters INT NOT NULL COMMENT '提交给供应商的字符数，也是合成的计费依据',
+    scene_duration_ms BIGINT NOT NULL COMMENT '发起时的场景帧长，用于判断音频是否放得下',
+    provider VARCHAR(64) DEFAULT NULL COMMENT '实际调用的语音合成供应商标识',
+    model VARCHAR(128) DEFAULT NULL COMMENT '实际请求的合成模型',
+    voice_id VARCHAR(128) DEFAULT NULL COMMENT '实际请求的音色',
+    provider_request_id VARCHAR(128) DEFAULT NULL COMMENT '合成响应标识，仅用于核对本次调用',
+    provider_task_id VARCHAR(128) DEFAULT NULL COMMENT '转写任务标识，重启后据此续查而不是重复提交',
+    audio_asset_id VARCHAR(64) DEFAULT NULL COMMENT '生成的真实配音素材',
+    audio_sha256 CHAR(64) DEFAULT NULL COMMENT '规范化音频完整摘要',
+    audio_bytes BIGINT DEFAULT NULL COMMENT '规范化音频字节数',
+    audio_duration_ms BIGINT DEFAULT NULL COMMENT '规范化音频实际时长',
+    transcript_json JSON DEFAULT NULL COMMENT '转写段落，仅保存受控时间与文本',
+    match_ratio DECIMAL(6,5) DEFAULT NULL COMMENT '文稿与转写文本的确定性比对结果，不是模型评分',
+    proposal_json JSON DEFAULT NULL COMMENT '需要作者选择的时长或文稿处理提案',
+    error_code VARCHAR(64) DEFAULT NULL COMMENT '受控失败原因，不保存供应商敏感正文',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近变化时间',
+    PRIMARY KEY(run_id,scene_id),
+    KEY idx_voice_task(task_id,owner_id,status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='场景配音、真实音频事实与转写对齐';
+
+-- AI 视频生成沿用准备运行与预算，不另建执行状态机；任务标识与结果事实逐场景保存。
+CREATE TABLE IF NOT EXISTS creator_creation_video_job
+(
+    run_id VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '沿用准备运行及预算',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '发起生成时的不可变简报',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '来源故事板版本，不被本运行覆盖',
+    source_scope VARCHAR(16) NOT NULL COMMENT 'SELECTED 只处理已有 AI 场景，ALL 把全部场景切换为 AI 画面',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '受理幂等键，同键不同请求必须拒绝',
+    request_hash CHAR(64) NOT NULL COMMENT '受理参数摘要，包含提示词与时长',
+    storyboard_result_id VARCHAR(64) DEFAULT NULL COMMENT '生成完成后保存的新故事板版本',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '受理时间',
+    UNIQUE KEY uk_video_job_key(task_id,owner_id,idempotency_key),
+    KEY idx_video_job_task(task_id,owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 视频生成的运行归属';
+
+-- 每个场景保存提示词摘要、请求时长、供应商任务标识与真实片段事实。
+-- 提示词摘要用于阻止改词后继续沿用旧片段；片段摘要与尺寸来自实际文件，不按请求参数推算。
+CREATE TABLE IF NOT EXISTS creator_creation_video
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '生成的准备运行',
+    scene_id VARCHAR(64) NOT NULL COMMENT '故事板场景身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '所属任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '任务归属',
+    brief_id VARCHAR(64) NOT NULL COMMENT '不可变简报',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '来源故事板版本',
+    position INT NOT NULL COMMENT '场景在故事板中的顺序',
+    status VARCHAR(32) NOT NULL DEFAULT 'QUEUED' COMMENT '排队、提交、已提交、可用、待作者确认、失败或取消',
+    prompt_text TEXT NOT NULL COMMENT '本次实际提交给视频模型的完整提示词',
+    prompt_sha256 CHAR(64) NOT NULL COMMENT '提示词摘要，改词或改标题后必须重新生成',
+    scene_duration_ms BIGINT NOT NULL COMMENT '发起时的场景帧长，决定请求时长与裁切终点',
+    requested_seconds INT NOT NULL COMMENT '向供应商请求的生成秒数，是费用预留依据',
+    provider VARCHAR(64) DEFAULT NULL COMMENT '实际调用的视频供应商标识',
+    model VARCHAR(128) DEFAULT NULL COMMENT '实际请求的生成模型',
+    provider_task_id VARCHAR(128) DEFAULT NULL COMMENT '异步任务标识，重启后据此续查而不是重复提交',
+    provider_request_id VARCHAR(128) DEFAULT NULL COMMENT '提交响应标识，仅用于核对本次调用',
+    video_asset_id VARCHAR(64) DEFAULT NULL COMMENT '生成的真实视频素材',
+    video_sha256 CHAR(64) DEFAULT NULL COMMENT '规范化视频完整摘要',
+    video_bytes BIGINT DEFAULT NULL COMMENT '规范化视频字节数',
+    video_duration_ms BIGINT DEFAULT NULL COMMENT '规范化视频实际时长',
+    video_width INT DEFAULT NULL COMMENT '实际画面宽度',
+    video_height INT DEFAULT NULL COMMENT '实际画面高度',
+    proposal_json JSON DEFAULT NULL COMMENT '需要作者选择的时长或重做提案',
+    error_code VARCHAR(64) DEFAULT NULL COMMENT '受控失败原因，不保存供应商敏感正文',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近变化时间',
+    PRIMARY KEY(run_id,scene_id),
+    KEY idx_video_task(task_id,owner_id,status),
+    KEY idx_video_prompt(task_id,owner_id,prompt_sha256,status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 视频场景、异步任务与真实片段事实';
+
+-- 素材独立于完整成片；声明摘要必须在后台读取真实文件后复核，不能据此直接置为可用。
+CREATE TABLE IF NOT EXISTS creator_creation_asset
+(
+    asset_id            VARCHAR(64) NOT NULL PRIMARY KEY COMMENT '素材独立标识',
+    task_id             VARCHAR(64) NOT NULL COMMENT '所属创作任务',
+    owner_id            VARCHAR(64) NOT NULL COMMENT '自托管工作台归属',
+    idempotency_key     VARCHAR(128) NOT NULL COMMENT '同任务上传幂等键',
+    kind                VARCHAR(32) NOT NULL COMMENT '图片、旁白录音、音乐或视频片段',
+    file_name           VARCHAR(255) NOT NULL COMMENT '原始展示文件名，不作为对象路径',
+    content_type        VARCHAR(100) NOT NULL COMMENT '上传声明类型，不能替代真实解码',
+    expected_bytes      BIGINT NOT NULL COMMENT '声明字节数，合并后核对',
+    expected_sha256     CHAR(64) NOT NULL COMMENT '客户端完整文件摘要，后台重新计算核对',
+    bucket_name         VARCHAR(255) NOT NULL COMMENT '持久化私有存储桶',
+    source_key          VARCHAR(1024) NOT NULL COMMENT '服务端生成的原始素材对象键',
+    storage_upload_id   VARCHAR(512) DEFAULT NULL COMMENT '分片上传句柄',
+    status              VARCHAR(32) NOT NULL COMMENT '创建、上传、合并、准备、可用、失败或取消',
+    failed_stage        VARCHAR(32) DEFAULT NULL COMMENT '失败时的阶段，用于显式恢复',
+    failure_code        VARCHAR(64) DEFAULT NULL COMMENT '不含私有路径或签名的失败原因',
+    failure_message     VARCHAR(500) DEFAULT NULL COMMENT '受控中文失败说明，不拼接底层异常或私有路径',
+    lease_token         VARCHAR(64) DEFAULT NULL COMMENT '本次后台操作的围栏令牌',
+    lease_expires_at    DATETIME(6) DEFAULT NULL COMMENT '数据库时钟租约，过期方可接管',
+    source_sha256       CHAR(64) DEFAULT NULL COMMENT '真实读取后复核的源摘要',
+    metadata_json       JSON DEFAULT NULL COMMENT '原始与规范化媒体事实',
+    objects_json        JSON DEFAULT NULL COMMENT '派生文件键、字节数与摘要',
+    cleanup_pending     TINYINT NOT NULL DEFAULT 0 COMMENT '取消清理：零为完成，一为首次待办，二为等待写入屏障后的再次核对',
+    create_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+    update_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+    UNIQUE KEY uk_creation_asset_idempotency (task_id,owner_id,idempotency_key),
+    KEY idx_creation_asset_task (task_id,owner_id,create_time),
+    KEY idx_creation_asset_work (status,lease_expires_at,update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户素材与独立上传准备状态';
+
+CREATE TABLE IF NOT EXISTS creator_creation_asset_object
+(
+    asset_id       VARCHAR(64) NOT NULL COMMENT '所属素材',
+    lease_token    VARCHAR(64) NOT NULL COMMENT '登记文件的执行代令牌',
+    role           VARCHAR(32) NOT NULL COMMENT '规范化文件或缩略图',
+    object_key     VARCHAR(1024) NOT NULL COMMENT '上传前登记的派生对象键，异常退出后仍可回收',
+    cleanup_done   TINYINT NOT NULL DEFAULT 0 COMMENT '非当前可用结果的对象是否已经清理',
+    cleanup_after  DATETIME(6) NOT NULL COMMENT '等待有界写入收尾后方可确认删除',
+    create_time    DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '登记时间',
+    PRIMARY KEY (asset_id,lease_token,role),
+    KEY idx_creation_asset_object_cleanup (cleanup_done,create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='素材派生对象的持久化清理依据';
+
+CREATE TABLE IF NOT EXISTS creator_creation_asset_part
+(
+    asset_id       VARCHAR(64) NOT NULL COMMENT '所属素材',
+    part_number    INT NOT NULL COMMENT '从一开始的分片编号',
+    etag           VARCHAR(255) NOT NULL COMMENT '存储返回的不透明分片凭据',
+    part_size      BIGINT NOT NULL COMMENT '客户端登记并经服务端范围校验的分片字节数',
+    PRIMARY KEY (asset_id,part_number)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='素材上传断点恢复分片';
+
 CREATE TABLE IF NOT EXISTS creator_media_upload
 (
     id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
@@ -2247,6 +2678,14 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'llm_api_call_log' AND COLUMN_NAME = 'reasoning_effort');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- 前缀缓存命中 token：旧库补齐后，压缩/对话调用才能量化 DeepSeek 的 KV cache 命中率。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE llm_api_call_log ADD COLUMN cached_prompt_tokens INT DEFAULT NULL COMMENT ''命中前缀缓存的输入 token 数（DeepSeek prompt_tokens_details.cached_tokens）；用于算缓存命中率和真实成本'' AFTER completion_tokens',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 'llm_api_call_log' AND COLUMN_NAME = 'cached_prompt_tokens');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- 媒体探测领取标识：旧库必须补齐，否则超时恢复后晚到的旧探测可能覆盖新一轮结果。
 SET @sql = (SELECT IF(COUNT(*) = 0,
     'ALTER TABLE creator_draft_video ADD COLUMN probe_attempt_id VARCHAR(64) DEFAULT NULL COMMENT ''当前媒体探测领取标识；防止超时恢复后的旧请求覆盖新探测结果'' AFTER has_audio',
@@ -2488,6 +2927,22 @@ SET @sql = (SELECT IF(COUNT(*) = 0,
 WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_conversation_message' AND INDEX_NAME = 'idx_user_id_id');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- 原生协议工具调用配对字段：assistant 的 tool_call 与 tool 结果用同一个 tool_call_id 配对，
+-- tool_arguments 只给调用消息存参数摘要；长期记忆增量查询靠 tool_call_id 排除工具调用行。
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE t_conversation_message ADD COLUMN tool_call_id VARCHAR(64) DEFAULT NULL COMMENT ''原生协议工具调用 id：assistant 的 tool_call 消息与 tool 结果消息共用一个值，普通消息为 NULL'' AFTER tool_name',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_conversation_message' AND COLUMN_NAME = 'tool_call_id');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE t_conversation_message ADD COLUMN tool_arguments TEXT DEFAULT NULL COMMENT ''assistant 工具调用参数摘要（≤300 字）；tool 结果消息和普通消息为 NULL'' AFTER tool_call_id',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_conversation_message' AND COLUMN_NAME = 'tool_arguments');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- 长期记忆改以记录 id 为身份（记忆重构步骤 6 / D13 / E1）：删掉 (user_id, memory_key) 唯一键。
 -- 保留它的话，「用户喜欢简洁解释」和「用户要求详细展开」这类同 key 不同事实会被 INSERT ... ON DUPLICATE KEY
 -- 直接覆盖，没有决策过程。memory_key 从此降级为展示用的分类字段，是否合并交给步骤 7 的写入决策。
@@ -2619,3 +3074,196 @@ CREATE TABLE IF NOT EXISTS creator_assistant_plan (
     create_time DATETIME(6) NOT NULL COMMENT '创建时间',
     KEY idx_assistant_plan_status (status,create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='平台助手连续操作计划';
+
+-- 整片运行进入真实媒体处理与完整试映的唯一闭环记录。
+-- 一条运行最多一个精确成片版本；子任务标识落库后，重启只恢复不重复创建，重复受理不会二次付费。
+CREATE TABLE IF NOT EXISTS creator_creation_media_link
+(
+    run_id              VARCHAR(64) NOT NULL COMMENT '已登记系统成片的整片运行',
+    task_id             VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id            VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    version_id          VARCHAR(64) NOT NULL COMMENT '本运行 REGISTERED 的唯一成片版本',
+    stage               VARCHAR(32) NOT NULL COMMENT '阶段：MEDIA_PENDING、MEDIA_RUNNING、PREFLIGHT_PENDING、PREFLIGHT_RUNNING、PACKAGE_PENDING、COMPLETED、FAILED、CANCELLED',
+    processing_job_id   VARCHAR(64) DEFAULT NULL COMMENT '内部受理的媒体预处理任务，恢复时按此精确复用',
+    preflight_review_id VARCHAR(64) DEFAULT NULL COMMENT '内部受理的完整试映任务，恢复时按此精确复用',
+    lease_generation    BIGINT      NOT NULL COMMENT '创建闭环时的执行代数，旧代数不能续写新结果',
+    failure_code        VARCHAR(64) DEFAULT NULL COMMENT '受控失败原因，不保存供应商原文',
+    create_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '进入媒体闭环时间',
+    update_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近阶段变化',
+    PRIMARY KEY (run_id),
+    UNIQUE KEY uk_creation_media_version (version_id),
+    KEY idx_creation_media_stage (stage, update_time),
+    KEY idx_creation_media_task (task_id, owner_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '整片运行媒体处理与完整试映闭环';
+
+-- 仅由真实对象校验通过的发布包生成记录，可幂等恢复；导出不等同于已发布。
+CREATE TABLE IF NOT EXISTS creator_creation_package
+(
+    run_id              VARCHAR(64) NOT NULL COMMENT '整片运行',
+    task_id             VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id            VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    version_id          VARCHAR(64) NOT NULL COMMENT '打包的精确成片版本',
+    processing_job_id   VARCHAR(64) NOT NULL COMMENT '生成该包的媒体预处理任务',
+    preflight_review_id VARCHAR(64) NOT NULL COMMENT '生成该包的完整试映任务',
+    status              VARCHAR(24) NOT NULL COMMENT 'BUILDING、READY、FAILED',
+    bucket_name         VARCHAR(255) DEFAULT NULL COMMENT '实际保存发布包的私有桶',
+    object_key          VARCHAR(1000) DEFAULT NULL COMMENT '发布包对象键，READY 前为空',
+    bytes               BIGINT DEFAULT NULL COMMENT '对象实际字节数，来自上传后 HEAD 校验',
+    sha256              CHAR(64) DEFAULT NULL COMMENT '本地发布包内容摘要',
+    manifest_json       LONGTEXT NOT NULL COMMENT '冻结的版本、文案、来源与文件清单',
+    lease_generation    BIGINT NOT NULL COMMENT '构建时的执行代数，失租结果不能登记',
+    failure_code        VARCHAR(64) DEFAULT NULL COMMENT '受控失败原因',
+    create_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '开始构建时间',
+    update_time         DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近状态变化',
+    PRIMARY KEY (run_id),
+    UNIQUE KEY uk_creation_package_version (version_id),
+    KEY idx_creation_package_task (task_id, owner_id, status)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '最小真实发布包';
+
+-- 配置保存与新运行受理共用行锁，重启前不允许换用新的供应商参数。
+CREATE TABLE IF NOT EXISTS creator_creation_provider_lock
+(
+    id TINYINT NOT NULL COMMENT '固定为一的制作配置事务锁',
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='制作配置受理锁';
+INSERT IGNORE INTO creator_creation_provider_lock(id) VALUES (1);
+CREATE TABLE IF NOT EXISTS creator_creation_provider_configuration
+(
+    id TINYINT NOT NULL COMMENT '固定为一的个人部署供应商配置',
+    configuration_json JSON NOT NULL COMMENT '模型及价格参数，密钥字段仅保存 AES-GCM 密文',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '保存时间，重启后生效',
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='制作供应商配置与加密密钥';
+
+-- 一次用户制作确认覆盖多个既有运行，子运行仍使用原有租约、费用与真实发布门禁。
+CREATE TABLE IF NOT EXISTS creator_creation_execution
+(
+    execution_id VARCHAR(64) NOT NULL COMMENT '本次明确确认的制作身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    kind VARCHAR(16) NOT NULL COMMENT '样片 SAMPLE、整片 FULL 或修改版 REVISION',
+    status VARCHAR(24) NOT NULL COMMENT 'ACTIVE、WAITING_USER、CANCEL_REQUESTED、COMPLETED、CANCELLED',
+    stage VARCHAR(32) NOT NULL COMMENT '实际正在推进的步骤',
+    source_storyboard_id VARCHAR(64) NOT NULL COMMENT '用户确认的不可变原故事板',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '已准备素材对应的最新故事板',
+    scene_ids_json TEXT NOT NULL COMMENT '本次授权覆盖的有序场景身份',
+    publishing_session_id VARCHAR(64) DEFAULT NULL COMMENT '整片确认的真实发布方案会话',
+    publishing_result_id VARCHAR(64) DEFAULT NULL COMMENT '整片确认的真实发布方案结果',
+    base_version_id VARCHAR(64) DEFAULT NULL COMMENT '确认时的基准成片，不能静默覆盖其他版本',
+    max_additional_cost_cny DECIMAL(18,6) NOT NULL COMMENT '所有子运行合计新增费用上限',
+    current_run_id VARCHAR(64) DEFAULT NULL COMMENT '已受理的当前子运行',
+    expected_workspace_revision BIGINT NOT NULL COMMENT '下一步受理所需修订，外部改动后停止自动推进',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '用户确认的重放身份',
+    request_hash CHAR(64) NOT NULL COMMENT '确认原文摘要，同键换范围必须拒绝',
+    provider_fingerprint CHAR(64) NOT NULL DEFAULT '' COMMENT '确认时的制作配置摘要，旧运行留空时须重新确认',
+    dispatch_failures INT NOT NULL DEFAULT 0 COMMENT '连续本地调度异常次数，达到三次后交还作者处理',
+    error_code VARCHAR(64) DEFAULT NULL COMMENT '可读提示对应的受控错误码',
+    objects_json LONGTEXT NOT NULL COMMENT '已验收样片产物清单，不包含读取签名',
+    active_slot TINYINT GENERATED ALWAYS AS (CASE WHEN status IN ('ACTIVE','WAITING_USER','CANCEL_REQUESTED') THEN 1 ELSE NULL END) STORED COMMENT '每条任务只允许一份活动制作确认',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '明确确认时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近推进时间',
+    PRIMARY KEY (execution_id),
+    UNIQUE KEY uk_execution_key (task_id, owner_id, idempotency_key),
+    UNIQUE KEY uk_execution_active (task_id, owner_id, active_slot),
+    KEY idx_execution_poll (status, update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户明确授权的连续制作';
+
+-- 已有表不会由 CREATE IF NOT EXISTS 补列，升级时逐项检查；旧运行不能推断成已确认当前配置。
+SET @creation_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_creation_execution' AND COLUMN_NAME='provider_fingerprint')=0, 'ALTER TABLE creator_creation_execution ADD COLUMN provider_fingerprint CHAR(64) NOT NULL DEFAULT '''' COMMENT ''确认时的制作配置摘要，旧运行留空时须重新确认''', 'SELECT 1');
+PREPARE creation_stmt FROM @creation_ddl; EXECUTE creation_stmt; DEALLOCATE PREPARE creation_stmt;
+SET @creation_ddl = IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='creator_creation_execution' AND COLUMN_NAME='dispatch_failures')=0, 'ALTER TABLE creator_creation_execution ADD COLUMN dispatch_failures INT NOT NULL DEFAULT 0 COMMENT ''连续本地调度异常次数，达到三次后交还作者处理''', 'SELECT 1');
+PREPARE creation_stmt FROM @creation_ddl; EXECUTE creation_stmt; DEALLOCATE PREPARE creation_stmt;
+
+CREATE TABLE IF NOT EXISTS creator_creation_execution_run
+(
+    execution_id VARCHAR(64) NOT NULL COMMENT '归属制作确认',
+    run_id VARCHAR(64) NOT NULL COMMENT '费用和租约所在的既有运行',
+    stage VARCHAR(32) NOT NULL COMMENT '本次准备或渲染步骤',
+    PRIMARY KEY (execution_id, stage),
+    UNIQUE KEY uk_execution_run (run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='制作确认与真实运行关系';
+
+CREATE TABLE IF NOT EXISTS creator_creation_execution_object
+(
+    execution_id VARCHAR(64) NOT NULL COMMENT '归属样片制作确认',
+    generation BIGINT NOT NULL COMMENT '实际生成尝试的租约代数',
+    file_name VARCHAR(80) NOT NULL COMMENT '固定渲染器产物名称',
+    bucket_name VARCHAR(255) NOT NULL COMMENT '实际保存的私有桶',
+    object_key VARCHAR(1000) NOT NULL COMMENT '写入前登记的精确对象键',
+    bytes BIGINT NOT NULL COMMENT '本地校验后的实际字节数',
+    sha256 CHAR(64) NOT NULL COMMENT '本地内容摘要',
+    content_type VARCHAR(120) NOT NULL COMMENT '已验证的媒体类型',
+    adopted TINYINT NOT NULL DEFAULT 0 COMMENT '只有当前活租约可采纳产物',
+    deleted TINYINT NOT NULL DEFAULT 0 COMMENT '未采纳产物是否已完成清理',
+    PRIMARY KEY (execution_id, generation, file_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='样片对象与失败回收依据';
+
+CREATE TABLE IF NOT EXISTS creator_creation_revision_proposal
+(
+    proposal_id VARCHAR(64) NOT NULL COMMENT '免费修改预览的不可变身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信素材归属',
+    storyboard_id VARCHAR(64) NOT NULL COMMENT '修改依据的不可变故事板',
+    expected_workspace_revision BIGINT NOT NULL COMMENT '确认修改时必须仍匹配的工作区修订',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '修改提案的重放身份',
+    request_hash CHAR(64) NOT NULL COMMENT '原修改请求摘要',
+    document_json LONGTEXT NOT NULL COMMENT '白名单修改后的简报、场景、真实素材、差异与复用计划',
+    applied_storyboard_id VARCHAR(64) DEFAULT NULL COMMENT '已采纳的新故事板，重复确认返回同一版本',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '提出时间',
+    PRIMARY KEY (proposal_id),
+    UNIQUE KEY uk_revision_key (task_id,owner_id,idempotency_key),
+    KEY idx_revision_board (task_id,owner_id,storyboard_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='受限局部修改提案';
+
+CREATE TABLE IF NOT EXISTS creator_creation_cleanup
+(
+    run_id VARCHAR(64) NOT NULL COMMENT '已经终止的制作运行',
+    local_done TINYINT NOT NULL DEFAULT 0 COMMENT '受控本地工作目录是否已回收',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近清理时间',
+    PRIMARY KEY (run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='终止运行资源回收检查点';
+
+CREATE TABLE IF NOT EXISTS creator_creation_manual_review
+(
+    review_id VARCHAR(64) NOT NULL COMMENT '原有独立试映任务',
+    run_id VARCHAR(64) NOT NULL COMMENT '本次明确发起试映对应的预算运行',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    version_id VARCHAR(64) NOT NULL COMMENT '试映的精确成片版本',
+    status VARCHAR(24) NOT NULL DEFAULT 'ACTIVE' COMMENT '本次试映预算运行是否已收尾',
+    active_slot TINYINT GENERATED ALWAYS AS (CASE WHEN status='ACTIVE' THEN 1 ELSE NULL END) STORED COMMENT '一份试映仅有一个活动授权',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '受理时间',
+    PRIMARY KEY (review_id,run_id),
+    UNIQUE KEY uk_manual_review_run (run_id),
+    UNIQUE KEY uk_manual_review_active (review_id,active_slot)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='独立试映接入同任务制作预算';
+
+-- 初稿制作独立于发布确认，真实成片与改进说明先交付，后台检查点支持刷新和重启恢复。
+CREATE TABLE IF NOT EXISTS creator_creation_draft
+(
+    draft_id VARCHAR(64) NOT NULL COMMENT '本次完整视频初稿身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    version INT NOT NULL COMMENT '同任务初稿版本序号',
+    base_draft_id VARCHAR(64) DEFAULT NULL COMMENT '用户本次观看和反馈的基准版本',
+    request_json MEDIUMTEXT NOT NULL COMMENT '用户原始反馈、所选素材和费用上限',
+    request_hash CHAR(64) NOT NULL COMMENT '原始请求摘要，用于拒绝同键改内容',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '用户本次明确制作动作的幂等键',
+    status VARCHAR(24) NOT NULL COMMENT '准备、执行、完成、等待处理或取消状态',
+    brief_id VARCHAR(64) NOT NULL COMMENT '本次自动整理的制作简报',
+    preparation_run_id VARCHAR(64) NOT NULL COMMENT '已授权的文本准备运行',
+    storyboard_id VARCHAR(64) DEFAULT NULL COMMENT '本次当前实际制作工程',
+    execution_id VARCHAR(64) DEFAULT NULL COMMENT '完整初稿媒体执行记录',
+    expected_workspace_revision BIGINT NOT NULL COMMENT '准备受理后冻结的工作区版本',
+    authorization_limit_cny DECIMAL(18,6) NOT NULL COMMENT '本版累计新增费用授权，覆盖准备与制作',
+    error_message VARCHAR(500) DEFAULT NULL COMMENT '实际阻塞原因，不保存内容建议',
+    dispatch_failures INT NOT NULL DEFAULT 0 COMMENT '本地连续恢复失败次数',
+    active_slot TINYINT GENERATED ALWAYS AS (CASE WHEN status IN ('PREPARING','EXECUTING','CANCEL_REQUESTED') THEN 1 ELSE NULL END) STORED COMMENT '每任务仅一个活动初稿',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '制作受理时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近检查点时间',
+    PRIMARY KEY (draft_id),
+    UNIQUE KEY uk_creation_draft_version (task_id,owner_id,version),
+    UNIQUE KEY uk_creation_draft_request (task_id,owner_id,idempotency_key),
+    UNIQUE KEY uk_creation_draft_active (task_id,owner_id,active_slot),
+    KEY idx_creation_draft_scan (status,update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='先制作后修改的完整视频初稿与反馈历史';

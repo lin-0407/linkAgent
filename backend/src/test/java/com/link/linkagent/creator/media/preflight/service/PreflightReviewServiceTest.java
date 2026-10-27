@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.media.preflight.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.media.config.CreatorMediaProperties;
 import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
 import com.link.linkagent.creator.media.preflight.model.CreatePreflightReviewRequest;
@@ -38,14 +39,7 @@ class PreflightReviewServiceTest {
         when(mapper.findReview("task-1", "default", "review-1")).thenReturn(Optional.of(review));
         when(mapper.findCurrentByVersion("task-1", "default", "version-1"))
                 .thenReturn(Optional.of(review));
-        PreflightReviewService service = new PreflightReviewService(
-                new CreatorMediaProperties(),
-                mapper,
-                mock(MediaUploadMapper.class),
-                mock(MediaProcessingMapper.class),
-                mock(PreflightEventPublisher.class),
-                new ObjectMapper()
-        );
+        PreflightReviewService service = service(mapper);
 
         ResponseStatusException exception = catchThrowableOfType(
                 () -> service.retry("default", "task-1", "review-1"),
@@ -108,11 +102,35 @@ class PreflightReviewServiceTest {
         verify(mapper, never()).retryReview("task-1", "default", "review-1");
     }
 
+    @Test
+    void shouldRejectNewReviewBeforeTouchingDataWhenPaidAnalysisIsOff() {
+        PreflightReviewMapper mapper = mock(PreflightReviewMapper.class);
+        PreflightReviewService service = new PreflightReviewService(
+                new CreatorMediaProperties(), mapper, mock(MediaUploadMapper.class),
+                mock(MediaProcessingMapper.class), mock(PreflightEventPublisher.class), new ObjectMapper(),
+                new CreationCapabilityGate() {
+                    @Override public boolean mediaInfrastructureEnabled() { return true; }
+                    @Override public boolean mediaAnalysisEnabled() { return false; }
+                    @Override public boolean voiceEnabled() { return false; }
+                    @Override public boolean videoEnabled() { return false; }
+                });
+
+        ResponseStatusException exception = catchThrowableOfType(
+                () -> service.create("default", "task-1", "new-key",
+                        new CreatePreflightReviewRequest("version-1", true, null)),
+                ResponseStatusException.class);
+
+        assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(exception.getReason()).contains("媒体付费分析");
+        verify(mapper, never()).lockDraftVersion("task-1", "default", "version-1");
+    }
+
     private PreflightReviewService service(PreflightReviewMapper mapper) {
         return service(mapper, mock(MediaUploadMapper.class));
     }
 
     private PreflightReviewService service(PreflightReviewMapper mapper, MediaUploadMapper uploadMapper) {
+        when(uploadMapper.lockMediaTask("task-1", "default")).thenReturn(Optional.of("task-1"));
         return new PreflightReviewService(
                 new CreatorMediaProperties(),
                 mapper,

@@ -58,8 +58,6 @@ import java.util.UUID;
 @ConditionalOnProperty(prefix = "creator.media", name = "enabled", havingValue = "true")
 public class MediaUploadService {
 
-    // P0 只支持单一版本号 V1，后续版本对比阶段再扩展多版本
-    private static final int P0_VERSION_NO = 1;
     // 失败原因摘要上限：对应 creator_media_upload.failure_message 列长度 500
     private static final int MAX_FAILURE_MESSAGE_LENGTH = 500;
     // VERIFYING 状态恢复等待时间：Complete 请求可能在 OSS 端成功但网络丢包，
@@ -143,6 +141,9 @@ public class MediaUploadService {
         if (mediaUploadMapper.countTaskByOwner(normalizedTaskId, ownerId) != 1) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在");
         }
+        // 先取上下文再检查门禁，避免检查旧蓝图后读到新修订号，误放行跨方向的迟到请求。
+        long expectedWorkspaceRevision = mediaUploadMapper.findMediaWorkspace(normalizedTaskId, ownerId)
+                .map(workspace -> workspace.workspaceRevision()).orElse(-1L);
         // 在读取或复用幂等上传会话前确认正常策划链路或已有成片跳过事实，避免前端单独绕过门禁。
         mediaWorkflowGateService.ensurePrePublishConfirmed(normalizedTaskId, ownerId, "成片试映");
         ensureProductionPlanReady(normalizedTaskId, ownerId);
@@ -159,22 +160,21 @@ public class MediaUploadService {
             return toUploadResponse(optionalUpload.upload());
         }
 
-        // 查是否已有该任务的成片记录：没有则新建，有则需判断是否能复用
-        DraftVideoRecord currentDraft = mediaUploadMapper.findDraftVideo(normalizedTaskId, ownerId).orElse(null);
-        boolean createDraft = currentDraft == null;
-        if (!createDraft && currentDraft.mediaDeletedAt() != null) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "当前任务的媒体文件已删除；为避免旧报告对应新视频，本版本不支持重新上传"
-            );
+        // 先做无副作用检查，避免已发布或已有上传的任务额外创建 OSS 分片；事务内还会复核。
+        if (mediaUploadMapper.countPublishingFacts(normalizedTaskId, ownerId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务已有发布标记或 BV 关联，请新建任务上传修订视频");
         }
-        if (!createDraft && !canReuseDraft(currentDraft.status())) {
-            // 成片正在上传中或已完成，不允许覆盖
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务已经存在上传中或已完成的成片");
+        if (mediaUploadMapper.findCurrentUpload(normalizedTaskId, ownerId).isPresent()) {
+            // 两次读取之间可能已提交同一幂等请求，不能把合法重试误报成另一条上传。
+            OptionalUpload concurrent = findIdempotentUpload(normalizedTaskId, ownerId,
+                    normalizedIdempotencyKey, fingerprint);
+            if (concurrent.found()) {
+                return toUploadResponse(concurrent.upload());
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前任务仍有上传未结束，请先完成或取消原上传");
         }
-
-        // 版本 ID：新建时生成 UUID，复用时沿用已有版本 ID（P0 只有一个版本）
-        String versionId = createDraft ? UUID.randomUUID().toString() : currentDraft.versionId();
+        // 每个新文件都有独立身份；失败重传也不能改写完整历史版本。
+        String versionId = UUID.randomUUID().toString();
         // 上传会话 ID：每次创建都生成新 UUID，区分不同上传尝试
         String uploadSessionId = UUID.randomUUID().toString();
         // 后端生成的对象键：格式为 users/{ownerId}/tasks/{taskId}/versions/{versionId}/attempts/{uploadSessionId}/original/source.mp4
@@ -193,13 +193,13 @@ public class MediaUploadService {
         int partSize = mediaProperties.getUpload().getPartSizeBytes(); // 默认 16 MiB
         // 总分片数：向上取整，最后一个分片可以小于 partSize
         int totalParts = Math.toIntExact((request.fileSize() + partSize - 1L) / partSize);
-        // 构造成片记录（复用已有记录时保留原 createTime）
+        // 序号稍后在数据库任务锁内分配，事务外不预读 MAX(version_no)。
         DraftVideoRecord draftVideo = new DraftVideoRecord(
-                createDraft ? null : currentDraft.id(),       // 新建时为 null，MyBatis 会使用自增主键
+                null,
                 versionId,
                 normalizedTaskId,
                 ownerId,
-                P0_VERSION_NO,                                  // P0 固定版本号为 1
+                0,
                 request.versionName().trim(),
                 normalizedFileName,
                 storageProperties.getBucket(),                  // 桶名从配置读取
@@ -216,8 +216,8 @@ public class MediaUploadService {
                 null,
                 DraftVideoStatus.UPLOADING.name(),             // 初始状态：上传中
                 null,
-                createDraft ? null : currentDraft.createTime(),
-                createDraft ? null : currentDraft.updateTime()
+                null,
+                null
         );
         // 构造上传会话记录
         MediaUploadRecord upload = new MediaUploadRecord(
@@ -243,18 +243,16 @@ public class MediaUploadService {
         );
 
         try {
-            // 在事务内原子写入成片记录和上传会话记录
-            MediaUploadRecord replacedUpload = persistenceService.saveCreatedUpload(
-                    draftVideo,
-                    createDraft,
-                    createDraft ? null : currentDraft.objectKey(), // 复用成片时传入原对象键，用于行级锁定位
-                    upload
-            );
-            if (replacedUpload != null) {
-                // 新旧尝试使用不同对象键（每次 attempt 不同 uploadSessionId）；
-                // 事务提交后再清理旧尝试的 OSS 资源，避免外部请求占用数据库事务。
-                safeAbort(replacedUpload.objectKey(), replacedUpload.storageUploadId());
-                safeDelete(replacedUpload.objectKey());
+            MediaUploadRecord savedUpload = persistenceService.saveCreatedUpload(draftVideo, upload, expectedWorkspaceRevision);
+            if (!savedUpload.uploadSessionId().equals(uploadSessionId)) {
+                // 并发幂等请求可能先成功：只清理本请求多创建的分片，不动胜出会话及历史成片。
+                safeAbort(objectKey, storageUpload.uploadId());
+                OptionalUpload concurrent = findIdempotentUpload(normalizedTaskId, ownerId,
+                        normalizedIdempotencyKey, fingerprint);
+                if (!concurrent.found()) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "原上传会话已变化，请刷新后重试");
+                }
+                return toUploadResponse(concurrent.upload());
             }
         } catch (RuntimeException exception) {
             // 数据库写入失败时，必须清理已创建的 OSS Multipart Upload，避免产生孤立资源
@@ -326,8 +324,10 @@ public class MediaUploadService {
                                                  String uploadSessionId,
                                                  List<Integer> partNumbers) {
         MediaUploadRecord upload = requireUpload(ownerId, taskId, uploadSessionId);
-        mediaWorkflowGateService.ensurePrePublishConfirmed(upload.taskId(), upload.ownerId(), "成片试映");
-        ensureProductionPlanReady(upload.taskId(), upload.ownerId());
+        if (!mediaWorkflowGateService.ensureVersionContextOrLegacyConfirmation(
+                upload.taskId(), upload.ownerId(), upload.versionId(), "成片试映")) {
+            ensureProductionPlanReady(upload.taskId(), upload.ownerId());
+        }
         expireIfNecessary(upload);
         ensureStatusAllowsUpload(upload.status()); // 只允许 CREATED 和 UPLOADING 状态签名
 
@@ -389,8 +389,10 @@ public class MediaUploadService {
                                                                 String uploadSessionId,
                                                                 MediaUploadPartsCompleteRequest request) {
         MediaUploadRecord upload = requireUpload(ownerId, taskId, uploadSessionId);
-        mediaWorkflowGateService.ensurePrePublishConfirmed(upload.taskId(), upload.ownerId(), "成片试映");
-        ensureProductionPlanReady(upload.taskId(), upload.ownerId());
+        if (!mediaWorkflowGateService.ensureVersionContextOrLegacyConfirmation(
+                upload.taskId(), upload.ownerId(), upload.versionId(), "成片试映")) {
+            ensureProductionPlanReady(upload.taskId(), upload.ownerId());
+        }
         expireIfNecessary(upload);
         ensureStatusAllowsUpload(upload.status());
 
@@ -442,10 +444,12 @@ public class MediaUploadService {
         MediaUploadRecord upload = requireUpload(ownerId, taskId, uploadSessionId);
         // 已完成则直接返回事实，幂等保证
         if (MediaUploadStatus.COMPLETED.name().equals(upload.status())) {
-            return toDraftVideoResponse(requireDraft(ownerId, taskId));
+            return toDraftVideoResponse(requireDraft(upload));
         }
-        mediaWorkflowGateService.ensurePrePublishConfirmed(upload.taskId(), upload.ownerId(), "成片试映");
-        ensureProductionPlanReady(upload.taskId(), upload.ownerId());
+        if (!mediaWorkflowGateService.ensureVersionContextOrLegacyConfirmation(
+                upload.taskId(), upload.ownerId(), upload.versionId(), "成片试映")) {
+            ensureProductionPlanReady(upload.taskId(), upload.ownerId());
+        }
         expireIfNecessary(upload);
         if (MediaUploadStatus.VERIFYING.name().equals(upload.status())) {
             // VERIFYING 状态恢复：上轮 Complete 请求可能已成功，先 HeadObject 确认
@@ -506,7 +510,7 @@ public class MediaUploadService {
                 metadata.contentLength(),
                 LocalDateTime.now()
         );
-        return toDraftVideoResponse(requireDraft(ownerId, taskId));
+        return toDraftVideoResponse(requireDraft(upload));
     }
 
     /**
@@ -601,21 +605,11 @@ public class MediaUploadService {
     }
 
     /**
-     * 根据 taskId、ownerId 查找成片记录。
+     * 完成和恢复响应始终读取该上传会话的版本，不能跟随当前工作区指针。
      */
-    private DraftVideoRecord requireDraft(String ownerId, String taskId) {
-        return mediaUploadMapper.findDraftVideo(taskId.trim(), ownerId)
+    private DraftVideoRecord requireDraft(MediaUploadRecord upload) {
+        return mediaUploadMapper.findDraftVideoByVersion(upload.taskId(), upload.ownerId(), upload.versionId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
-    }
-
-    /**
-     * 判断成片状态是否允许复用创建新上传。
-     * 只有上传失败、用户取消或探测失败表示上一次尝试已结束，可以重新上传。
-     */
-    private boolean canReuseDraft(String status) {
-        return DraftVideoStatus.UPLOAD_FAILED.name().equals(status)
-                || DraftVideoStatus.UPLOAD_ABORTED.name().equals(status)
-                || DraftVideoStatus.PROBE_FAILED.name().equals(status);
     }
 
     /**
@@ -732,7 +726,7 @@ public class MediaUploadService {
                     metadata.contentLength(),
                     LocalDateTime.now()
             );
-            return toDraftVideoResponse(requireDraft(upload.ownerId(), upload.taskId()));
+            return toDraftVideoResponse(requireDraft(upload));
         }
         // HeadObject 失败：尝试将 VERIFYING 状态回退到 FAILED（需满足超时条件）
         if (mediaUploadMapper.reopenStaleVerifyingUpload(

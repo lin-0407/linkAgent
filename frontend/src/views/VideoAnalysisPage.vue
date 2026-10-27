@@ -6,9 +6,11 @@
  * P0-3 为页壳，P0-4 补全点击卡片后的完整分析报告和追问能力。
  */
 import { onMounted, ref, watch } from 'vue'
+import { errorText } from '@/utils/error'
 import { ArrowRight, RefreshCw } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import { getPostPublishReadiness, listCreatorTasks } from '@/api/creator'
+import PageHeader from '@/components/common/PageHeader.vue'
 import BilibiliAccountPanel from '@/components/creator/BilibiliAccountPanel.vue'
 import BvBindingPanel from '@/components/creator/BvBindingPanel.vue'
 import LinkedVideoGrid from '@/components/creator/LinkedVideoGrid.vue'
@@ -23,7 +25,6 @@ import type {
   BilibiliVideo,
   CreatorTaskSummary,
   PostPublishReadiness,
-  TaskVideoBinding,
 } from '@/types/creator'
 
 const router = useRouter()
@@ -66,8 +67,8 @@ async function loadTasks() {
     if (nextTaskId === currentTaskId) {
       await loadReadiness()
     }
-  } catch (e: any) {
-    taskError.value = e?.message || '读取任务列表失败'
+  } catch (e) {
+    taskError.value = errorText(e, '读取任务列表失败')
   } finally {
     loadingTasks.value = false
   }
@@ -87,9 +88,9 @@ async function loadReadiness() {
     const result = await getPostPublishReadiness(taskId)
     if (requestGeneration !== readinessRequestGeneration || taskId !== selectedBindTaskId.value) return
     readiness.value = result
-  } catch (e: any) {
+  } catch (e) {
     if (requestGeneration !== readinessRequestGeneration || taskId !== selectedBindTaskId.value) return
-    readinessError.value = e?.message || '检查任务状态失败'
+    readinessError.value = errorText(e, '检查任务状态失败')
   } finally {
     if (requestGeneration === readinessRequestGeneration) {
       loadingReadiness.value = false
@@ -126,19 +127,14 @@ function onSyncCompleted() {
   void videoGrid.value?.refresh()
 }
 
-function onVideoBound(_binding: TaskVideoBinding) {
+function onVideoBound() {
   void videoGrid.value?.refresh()
 }
 </script>
 
 <template>
   <div class="video-analysis-page">
-    <header class="video-analysis-header">
-      <h2>视频分析与复盘</h2>
-      <p class="video-analysis-subtitle">
-        已绑定任务的视频会在同步校验后出现在这里。
-      </p>
-    </header>
+    <PageHeader title="视频分析与复盘" description="已绑定任务的视频会在同步校验后出现在这里。" />
 
     <BilibiliAccountPanel
       @account-ready="onAccountReady"
@@ -257,26 +253,6 @@ function onVideoBound(_binding: TaskVideoBinding) {
   padding: 22px 24px 72px;
 }
 
-.video-analysis-header {
-  margin-bottom: 24px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--border);
-}
-
-.video-analysis-header h2 {
-  margin: 0 0 8px;
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--ink);
-}
-
-.video-analysis-subtitle {
-  margin: 0;
-  font-size: 14px;
-  color: var(--creator-muted-ink, #86868b);
-  line-height: 1.5;
-}
-
 .video-binding-section {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -295,7 +271,7 @@ function onVideoBound(_binding: TaskVideoBinding) {
 
 .video-binding-header h3 {
   margin: 0 0 6px;
-  font-size: 16px;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--ink);
 }
@@ -304,13 +280,13 @@ function onVideoBound(_binding: TaskVideoBinding) {
 .video-binding-empty,
 .video-binding-error {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
-  color: var(--creator-muted-ink, #86868b);
+  color: var(--creator-muted-ink, var(--muted));
 }
 
 .video-binding-error {
-  color: #c93400;
+  color: var(--danger);
   margin-bottom: 12px;
 }
 
@@ -322,8 +298,8 @@ function onVideoBound(_binding: TaskVideoBinding) {
 }
 
 .video-binding-task-field span {
-  font-size: 13px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-sm);
+  color: var(--creator-muted-ink, var(--muted));
 }
 
 .video-binding-task-field select {
@@ -331,7 +307,7 @@ function onVideoBound(_binding: TaskVideoBinding) {
   border-radius: var(--r-sm);
   background: var(--surface);
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   min-height: 44px;
   padding: 0 12px;
 }
@@ -360,8 +336,8 @@ function onVideoBound(_binding: TaskVideoBinding) {
 
 .video-readiness-loading {
   justify-content: center;
-  color: var(--creator-muted-ink, #86868b);
-  font-size: 13px;
+  color: var(--creator-muted-ink, var(--muted));
+  font-size: var(--fs-sm);
 }
 
 .video-readiness-spinner {
@@ -381,14 +357,14 @@ function onVideoBound(_binding: TaskVideoBinding) {
   display: block;
   margin-bottom: 5px;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.5;
 }
 
 .video-readiness-content p {
   margin: 0;
   color: var(--creator-muted-ink, #68686f);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
@@ -427,29 +403,29 @@ function onVideoBound(_binding: TaskVideoBinding) {
 
 .video-detail-placeholder h3 {
   margin: 0 0 12px;
-  font-size: 18px;
+  font-size: var(--fs-lg);
   font-weight: 600;
-  color: var(--creator-text, #1d1d1f);
+  color: var(--creator-text, var(--ink));
 }
 
 .video-detail-bv,
 .video-detail-task {
   margin: 0 0 4px;
-  font-size: 14px;
-  color: var(--creator-text, #1d1d1f);
+  font-size: var(--fs-base);
+  color: var(--creator-text, var(--ink));
 }
 
 .video-detail-coming {
   margin-top: 16px;
   padding: 16px;
   background: var(--creator-surface-sub, #f5f5f7);
-  border-radius: 8px;
+  border-radius: var(--r-sm);
 }
 
 .video-detail-coming p {
   margin: 0;
-  font-size: 14px;
-  color: var(--creator-muted-ink, #86868b);
+  font-size: var(--fs-base);
+  color: var(--creator-muted-ink, var(--muted));
   line-height: 1.6;
 }
 
@@ -464,7 +440,7 @@ function onVideoBound(_binding: TaskVideoBinding) {
   }
 
   .video-analysis-header h2 {
-    font-size: 20px;
+    font-size: var(--fs-xl);
   }
 
   .video-binding-header {

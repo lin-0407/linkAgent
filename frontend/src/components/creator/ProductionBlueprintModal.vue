@@ -209,14 +209,14 @@ function handleStepUpdate(status: ProductionStepStatus, rowVersion: number, skip
 .production-modal-kicker {
   margin: 0 0 5px;
   color: var(--accent-strong);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
 }
 
 .production-modal-header h2 {
   margin: 0;
   color: var(--ink);
-  font-size: 23px;
+  font-size: var(--fs-2xl);
   letter-spacing: 0;
 }
 
@@ -240,9 +240,9 @@ function handleStepUpdate(status: ProductionStepStatus, rowVersion: number, skip
   border-radius: var(--r-sm);
   cursor: pointer;
   transition:
-    color 180ms ease,
-    background 180ms ease,
-    border-color 180ms ease;
+    color var(--dur-fast) ease,
+    background var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
 }
 
 .production-modal-close:hover {
@@ -272,7 +272,7 @@ function handleStepUpdate(status: ProductionStepStatus, rowVersion: number, skip
   color: var(--danger);
   background: rgba(220, 38, 38, 0.06);
   border-bottom: 1px solid rgba(220, 38, 38, 0.14);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .production-modal-body {
@@ -298,7 +298,7 @@ function handleStepUpdate(status: ProductionStepStatus, rowVersion: number, skip
   gap: 9px;
   margin: 0;
   color: var(--warn);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .production-modal-footer p > span {
@@ -334,14 +334,14 @@ function handleStepUpdate(status: ProductionStepStatus, rowVersion: number, skip
 
 .production-modal-enter-active,
 .production-modal-leave-active {
-  transition: opacity 180ms ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .production-modal-enter-active .production-blueprint-modal,
 .production-modal-leave-active .production-blueprint-modal {
   transition:
-    opacity 180ms ease,
-    transform 180ms ease;
+    opacity var(--dur-fast) ease,
+    transform var(--dur-fast) ease;
 }
 
 .production-modal-enter-from,
@@ -376,7 +376,7 @@ function handleStepUpdate(status: ProductionStepStatus, rowVersion: number, skip
   }
 
   .production-modal-header h2 {
-    font-size: 20px;
+    font-size: var(--fs-xl);
   }
 
   .production-modal-header p:last-child {

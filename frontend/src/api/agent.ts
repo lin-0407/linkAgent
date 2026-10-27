@@ -6,6 +6,7 @@ import type {
 } from '@/types/agent'
 import type { AgentStep } from '@/types/agent'
 import type { AssistantChatContext } from './assistant'
+import { API_BASE_URL } from './config'
 import { get, post } from './http'
 
 /** SSE 排查日志统一前缀，浏览器控制台可按 [agent-sse] 过滤 */
@@ -121,7 +122,8 @@ export function sendAgentMessageStream(
   context?: AssistantChatContext,
 ): () => void {
   const abortController = new AbortController()
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
+  // 基址与 axios 实例共用同一份来源，避免流式接口和普通请求分叉
+  const baseUrl = API_BASE_URL
 
   // 异步启动 fetch 流，不阻塞调用方
   void (async () => {

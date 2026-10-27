@@ -66,9 +66,12 @@ def load_config(path: Path | None) -> dict:
     for key in ("popular_pages", "newlist_pages", "max_comments", "max_danmaku"):
         if type(config[key]) is not int or not 0 <= config[key] <= 1000:
             raise ValueError(f"{key} 必须是 0–1000 的整数")
-    for key, maximum in (("page_size", 50), ("max_checks", 10000), ("max_imports", 1000)):
+    for key, maximum in (("page_size", 50), ("max_checks", 10000)):
         if type(config[key]) is not int or not 1 <= config[key] <= maximum:
             raise ValueError(f"{key} 必须是 1–{maximum} 的整数")
+    # 单轮入库上限不再卡 1000，只拦非正整数；实际能入库多少仍受候选数、max_checks 和后端逐条导入限制。
+    if type(config["max_imports"]) is not int or config["max_imports"] < 1:
+        raise ValueError("max_imports 必须是正整数")
     for key in ("delay_seconds", "timeout_seconds", "import_timeout_seconds", "recheck_hours", "retry_minutes"):
         value = config[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:

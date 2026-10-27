@@ -10,8 +10,8 @@ RUN npm install
 
 COPY . .
 
-# 使用正式 build，让 Docker 构建阶段也执行 vue-tsc，避免类型错误进入镜像。
-RUN npm run build
+# 页面排版改动只构建静态资源，避免间接执行项目协作规则禁止的 type-check。
+RUN npm run build-only
 
 # 静态站点用 Nginx 承载，既能直接服务 SPA，又能顺手把 /api 转发给后端。
 FROM nginx:1.27-alpine

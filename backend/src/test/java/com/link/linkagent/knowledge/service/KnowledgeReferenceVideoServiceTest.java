@@ -73,7 +73,8 @@ class KnowledgeReferenceVideoServiceTest {
                 mock(KnowledgeReferenceCleaningService.class),
                 mock(KnowledgeReferenceChunkService.class),
                 scoringService,
-                new ObjectMapper()
+                new ObjectMapper(),
+                new org.springframework.transaction.support.TransactionTemplate(mock(org.springframework.transaction.PlatformTransactionManager.class))
         );
     }
 

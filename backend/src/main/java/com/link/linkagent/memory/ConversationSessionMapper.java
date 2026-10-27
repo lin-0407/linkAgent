@@ -38,10 +38,10 @@ public interface ConversationSessionMapper {
 
     @Insert("""
             INSERT INTO t_conversation_message (
-                session_id, user_id, role, content, tool_name, token_count, create_time
+                session_id, user_id, role, content, tool_name, tool_call_id, tool_arguments, token_count, create_time
             )
             VALUES (
-                #{sessionId}, #{userId}, #{role}, #{content}, #{toolName}, #{tokenCount}, #{createTime}
+                #{sessionId}, #{userId}, #{role}, #{content}, #{toolName}, #{toolCallId}, #{toolArguments}, #{tokenCount}, #{createTime}
             )
             """)
     @Options(useGeneratedKeys = true, keyProperty = "id")
@@ -59,7 +59,7 @@ public interface ConversationSessionMapper {
                                                        @Param("limit") int limit);
 
     @Select("""
-            SELECT id, session_id, role, content, tool_name, token_count, create_time, is_deleted
+            SELECT id, session_id, role, content, tool_name, tool_call_id, tool_arguments, token_count, create_time, is_deleted
             FROM t_conversation_message
             WHERE session_id = #{sessionId}
               AND is_deleted = 0
@@ -83,11 +83,12 @@ public interface ConversationSessionMapper {
      * @return 按 id 倒序（新的在前）的消息记录；调用方需要按时间顺序使用时自行翻正
      */
     @Select("""
-            SELECT id, session_id, user_id, role, content, tool_name, token_count, create_time, is_deleted
+            SELECT id, session_id, user_id, role, content, tool_name, tool_call_id, tool_arguments, token_count, create_time, is_deleted
             FROM t_conversation_message
             WHERE user_id = #{userId}
               AND id > #{afterId}
               AND role IN ('user', 'assistant')
+              AND tool_call_id IS NULL
               AND is_deleted = 0
             ORDER BY id DESC
             LIMIT #{limit}
@@ -101,12 +102,13 @@ public interface ConversationSessionMapper {
             SELECT COALESCE(MAX(m.id), 0)
             FROM t_conversation_message m
             WHERE m.user_id = #{userId} AND m.session_id != #{sessionId}
-              AND m.role = 'assistant' AND m.is_deleted = 0
+              AND m.role = 'assistant' AND m.tool_call_id IS NULL AND m.is_deleted = 0
               AND NOT EXISTS (
                   SELECT 1 FROM t_conversation_message current_message
                   WHERE current_message.user_id = #{userId}
                     AND current_message.session_id = #{sessionId}
                     AND current_message.role IN ('user', 'assistant')
+                    AND current_message.tool_call_id IS NULL
                     AND current_message.is_deleted = 0
               )
             """)
@@ -114,10 +116,10 @@ public interface ConversationSessionMapper {
 
     /** 从游标之后最早的消息开始处理，才能在推进游标时保证前面的消息没有被 LIMIT 跳过。 */
     @Select("""
-            SELECT id, session_id, user_id, role, content, tool_name, token_count, create_time, is_deleted
+            SELECT id, session_id, user_id, role, content, tool_name, tool_call_id, tool_arguments, token_count, create_time, is_deleted
             FROM t_conversation_message
             WHERE user_id = #{userId} AND id > #{afterId} AND id <= #{throughId}
-              AND role IN ('user', 'assistant') AND is_deleted = 0
+              AND role IN ('user', 'assistant') AND tool_call_id IS NULL AND is_deleted = 0
             ORDER BY id ASC LIMIT #{limit}
             """)
     List<ConversationMessageRecord> listMessagesInRangeForUser(@Param("userId") String userId,

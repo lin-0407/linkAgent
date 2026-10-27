@@ -17,6 +17,8 @@ public class TaskVideoBindingRecord {
     private String bvid;
     private String bindingStatus;
     private String verifyMessage;
+    private String publishedVersionId;
+    private String publishedSnapshotJson;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 
@@ -57,6 +59,10 @@ public class TaskVideoBindingRecord {
     public void setBindingStatus(String bindingStatus) { this.bindingStatus = bindingStatus; }
     public String getVerifyMessage() { return verifyMessage; }
     public void setVerifyMessage(String verifyMessage) { this.verifyMessage = verifyMessage; }
+    public String getPublishedVersionId() { return publishedVersionId; }
+    public void setPublishedVersionId(String publishedVersionId) { this.publishedVersionId = publishedVersionId; }
+    public String getPublishedSnapshotJson() { return publishedSnapshotJson; }
+    public void setPublishedSnapshotJson(String publishedSnapshotJson) { this.publishedSnapshotJson = publishedSnapshotJson; }
     public LocalDateTime getCreateTime() { return createTime; }
     public void setCreateTime(LocalDateTime createTime) { this.createTime = createTime; }
     public LocalDateTime getUpdateTime() { return updateTime; }

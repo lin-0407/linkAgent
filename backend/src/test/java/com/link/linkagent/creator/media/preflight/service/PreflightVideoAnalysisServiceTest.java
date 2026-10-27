@@ -26,6 +26,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.anyString;
 
 /** 验证模型问题只有绑定合法时间段和可追溯证据后才会进入发布前体检。 */
 class PreflightVideoAnalysisServiceTest {
@@ -61,8 +63,9 @@ class PreflightVideoAnalysisServiceTest {
                         && issue.evidenceRefs().contains("evidence-1")
                         && issue.evidenceRefs().contains("video-model-evidence-1")
                         && !issue.evidenceRefs().contains("stale-video")
+                        && issue.sourceTypes().contains("QWEN3_VL_PLUS")
         ));
-        verify(fixture.mapper).completeVideoCall(eq("call-1"), eq(1200L), eq(180L), any(), anyInt());
+        verify(fixture.mapper).completeVideoCall(eq("call-1"), eq(1200L), eq(180L), eq(new BigDecimal("0.00043092")), anyInt());
     }
 
     @Test
@@ -109,7 +112,69 @@ class PreflightVideoAnalysisServiceTest {
         );
     }
 
+    @Test
+    void shouldKeepOriginalAudioFactsWhenManyKeyFramesExceedPromptLimit() {
+        Fixture fixture = fixture("{\"executiveSummary\":\"原片含音轨，画面结构完整。\",\"issues\":[]}");
+        List<TimelineEvidenceRecord> evidence = new java.util.ArrayList<>();
+        for (int index = 0; index < 300; index++) {
+            evidence.add(new TimelineEvidenceRecord(null, "frame-" + index, "review-1", "version-1", "KEY_FRAME",
+                    0L, 0L, "关键画面", null, null, false, "timeline-step", null));
+        }
+        evidence.add(new TimelineEvidenceRecord(null, "audio-1", "review-1", "version-1", "AUDIO_TRACK",
+                0L, 60000L, "FFprobe 已确认原片存在音轨（编码：aac）", null, null, false, "timeline-step", null));
+        evidence.add(new TimelineEvidenceRecord(null, "volume-1", "review-1", "version-1", "VOLUME",
+                0L, 60000L, "原片音量检测：平均音量 -21.1 dB，峰值音量 -17.8 dB", null, null, false, "timeline-step", null));
+        when(fixture.mapper.listEvidence("review-1")).thenReturn(evidence);
+
+        fixture.service.analyze(review(), step());
+
+        assertThat(fixture.prompt.get()).contains("FFprobe 已确认原片存在音轨", "平均音量 -21.1 dB",
+                "不是原片缺少音轨或原片无声的证据", "不能据此声称原片没有音轨、声音或音乐");
+    }
+
+    @Test
+    void shouldSendEvidenceBoundariesWithActualVideoRequest() {
+        Fixture fixture = fixture("{\"executiveSummary\":\"仅观察到测试图，发布用途未知。\",\"issues\":[]}");
+
+        fixture.service.analyze(review(), step());
+
+        assertThat(fixture.prompt.get()).contains(
+                "没有提供官方规则原文、审核记录或流量数据",
+                "不得编造 B 站规范名称、审核先例",
+                "不得断言违规、限流、推荐机制或预测审核结果",
+                "不得断言测试图、抽象画面、重复、拖影或像素效果属于非设计意图",
+                "用户试映重点是待检查的问题",
+                "证据不足时省略问题",
+                "不能自行认定由系统或播放器叠加", "不得仅凭 VOLUME 数值声称音量正常",
+                "不得因像素化、抽象、看不清或“无法100%排除”而生成敏感或违规风险条目",
+                "不得把缺少依据的审核、AI误判或限流说法改写为条件式修改理由"
+        );
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(value={"NULL,180", "1200,NULL", "NULL,NULL", "0,0"},nullValues="NULL")
+    void videoUsageMustPreserveUnknownCostsWithoutConfusingAnExplicitZero(Long input,Long output) {
+        var gate=mock(MediaCallChargeGate.class);
+        when(gate.upperBound("MEDIA_VIDEO")).thenReturn(new BigDecimal("0.30"));
+        when(gate.reserve(anyString(),anyString(),anyString(),any(),anyString())).thenReturn(()->true);
+        var fixture=fixture("{\"executiveSummary\":\"可见画面已完成观察。\",\"issues\":[]}",input,output,gate);
+        var result=fixture.service.analyze(review(),step());
+        if(input==null || output==null) {
+            assertThat(result.actualCostUsd()).isNull();
+            verify(gate).unknown("review-1","video-review-1-call-1");
+            verify(gate,never()).settle(anyString(),anyString(),any(),anyString());
+        } else {
+            assertThat(result.actualCostUsd()).isZero();
+            verify(gate).settle(eq("review-1"),eq("video-review-1-call-1"),eq(result.actualCostUsd()),anyString());
+            verify(gate,never()).unknown(anyString(),anyString());
+        }
+    }
+
     private Fixture fixture(String response) {
+        return fixture(response,1200L,180L,MediaCallChargeGate.NOOP);
+    }
+
+    private Fixture fixture(String response,Long input,Long output,MediaCallChargeGate gate) {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.getPreflight().setDashScopeApiKey("test-key");
         PreflightReviewMapper mapper = mock(PreflightReviewMapper.class);
@@ -118,7 +183,7 @@ class PreflightVideoAnalysisServiceTest {
         AtomicReference<String> prompt = new AtomicReference<>();
         VideoUnderstandingProvider provider = (videoUrl, requestPrompt) -> {
             prompt.set(requestPrompt);
-            return new VideoUnderstandingProvider.AnalysisResult(response, 1200L, 180L);
+            return new VideoUnderstandingProvider.AnalysisResult(response, input, output);
         };
         MediaProcessingAssetRecord preview = new MediaProcessingAssetRecord(
                 null, "asset-1", "job-1", "version-1", "PREVIEW_VIDEO", "bucket",
@@ -143,7 +208,7 @@ class PreflightVideoAnalysisServiceTest {
         when(mapper.completeVideoCall(any(), any(), any(), any(), anyInt())).thenReturn(1);
         PreflightVideoAnalysisService service = new PreflightVideoAnalysisService(
                 properties, mapper, processingMapper, storage, provider, new ObjectMapper(), () -> "call-1",
-                () -> "video-model-evidence-1", () -> "issue-1"
+                () -> "video-model-evidence-1", () -> "issue-1", gate
         );
         return new Fixture(service, mapper, prompt);
     }

@@ -7,6 +7,8 @@ public record RuntimeToggleResponse(
         String key,
         String name,
         boolean enabled,
-        String description
+        String description,
+        boolean locked,
+        String lockedReason
 ) {
 }

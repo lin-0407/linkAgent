@@ -12,9 +12,9 @@ const router = useRouter()
       <h1 id="not-found-title">页面不存在</h1>
       <p>这个地址可能已失效，或者页面已经移动。</p>
       <div class="not-found-actions">
-        <RouterLink to="/" class="not-found-primary-action">
+        <RouterLink to="/creator" class="not-found-primary-action">
           <Home :size="17" :stroke-width="1.8" aria-hidden="true" />
-          返回首页
+          返回创作台
         </RouterLink>
         <button type="button" class="not-found-secondary-action" @click="router.back()">
           <ArrowLeft :size="17" :stroke-width="1.8" aria-hidden="true" />
@@ -44,21 +44,21 @@ const router = useRouter()
 .not-found-code {
   margin: 0;
   color: var(--accent-strong);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-bold);
 }
 
 .not-found-content h1 {
   margin: 0;
   color: var(--ink);
-  font-size: 28px;
+  font-size: var(--fs-3xl);
   line-height: 1.3;
 }
 
 .not-found-content > p:last-of-type {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .not-found-actions {
@@ -78,7 +78,7 @@ const router = useRouter()
   gap: 7px;
   padding: 0 16px;
   border-radius: var(--r-sm);
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
   text-decoration: none;
   cursor: pointer;

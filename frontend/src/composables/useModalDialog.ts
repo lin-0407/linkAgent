@@ -57,7 +57,7 @@ export function useModalDialog(open: Ref<boolean>, close: () => void) {
     releaseBackground()
     returnFocus?.focus()
     returnFocus = null
-  })
+  }, { immediate: true })
 
   onBeforeUnmount(() => {
     releaseBackground()

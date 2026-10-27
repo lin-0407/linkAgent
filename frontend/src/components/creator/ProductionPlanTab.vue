@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import ProductionBlueprintModal from './ProductionBlueprintModal.vue'
 import ProductionPositioningForm from './ProductionPositioningForm.vue'
+import AutomaticProductionPanel from './AutomaticProductionPanel.vue'
 import { useCreatorWorkspaceShell } from '@/composables/creator/useCreatorWorkspaceContext'
 import { useProductionPlan } from '@/composables/creator/useProductionPlan'
 import type { CreateProductionPlanPayload } from '@/types/creatorProduction'
@@ -15,6 +16,7 @@ const production = useProductionPlan()
 const selectedStepId = ref('')
 const isBlueprintOpen = ref(false)
 const isRegenerating = ref(false)
+const mode = ref<'automatic' | 'manual'>('automatic')
 const selectedStep = computed(
   () =>
     production.workspace.value?.steps.find((step) => step.stepId === selectedStepId.value) ??
@@ -91,63 +93,74 @@ onMounted(() => {
 
 <template>
   <section class="production-plan-tab">
-    <p v-if="production.errorMessage.value" class="production-error" role="alert">
-      {{ production.errorMessage.value }}
-    </p>
-    <p v-if="production.isLoading.value" class="production-loading">正在读取制作蓝图...</p>
-    <ProductionPositioningForm
-      v-else-if="showForm"
-      :key="selectedTaskId"
-      :busy="production.isGenerating.value"
-      @submit="generate"
-    />
-    <div v-else-if="plan" class="production-plan-entry">
-      <button type="button" class="production-open-entry" @click="isBlueprintOpen = true">
-        <span class="production-open-entry-copy">
-          <span class="production-kicker">
-            {{ plan.videoCategory === 'AI_GENERATED' ? 'AI 视频' : '项目演示' }} · V{{
-              plan.planVersion
-            }}
-          </span>
-          <strong>{{ plan.planTitle || '制作蓝图' }}</strong>
-          <small>
-            {{
-              production.workspace.value?.readyForMedia
-                ? '制作步骤已完成，可进入成片试映。'
-                : '打开蓝图继续执行制作步骤。'
-            }}
-          </small>
-        </span>
-        <span class="production-open-entry-arrow" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <path d="M5 12h13M13 6l6 6-6 6" />
-          </svg>
-        </span>
+    <div class="production-mode" role="group" aria-label="制作方式">
+      <button type="button" :aria-pressed="mode === 'automatic'" @click="mode = 'automatic'">
+        自动制作
       </button>
-      <button
-        type="button"
-        class="production-regenerate"
-        :disabled="production.isGenerating.value"
-        @click="restartGeneration"
-      >
-        重新定位
+      <button type="button" :aria-pressed="mode === 'manual'" @click="mode = 'manual'">
+        手动制作蓝图
       </button>
     </div>
+    <AutomaticProductionPanel v-if="mode === 'automatic'" @changed="load" />
+    <template v-else>
+      <p v-if="production.errorMessage.value" class="production-error" role="alert">
+        {{ production.errorMessage.value }}
+      </p>
+      <p v-if="production.isLoading.value" class="production-loading">正在读取制作蓝图...</p>
+      <ProductionPositioningForm
+        v-else-if="showForm"
+        :key="selectedTaskId"
+        :busy="production.isGenerating.value"
+        @submit="generate"
+      />
+      <div v-else-if="plan" class="production-plan-entry">
+        <button type="button" class="production-open-entry" @click="isBlueprintOpen = true">
+          <span class="production-open-entry-copy">
+            <span class="production-kicker">
+              {{ plan.videoCategory === 'AI_GENERATED' ? 'AI 视频' : '项目演示' }} · V{{
+                plan.planVersion
+              }}
+            </span>
+            <strong>{{ plan.planTitle || '制作蓝图' }}</strong>
+            <small>
+              {{
+                production.workspace.value?.readyForMedia
+                  ? '制作步骤已完成，可进入成片试映。'
+                  : '打开蓝图继续执行制作步骤。'
+              }}
+            </small>
+          </span>
+          <span class="production-open-entry-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M5 12h13M13 6l6 6-6 6" />
+            </svg>
+          </span>
+        </button>
+        <button
+          type="button"
+          class="production-regenerate creator-secondary-action"
+          :disabled="production.isGenerating.value"
+          @click="restartGeneration"
+        >
+          重新定位
+        </button>
+      </div>
 
-    <ProductionBlueprintModal
-      :open="isBlueprintOpen"
-      :plan="plan"
-      :steps="production.workspace.value?.steps ?? []"
-      :selected-step="selectedStep"
-      :selected-step-id="selectedStepId"
-      :ready-for-media="production.workspace.value?.readyForMedia ?? false"
-      :busy="production.isUpdatingStep.value"
-      :error-message="production.errorMessage.value"
-      @close="isBlueprintOpen = false"
-      @restart="restartGeneration"
-      @select="selectedStepId = $event"
-      @update="updateStep"
-    />
+      <ProductionBlueprintModal
+        :open="isBlueprintOpen"
+        :plan="plan"
+        :steps="production.workspace.value?.steps ?? []"
+        :selected-step="selectedStep"
+        :selected-step-id="selectedStepId"
+        :ready-for-media="production.workspace.value?.readyForMedia ?? false"
+        :busy="production.isUpdatingStep.value"
+        :error-message="production.errorMessage.value"
+        @close="isBlueprintOpen = false"
+        @restart="restartGeneration"
+        @select="selectedStepId = $event"
+        @update="updateStep"
+      />
+    </template>
   </section>
 </template>
 
@@ -156,11 +169,34 @@ onMounted(() => {
   display: grid;
   gap: 16px;
 }
+.production-mode {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+.production-mode button {
+  padding: 9px 14px;
+  background: var(--surface, #fff);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  font: inherit;
+  cursor: pointer;
+}
+.production-mode button[aria-pressed='true'] {
+  color: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+.production-mode button:focus-visible {
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 2px;
+}
 
 .production-error,
 .production-loading {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .production-error {
@@ -215,7 +251,7 @@ onMounted(() => {
 .production-kicker {
   margin: 0;
   color: var(--accent-strong);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
 }
 
@@ -227,8 +263,8 @@ onMounted(() => {
 }
 
 .production-open-entry-copy strong {
-  font-size: 18px;
-  transition: color 180ms ease;
+  font-size: var(--fs-lg);
+  transition: color var(--dur-fast) ease;
 }
 
 .production-open-entry-copy small {

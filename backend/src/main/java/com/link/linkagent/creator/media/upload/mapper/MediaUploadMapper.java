@@ -3,6 +3,8 @@ package com.link.linkagent.creator.media.upload.mapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
 import com.link.linkagent.creator.media.upload.model.MediaUploadPartRecord;
 import com.link.linkagent.creator.media.upload.model.MediaUploadRecord;
+import com.link.linkagent.creator.creation.model.CreationWorkspaceRecord;
+import com.link.linkagent.creator.creation.model.VideoVersionContextRecord;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
@@ -22,13 +24,125 @@ import java.util.Optional;
  *   <li>所有读取上传或成片的方法都同时携带 taskId 和 ownerId，避免先按 ID 查询再在内存判断归属</li>
  *   <li>状态更新全部使用 CAS（Compare-And-Swap）模式，WHERE 条件包含当前状态，
  *       通过受影响行数判断是否成功，防止并发覆盖</li>
- *   <li>行级锁（FOR UPDATE）只在替换上传会话时使用，范围最小化</li>
+ *   <li>任务行锁串行化版本分配、上传完成和 BV 绑定，网络操作始终在锁外</li>
  * </ul>
  * <p>
- * P0 简化：version_no 固定为 1；current_review_id 由 P0-3 创建时写入，重做 P0-2 时清空。
+ * 无工作区的旧任务回退 V1；新上传分配独立版本，完整旧版不再重置。
  */
 @Mapper
 public interface MediaUploadMapper {
+
+    /** 系统成片必须固定真实确认与专属蓝图，不能使用任务的已有成片跳过标志。 */
+    @Select("""
+            SELECT JSON_OBJECT('schemaVersion',1,'source','SYSTEM_RENDER','planningSkipped',0,
+                'publishingPlan',JSON_OBJECT('suggestionId',g.suggestion_id,'contentSummary',g.content_summary,
+                    'audienceProfile',g.audience_profile,'contentPositioning',g.content_positioning,
+                    'titles',g.title_suggestions,'description',g.description_suggestion),
+                'productionPlan',JSON_OBJECT('planId',p.plan_id,'title',p.plan_title,'corePromise',p.core_promise,
+                    'targetDurationMs',p.target_duration_ms,'productionMethod',p.production_method,'sourceSnapshot',p.source_snapshot,
+                    'steps',(SELECT JSON_ARRAYAGG(JSON_OBJECT('stepId',x.step_id,'name',x.step_name,'status',x.status,'skipReason',x.skip_reason))
+                        FROM creator_production_step x WHERE x.plan_id=p.plan_id AND x.task_id=t.task_id AND x.is_deleted=0)),
+                'materials',(SELECT JSON_OBJECTAGG(m.material_type,m.content) FROM creator_material m
+                    WHERE m.task_id=t.task_id AND m.is_deleted=0))
+            FROM creator_task t
+            JOIN creator_workflow_session s ON s.task_id=t.task_id AND s.user_id=t.user_id AND s.session_id=#{sessionId}
+                AND s.stage='PRE_PUBLISH' AND s.status='CONFIRMED' AND s.confirmed_result_id=#{resultId} AND s.is_deleted=0
+            JOIN creator_suggestion g ON g.task_id=t.task_id AND g.suggestion_id=#{resultId} AND g.is_deleted=0
+            JOIN creator_production_plan p ON p.task_id=t.task_id AND p.owner_id=t.user_id AND p.plan_id=#{planId}
+                AND p.production_method='AI_GENERATION' AND p.status='READY' AND p.is_deleted=0
+            WHERE t.task_id=#{taskId} AND t.user_id=#{ownerId} AND t.is_deleted=0
+                AND (#{latest}=0 OR s.id=(SELECT MAX(s2.id) FROM creator_workflow_session s2
+                    WHERE s2.task_id=t.task_id AND s2.stage='PRE_PUBLISH' AND s2.is_deleted=0))
+                AND (#{complete}=0 OR (EXISTS (SELECT 1 FROM creator_production_step x WHERE x.task_id=t.task_id AND x.plan_id=p.plan_id AND x.is_deleted=0)
+                    AND NOT EXISTS (SELECT 1 FROM creator_production_step x
+                    WHERE x.task_id=t.task_id AND x.plan_id=p.plan_id AND x.is_deleted=0 AND x.status NOT IN ('COMPLETED','SKIPPED')))
+                )
+            """)
+    Optional<String> findGeneratedProductionContext(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+            @Param("sessionId") String sessionId, @Param("resultId") String resultId, @Param("planId") String planId,
+            @Param("complete") boolean complete, @Param("latest") boolean latest);
+
+    @Select("""
+            SELECT COUNT(*) FROM creator_creation_run WHERE task_id=#{taskId} AND owner_id=#{ownerId}
+                AND kind IN ('FULL','REVISION') AND JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(request_json),request_json,'{}'),'$.productionPlanId'))=#{planId}
+            """)
+    int countProductionPlanRuns(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("planId") String planId);
+
+    @Select("""
+            SELECT o.object_key FROM creator_creation_render_attempt a
+            JOIN JSON_TABLE(a.objects_json,'$[*]' COLUMNS(object_key VARCHAR(1000) PATH '$.objectKey')) o
+            WHERE a.task_id=#{taskId} AND a.owner_id=#{ownerId} AND a.version_id=#{versionId} AND a.status='REGISTERED'
+            """)
+    List<String> listGeneratedObjectKeys(@Param("taskId") String taskId, @Param("ownerId") String ownerId, @Param("versionId") String versionId);
+
+    record PackageObject(String bucketName, String objectKey) { }
+
+    @Select("""
+            SELECT bucket_name, object_key FROM creator_creation_package
+            WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND version_id=#{versionId}
+            """)
+    List<PackageObject> listPackageObjects(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+                                         @Param("versionId") String versionId);
+
+    @Update("""
+            UPDATE creator_creation_package SET status='FAILED', failure_code='MEDIA_DELETED'
+            WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND version_id=#{versionId}
+            """)
+    int markPackagesMediaDeleted(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+                                 @Param("versionId") String versionId);
+
+    @Select("""
+            SELECT version_id, task_id, owner_id, planning_skipped, publishing_session_id,
+                   publishing_result_id, production_plan_id, snapshot_json
+            FROM creator_video_version_context
+            WHERE version_id = #{versionId} AND task_id = #{taskId} AND owner_id = #{ownerId}
+            """)
+    Optional<VideoVersionContextRecord> findVersionContext(@Param("taskId") String taskId,
+            @Param("ownerId") String ownerId, @Param("versionId") String versionId);
+
+    /** 只在真实确认和蓝图就绪时捕获，不把后来变化的任务状态补写到历史版本。 */
+    @Insert("""
+            INSERT INTO creator_video_version_context (version_id, task_id, owner_id, planning_skipped,
+                publishing_session_id, publishing_result_id, production_plan_id, snapshot_json)
+            SELECT d.version_id, t.task_id, t.user_id, t.planning_skipped,
+                IF(t.planning_skipped = 1, NULL, s.session_id),
+                IF(t.planning_skipped = 1, NULL, s.confirmed_result_id),
+                IF(t.planning_skipped = 1, NULL, p.plan_id),
+                JSON_OBJECT('schemaVersion', 1, 'source', 'UPLOAD', 'planningSkipped', t.planning_skipped,
+                    'publishingPlan', IF(t.planning_skipped = 1, NULL, JSON_OBJECT(
+                        'suggestionId', g.suggestion_id, 'contentSummary', g.content_summary,
+                        'audienceProfile', g.audience_profile, 'contentPositioning', g.content_positioning,
+                        'titles', g.title_suggestions, 'description', g.description_suggestion)),
+                    'productionPlan', IF(t.planning_skipped = 1, NULL, JSON_OBJECT(
+                        'planId', p.plan_id, 'title', p.plan_title, 'corePromise', p.core_promise,
+                        'targetDurationMs', p.target_duration_ms, 'productionMethod', p.production_method,
+                        'sourceSnapshot', p.source_snapshot,
+                        'steps', (SELECT JSON_ARRAYAGG(JSON_OBJECT('stepId', x.step_id,
+                            'name', x.step_name, 'status', x.status, 'skipReason', x.skip_reason))
+                            FROM creator_production_step x WHERE x.plan_id = p.plan_id
+                            AND x.task_id = t.task_id AND x.is_deleted = 0))),
+                    'materials', (SELECT JSON_OBJECTAGG(m.material_type, m.content)
+                        FROM creator_material m WHERE m.task_id = t.task_id AND m.is_deleted = 0))
+            FROM creator_draft_video d
+            JOIN creator_task t ON t.task_id = d.task_id AND t.user_id = d.owner_id AND t.is_deleted = 0
+            LEFT JOIN creator_workflow_session s ON s.id = (
+                SELECT id FROM creator_workflow_session WHERE task_id = t.task_id
+                AND stage = 'PRE_PUBLISH' AND is_deleted = 0 ORDER BY id DESC LIMIT 1)
+            LEFT JOIN creator_suggestion g ON g.suggestion_id = s.confirmed_result_id
+                AND g.task_id = t.task_id AND g.is_deleted = 0
+            LEFT JOIN creator_production_plan p ON p.id = (
+                SELECT id FROM creator_production_plan WHERE task_id = t.task_id AND owner_id = t.user_id
+                AND status <> 'STALE' AND is_deleted = 0 ORDER BY plan_version DESC, id DESC LIMIT 1)
+            WHERE d.version_id = #{versionId} AND d.task_id = #{taskId} AND d.owner_id = #{ownerId}
+                AND d.is_deleted = 0
+                AND (t.planning_skipped = 1 OR (s.status = 'CONFIRMED' AND s.user_id = t.user_id
+                    AND g.suggestion_id IS NOT NULL AND p.status = 'READY'
+                    AND NOT EXISTS (SELECT 1 FROM creator_production_step x WHERE x.plan_id = p.plan_id
+                        AND x.task_id = t.task_id AND x.is_deleted = 0
+                        AND x.status NOT IN ('COMPLETED', 'SKIPPED'))))
+            """)
+    int captureUploadVersionContext(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+                                    @Param("versionId") String versionId);
 
     // ========== 归属校验 ==========
 
@@ -59,11 +173,23 @@ public interface MediaUploadMapper {
             """)
     int countPlanningSkippedTask(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
 
+    /** 正式发布链路只使用明确绑定的版本，旧记录为空时不猜测其历史归属。 */
+    @Select("""
+            SELECT published_version_id FROM creator_task_video_binding
+            WHERE task_id = #{taskId} AND user_id = #{ownerId}
+              AND is_deleted = 0 AND (binding_status = 'BOUND' OR EXISTS (
+                  SELECT 1 FROM creator_draft_video d WHERE d.version_id = published_version_id
+                    AND d.task_id = creator_task_video_binding.task_id
+                    AND d.owner_id = creator_task_video_binding.user_id
+                    AND d.published_flag = 1 AND d.is_deleted = 0))
+            LIMIT 1
+            """)
+    Optional<String> findPublishedVideoVersionId(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
     // ========== 成片（creator_draft_video） ==========
 
     /**
-     * 按 taskId + ownerId 查找 P0 版本（version_no=1）的成片记录。
-     * P0 每个任务只有一个版本，所以 LIMIT 1。
+     * 工作区存在时只读明确指针；只有没有工作区的旧任务才回退 V1。
      *
      * @return 成片记录；未找到时返回 Optional.empty()
      */
@@ -94,12 +220,93 @@ public interface MediaUploadMapper {
             FROM creator_draft_video
             WHERE task_id = #{taskId}
               AND owner_id = #{ownerId}
-              AND version_no = 1               -- P0 固定版本号
+              AND (
+                    version_id = (SELECT current_video_version_id FROM creator_creation_workspace
+                                  WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND is_deleted = 0)
+                    OR (version_no = 1 AND NOT EXISTS (
+                        SELECT 1 FROM creator_creation_workspace
+                        WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND is_deleted = 0
+                    ))
+                  )
               AND is_deleted = 0
             LIMIT 1
             """)
     Optional<DraftVideoRecord> findDraftVideo(@Param("taskId") String taskId,
                                                @Param("ownerId") String ownerId);
+
+    @Select("""
+            SELECT task_id FROM creator_task
+            WHERE task_id = #{taskId} AND user_id = #{ownerId} AND is_deleted = 0
+            FOR UPDATE
+            """)
+    Optional<String> lockMediaTask(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
+    @Select("SELECT COUNT(*) FROM creator_creation_run WHERE task_id=#{taskId} AND owner_id=#{ownerId} AND status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED')")
+    int countActiveCreationRuns(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
+    /** 先锁版本再改其子任务，保持与探测、试映和媒体删除相同的锁顺序。 */
+    @Select("""
+            SELECT version_id FROM creator_draft_video
+            WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND is_deleted = 0
+            ORDER BY id FOR UPDATE
+            """)
+    List<String> lockTaskDraftVersions(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
+    @Select("""
+            SELECT (SELECT COUNT(*) FROM creator_task_video_binding
+                    WHERE task_id = #{taskId} AND user_id = #{ownerId} AND is_deleted = 0)
+                 + (SELECT COUNT(*) FROM creator_draft_video
+                    WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND published_flag = 1 AND is_deleted = 0)
+            """)
+    int countPublishingFacts(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
+    /** 只在显式写入上传时采纳旧 V1；读取页面不能偷偷创建工作区。 */
+    @Insert("""
+            INSERT INTO creator_creation_workspace
+                (task_id, owner_id, current_video_version_id, next_version_no)
+            SELECT task_id, user_id,
+                   (SELECT version_id FROM creator_draft_video
+                    WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND version_no = 1 AND is_deleted = 0),
+                   (SELECT COALESCE(MAX(version_no), 0) + 1 FROM creator_draft_video WHERE task_id = #{taskId})
+            FROM creator_task WHERE task_id = #{taskId} AND user_id = #{ownerId} AND is_deleted = 0
+            ON DUPLICATE KEY UPDATE task_id = creator_creation_workspace.task_id
+            """)
+    int adoptMediaWorkspace(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
+    @Select("""
+            SELECT task_id, owner_id, workspace_revision, current_video_version_id, next_version_no
+            FROM creator_creation_workspace
+            WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND is_deleted = 0
+            """)
+    Optional<CreationWorkspaceRecord> findMediaWorkspace(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
+
+    @Update("""
+            UPDATE creator_creation_workspace SET next_version_no = next_version_no + 1
+            WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND next_version_no = #{expectedNumber}
+              AND is_deleted = 0
+            """)
+    int advanceMediaVersion(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+                            @Param("expectedNumber") int expectedNumber);
+
+    /** 完整对象登记后才切换指针；失败或取消不能把当前好版本替换掉。 */
+    @Update("""
+            UPDATE creator_creation_workspace SET current_video_version_id = #{versionId},
+                workspace_revision = workspace_revision + 1
+            WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND is_deleted = 0
+              AND workspace_revision = #{expectedRevision}
+            """)
+    int activateUploadedVersion(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+                                @Param("versionId") String versionId, @Param("expectedRevision") long expectedRevision);
+
+    /** 新方向需要新的成片事实，保留历史媒体和报告，只撤下当前指针。 */
+    @Update("""
+            UPDATE creator_creation_workspace SET current_video_version_id = NULL,
+                workspace_revision = workspace_revision + 1
+            WHERE task_id = #{taskId} AND owner_id = #{ownerId} AND is_deleted = 0
+              AND workspace_revision = #{expectedRevision}
+            """)
+    int clearCurrentVideoForReposition(@Param("taskId") String taskId, @Param("ownerId") String ownerId,
+                                       @Param("expectedRevision") long expectedRevision);
 
     /**
      * 按 versionId + taskId + ownerId 查找成片记录。
@@ -742,6 +949,11 @@ public interface MediaUploadMapper {
               AND status IN ('UPLOADED', 'PROBE_FAILED')
               AND media_deleted_at IS NULL
               AND is_deleted = 0
+              AND NOT EXISTS (SELECT 1 FROM creator_creation_render_attempt a JOIN creator_creation_run r
+                  ON r.run_id=a.run_id AND r.task_id=a.task_id AND r.owner_id=a.owner_id
+                  WHERE a.version_id=creator_draft_video.version_id AND a.task_id=creator_draft_video.task_id
+                    AND a.owner_id=creator_draft_video.owner_id AND a.status='REGISTERED'
+                    AND r.status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED'))
             """)
     int claimDraftVideoProbe(@Param("taskId") String taskId,
                              @Param("ownerId") String ownerId,
@@ -765,6 +977,11 @@ public interface MediaUploadMapper {
               AND status = 'PROBING'
               AND update_time < #{staleBefore}
               AND is_deleted = 0
+              AND NOT EXISTS (SELECT 1 FROM creator_creation_render_attempt a JOIN creator_creation_run r
+                  ON r.run_id=a.run_id AND r.task_id=a.task_id AND r.owner_id=a.owner_id
+                  WHERE a.version_id=creator_draft_video.version_id AND a.task_id=creator_draft_video.task_id
+                    AND a.owner_id=creator_draft_video.owner_id AND a.status='REGISTERED'
+                    AND r.status IN ('QUEUED','RUNNING','WAITING_DEPENDENCY','CANCEL_REQUESTED'))
             """)
     int recoverStaleDraftVideoProbe(@Param("taskId") String taskId,
                                     @Param("ownerId") String ownerId,

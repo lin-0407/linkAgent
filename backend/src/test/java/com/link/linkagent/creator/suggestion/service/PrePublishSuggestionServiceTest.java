@@ -18,6 +18,7 @@ import com.link.linkagent.creator.task.model.CreatorTaskSummaryRecord;
 import com.link.linkagent.llm.LLMService;
 import com.link.linkagent.prompt.StubPromptService;
 import com.link.linkagent.prompt.service.PromptService;
+import com.link.linkagent.support.TestTransactions;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -28,6 +29,83 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class PrePublishSuggestionServiceTest {
+
+    @Test
+    void shouldRecoverActualAgentFieldsFromSavedRawOutputWithoutCallingModel() {
+        var taskMapper = new FakeCreatorTaskMapper();
+        taskMapper.taskRecord = createTaskRecord();
+        var suggestions = new FakeCreatorSuggestionMapper();
+        var saved = new CreatorSuggestionRecord();
+        saved.setTaskId("task-1");
+        saved.setSuggestionId("saved-real-output");
+        saved.setRawOutput("""
+                {"description":"月亮不是坏了，只是困了。","tags":["原创动画"],
+                 "audienceHooks":["先展示月亮变暗"],"expressionRisks":["避免误解成加班"],
+                 "titleSuggestions":[{"title":"月亮维修员"}]}
+                """);
+        suggestions.savedRecord = saved;
+        var llm = new CapturingLlmService("不应调用");
+        var service = new PrePublishSuggestionService(taskMapper, suggestions,
+                new CreatorPreferenceService(new TrackingCreatorPreferenceMapper()),
+                emptyContextService(), llm, new ObjectMapper(), new StubPromptService(),
+                TestTransactions.directTemplate());
+
+        var response = service.getSuggestion("task-1");
+
+        assertThat(response.descriptionSuggestion()).isEqualTo("月亮不是坏了，只是困了。");
+        assertThat(response.tagSuggestions()).contains("原创动画");
+        assertThat(response.audienceHook()).contains("先展示月亮变暗");
+        assertThat(response.riskPoints()).contains("避免误解成加班");
+        assertThat(llm.lastUserMessage).isEmpty();
+    }
+
+    @Test
+    void shouldPreferCanonicalAndAlreadySavedFieldsWhenRecoveringSuggestion() {
+        var taskMapper = new FakeCreatorTaskMapper();
+        taskMapper.taskRecord = createTaskRecord();
+        var suggestions = new FakeCreatorSuggestionMapper();
+        var saved = new CreatorSuggestionRecord();
+        saved.setTaskId("task-1");
+        saved.setDescriptionSuggestion("已保存的简介");
+        saved.setRawOutput("""
+                {"descriptionSuggestion":"标准简介","description":"简写简介",
+                 "tagSuggestions":["标准标签"],"tags":["简写标签"]}
+                """);
+        suggestions.savedRecord = saved;
+        var service = new PrePublishSuggestionService(taskMapper, suggestions,
+                new CreatorPreferenceService(new TrackingCreatorPreferenceMapper()),
+                emptyContextService(), new CapturingLlmService("不应调用"), new ObjectMapper(),
+                new StubPromptService(), TestTransactions.directTemplate());
+
+        var response = service.getSuggestion("task-1");
+
+        assertThat(response.descriptionSuggestion()).isEqualTo("已保存的简介");
+        assertThat(response.tagSuggestions()).contains("标准标签").doesNotContain("简写标签");
+    }
+
+    @Test
+    void shouldUsePlanForEvidenceThenGenerateBusinessJsonWithoutSavingCandidate() {
+        var taskMapper=new FakeCreatorTaskMapper(); taskMapper.taskRecord=createTaskRecord();
+        taskMapper.materials=List.of(createMaterialRecord());
+        var suggestions=new FakeCreatorSuggestionMapper();
+        var agent=org.mockito.Mockito.mock(com.link.linkagent.core.AgentExecutor.class);
+        org.mockito.Mockito.when(agent.runTask(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq(com.link.linkagent.core.AgentExecutionMode.PLAN_EXECUTE)))
+                .thenReturn(new com.link.linkagent.dto.AgentChatResponse(null,"实际取证：用户材料明确给出使用边界",null,1,List.of(),
+                        com.link.linkagent.core.AgentExecutionMode.PLAN_EXECUTE,null,List.of()));
+        var llm=new CapturingLlmService("{\"contentSummary\":\"基于材料生成的方案\"}");
+        var service=new PrePublishSuggestionService(taskMapper,suggestions,
+                new CreatorPreferenceService(new TrackingCreatorPreferenceMapper()),emptyContextService(),null,
+                llm,agent,new ObjectMapper(),placeholderPromptService(),null,null,TestTransactions.directTemplate());
+        var candidate=service.generateSuggestionCandidateByAgent("task-1",
+                new PrePublishAnalyzeRequest(null,null,null,null,"IGNORE_HISTORY",null));
+        assertThat(candidate.parseStatus()).isEqualTo("PARSED");
+        assertThat(candidate.record().getGenerationMode()).isEqualTo("PLAN_EXECUTE_EVIDENCE");
+        assertThat(llm.lastUserMessage).contains("实际取证：用户材料明确给出使用边界");
+        org.mockito.Mockito.verify(agent).runTask(org.mockito.ArgumentMatchers.contains("不生成发布方案 JSON"),
+                org.mockito.ArgumentMatchers.eq(com.link.linkagent.core.AgentExecutionMode.PLAN_EXECUTE));
+        assertThat(com.link.linkagent.assistant.AssistantInvocationContext.current()).isNull();
+    }
 
     @Test
     void shouldBindSavedSuggestionToWorkflowSession() {
@@ -46,7 +124,8 @@ class PrePublishSuggestionServiceTest {
                 emptyContextService(),
                 new CapturingLlmService("发布方案"),
                 new ObjectMapper(),
-                new StubPromptService()
+                new StubPromptService(),
+                TestTransactions.directTemplate()
         );
 
         service.saveSuggestion(new PrePublishSuggestionCandidate(record), "session-1");
@@ -75,7 +154,8 @@ class PrePublishSuggestionServiceTest {
                 emptyContextService(),
                 llmService,
                 new ObjectMapper(),
-                placeholderPromptService());
+                placeholderPromptService(),
+                TestTransactions.directTemplate());
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
@@ -83,7 +163,8 @@ class PrePublishSuggestionServiceTest {
         );
 
         assertThat(response.taskId()).isEqualTo("task-1");
-        assertThat(preferenceMapper.callCount).isEqualTo(1);
+        // 读两次：生成时读一次装 prompt，保存前再读一次复核历史偏好有没有在生成期间变化
+        assertThat(preferenceMapper.callCount).isEqualTo(2);
         assertThat(llmService.lastUserMessage).contains("沿用历史偏好");
         assertThat(llmService.lastUserMessage).contains("偏好干货表达");
     }
@@ -107,7 +188,8 @@ class PrePublishSuggestionServiceTest {
                 emptyContextService(),
                 llmService,
                 new ObjectMapper(),
-                placeholderPromptService());
+                placeholderPromptService(),
+                TestTransactions.directTemplate());
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
@@ -170,7 +252,8 @@ class PrePublishSuggestionServiceTest {
                 emptyContextService(),
                 llmService,
                 new ObjectMapper(),
-                new StubPromptService());
+                new StubPromptService(),
+                TestTransactions.directTemplate());
 
         CreatorSuggestionResponse response = service.generateSuggestion(
                 "task-1",
@@ -204,7 +287,8 @@ class PrePublishSuggestionServiceTest {
                 emptyContextService(),
                 llmService,
                 new ObjectMapper(),
-                promptService
+                promptService,
+                TestTransactions.directTemplate()
         );
 
         service.generateSuggestion(
@@ -234,7 +318,8 @@ class PrePublishSuggestionServiceTest {
                 emptyContextService(),
                 new CapturingLlmService("{\"contentSummary\":\"候选摘要\"}"),
                 new ObjectMapper(),
-                new StubPromptService()
+                new StubPromptService(),
+                TestTransactions.directTemplate()
         );
 
         PrePublishSuggestionCandidate candidate = service.generateSuggestionCandidate(
@@ -356,6 +441,16 @@ class PrePublishSuggestionServiceTest {
         @Override
         public Optional<CreatorTaskRecord> findTaskByTaskId(String taskId) {
             return Optional.ofNullable(taskRecord);
+        }
+
+        @Override
+        public Optional<CreatorTaskRecord> lockTaskForDeletion(String taskId) {
+            return findTaskByTaskId(taskId);
+        }
+
+        @Override
+        public int countDeletionBlockers(String taskId, String ownerId) {
+            return 0;
         }
 
         @Override

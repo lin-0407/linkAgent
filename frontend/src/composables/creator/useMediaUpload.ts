@@ -4,8 +4,8 @@ import {
   abortDraftVideoUpload,
   completeDraftVideoUpload,
   createDraftVideoUpload,
+  getCurrentDraftVideo,
   getCurrentDraftVideoUpload,
-  getDraftVideo,
   getDraftVideoUpload,
   listDraftVideoUploadParts,
   putDraftVideoPart,
@@ -66,6 +66,8 @@ export function useMediaUpload() {
           restoredUpload = await getCurrentDraftVideoUpload(taskId)
         } catch (error) {
           if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
+            // 切换任务后，旧请求的失败也不能清空新任务已恢复的上传状态。
+            if (generation !== operationGeneration) return null
             clearUploadState()
             return null
           }
@@ -92,22 +94,22 @@ export function useMediaUpload() {
           : '上次上传会话已经结束，请重新选择文件创建新的上传尝试'
         return null
       }
+      let restoredDraft: DraftVideo | null = null
+      if (restoredUpload.status === 'COMPLETED') {
+        // 历史上传完成不代表仍是当前成片；重新定位或换版后不能由本地续传记录选回旧视频。
+        const draft = await getCurrentDraftVideo(taskId)
+        if (generation !== operationGeneration) return null
+        if (draft.versionId !== restoredUpload.versionId) {
+          clearStoredResume(taskId)
+          clearUploadState()
+          return null
+        }
+        restoredDraft = draft
+      }
       currentUpload.value = restoredUpload
       completedParts.value = restoredParts
-      completedDraft.value = null
+      completedDraft.value = restoredDraft
       uploadedBytes.value = sumPartBytes(completedParts.value)
-      if (restoredUpload.status === 'COMPLETED') {
-        try {
-          const draft = await getDraftVideo(taskId, restoredUpload.versionId)
-          if (generation !== operationGeneration) return null
-          completedDraft.value = draft
-        } catch (error) {
-          if (generation !== operationGeneration) return null
-          if (!(error instanceof ApiError) || error.status !== 404) throw error
-          // 上传会话仍然是续传事实；查询成片摘要失败不应阻止用户重新进入上传页。
-          completedDraft.value = null
-        }
-      }
       statusMessage.value = currentUpload.value.status === 'COMPLETED'
         ? completedDraft.value?.status === 'READY_FOR_REVIEW'
           ? '成片已完成媒体探测'
@@ -367,6 +369,14 @@ export function useMediaUpload() {
     statusMessage.value = ''
   }
 
+  function prepareNewVersion(taskId: string) {
+    if (currentUpload.value && ['CREATED', 'UPLOADING', 'VERIFYING'].includes(currentUpload.value.status)) {
+      throw new Error('请先完成或取消正在进行的上传')
+    }
+    // 用户显式上传新版才丢弃已结束的本地续传指针，服务器历史版本保持不变。
+    clearStoredResume(taskId)
+  }
+
   function disposeUpload() {
     disposed = true
     operationGeneration += 1
@@ -415,6 +425,7 @@ export function useMediaUpload() {
     pauseUpload,
     confirmUploadResult,
     resetForTaskChange,
+    prepareNewVersion,
     disposeUpload,
     cancelUpload,
   }

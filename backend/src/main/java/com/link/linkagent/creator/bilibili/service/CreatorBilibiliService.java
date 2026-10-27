@@ -221,6 +221,8 @@ public class CreatorBilibiliService {
      */
     @Transactional
     public TaskVideoBindingResponse bindBvToTask(String taskId, BindBvRequest request) {
+        // 必须在首次一致性读取之前加锁，使版本分配、完成上传和本次绑定按同一任务串行。
+        mediaWorkflowGateService.lockForVideoBinding(taskId, request.userId());
         // 校验任务存在
         var task = taskMapper.findTaskByTaskId(taskId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
@@ -233,15 +235,15 @@ public class CreatorBilibiliService {
         // 已确认的绑定不能覆盖，避免用户误操作清掉已经验证通过的任务；异常或待校验状态允许修正。
         var existingBinding = bilibiliMapper.findBindingByTaskId(taskId);
         if (existingBinding.isPresent()
-                && "BOUND".equals(existingBinding.get().getBindingStatus())) {
+                && ("BOUND".equals(existingBinding.get().getBindingStatus())
+                    || bilibiliMapper.countPermanentPublishingFact(existingBinding.get().getBindingId()) > 0)) {
             log.info("任务已有BV绑定，直接返回：taskId={}, bvid={}", taskId, existingBinding.get().getBvid());
             return toBindingResponse(existingBinding.get());
         }
 
-        mediaWorkflowGateService.ensureReadyForPostPublish(
+        String publishedVersionId = mediaWorkflowGateService.requireReadyVersionForBinding(
                 task.getTaskId(),
-                task.getUserId(),
-                "BV绑定"
+                task.getUserId()
         );
 
         var account = bilibiliMapper.findAccountByUserId(request.userId())
@@ -293,7 +295,8 @@ public class CreatorBilibiliService {
                     request.bilibiliUid(),
                     request.bvid(),
                     bindingStatus,
-                    verifyMessage
+                    verifyMessage,
+                    publishedVersionId
             );
             // 同步线程可能在本次请求期间先把状态推进为 BOUND，此时保留数据库中的已确认结果。
             if (updatedRows == 0) {
@@ -301,6 +304,10 @@ public class CreatorBilibiliService {
                         .map(this::toBindingResponse)
                         .orElseThrow(() -> new ResponseStatusException(
                                 HttpStatus.INTERNAL_SERVER_ERROR, "更新任务视频绑定时记录已不存在"));
+            }
+            if ("BOUND".equals(bindingStatus)) {
+                bilibiliMapper.freezePublishedSnapshot(record.getBindingId());
+                bilibiliMapper.markBoundVersionPublished(record.getBindingId());
             }
             return bilibiliMapper.findBindingByTaskId(taskId)
                     .map(this::toBindingResponse)
@@ -321,6 +328,7 @@ public class CreatorBilibiliService {
                 null,
                 null
         );
+        record.setPublishedVersionId(publishedVersionId);
         try {
             bilibiliMapper.insertBinding(record);
         } catch (DuplicateKeyException e) {
@@ -330,6 +338,10 @@ public class CreatorBilibiliService {
             return toBindingResponse(existing);
         }
 
+        if ("BOUND".equals(bindingStatus)) {
+            bilibiliMapper.freezePublishedSnapshot(record.getBindingId());
+            bilibiliMapper.markBoundVersionPublished(record.getBindingId());
+        }
         var created = bilibiliMapper.findBindingByTaskId(taskId).orElseThrow();
         return toBindingResponse(created);
     }
@@ -517,7 +529,8 @@ public class CreatorBilibiliService {
                 record.getBindingStatus(),
                 record.getVerifyMessage(),
                 record.getCreateTime(),
-                record.getUpdateTime()
+                record.getUpdateTime(),
+                record.getPublishedVersionId()
         );
     }
 }

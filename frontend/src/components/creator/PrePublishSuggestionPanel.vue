@@ -395,7 +395,7 @@ function saveSuggestionContext(
   min-height: 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   box-shadow: var(--sh-sm);
 }
 
@@ -425,14 +425,14 @@ function saveSuggestionContext(
 .suggestion-content-section > header,
 .suggestion-insight-grid span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
 .suggestion-panel-head strong {
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: 17px;
+  font-size: var(--fs-md);
 }
 
 .suggestion-status-badge {
@@ -442,7 +442,7 @@ function saveSuggestionContext(
   background: var(--surface-sub);
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .suggestion-status-badge.pending {
@@ -509,8 +509,8 @@ function saveSuggestionContext(
   color: var(--danger);
   background: rgba(220, 38, 38, 0.06);
   border: 1px solid rgba(220, 38, 38, 0.18);
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
@@ -524,7 +524,7 @@ function saveSuggestionContext(
 
 .suggestion-content-section > header small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.45;
   text-align: right;
 }
@@ -547,7 +547,7 @@ function saveSuggestionContext(
 .suggestion-disclosure summary {
   color: var(--ink);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-base);
   font-weight: var(--fw-semibold);
 }
 

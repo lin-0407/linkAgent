@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowRight, Play } from '@lucide/vue'
 import { useModalDialog } from '@/composables/useModalDialog'
+import { useReferenceVideoPageSize } from '@/composables/useReferenceVideoPageSize'
 import type { ReferenceVideo } from '@/types/knowledge'
 import {
   formatKnowledgeCount,
@@ -27,6 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'page-change': [page: number]
+  'page-size-change': [size: number]
   'filter-change': [tier: string, category: string]
   refresh: []
   'refresh-public-metadata': [video: ReferenceVideo]
@@ -39,6 +41,8 @@ const detailTarget = ref<ReferenceVideo | null>(null)
 const cardListRef = ref<HTMLElement | null>(null)
 const failedCoverItems = ref(new Map<string, ReferenceVideo>())
 let missingCoverObserver: IntersectionObserver | null = null
+
+useReferenceVideoPageSize(cardListRef, (size) => emit('page-size-change', size))
 
 watch(() => props.category, (val) => {
   filterCategoryInput.value = val
@@ -128,7 +132,7 @@ function openCompetitorFromDetail(video: ReferenceVideo) {
   emit('open-competitor', video)
 }
 
-const totalPages = computed(() => Math.max(1, Math.ceil(props.total / props.pageSize)))
+const totalPages = computed(() => Math.max(1, Math.ceil(props.total / Math.max(1, props.pageSize))))
 
 type PagerItem = {
   key: string
@@ -224,7 +228,20 @@ function goToPage(targetPage: number | null) {
     <p v-if="!items.length && !loading && !error" class="creator-muted">
       还没有案例，可通过下方的“添加参考案例”导入一个 BV。
     </p>
-    <div v-else-if="!error" ref="cardListRef" class="knowledge-card-list">
+    <div
+      v-if="loading && !items.length"
+      class="skeleton-stack knowledge-card-skeleton"
+      role="status"
+    >
+      <span class="sr-only">正在加载案例</span>
+      <div v-for="n in 3" :key="n" class="skeleton-row" aria-hidden="true">
+        <span class="skeleton-bar skeleton-bar--title skeleton-bar--medium"></span>
+        <span class="skeleton-bar"></span>
+        <span class="skeleton-bar skeleton-bar--short"></span>
+      </div>
+    </div>
+
+    <div v-if="!error" ref="cardListRef" class="knowledge-card-list" :aria-busy="loading">
       <article
         v-for="item in items"
         :key="item.id"
@@ -427,7 +444,7 @@ function goToPage(targetPage: number | null) {
 
 .knowledge-list-title > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
@@ -472,7 +489,12 @@ function goToPage(targetPage: number | null) {
 
 .knowledge-card-list {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: var(--s5) var(--s4);
+}
+
+.knowledge-card-skeleton {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
   gap: var(--s5) var(--s4);
 }
 
@@ -487,8 +509,8 @@ function goToPage(targetPage: number | null) {
   border-radius: var(--r);
   box-shadow: none;
   transition:
-    border-color 180ms ease,
-    background-color 180ms ease;
+    border-color var(--dur-fast) ease,
+    background-color var(--dur-fast) ease;
 }
 
 .knowledge-card:hover {
@@ -528,7 +550,7 @@ function goToPage(targetPage: number | null) {
   color: #fff;
   background: #344054;
   border-radius: var(--r-sm);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -559,7 +581,7 @@ function goToPage(targetPage: number | null) {
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .knowledge-card-body {
@@ -576,7 +598,7 @@ function goToPage(targetPage: number | null) {
   min-height: 44px;
   overflow: hidden;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -585,7 +607,7 @@ function goToPage(targetPage: number | null) {
 .knowledge-card-body small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -605,7 +627,7 @@ function goToPage(targetPage: number | null) {
   background: var(--surface-sub);
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-medium);
   white-space: nowrap;
 }
@@ -623,13 +645,13 @@ function goToPage(targetPage: number | null) {
   background: var(--accent-tint);
   border: 1px solid transparent;
   border-radius: var(--r-sm);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
   cursor: pointer;
   transition:
-    color 160ms ease,
-    background 160ms ease,
-    border-color 160ms ease;
+    color var(--dur-fast) ease,
+    background var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
 }
 
 .knowledge-card-detail-button:hover {
@@ -653,7 +675,7 @@ function goToPage(targetPage: number | null) {
 
 .knowledge-detail-head span {
   color: var(--accent-strong);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
 }
 
@@ -668,7 +690,7 @@ function goToPage(targetPage: number | null) {
 
 .knowledge-detail-title-block strong {
   color: var(--ink);
-  font-size: 17px;
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 
@@ -685,13 +707,13 @@ function goToPage(targetPage: number | null) {
 .knowledge-detail-section h4 {
   margin: 0;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
 }
 
 .knowledge-detail-section p {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.75;
   white-space: pre-wrap;
   word-break: break-word;
@@ -717,14 +739,14 @@ function goToPage(targetPage: number | null) {
 .knowledge-detail-stats dt,
 .knowledge-detail-meta dt {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .knowledge-detail-stats dd,
 .knowledge-detail-meta dd {
   margin: 0;
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
 }
 
@@ -760,7 +782,7 @@ function goToPage(targetPage: number | null) {
 
 .knowledge-pagination-summary {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 
 .knowledge-pagination-controls {
@@ -808,10 +830,6 @@ function goToPage(targetPage: number | null) {
     margin-left: 0;
   }
 
-  .knowledge-card-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .knowledge-detail-stats {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -836,7 +854,6 @@ function goToPage(targetPage: number | null) {
     gap: var(--s1);
   }
 
-  .knowledge-card-list,
   .knowledge-detail-meta {
     grid-template-columns: 1fr;
   }

@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Map;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -46,6 +48,27 @@ class LLMServiceTest {
         assertThatThrownBy(() -> service.validatePromptLength("system", "user"))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("当前限制约 1 token");
+    }
+
+    @Test
+    void shouldChooseAutoToolChoiceWhenThinkingEnabled() {
+        LLMService service = new LLMService(new LlmCallGuardProperties());
+
+        // 2026-09-19 真实接口实测：思考模式传指定函数或 required 都会 400，只有 auto 可用；
+        // 这一路只挂一个结果函数，auto 的实际效果仍是模型用该函数交结果。
+        assertThat(service.structuredResultToolChoice(true)).isEqualTo("auto");
+    }
+
+    @Test
+    void shouldKeepForcedResultFunctionWhenThinkingDisabled() {
+        LLMService service = new LLMService(new LlmCallGuardProperties());
+
+        Object toolChoice = service.structuredResultToolChoice(false);
+
+        assertThat(toolChoice).isInstanceOf(Map.class);
+        Map<?, ?> choice = (Map<?, ?>) toolChoice;
+        assertThat(choice.get("type")).isEqualTo("function");
+        assertThat(choice.get("function")).isInstanceOf(Map.class);
     }
 
     @Test

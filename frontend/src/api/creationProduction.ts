@@ -1,0 +1,45 @@
+import { get, post, patch, del } from './http'
+import type { Runtime, Brief, BriefDocument, Storyboard, Scene, CreationAsset, Preparation, ExecutionEstimate, Execution, SignedRead, Timing, RevisionProposal } from '@/types/creationProduction'
+import type { VideoDraft, VideoDraftWorkspace, VideoDraftRequest } from '@/types/creationProduction'
+
+const root = (task: string) => `/creator/tasks/${encodeURIComponent(task)}/creation`
+const assets = (task: string) => `/creator/tasks/${encodeURIComponent(task)}/assets`
+const id = encodeURIComponent
+export const creationKey = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+const options = (key: string) => ({ headers: { 'Idempotency-Key': key } })
+export const readRuntime = (task: string) => get<Runtime>(`${root(task)}/runtime`)
+export const initializeBudget = (task: string, expectedWorkspaceRevision: number, budgetLimitCny: number, key: string) => post<Runtime>(root(task), { expectedWorkspaceRevision, budgetLimitCny }, options(key))
+export const updateCreationBudget = (task: string, expectedWorkspaceRevision: number, budgetLimitCny: number) => patch<Runtime>(`${root(task)}/budget`, { expectedWorkspaceRevision, budgetLimitCny })
+export const listBriefs = (task: string) => get<Brief[]>(`${root(task)}/briefs`)
+export const saveBrief = (task: string, expectedWorkspaceRevision: number, document: BriefDocument, key: string) => post<Brief>(`${root(task)}/briefs`, { ...document, expectedWorkspaceRevision }, options(key))
+export const listStoryboards = (task: string) => get<Storyboard[]>(`${root(task)}/storyboards`)
+export const readStoryboard = (task: string, board: string) => get<Storyboard>(`${root(task)}/storyboards/${id(board)}`)
+export const saveStoryboard = (task: string, expectedWorkspaceRevision: number, briefId: string, parentStoryboardId: string | null, scenes: Scene[], key: string) => post<Storyboard>(`${root(task)}/storyboards`, { expectedWorkspaceRevision, briefId, parentStoryboardId, candidate: { scenes } }, options(key))
+export const estimatePreparation = (task: string, expectedWorkspaceRevision: number, briefId: string) => post<{ estimatedMaxAdditionalCostCny: number; model: string }>(`${root(task)}/storyboards:estimate`, { expectedWorkspaceRevision, briefId })
+export const prepareStoryboard = (task: string, expectedWorkspaceRevision: number, briefId: string, maxAdditionalCostCny: number, key: string) => post<Preparation>(`${root(task)}/storyboards:generate`, { expectedWorkspaceRevision, briefId, maxAdditionalCostCny }, options(key))
+export const currentPreparation = (task: string) => get<Preparation | null>(`${root(task)}/storyboard-preparations/current`)
+export const cancelCreationRun = (task: string, run: string) => post(`${root(task)}/runs/${id(run)}:cancel`)
+export const listAssets = (task: string, offset = 0) => get<CreationAsset[]>(`${assets(task)}?offset=${offset}&limit=100`)
+export const readCreationAsset = (task: string, asset: string) => get<CreationAsset>(`${assets(task)}/${id(asset)}`)
+export const createAsset = (task: string, kind: CreationAsset['kind'], file: File, sha256: string, key: string) => post<CreationAsset>(assets(task), { kind, fileName: file.name, fileSize: file.size, contentType: file.type || (kind === 'IMAGE' ? 'image/png' : kind === 'VIDEO_CLIP' ? 'video/mp4' : 'audio/wav'), sha256 }, options(key))
+export const signAssetPart = (task: string, asset: string, partNumber: number) => post<{ partNumber: number; url: string; expiresAt: string }[]>(`${assets(task)}/${id(asset)}/parts:sign`, { partNumbers: [partNumber] })
+export const completeAssetPart = (task: string, asset: string, partNumber: number, etag: string, partSize: number) => post<CreationAsset>(`${assets(task)}/${id(asset)}/parts:complete`, { parts: [{ partNumber, etag, partSize }] })
+export const completeAsset = (task: string, asset: string) => post<CreationAsset>(`${assets(task)}/${id(asset)}:complete`)
+export const retryAsset = (task: string, asset: string) => post<CreationAsset>(`${assets(task)}/${id(asset)}:retry`)
+export const cancelAsset = (task: string, asset: string) => del<CreationAsset>(`${assets(task)}/${id(asset)}`)
+export const assetDeletionImpact = (task: string, asset: string) => get<{ allowed: boolean; references: number; message: string }>(`${assets(task)}/${id(asset)}/deletion-impact`)
+export const deleteReadyAsset = (task: string, asset: string) => del<CreationAsset>(`${assets(task)}/${id(asset)}/media`)
+export const readAssetUrl = (task: string, asset: string, role = 'NORMALIZED') => post<SignedRead>(`${assets(task)}/${id(asset)}:read-url?role=${encodeURIComponent(role)}`)
+export const estimateExecution = (task: string, expectedWorkspaceRevision: number, storyboardId: string, kind: Execution['kind']) => post<ExecutionEstimate>(`${root(task)}/executions:estimate`, { expectedWorkspaceRevision, storyboardId, kind })
+export const startExecution = (task: string, estimate: ExecutionEstimate, maxAdditionalCostCny: number, key: string) => post<Execution>(`${root(task)}/executions`, { expectedWorkspaceRevision: estimate.workspaceRevision, storyboardId: estimate.storyboardId, storyboardHash: estimate.storyboardHash, providerFingerprint: estimate.providerFingerprint, kind: estimate.kind, maxAdditionalCostCny }, options(key))
+export const listExecutions = (task: string) => get<Execution[]>(`${root(task)}/executions`)
+export const cancelExecution = (task: string, execution: string) => post<Execution>(`${root(task)}/executions/${id(execution)}:cancel`)
+export const executionDownload = (task: string, execution: string, name: string) => get<SignedRead & { label: string; fileName: string; versionId: string | null }>(`${root(task)}/executions/${id(execution)}/downloads/${id(name)}`)
+export const readTiming = (task: string, board: string) => get<Timing>(`${root(task)}/storyboards/${id(board)}/timing`)
+export const applyTiming = (task: string, board: string, expectedWorkspaceRevision: number, adjustments: { sceneId: string; proposalCode: string; durationMs: number }[], key: string) => post<{ board: Storyboard }>(`${root(task)}/storyboards/${id(board)}/timeline:apply`, { expectedWorkspaceRevision, adjustments }, options(key))
+export const importSubtitles = (task: string, board: string, expectedWorkspaceRevision: number, sceneId: string, srt: string, key: string) => post<Storyboard>(`${root(task)}/storyboards/${id(board)}/subtitles:import`, { expectedWorkspaceRevision, sceneId, srt }, options(key))
+export const proposeRevision = (task: string, expectedWorkspaceRevision: number, storyboardId: string, instruction: string, key: string) => post<RevisionProposal>(`${root(task)}/revisions:propose`, { expectedWorkspaceRevision, storyboardId, instruction }, options(key))
+export const applyRevision = (task: string, proposal: RevisionProposal) => post<Storyboard>(`${root(task)}/revisions/${id(proposal.proposalId!)}:apply`, { expectedWorkspaceRevision: proposal.workspaceRevision })
+export const readVideoDrafts = (task: string) => get<VideoDraftWorkspace>(`${root(task)}/drafts`)
+export const startVideoDraft = (task: string, input: VideoDraftRequest, key: string) => post<VideoDraft>(`${root(task)}/drafts`, input, options(key))
+export const cancelVideoDraft = (task: string, draft: string) => post<VideoDraft>(`${root(task)}/drafts/${id(draft)}:cancel`)

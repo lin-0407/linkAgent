@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { errorText } from '@/utils/error'
 import { Download, LoaderCircle, Square } from '@lucide/vue'
 import { getReferenceAutoCollection, startReferenceAutoCollection, stopReferenceAutoCollection } from '@/api/knowledge'
 import type { ReferenceAutoCollectionState } from '@/types/knowledge'
@@ -58,7 +59,7 @@ async function refreshStatus() {
     }
     if (wasRunning && !running.value) emit('finished')
   } catch (cause) {
-    if (!disposed) error.value = cause instanceof Error ? cause.message : String(cause)
+    if (!disposed) error.value = errorText(cause, '操作失败，请稍后重试')
   } finally {
     schedulePoll()
   }
@@ -73,7 +74,7 @@ async function start() {
     now.value = Date.now()
     schedulePoll()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
+    error.value = errorText(cause, '操作失败，请稍后重试')
     // 重复启动被拒绝时重新读取后台任务，刷新页面后仍能接着查看。
     if (cause instanceof ApiError && cause.status === 409) void refreshStatus()
   } finally {
@@ -88,7 +89,7 @@ async function stop() {
     if (!running.value) emit('finished')
     schedulePoll()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
+    error.value = errorText(cause, '操作失败，请稍后重试')
   } finally {
     pending.value = false
   }
@@ -120,7 +121,7 @@ onUnmounted(() => {
       <summary>采集设置 · 指数 &gt; {{ minIndex }} · 单轮最多 {{ maxImports }} 条</summary>
       <form class="collection-fields" @submit.prevent="start">
         <label>最低视频指数<input v-model.number="minIndex" type="number" min="0" max="100" step="0.1" required :disabled="running" /></label>
-        <label>单轮入库上限<input v-model.number="maxImports" type="number" min="1" max="1000" required :disabled="running" /></label>
+        <label>单轮入库上限<input v-model.number="maxImports" type="number" min="1" required :disabled="running" /></label>
         <label>单轮检查上限<input v-model.number="maxChecks" type="number" min="1" max="10000" required :disabled="running" /></label>
         <fieldset class="category-field" :disabled="running">
           <legend>视频分类（可选）</legend>
@@ -160,35 +161,35 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.auto-collection { padding: var(--s4); border: 1px solid var(--border); border-radius: 12px; background: var(--surface); display: grid; gap: var(--s3); }
+.auto-collection { padding: var(--s4); border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); display: grid; gap: var(--s3); }
 .collection-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--s4); }
-h3 { margin: 0 0 6px; font-size: 16px; }
-p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.6; }
+h3 { margin: 0 0 6px; font-size: var(--fs-md); }
+p { margin: 0; font-size: var(--fs-sm); color: var(--muted); line-height: 1.6; }
 button { flex-shrink: 0; }
-summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+summary { cursor: pointer; font-size: var(--fs-sm); color: var(--muted); }
 .collection-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s3); padding-top: var(--s3); }
-label { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
-input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-sub); color: var(--ink); font: inherit; }
+label { display: grid; gap: 6px; font-size: var(--fs-xs); color: var(--muted); }
+input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-sub); color: var(--ink); font: inherit; }
 .category-field { grid-column: 1 / -1; min-width: 0; margin: 0; padding: 0; border: 0; display: grid; gap: 10px; }
-.category-field legend { padding: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.category-field legend { padding: 0 0 6px; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
 .category-options { display: flex; flex-wrap: wrap; gap: 8px; }
-.category-option { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.category-option { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); cursor: pointer; }
 .category-option.is-selected { color: var(--accent-strong); border-color: var(--accent); background: var(--accent-tint); }
 .category-option input { width: 15px; height: 15px; margin: 0; padding: 0; accent-color: var(--accent); }
 .category-field:disabled .category-option { cursor: default; opacity: .7; }
-.category-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; }
+.category-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--muted); font-size: var(--fs-xs); }
 .category-actions button { border: 0; padding: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
 .category-field:disabled .category-actions button { cursor: default; opacity: .7; }
-.collection-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; }
+.collection-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: var(--fs-xs); }
 .collection-status p { width: 100%; }
-.status-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 6px; padding: 4px 8px; background: var(--surface-sub); }
+.status-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--r-xs); padding: 4px 8px; background: var(--surface-sub); }
 .status-badge[data-status='SUCCEEDED'] { color: #258a57; }
 .status-badge[data-status='FAILED'], .collection-error { color: #c64242; }
 .status-badge[data-status='WARNING'] { color: #a56d15; }
 .collection-hint { opacity: .75; }
-.collection-results { display: flex; flex-wrap: wrap; gap: 10px 20px; font-size: 13px; }
+.collection-results { display: flex; flex-wrap: wrap; gap: 10px 20px; font-size: var(--fs-sm); }
 .collection-results strong { margin-left: 4px; }
-.collection-warnings ul { max-height: 180px; overflow: auto; padding-left: 20px; font-size: 12px; line-height: 1.7; }
+.collection-warnings ul { max-height: 180px; overflow: auto; padding-left: 20px; font-size: var(--fs-xs); line-height: 1.7; }
 .collection-error button { cursor: pointer; color: inherit; background: none; border: 0; text-decoration: underline; }
 .spin { animation: collection-spin 1.2s linear infinite; }
 @keyframes collection-spin { to { transform: rotate(360deg); } }

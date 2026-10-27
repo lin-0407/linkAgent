@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { errorText } from '@/utils/error'
 import { ArrowRight, Plus, RefreshCw } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import { listCreatorTasks } from '@/api/creator'
+import PageHeader from '@/components/common/PageHeader.vue'
 import type { CreatorTaskSummary } from '@/types/creator'
 import { useCreatorStore } from '@/stores/creatorStore'
 import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
@@ -68,12 +70,17 @@ const taskStats = computed(() => {
   return stats
 })
 
-const statCards = computed(() => [
-  { key: 'total', label: '全部项目', value: taskStats.value.total, tone: 'total' },
-  { key: 'draft', label: '草稿', value: taskStats.value.draft, tone: 'draft' },
-  { key: 'inProgress', label: '推进中', value: taskStats.value.inProgress, tone: 'progress' },
-  { key: 'done', label: '已复盘', value: taskStats.value.done, tone: 'done' },
-])
+const statCards = computed(() => {
+  // 读取失败时没有数据，用破折号表示「未知」，不要用 0 冒充「确实是 0」
+  const unknown = Boolean(errorMessage.value) && tasks.value.length === 0
+  const value = (count: number) => (unknown ? '—' : String(count))
+  return [
+    { key: 'total', label: '全部项目', value: value(taskStats.value.total), tone: 'total' },
+    { key: 'draft', label: '草稿', value: value(taskStats.value.draft), tone: 'draft' },
+    { key: 'inProgress', label: '推进中', value: value(taskStats.value.inProgress), tone: 'progress' },
+    { key: 'done', label: '已复盘', value: value(taskStats.value.done), tone: 'done' },
+  ]
+})
 
 onMounted(() => {
   void loadTasks()
@@ -85,7 +92,7 @@ async function loadTasks() {
   try {
     tasks.value = await listCreatorTasks(50)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : String(error)
+    errorMessage.value = errorText(error, '操作失败，请稍后重试')
   } finally {
     isLoading.value = false
   }
@@ -151,28 +158,29 @@ function formatDate(value: string) {
 <template>
   <section class="creator-shell project-list-shell">
     <div class="project-list-page">
-      <header class="creator-header project-list-header">
-        <div>
-          <p class="creator-kicker">项目列表</p>
-          <h2>历史视频项目</h2>
-          <p>从这里继续上次的发布方案或复盘，不需要回到技术调试入口。</p>
-        </div>
-        <div class="creator-header-actions project-list-actions">
-          <button type="button" class="creator-primary-button creator-mini-button" @click="createNewTask">
-            <Plus :size="16" :stroke-width="1.8" aria-hidden="true" />
-            开始优化一条视频
-          </button>
-          <button
-            type="button"
-            class="creator-secondary-action creator-mini-button"
-            :disabled="isLoading"
-            @click="loadTasks"
-          >
-            <RefreshCw :size="16" :stroke-width="1.8" aria-hidden="true" />
-            {{ isLoading ? '刷新中...' : '刷新列表' }}
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        kicker="项目列表"
+        title="我的创作项目"
+        description="整理进行中的视频，继续发布方案、制作或复盘。"
+      >
+        <template #actions>
+          <div class="project-list-actions">
+            <button type="button" class="creator-primary-button creator-mini-button" @click="createNewTask">
+              <Plus :size="16" :stroke-width="1.8" aria-hidden="true" />
+              新建视频项目
+            </button>
+            <button
+              type="button"
+              class="creator-secondary-action creator-mini-button"
+              :disabled="isLoading"
+              @click="loadTasks"
+            >
+              <RefreshCw :size="16" :stroke-width="1.8" aria-hidden="true" />
+              {{ isLoading ? '刷新中...' : '刷新列表' }}
+            </button>
+          </div>
+        </template>
+      </PageHeader>
 
       <section class="creator-section project-list-section" :aria-busy="isLoading">
         <div class="project-list-controls">
@@ -204,12 +212,19 @@ function formatDate(value: string) {
           </div>
         </div>
 
-        <div v-if="errorMessage" class="creator-alert error-alert project-message project-message-error">
+        <div v-if="errorMessage" class="creator-alert error-alert project-message project-message-error" role="alert">
           <div>
             <strong>项目列表加载失败</strong>
-            <span>当前请求没有成功返回，确认服务恢复后可以重新刷新列表。</span>
+            <span>{{ errorMessage }}</span>
           </div>
-          <code>{{ errorMessage }}</code>
+        </div>
+
+        <div v-else-if="isLoading && filteredTasks.length === 0" class="skeleton-stack" role="status">
+          <span class="sr-only">正在读取项目列表</span>
+          <div v-for="n in 3" :key="n" class="skeleton-row" aria-hidden="true">
+            <span class="skeleton-bar skeleton-bar--title skeleton-bar--short"></span>
+            <span class="skeleton-bar skeleton-bar--medium"></span>
+          </div>
         </div>
 
         <div v-else-if="filteredTasks.length > 0" class="project-list">
@@ -229,14 +244,14 @@ function formatDate(value: string) {
               </div>
             </div>
             <button type="button" class="creator-primary-button creator-mini-button" @click="continueTask(task)">
-              继续复盘
+              继续创作
               <ArrowRight :size="16" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </article>
         </div>
 
         <article v-else class="creator-empty-result project-empty-result">
-          <strong>{{ isLoading ? '正在读取项目...' : '还没有匹配的项目' }}</strong>
+          <strong>还没有匹配的项目</strong>
           <span>可以调整搜索条件，或新建一条视频项目，把标题、简介和文稿先放进去。</span>
           <div class="project-empty-actions">
             <button type="button" class="creator-primary-button creator-mini-button" @click="createNewTask">
@@ -316,7 +331,7 @@ function formatDate(value: string) {
 
 .project-filter-field span {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
 }
 
@@ -383,14 +398,14 @@ function formatDate(value: string) {
 
 .project-stat-card b {
   color: var(--ink);
-  font-size: 26px;
+  font-size: var(--fs-2xl);
   font-weight: var(--fw-bold);
   line-height: 1;
 }
 
 .project-stat-card span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.35;
 }
 
@@ -411,8 +426,8 @@ function formatDate(value: string) {
   background: transparent;
   border-bottom: 1px solid var(--border);
   transition:
-    background-color 180ms ease,
-    box-shadow 180ms ease;
+    background-color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
 }
 
 .project-list-item::before {
@@ -422,7 +437,7 @@ function formatDate(value: string) {
   left: 0;
   width: 3px;
   background: rgba(23, 32, 51, 0.12);
-  border-radius: 3px;
+  border-radius: var(--r-xs);
   content: '';
 }
 
@@ -456,7 +471,7 @@ function formatDate(value: string) {
 .project-list-item strong {
   overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.45;
 }
 
@@ -468,7 +483,7 @@ function formatDate(value: string) {
   background: var(--accent-tint);
   border: 1px solid rgba(0, 174, 236, 0.18);
   border-radius: var(--r-pill);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   line-height: 1.3;
 }
@@ -494,7 +509,7 @@ function formatDate(value: string) {
 
 .project-list-item-meta span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
 }
 
@@ -525,7 +540,7 @@ function formatDate(value: string) {
   border: 1px solid rgba(220, 38, 38, 0.12);
   border-radius: var(--r-sm);
   font-family: var(--font-code);
-  font-size: 12px;
+  font-size: var(--fs-xs);
 }
 
 .project-empty-result {

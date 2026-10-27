@@ -7,6 +7,7 @@ import com.link.linkagent.creator.media.preflight.mapper.PreflightReviewMapper;
 import com.link.linkagent.creator.media.preflight.model.PreflightReviewRecord;
 import com.link.linkagent.creator.media.preflight.model.PreflightStepRecord;
 import com.link.linkagent.creator.media.preflight.provider.SpeechRecognitionProvider;
+import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
 import com.link.linkagent.creator.media.processing.mapper.MediaProcessingMapper;
 import com.link.linkagent.creator.media.processing.model.MediaProcessingAssetRecord;
 import jakarta.annotation.PreDestroy;
@@ -14,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -53,6 +55,7 @@ public class PreflightReviewWorker {
     private final AudienceScreeningService audienceScreeningService;
     private final PreflightReviewService reviewService;
     private final ObjectMapper objectMapper;
+    private final CreationCapabilityGate capabilities;
     private final AtomicBoolean busy = new AtomicBoolean(false);
     private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "preflight-review-worker");
@@ -76,6 +79,24 @@ public class PreflightReviewWorker {
                                  AudienceScreeningService audienceScreeningService,
                                  PreflightReviewService reviewService,
                                  ObjectMapper objectMapper) {
+        this(properties, mapper, processingMapper, asrProvider, asrService, timelineService, videoAnalysisService,
+                segmentReviewService, audienceScreeningService, reviewService, objectMapper,
+                CreationCapabilityGate.ALL_ENABLED);
+    }
+
+    @Autowired
+    public PreflightReviewWorker(CreatorMediaProperties properties,
+                                 PreflightReviewMapper mapper,
+                                 MediaProcessingMapper processingMapper,
+                                 SpeechRecognitionProvider asrProvider,
+                                 PreflightAsrService asrService,
+                                 PreflightTimelineService timelineService,
+                                 PreflightVideoAnalysisService videoAnalysisService,
+                                 PreflightSegmentReviewService segmentReviewService,
+                                 AudienceScreeningService audienceScreeningService,
+                                 PreflightReviewService reviewService,
+                                 ObjectMapper objectMapper,
+                                 CreationCapabilityGate capabilities) {
         this.properties = properties;
         this.mapper = mapper;
         this.processingMapper = processingMapper;
@@ -87,6 +108,7 @@ public class PreflightReviewWorker {
         this.audienceScreeningService = audienceScreeningService;
         this.reviewService = reviewService;
         this.objectMapper = objectMapper;
+        this.capabilities = capabilities;
     }
 
     @Scheduled(fixedDelayString = "${creator.media.preflight.poll-interval-ms:2000}")
@@ -94,6 +116,8 @@ public class PreflightReviewWorker {
         try {
             mapper.requeueExpiredReviews();
             mapper.cancelExpiredRequestedReviews();
+            // 关闭付费分析后只保留状态收口，不领取新的试映任务；重新开启后排队任务自然继续。
+            if (!capabilities.mediaAnalysisEnabled()) return;
             mapper.findNextRunnableReview().ifPresent(this::submit);
         } catch (RuntimeException exception) {
             log.warn("发布前试映任务轮询失败", exception);

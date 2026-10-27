@@ -251,6 +251,10 @@ public class AgentController {
                     sessionId, exception.getMessage());
         }
         shortTermMemory.getMessages(sessionId).stream()
+                // 工具调用/结果消息是模型上下文的一部分（原生协议成对存储），不是给人看的对话内容：
+                // 调用消息正文为空、结果消息是原始工具输出，直接展示会在会话历史里冒出空气泡和「用户口吻」的工具日志。
+                // 真实执行过程已由流式 steps 事件实时展示，历史视图保持原来的 user/assistant/summary 语义。
+                .filter(message -> !message.isToolCall() && !message.isToolResult())
                 .map(this::toMessageItem)
                 .forEach(items::add);
         return items;

@@ -48,14 +48,17 @@ public class MediaDeletionService {
     public void deleteMedia(String ownerId, String taskId, String versionId) {
         String normalizedTaskId = taskId.trim();
         String normalizedVersionId = versionId.trim();
+        uploadMapper.lockMediaTask(normalizedTaskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+        if (uploadMapper.countActiveCreationRuns(normalizedTaskId, ownerId) > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "制作运行尚未结束，不能删除媒体");
+        }
         processingMapper.lockDraftVersion(normalizedTaskId, ownerId, normalizedVersionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
         DraftVideoRecord draft = uploadMapper.findDraftVideoByVersion(
                         normalizedTaskId, ownerId, normalizedVersionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "成片记录不存在"));
-        if (draft.mediaDeletedAt() != null) {
-            return;
-        }
+        // 重试也清理对象，补删旧版删除流程可能遗留的发布包副本。
         ensureNoActiveMediaWork(draft);
 
         List<MediaUploadRecord> uploads = uploadMapper.listUploadsByVersion(
@@ -71,11 +74,13 @@ public class MediaDeletionService {
             );
         }
 
+        uploadMapper.markPackagesMediaDeleted(normalizedTaskId, ownerId, normalizedVersionId);
         processingMapper.markAssetsDeleted(normalizedVersionId);
         preflightMapper.markVersionEvidenceUnavailable(normalizedVersionId);
         uploads.forEach(upload -> uploadMapper.deleteParts(upload.uploadSessionId()));
         uploadMapper.markUploadsDeleted(normalizedTaskId, ownerId, normalizedVersionId);
-        if (uploadMapper.markDraftMediaDeleted(normalizedTaskId, ownerId, normalizedVersionId) != 1) {
+        if (draft.mediaDeletedAt() == null
+                && uploadMapper.markDraftMediaDeleted(normalizedTaskId, ownerId, normalizedVersionId) != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "成片删除状态已变化，请刷新后重试");
         }
     }
@@ -119,6 +124,11 @@ public class MediaDeletionService {
         for (MediaUploadRecord upload : uploads) {
             addObject(objects, draft.bucketName(), upload.objectKey());
         }
+        for (String key : uploadMapper.listGeneratedObjectKeys(draft.taskId(), draft.ownerId(), draft.versionId()))
+            addObject(objects, draft.bucketName(), key);
+        // ZIP 内含完整成片，必须使用发布包实际保存的桶一起删除。
+        for (var object : uploadMapper.listPackageObjects(draft.taskId(), draft.ownerId(), draft.versionId()))
+            addObject(objects, object.bucketName(), object.objectKey());
         addObject(objects, draft.bucketName(), draft.objectKey());
         objects.values().forEach(object -> storage.deleteObject(object.bucketName(), object.objectKey()));
     }

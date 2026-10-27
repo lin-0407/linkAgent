@@ -3,6 +3,9 @@ export interface RuntimeToggle {
   name: string
   enabled: boolean
   description: string
+  /** 当前部署无法在运行期打开；关闭方向仍可能允许。 */
+  locked?: boolean
+  lockedReason?: string
 }
 
 export interface RuntimeValue {
@@ -24,6 +27,28 @@ export interface SettingsStatus {
   dynamicToggles: RuntimeToggle[]
   dynamicValues: RuntimeValue[]
   readonlySettings: ReadonlySetting[]
+  /** 制作与付费能力开关，和通用运行期开关分开展示。 */
+  productionToggles: RuntimeToggle[]
+  billing: BillingSettings
+}
+
+export interface PriceRange {
+  key: string
+  name: string
+  unit: string
+  lowCny: number | string
+  highCny: number | string
+  note: string
+}
+
+export interface BillingSettings {
+  usdToCny: number | string
+  /** LIVE / CACHED / CONFIG_FALLBACK */
+  source: string
+  fetchedAt: string
+  stale: boolean
+  note: string
+  ranges: PriceRange[]
 }
 
 export type ConnectivityStatus = 'UP' | 'DOWN' | 'DISABLED' | 'UNKNOWN'
