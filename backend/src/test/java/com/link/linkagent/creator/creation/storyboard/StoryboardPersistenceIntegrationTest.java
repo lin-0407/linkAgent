@@ -20,6 +20,8 @@ import com.link.linkagent.creator.creation.storyboard.service.StoryboardAudioSer
 import com.link.linkagent.creator.creation.storyboard.service.StoryboardCompiler;
 import com.link.linkagent.creator.creation.storyboard.model.StoryboardAudioModels.*;
 import com.link.linkagent.creator.creation.execution.*;
+import com.link.linkagent.creator.creation.draft.*;
+import com.link.linkagent.creator.interactive.mapper.CreatorInteractiveMapper;
 import com.link.linkagent.creator.creation.revision.*;
 import com.link.linkagent.creator.creation.service.CreationWorkerProperties;
 import com.link.linkagent.creator.creation.service.CreationCapabilityGate;
@@ -115,7 +117,8 @@ class StoryboardPersistenceIntegrationTest {
         configuration.setMapUnderscoreToCamelCase(true);
         for (Class<?> type : List.of(MediaUploadMapper.class, CreationRuntimeMapper.class,
                 CreationWorkspaceMapper.class, CreationMediaMapper.class, CreationPackageMapper.class,
-                CreatorTaskMapper.class, CreationAssetMapper.class, StoryboardMapper.class, ExecutionMapper.class, RevisionMapper.class)) {
+                CreatorTaskMapper.class, CreationAssetMapper.class, StoryboardMapper.class, ExecutionMapper.class, RevisionMapper.class,
+                DraftMapper.class, CreatorInteractiveMapper.class)) {
             configuration.addMapper(type);
         }
         var factory = new SqlSessionFactoryBean();
@@ -1339,6 +1342,201 @@ class StoryboardPersistenceIntegrationTest {
                 new CreatorMediaProperties(),CreationCapabilityGate.defaults(true,true),BillingExchangeRate.fixed(cny("7.2")),renderer,worker);
         return tx(new ExecutionService(session.getMapper(ExecutionMapper.class),planner,media,runs,runtime,mapper,codec,voice,video,
                 mock(AutomaticProductionPlanService.class),session.getMapper(CreationMediaMapper.class),session.getMapper(CreationPackageMapper.class)));
+    }
+
+    private DraftService draftService() {
+        var renderer=new FixedProjectRendererProperties();renderer.setEnabled(true);
+        var worker=new CreationWorkerProperties();worker.setEnabled(true);
+        var draftRuntime=tx(new CreationRuntimeService(media,runs,workspace,session.getMapper(CreationMediaMapper.class),
+                session.getMapper(CreationPackageMapper.class),JSON,renderer,worker));
+        var service=new com.link.linkagent.creator.creation.storyboard.service.StoryboardService(mapper,persistence,
+                new StoryboardCompiler(JSON),codec,media,draftRuntime,assets);
+        return tx(new DraftService(session.getMapper(DraftMapper.class),media,session.getMapper(CreatorInteractiveMapper.class),
+                draftRuntime,persistence,service,mapper,executions(),codec,JSON,CreationCapabilityGate.defaults(false,false),
+                new com.link.linkagent.creator.creation.voice.service.CreationVoiceProperties(),new CreatorMediaProperties()));
+    }
+    private String draftTask() {
+        String task=task("default");
+        jdbc.update("INSERT INTO creator_interactive_session(session_id,task_id,user_id,idea,video_type,status,parse_status,understanding_status) VALUES (?,?,'default','想做一个月亮维修员的小故事，其他细节你先决定','未分类','IDEA_INPUT','PENDING','NONE')",UUID.randomUUID().toString(),task);
+        return task;
+    }
+    private DraftModels.Start draftInput(String task,String base,String instruction) {
+        return new DraftModels.Start(revision(task),base,instruction,cny("20"),5000,List.of());
+    }
+    private DraftModels.View preparedDraft(String task,String key) {
+        var service=draftService();var started=service.start(task,"default",key,draftInput(task,null,""));
+        var row=session.getMapper(DraftMapper.class).find(task,"default",started.draftId()).orElseThrow();
+        var job=mapper.job(task,"default",row.preparationRunId()).orElseThrow();
+        var lease=claim(job,"draft-test-worker");
+        persistence.finish(job,lease,new Candidate(candidate(null,List.of("brief:user"),List.of()).scenes(),
+                List.of("本版先采用安静的图文叙事"),List.of("结尾可以在看过后继续调整")),List.of());
+        service.advance(task,"default",started.draftId());
+        return service.workspace(task,"default").versions().getFirst();
+    }
+
+    @Test void vagueIdeaStartsADurableCompleteDraftWithoutAlignmentOrPublishingApproval() {
+        String task=draftTask();var service=draftService();var input=draftInput(task,null,"");
+        var first=service.start(task,"default","first-draft",input);
+        assertThat(first.status()).isEqualTo("PREPARING");
+        assertThat(service.start(task,"default","first-draft",input).draftId()).isEqualTo(first.draftId());
+        assertThat(count("creator_creation_draft",task)).isEqualTo(1);
+        assertThat(count("creator_workflow_session",task)).isZero();
+        var row=session.getMapper(DraftMapper.class).find(task,"default",first.draftId()).orElseThrow();
+        var brief=mapper.brief(task,"default",row.briefId()).orElseThrow();
+        assertThat(codec.read(brief.sourceJson()).path("draft").path("originalIdea").asText()).contains("月亮维修员");
+        assertThat(codec.read(brief.sourceJson()).path("publishing").isNull()).isTrue();
+        assertThatThrownBy(()->service.start(task,"default","first-draft",new DraftModels.Start(input.expectedWorkspaceRevision(),null,"换一个方向",cny("20"),5000,List.of())))
+                .isInstanceOf(ResponseStatusException.class);
+        assertThat(draftService().workspace(task,"default").versions().getFirst().draftId()).isEqualTo(first.draftId());
+    }
+    @Test void reviewNotesNeverBlockTheTransitionToMediaExecutionAndRecoveryReusesIt() {
+        String task=draftTask();var result=preparedDraft(task,"with-notes");
+        assertThat(result.status()).isEqualTo("EXECUTING");
+        assertThat(result.reviewNotes()).contains("结尾可以在看过后继续调整");
+        assertThat(result.creativeChoices()).contains("本版先采用安静的图文叙事");
+        assertThat(result.execution().kind()).isEqualTo("DRAFT");
+        draftService().advance(task,"default",result.draftId());
+        assertThat(count("creator_creation_execution",task)).isEqualTo(1);
+        assertThat(draftService().workspace(task,"default").versions().getFirst().execution().executionId()).isEqualTo(result.execution().executionId());
+    }
+    @Test void completeDraftSelectsAllScenesAndNeverRequiresFormalReviewCredentials() {
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","all-brief",new BriefInput(revision(task),"小故事","完整叙事","普通观众",30000,"NO_DIALOGUE","USER_PROVIDED",List.of(),""));
+        var scenes=java.util.stream.IntStream.range(0,3).mapToObj(i->new Scene("scene-"+i,"TITLE_CARD","第"+i+"幕",List.of("实际故事内容"),"",10000,null,null,null,"CONTAIN","NO_DIALOGUE",null,List.of(),List.of("brief:user"))).toList();
+        var board=persistence.save(task,"default","all-board",new Save(revision(task),brief.briefId(),null,new Candidate(scenes)));
+        var quote=executions().estimate(task,"default",new ExecutionModels.EstimateInput(revision(task),board.storyboardId(),"DRAFT"));
+        assertThat(quote.blockers()).isEmpty();assertThat(quote.sceneIds()).hasSize(3);assertThat(quote.durationMs()).isEqualTo(30000);
+        var sample=executions().estimate(task,"default",new ExecutionModels.EstimateInput(revision(task),board.storyboardId(),"SAMPLE"));
+        assertThat(sample.sceneIds()).hasSize(1);
+        var started=executions().start(task,"default","whole-draft",new ExecutionModels.Start(quote.workspaceRevision(),board.storyboardId(),board.documentHash(),"DRAFT",quote.providerFingerprint(),BigDecimal.ZERO));
+        var work=executions().advance(task,"default",started.executionId());
+        assertThat(work.action()).isEqualTo("SAMPLE");
+        var run=runs.run(task,"default",work.execution().currentRunId()).orElseThrow();
+        assertThat(codec.read(run.requestJson()).path("purpose").asText()).isEqualTo("DRAFT");
+        assertThat(count("creator_draft_video",task)).isZero();
+        assertThat(count("creator_workflow_session",task)).isZero();
+        String evidence=System.getProperty("linkagent.draft.renderEvidence");
+        if(evidence!=null)try {
+            var root=java.nio.file.Path.of(evidence);java.nio.file.Files.createDirectories(root);
+            JSON.writeValue(root.resolve("input.json").toFile(),new StoryboardCompiler(JSON).compile(board.storyboardId(),codec.read(brief.documentJson()),new Candidate(scenes),List.of(),"draft-evidence-run","draft-evidence-attempt"));
+        }catch(java.io.IOException error){throw new java.io.UncheckedIOException(error);}
+    }
+    @Test void draftTextWorkerProducesTheVersionOnceAndSettlesItsRealLedgerEntries() {
+        String task=draftTask();var first=draftService().start(task,"default","draft-worker",draftInput(task,null,""));
+        var row=session.getMapper(DraftMapper.class).find(task,"default",first.draftId()).orElseThrow();
+        var job=mapper.job(task,"default",row.preparationRunId()).orElseThrow();
+        var candidate=new Candidate(candidate(null,List.of("brief:user"),List.of()).scenes(),List.of("本版先采用三幕结构"),List.of("可以根据观看反馈调整节奏"));
+        String model=generator.modelName();
+        when(generator.generate(anyString(),anyString(),eq(4096))).thenReturn(new StoryboardTextGenerator.Raw(codec.write(candidate),100,100,model));
+        try(var worker=new StoryboardWorker(mapper,runtime,persistence,generator,codec,JSON)) {worker.process(job);worker.process(job);}
+        assertThat(runtime.getRun(task,"default",row.preparationRunId()).status()).isEqualTo("COMPLETED");
+        draftService().advance(task,"default",first.draftId());
+        assertThat(draftService().workspace(task,"default").versions().getFirst().status()).isEqualTo("EXECUTING");
+        assertThat(count("creator_creation_cost_entry",task)).isEqualTo(1);
+        verify(generator,times(1)).generate(anyString(),anyString(),eq(4096));
+    }
+    @Test void draftFeedbackKeepsPriorWorkAndRejectsStaleBaseOrParallelSubmissions() {
+        String task=draftTask();var first=preparedDraft(task,"base-draft");
+        jdbc.update("UPDATE creator_creation_execution SET status='COMPLETED' WHERE execution_id=?",first.execution().executionId());
+        draftService().advance(task,"default",first.draftId());
+        var next=draftInput(task,first.draftId(),"开头短一点，结尾保留");
+        var revised=draftService().start(task,"default","draft-feedback",next);
+        assertThat(revised.version()).isEqualTo(2);
+        var row=session.getMapper(DraftMapper.class).find(task,"default",revised.draftId()).orElseThrow();
+        var source=codec.read(mapper.brief(task,"default",row.briefId()).orElseThrow().sourceJson()).path("draft");
+        assertThat(source.path("feedbackHistory").get(0).asText()).isEqualTo("开头短一点，结尾保留");
+        assertThat(source.path("previousCandidate").path("scenes")).hasSize(1);
+        assertThat(draftService().workspace(task,"default").versions()).hasSize(2);
+        assertThatThrownBy(()->draftService().start(task,"default","parallel-feedback",draftInput(task,first.draftId(),"另一条"))).isInstanceOf(ResponseStatusException.class);
+        assertThat(count("creator_creation_draft",task)).isEqualTo(2);
+    }
+    @Test void draftBudgetFailureRollsBackBriefPreparationAndVersionRegistration() {
+        String task=draftTask();
+        var input=new DraftModels.Start(revision(task),null,"",cny("0.000001"),5000,List.of());
+        assertThatThrownBy(()->draftService().start(task,"default","insufficient",input)).isInstanceOf(ResponseStatusException.class);
+        assertThat(count("creator_creation_brief",task)).isZero();assertThat(count("creator_creation_draft",task)).isZero();
+        assertThat(count("creator_creation_run",task)).isZero();assertThat(runtime.snapshot(task,"default").initialized()).isFalse();
+    }
+    @Test void replacingADeletedVisualDoesNotPullItBackIntoTheNewDraft() {
+        String task=draftTask(),oldImage=asset(task,"default","old.png","a");
+        String imageMetadata="{\"normalized\":{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"png\",\"width\":640,\"height\":360}]}}";
+        jdbc.update("UPDATE creator_creation_asset SET metadata_json=? WHERE asset_id=?",imageMetadata,oldImage);
+        var first=draftService().start(task,"default","old-visual",new DraftModels.Start(revision(task),null,"",cny("20"),5000,List.of(oldImage)));
+        var row=session.getMapper(DraftMapper.class).find(task,"default",first.draftId()).orElseThrow();
+        var job=mapper.job(task,"default",row.preparationRunId()).orElseThrow();var lease=claim(job,"image-worker");
+        persistence.finish(job,lease,candidate(oldImage,List.of("brief:user"),List.of()),persistence.snapshotAssets(task,"default",List.of(oldImage)));
+        draftService().advance(task,"default",first.draftId());
+        var rendered=draftService().workspace(task,"default").versions().getFirst();
+        assertThat(rendered.status()).describedAs("实际阻塞原因：%s",rendered.message()).isEqualTo("EXECUTING");
+        jdbc.update("UPDATE creator_creation_execution SET status='COMPLETED' WHERE execution_id=?",rendered.execution().executionId());
+        draftService().advance(task,"default",first.draftId());
+        jdbc.update("UPDATE creator_creation_asset SET status='CANCELLED' WHERE asset_id=?",oldImage);
+        String replacement=asset(task,"default","new.png","b");
+        jdbc.update("UPDATE creator_creation_asset SET metadata_json=? WHERE asset_id=?",imageMetadata,replacement);
+        var second=draftService().start(task,"default","new-visual",new DraftModels.Start(revision(task),first.draftId(),"换成新图片",cny("20"),5000,List.of(replacement)));
+        var revised=session.getMapper(DraftMapper.class).find(task,"default",second.draftId()).orElseThrow();
+        var selected=codec.read(mapper.brief(task,"default",revised.briefId()).orElseThrow().documentJson()).path("assetIds");
+        assertThat(selected).hasSize(1);assertThat(selected.get(0).asText()).isEqualTo(replacement);
+    }
+    @Test void draftCreativeChoicesApplyMusicFictionAndDurationToANewBriefWithoutAnExtraConfirmation() {
+        String task=draftTask();String music=audioAsset(task,"MUSIC",5000,"b");
+        var input=new DraftModels.Start(revision(task),null,"不要配音，用我提供的音乐，短一点",cny("20"),5000,List.of(music));
+        var first=draftService().start(task,"default","draft-choices",input);
+        var row=session.getMapper(DraftMapper.class).find(task,"default",first.draftId()).orElseThrow();
+        var original=mapper.brief(task,"default",row.briefId()).orElseThrow();
+        var job=mapper.job(task,"default",row.preparationRunId()).orElseThrow();var lease=claim(job,"choice-worker");
+        var scene=new Scene("opening","TITLE_CARD","维修月亮",List.of("把裂缝缝成一颗星星"),"",4000,null,null,null,"CONTAIN","NO_DIALOGUE",null,List.of(),List.of());
+        var settings=new DraftSettings("NO_DIALOGUE","FICTION",4000,new BackgroundMusic(music,0,4000,new BigDecimal("-18"),0,0,true),null);
+        var board=persistence.finish(job,lease,new Candidate(List.of(scene),List.of("本版创作为虚构故事"),List.of("可继续调整节奏"),settings),persistence.snapshotAssets(task,"default",List.of(music)));
+        var chosen=mapper.brief(task,"default",board.briefId()).orElseThrow();
+        assertThat(chosen.briefId()).isNotEqualTo(original.briefId());
+        assertThat(codec.read(chosen.documentJson()).path("contentKind").asText()).isEqualTo("FICTION");
+        assertThat(codec.read(chosen.documentJson()).path("backgroundMusic").path("assetId").asText()).isEqualTo(music);
+        assertThat(codec.read(chosen.documentJson()).path("targetDurationMs").asLong()).isEqualTo(4000);
+        assertThat(codec.read(mapper.brief(task,"default",original.briefId()).orElseThrow().documentJson()).path("targetDurationMs").asLong()).isEqualTo(5000);
+        draftService().advance(task,"default",first.draftId());
+        assertThat(draftService().workspace(task,"default").versions().getFirst().status()).isEqualTo("EXECUTING");
+        assertThat(count("creator_workflow_session",task)).isZero();
+    }
+    @Test void draftChoicesCannotIntroduceMusicOutsideTheSelectedAssets() {
+        String task=draftTask();var first=draftService().start(task,"default","draft-foreign",draftInput(task,null,""));
+        String foreign=audioAsset(task("other"),"MUSIC",5000,"c");
+        var row=session.getMapper(DraftMapper.class).find(task,"default",first.draftId()).orElseThrow();
+        var job=mapper.job(task,"default",row.preparationRunId()).orElseThrow();var lease=claim(job,"foreign-worker");
+        var settings=new DraftSettings("NO_DIALOGUE","USER_PROVIDED",5000,new BackgroundMusic(foreign,0,5000,new BigDecimal("-18"),0,0,true),null);
+        assertThatThrownBy(()->persistence.finish(job,lease,new Candidate(candidate(null,List.of("brief:user"),List.of()).scenes(),List.of(),List.of(),settings),List.of())).isInstanceOf(ResponseStatusException.class);
+        assertThat(count("creator_creation_brief",task)).isEqualTo(1);assertThat(count("creator_creation_storyboard",task)).isZero();
+    }
+    @Test void manuallyChosenBriefCannotBeReplacedWithModelDraftSettings() {
+        String task=task("default");initialize(task);
+        var brief=persistence.saveBrief(task,"default","manual-brief",brief(revision(task),List.of()));
+        var job=persistence.generate(task,"default","manual-prepare",new Generate(revision(task),brief.briefId(),cny("2")));
+        var lease=claim(job,"manual-worker");
+        var settings=new DraftSettings("NO_DIALOGUE","FICTION",5000,null,null);
+        assertThatThrownBy(()->persistence.finish(job,lease,new Candidate(candidate(null,List.of("brief:user"),List.of()).scenes(),List.of(),List.of(),settings),List.of())).isInstanceOf(ResponseStatusException.class);
+        assertThat(count("creator_creation_brief",task)).isEqualTo(1);
+    }
+    @Test void unknownPreparationCostPausesDraftInsteadOfSendingMorePaidWork() {
+        String task=draftTask();var first=draftService().start(task,"default","unknown-cost",draftInput(task,null,""));
+        var row=session.getMapper(DraftMapper.class).find(task,"default",first.draftId()).orElseThrow();
+        var job=mapper.job(task,"default",row.preparationRunId()).orElseThrow();var lease=claim(job,"cost-worker");
+        runtime.reserve(task,"default",lease.runId(),"cost-worker",lease.leaseGeneration(),"uncertain-text","STORYBOARD_TEXT",cny("0.001"),"{\"basis\":\"ISOLATED_TEST\"}");
+        runtime.markSent(task,"default","uncertain-text","cost-worker",lease.leaseGeneration());runtime.markUnknown(task,"default","uncertain-text");
+        persistence.finish(job,lease,candidate(null,List.of("brief:user"),List.of()),List.of());
+        assertThatThrownBy(()->draftService().advance(task,"default",first.draftId())).isInstanceOf(ResponseStatusException.class);
+        assertThat(count("creator_creation_execution",task)).isZero();
+    }
+    @Test void cancelledDraftCannotBeRevivedByLatePreparationAndDeletionWaitsForIt() {
+        String task=draftTask();var first=draftService().start(task,"default","cancel-draft",draftInput(task,null,""));
+        assertThat(tasks.countDeletionBlockers(task,"default")).isGreaterThan(0);
+        var row=session.getMapper(DraftMapper.class).find(task,"default",first.draftId()).orElseThrow();
+        var job=mapper.job(task,"default",row.preparationRunId()).orElseThrow();var lease=claim(job,"late-worker");
+        assertThat(draftService().cancel(task,"default",first.draftId()).status()).isEqualTo("CANCEL_REQUESTED");
+        assertThatThrownBy(()->persistence.finish(job,lease,candidate(null,List.of("brief:user"),List.of()),List.of())).isInstanceOf(ResponseStatusException.class);
+        runtime.acknowledgeCancellation(task,"default",lease.runId(),"late-worker",lease.leaseGeneration());
+        draftService().advance(task,"default",first.draftId());
+        assertThat(draftService().workspace(task,"default").versions().getFirst().status()).isEqualTo("CANCELLED");
+        assertThat(tasks.countDeletionBlockers(task,"default")).isZero();
     }
     private ExecutionModels.Start executionInput(String task,Board board,String kind,BigDecimal limit){
         var quote=executions().estimate(task,"default",new ExecutionModels.EstimateInput(revision(task),board.storyboardId(),kind));

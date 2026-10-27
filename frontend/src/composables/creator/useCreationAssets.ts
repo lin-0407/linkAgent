@@ -43,7 +43,7 @@ export function useCreationAssets(taskId: Ref<string>) {
       }
       if (['COMPLETING','UPLOADED','PREPARING','READY'].includes(asset.status)) {
         progress.value = asset.status === 'READY' ? '相同素材已准备完成，可直接使用' : '上传已完成，正在检查和准备素材'
-        await refresh();return
+        await refresh();return asset.assetId
       }
       if (asset.status !== 'UPLOADING') throw new Error(asset.failureMessage || '上传会话不可继续，请在素材列表中查看状态或重试')
       if (['CREATED','UPLOADING'].includes(asset.status)) {
@@ -64,6 +64,7 @@ export function useCreationAssets(taskId: Ref<string>) {
       check()
       await api.completeAsset(task, asset.assetId)
       check();progress.value = '上传完成，正在检查和准备素材';await refresh()
+      return asset.assetId
     } catch (reason) {
       if (current(token, task)) error.value = reason instanceof DOMException && reason.name === 'AbortError' ? '上传已暂停。重新选择同一个文件可继续。' : errorText(reason, '素材上传失败，已保存完成的分片，可重新选择同一文件继续')
     } finally { if (current(token, task)) { busy.value = false;controller = null } }

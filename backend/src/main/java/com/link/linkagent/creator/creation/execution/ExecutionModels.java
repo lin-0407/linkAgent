@@ -15,11 +15,11 @@ public final class ExecutionModels {
             String idempotencyKey, String requestHash, String providerFingerprint, String errorCode, String objectsJson, LocalDateTime createTime) { }
     public record EstimateInput(@NotNull @Min(0) Long expectedWorkspaceRevision,
             @NotBlank @Pattern(regexp="[A-Za-z0-9_-]{1,64}") String storyboardId,
-            @NotBlank @Pattern(regexp="SAMPLE|FULL|REVISION") String kind) { }
+            @NotBlank @Pattern(regexp="SAMPLE|DRAFT|FULL|REVISION") String kind) { }
     public record Start(@NotNull @Min(0) Long expectedWorkspaceRevision,
             @NotBlank @Pattern(regexp="[A-Za-z0-9_-]{1,64}") String storyboardId,
             @NotBlank @Pattern(regexp="[a-f0-9]{64}") String storyboardHash,
-            @NotBlank @Pattern(regexp="SAMPLE|FULL|REVISION") String kind,
+            @NotBlank @Pattern(regexp="SAMPLE|DRAFT|FULL|REVISION") String kind,
             @NotBlank @Pattern(regexp="[a-f0-9]{64}") String providerFingerprint,
             @NotNull @DecimalMin("0") @Digits(integer=12,fraction=6) BigDecimal maxAdditionalCostCny) { }
     public record Estimate(String storyboardId, String storyboardHash, String renderContentHash, String kind, long workspaceRevision,

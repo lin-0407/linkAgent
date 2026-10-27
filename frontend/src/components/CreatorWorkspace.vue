@@ -88,7 +88,7 @@ type ContextTermOption = {
   polarity: CreatorContextPolarity
 }
 
-const AiCreationConsole = defineAsyncComponent(() => import('@/components/creator/AiCreationConsole.vue'))
+const VideoCreationChat = defineAsyncComponent(() => import('@/components/creator/VideoCreationChat.vue'))
 const CreatorContextLibraryModal = defineAsyncComponent(
   () => import('@/components/creator/CreatorContextLibraryModal.vue'),
 )
@@ -279,7 +279,7 @@ useAssistantBusinessRefresh(['tasks.', 'creative.', 'workflow.', 'blueprint.', '
 const { activeStep, restoredTaskId, activeInteractiveTaskId } = storeToRefs(creatorStore)
 // 恢复期间使用稳定骨架隔离旧任务控件，避免异步状态陆续返回时暴露错误步骤或危险操作。
 const isRestoringTask = ref(
-  !isLayoutPreviewMode && Boolean(creatorStore.selectedTaskId || routeQueryText(route.query.taskId)),
+  !isLayoutPreviewMode && Boolean(creatorStore.selectedTaskId || creatorStore.activeInteractiveTaskId || routeQueryText(route.query.taskId)),
 )
 let taskRestoreVersion = 0
 const isPreparingPrePublishAnalyze = ref(false)
@@ -736,6 +736,11 @@ async function refreshTasks() {
   // 编排：检查是否有待恢复的任务，自动选中
   const targetTask = resolveRefreshTargetTask()
   if (!targetTask) {
+    if (activeInteractiveTaskId.value && isRestoringTask.value) {
+      // 旧页面可能只缓存了互动任务标识，先读取最新任务，才能识别已经跳过策划的状态。
+      await selectTask(activeInteractiveTaskId.value, { reload: true })
+      return
+    }
     if (activeInteractiveTaskId.value) {
       taskRestoreVersion += 1
       isRestoringTask.value = false
@@ -1043,6 +1048,7 @@ async function confirmDeleteTask() {
     creatorStore.clearInteractiveTaskDraft(targetTaskId)
   }
   creatorStore.clearWorkflowMessageDraft(targetTaskId)
+  creatorStore.clearVideoCreationDraft(targetTaskId)
   // 编排：删除成功后补充 toast，并刷新一次主壳状态，确保选中任务和历史列表保持一致。
   successMessage.value = '任务已删除，列表会自动刷新。'
   await refreshTasks()
@@ -1086,7 +1092,7 @@ async function selectTask(taskId: string, options: TaskSelectionOptions = {}) {
     prePublishAnalyzeAttemptVersion += 1
     isPreparingPrePublishAnalyze.value = false
 
-    if (task.status === 'DRAFT') {
+    if (task.status === 'DRAFT' && !task.planningSkipped) {
       try {
         await getInteractiveTask(task.taskId)
         if (selectedTaskId.value !== task.taskId) return
@@ -1304,12 +1310,15 @@ async function handleSkipToPreflight(taskId: string) {
   successMessage.value = ''
   try {
     await skipCreatorTaskToPreflight(taskId)
-    creatorStore.setActiveInteractiveTaskId(null)
+    // 跳过策划会保留 DRAFT 状态，必须重新读取已更新的试映入口，不能命中同任务缓存。
+    await selectTask(taskId, { reload: true, requestedStep: 'preflight' })
+    if (
+      selectedTask.value?.taskId !== taskId ||
+      !selectedTask.value.planningSkipped ||
+      activeStep.value !== 'preflight'
+    ) return
     creatorStore.clearInteractiveTaskDraft(taskId)
     creatorStore.clearWorkflowMessageDraft(taskId)
-    await selectTask(taskId)
-    if (selectedTaskId.value !== taskId) return
-    activeStep.value = 'preflight'
     successMessage.value = '已跳过发布方案和制作蓝图，可以直接上传成片。'
   } catch (error) {
     showError(error)
@@ -2219,8 +2228,8 @@ provideCreatorWorkspace({
       :class="{ 'is-active-session': Boolean(activeInteractiveTaskId) }"
       aria-label="创作台入口"
     >
-      <AiCreationConsole
-        :key="`${activeInteractiveTaskId || 'new'}-${aiCreationInstance}`"
+      <VideoCreationChat
+        :key="aiCreationInstance"
         :resume-task-id="activeInteractiveTaskId || ''"
         :skipping-to-preflight="isSkippingToPreflight"
         @confirmed="handleCreativeOptionConfirmed"

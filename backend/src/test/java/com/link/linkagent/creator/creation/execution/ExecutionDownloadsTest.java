@@ -8,6 +8,8 @@ import com.link.linkagent.creator.media.storage.*;
 import com.link.linkagent.creator.media.upload.mapper.MediaUploadMapper;
 import com.link.linkagent.creator.media.upload.model.DraftVideoRecord;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.web.server.ResponseStatusException;
 import java.time.*;
 import java.util.*;
@@ -25,18 +27,18 @@ class ExecutionDownloadsTest {
     private final Execution execution=mock(Execution.class);
     private final ExecutionDownloads downloads=new ExecutionDownloads(service,executions,drafts,packages,media,storage,mock(StoryboardCodec.class));
     @BeforeEach void setup(){when(service.require("task","default","execution")).thenReturn(execution);}
-    @Test void repeatedSampleReadsRefreshTheSignatureWithoutStartingOrRegisteringAVersion(){
-        when(execution.kind()).thenReturn("SAMPLE");when(execution.status()).thenReturn("COMPLETED");
+    @ParameterizedTest @ValueSource(strings={"SAMPLE","DRAFT"}) void repeatedSampleReadsRefreshTheSignatureWithoutStartingOrRegisteringAVersion(String kind){
+        when(execution.kind()).thenReturn(kind);when(execution.status()).thenReturn("COMPLETED");
         when(executions.outputs("execution")).thenReturn(List.of(new Output("execution",1,"video.mp4","private-bucket","sample/video.mp4",100,"a".repeat(64),"video/mp4",true,false)));
         when(storage.headObject("private-bucket","sample/video.mp4")).thenReturn(new StoredObjectMetadata(100,"video/mp4","etag"));
         when(storage.presignBrowserGetObject("private-bucket","sample/video.mp4",Duration.ofMinutes(5)))
             .thenReturn(new PresignedObjectRead("https://private.example.invalid/first",Instant.now().plusSeconds(300)),new PresignedObjectRead("https://private.example.invalid/second",Instant.now().plusSeconds(300)));
         var first=downloads.download("task","default","execution","video.mp4");var second=downloads.download("task","default","execution","video.mp4");
-        assertThat(first.versionId()).isNull();assertThat(second.label()).isEqualTo("样片");assertThat(first.url()).isNotEqualTo(second.url());
+        assertThat(first.versionId()).isNull();assertThat(second.label()).isEqualTo("DRAFT".equals(kind)?"完整初稿":"样片");assertThat(first.url()).isNotEqualTo(second.url());
         verify(service,times(2)).require("task","default","execution");verifyNoMoreInteractions(service);verifyNoInteractions(drafts,packages,media);
     }
-    @Test void unfinishedSamplesFormalSamplePackagesAndUnknownFileNamesAreRejected(){
-        when(execution.kind()).thenReturn("SAMPLE");when(execution.status()).thenReturn("ACTIVE");
+    @ParameterizedTest @ValueSource(strings={"SAMPLE","DRAFT"}) void unfinishedSamplesFormalSamplePackagesAndUnknownFileNamesAreRejected(String kind){
+        when(execution.kind()).thenReturn(kind);when(execution.status()).thenReturn("ACTIVE");
         assertThatThrownBy(()->downloads.download("task","default","execution","video.mp4")).isInstanceOf(ResponseStatusException.class);
         when(execution.status()).thenReturn("COMPLETED");
         assertThatThrownBy(()->downloads.download("task","default","execution","publish-package.zip")).isInstanceOf(ResponseStatusException.class);

@@ -2,7 +2,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { errorText } from '@/utils/error'
-import { ArrowDown, ArrowRight, FileText, MonitorPlay, Send, Sparkles } from '@lucide/vue'
+import {
+  ArrowDown,
+  ArrowRight,
+  FileText,
+  MonitorPlay,
+  PanelRightClose,
+  PanelRightOpen,
+  Send,
+  Sparkles,
+} from '@lucide/vue'
 import { createInteractiveTask, getInteractiveTask, uploadContextDocuments } from '@/api/creator'
 import { getRecordText, parseJsonArray } from '@/composables/creator/creatorWorkspaceUtils'
 import { useCreatorWorkflow } from '@/composables/creator/useCreatorWorkflow'
@@ -55,6 +64,7 @@ const isRestoring = ref(false)
 const generationRequestLocked = ref(false)
 const activePanel = ref<InteractiveCreationPanel>('idea')
 const alignmentView = ref<'conversation' | 'plan'>('conversation')
+const isPlanCollapsed = ref(false)
 const conversationElement = ref<HTMLElement | null>(null)
 const feedbackElement = ref<HTMLTextAreaElement | null>(null)
 const isFollowingConversation = ref(true)
@@ -838,7 +848,22 @@ function extractReferenceHtmlText(content: string) {
         <h2><Sparkles :size="17" :stroke-width="1.6" aria-hidden="true" />{{ sessionHeading }}</h2>
         <p :title="form.idea">{{ form.idea || '正在恢复创作任务…' }}</p>
       </div>
-      <span class="studio-intent-status" role="status">{{ statusText }}</span>
+      <div class="studio-intent-header-actions">
+        <span class="studio-intent-status" role="status">{{ statusText }}</span>
+        <button
+          v-if="activePanel === 'alignment' && hasSecondarySurface"
+          type="button"
+          class="studio-icon-button studio-intent-panel-toggle"
+          :title="isPlanCollapsed ? '展开右侧面板' : '收起右侧面板'"
+          :aria-label="isPlanCollapsed ? '展开右侧面板' : '收起右侧面板'"
+          :aria-expanded="!isPlanCollapsed"
+          aria-controls="creation-reference-panel"
+          @click="isPlanCollapsed = !isPlanCollapsed"
+        >
+          <PanelRightOpen v-if="isPlanCollapsed" :size="18" aria-hidden="true" />
+          <PanelRightClose v-else :size="18" aria-hidden="true" />
+        </button>
+      </div>
     </header>
 
     <nav
@@ -1047,7 +1072,10 @@ function extractReferenceHtmlText(content: string) {
       <div
         v-else
         class="studio-intent-workspace"
-        :class="{ 'is-discussion-only': !hasSecondarySurface }"
+        :class="{
+          'is-discussion-only': !hasSecondarySurface,
+          'is-plan-collapsed': isPlanCollapsed && hasSecondarySurface,
+        }"
         :data-view="alignmentView"
       >
         <section class="studio-intent-conversation" aria-label="创作对话">
@@ -1151,7 +1179,11 @@ function extractReferenceHtmlText(content: string) {
           </form>
         </section>
 
-        <aside class="studio-intent-plan" aria-label="参考资料与发布方案">
+        <aside
+          id="creation-reference-panel"
+          class="studio-intent-plan"
+          aria-label="参考资料与发布方案"
+        >
           <header class="studio-intent-plan-header">
             <FileText :size="16" :stroke-width="1.6" aria-hidden="true" />
             <h3>{{ suggestion || isPlanProgressVisible ? '发布方案' : '创作参考' }}</h3>

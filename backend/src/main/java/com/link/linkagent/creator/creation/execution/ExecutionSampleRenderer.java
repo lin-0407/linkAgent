@@ -17,7 +17,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
-/** 样片使用独立对象和 PREPARE 租约，绝不登记完整成片或推进发布门禁。 */
+/** 样片和完整初稿使用独立对象；只有实际核验的产物能播放，不提前推进发布门禁。 */
 @Service
 @ConditionalOnProperty(name={"creator.media.enabled","creator.creation.renderer.enabled","creator.creation.worker.enabled"},havingValue="true")
 public class ExecutionSampleRenderer implements AutoCloseable {
@@ -66,7 +66,8 @@ public class ExecutionSampleRenderer implements AutoCloseable {
             var planned=new ArrayList<Output>();
             for(var entry:output.files().entrySet()) {
                 var artifact=entry.getValue();
-                String key="users/"+run.ownerId()+"/tasks/"+run.taskId()+"/samples/"+execution.executionId()+"/"+run.leaseGeneration()+"/"+entry.getKey();
+                String family="DRAFT".equals(execution.kind())?"drafts":"samples";
+                String key="users/"+run.ownerId()+"/tasks/"+run.taskId()+"/"+family+"/"+execution.executionId()+"/"+run.leaseGeneration()+"/"+entry.getKey();
                 var object=new Output(execution.executionId(),run.leaseGeneration(),entry.getKey(),properties.getBucket(),key,
                         artifact.bytes(),artifact.sha256(),artifact.contentType(),false,false);
                 executions.plan(object);planned.add(object);

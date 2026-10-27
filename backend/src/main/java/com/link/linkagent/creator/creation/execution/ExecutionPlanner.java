@@ -62,7 +62,7 @@ public class ExecutionPlanner {
         prices.getVideoUsdUpperBound()+"\n"+prices.getTextScreeningUsdUpperBound()+"\n"+prices.getSegmentReviewUsdUpperBound()+"\n"+
         prices.getTextInputUsdPerMillionTokens()+"\n"+prices.getTextOutputUsdPerMillionTokens());}
     public Estimate estimate(String task,String owner,String boardId,String kind) {
-        if (!Set.of("SAMPLE","FULL","REVISION").contains(kind)) throw conflict("制作范围只能是样片、整片或修改版");
+        if (!Set.of("SAMPLE","DRAFT","FULL","REVISION").contains(kind)) throw conflict("制作范围只能是样片、完整初稿、整片或修改版");
         var snapshot=runtime.snapshot(task,owner);
         var board=boards.board(task,owner,boardId).orElseThrow(()->conflict("故事板不存在"));
         var brief=persistence.brief(task,owner,board.briefId());
@@ -90,7 +90,8 @@ public class ExecutionPlanner {
             var estimate=video.estimate(task,owner,boardId,"SELECTED",false,videoIds);
             preparation=preparation.add(estimate.estimatedMaxCostCny());blocked.addAll(estimate.blockers());
         }
-        if(!"SAMPLE".equals(kind)) {
+        // 初稿覆盖全部镜头，先交付作品；发布方向和完整试映只约束正式成片。
+        if(!Set.of("SAMPLE","DRAFT").contains(kind)) {
             var preflight=media.getPreflight();
             if(preflight.getDashScopeApiKey()==null || preflight.getDashScopeApiKey().isBlank()
                     || preflight.getVideoModel()==null || preflight.getVideoModel().isBlank()

@@ -32,10 +32,10 @@ public class ExecutionDownloads {
         var e=service.require(task,owner,id);
         String bucket,key,version=null,label;
         long bytes;
-        if("SAMPLE".equals(e.kind())) {
+        if(Set.of("SAMPLE","DRAFT").contains(e.kind())) {
             if(!"COMPLETED".equals(e.status()) || "publish-package.zip".equals(fileName))throw conflict("样片尚未完成，或请求了不属于样片的正式包");
             var object=executions.outputs(id).stream().filter(o->fileName.equals(o.fileName())).findFirst().orElseThrow(()->conflict("样片没有该产物"));
-            bucket=object.bucketName();key=object.objectKey();bytes=object.bytes();label="样片";
+            bucket=object.bucketName();key=object.objectKey();bytes=object.bytes();label="DRAFT".equals(e.kind())?"完整初稿":"样片";
         } else {
             if(e.currentRunId()==null)throw conflict("整片尚未开始渲染");
             var attempt=drafts.registered(task,owner,e.currentRunId()).orElseThrow(()->conflict("本次整片尚无可导出的媒体"));

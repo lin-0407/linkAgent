@@ -32,12 +32,12 @@ export type CreationAsset = {
   metadata: Record<string, unknown>; partSize: number; totalParts: number; parts: { partNumber: number; etag: string; partSize: number }[]
 }
 export type ExecutionEstimate = {
-  storyboardId: string; storyboardHash: string; providerFingerprint: string; kind: 'SAMPLE' | 'FULL' | 'REVISION'; workspaceRevision: number
+  storyboardId: string; storyboardHash: string; providerFingerprint: string; kind: 'SAMPLE' | 'DRAFT' | 'FULL' | 'REVISION'; workspaceRevision: number
   sceneIds: string[]; durationMs: number; voiceSceneIds: string[]; videoSceneIds: string[]
   preparationEstimateCny: Money; reviewEstimateCny: Money; estimatedMaxAdditionalCostCny: Money; blockers: string[]
 }
 export type Execution = {
-  executionId: string; kind: 'SAMPLE' | 'FULL' | 'REVISION'; status: string; stage: string; storyboardId: string; sceneIds: string[]
+  executionId: string; kind: 'SAMPLE' | 'DRAFT' | 'FULL' | 'REVISION'; status: string; stage: string; storyboardId: string; sceneIds: string[]
   maxAdditionalCostCny: Money; costs: { knownCny: Money; reservedCny: Money; unknownCny: Money; overrunCount: number }
   run: CreationRun | null; versionId: string | null; previewAvailable: boolean; packageAvailable: boolean
   errorCode: string | null; message: string | null; createTime: string
@@ -49,4 +49,16 @@ export type RevisionProposal = {
   differences: { sceneId: string | null; field: string; before: unknown; after: unknown }[]
   plan: { voiceSceneIds: string[]; videoSceneIds: string[]; reusedAssetIds: string[]; rebuildTimeline: boolean; estimatedPreparationCny: number | null; notes: string[] } | null
   clarifications: string[]; appliedStoryboardId: string | null
+}
+
+export type VideoDraft = {
+  draftId: string; version: number; baseDraftId: string | null; requestKey: string; instruction: string; status: string
+  targetDurationMs: number
+  message: string | null; storyboardId: string | null; creativeChoices: string[]; reviewNotes: string[]
+  execution: Execution | null; createTime: string
+}
+export type VideoDraftWorkspace = { versions: VideoDraft[]; runtime: Runtime }
+export type VideoDraftRequest = {
+  expectedWorkspaceRevision: number; baseDraftId: string | null; instruction: string
+  budgetLimitCny: number; targetDurationMs: number; assetIds: string[]
 }

@@ -3237,3 +3237,33 @@ CREATE TABLE IF NOT EXISTS creator_creation_manual_review
     UNIQUE KEY uk_manual_review_run (run_id),
     UNIQUE KEY uk_manual_review_active (review_id,active_slot)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='独立试映接入同任务制作预算';
+
+-- 初稿制作独立于发布确认，真实成片与改进说明先交付，后台检查点支持刷新和重启恢复。
+CREATE TABLE IF NOT EXISTS creator_creation_draft
+(
+    draft_id VARCHAR(64) NOT NULL COMMENT '本次完整视频初稿身份',
+    task_id VARCHAR(64) NOT NULL COMMENT '归属创作任务',
+    owner_id VARCHAR(64) NOT NULL COMMENT '可信媒体归属',
+    version INT NOT NULL COMMENT '同任务初稿版本序号',
+    base_draft_id VARCHAR(64) DEFAULT NULL COMMENT '用户本次观看和反馈的基准版本',
+    request_json MEDIUMTEXT NOT NULL COMMENT '用户原始反馈、所选素材和费用上限',
+    request_hash CHAR(64) NOT NULL COMMENT '原始请求摘要，用于拒绝同键改内容',
+    idempotency_key VARCHAR(128) NOT NULL COMMENT '用户本次明确制作动作的幂等键',
+    status VARCHAR(24) NOT NULL COMMENT '准备、执行、完成、等待处理或取消状态',
+    brief_id VARCHAR(64) NOT NULL COMMENT '本次自动整理的制作简报',
+    preparation_run_id VARCHAR(64) NOT NULL COMMENT '已授权的文本准备运行',
+    storyboard_id VARCHAR(64) DEFAULT NULL COMMENT '本次当前实际制作工程',
+    execution_id VARCHAR(64) DEFAULT NULL COMMENT '完整初稿媒体执行记录',
+    expected_workspace_revision BIGINT NOT NULL COMMENT '准备受理后冻结的工作区版本',
+    authorization_limit_cny DECIMAL(18,6) NOT NULL COMMENT '本版累计新增费用授权，覆盖准备与制作',
+    error_message VARCHAR(500) DEFAULT NULL COMMENT '实际阻塞原因，不保存内容建议',
+    dispatch_failures INT NOT NULL DEFAULT 0 COMMENT '本地连续恢复失败次数',
+    active_slot TINYINT GENERATED ALWAYS AS (CASE WHEN status IN ('PREPARING','EXECUTING','CANCEL_REQUESTED') THEN 1 ELSE NULL END) STORED COMMENT '每任务仅一个活动初稿',
+    create_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '制作受理时间',
+    update_time DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '最近检查点时间',
+    PRIMARY KEY (draft_id),
+    UNIQUE KEY uk_creation_draft_version (task_id,owner_id,version),
+    UNIQUE KEY uk_creation_draft_request (task_id,owner_id,idempotency_key),
+    UNIQUE KEY uk_creation_draft_active (task_id,owner_id,active_slot),
+    KEY idx_creation_draft_scan (status,update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='先制作后修改的完整视频初稿与反馈历史';

@@ -654,7 +654,8 @@ body .workbench-content .creator-workbench-shell .studio-creation-console {
   box-shadow: none;
 }
 body .workbench-content .creator-workbench-shell .studio-start-screen.is-active-session {
-  display: block;
+  /* 保留高度约束，让聊天历史在内部滚动，避免把输入区挤出工作台。 */
+  display: flex;
   padding: 0;
   overflow: hidden;
 }
@@ -832,6 +833,12 @@ body .workbench-content .creator-workbench-shell .studio-start-actions {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.6;
+}
+.studio-intent-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
 }
 .studio-intent-tabs {
   display: flex;
@@ -1479,7 +1486,19 @@ body .workbench-content .creator-workbench-shell .studio-intent-plan-actions > b
   border-radius: 50%;
   background: var(--accent);
 }
+/* 只在双栏布局中收起，保留面板节点及阅读位置；窄屏仍用原有工作面切换。 */
+@container workspace (width > 1050px) {
+  .studio-intent-workspace.is-plan-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .studio-intent-workspace.is-plan-collapsed .studio-intent-plan {
+    display: none;
+  }
+}
 @container workspace (max-width: 1050px) {
+  .studio-intent-panel-toggle {
+    display: none;
+  }
   .studio-intent-workspace {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);

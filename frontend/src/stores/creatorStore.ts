@@ -8,6 +8,11 @@ type InteractiveCreationDraft = {
   feedbackDraft: string
 }
 
+type VideoCreationDraft = {
+  budgetLimitCny: number | null
+  targetDurationMs: number | null
+}
+
 /**
  * 创作台核心状态：跨组件被选中的任务 ID、当前导航步骤、恢复标记。
  * 替代原来的 ProjectListWorkspace → localStorage → CreatorWorkspace 间接通道。
@@ -28,6 +33,10 @@ export const useCreatorStore = defineStore(
     })
     /** 已创建任务的子页和未发送补充按 taskId 隔离，切换任务时互不覆盖。 */
     const interactiveTaskDrafts = ref<Record<string, InteractiveCreationDraft>>({})
+    /** 费用与时长只是待提交输入，保存在本机不代表已经授权制作。 */
+    const newVideoCreationDraft = ref<VideoCreationDraft | null>(null)
+    const videoCreationDrafts = ref<Record<string, VideoCreationDraft>>({})
+    const videoCreationAssetSelections = ref<Record<string, string[]>>({})
     /** 发布前协作输入按 taskId 保存，刷新后仍可继续编辑而不会自动发送。 */
     const workflowMessageDrafts = ref<Record<string, string>>({})
 
@@ -55,6 +64,25 @@ export const useCreatorStore = defineStore(
 
     function clearNewInteractiveTaskDraft() {
       newInteractiveTaskDraft.value = { idea: '', videoType: '未分类' }
+      newVideoCreationDraft.value = null
+    }
+
+    function setVideoCreationDraft(taskId: string | null, draft: VideoCreationDraft) {
+      if (taskId) videoCreationDrafts.value = { ...videoCreationDrafts.value, [taskId]: { ...draft } }
+      else newVideoCreationDraft.value = { ...draft }
+    }
+
+    function clearVideoCreationDraft(taskId: string) {
+      const next = { ...videoCreationDrafts.value }
+      delete next[taskId]
+      videoCreationDrafts.value = next
+      const selections = { ...videoCreationAssetSelections.value }
+      delete selections[taskId]
+      videoCreationAssetSelections.value = selections
+    }
+
+    function setVideoCreationAssets(taskId: string, assetIds: string[]) {
+      videoCreationAssetSelections.value = { ...videoCreationAssetSelections.value, [taskId]: [...assetIds] }
     }
 
     function setInteractiveTaskDraft(
@@ -101,6 +129,9 @@ export const useCreatorStore = defineStore(
       activeInteractiveTaskId,
       newInteractiveTaskDraft,
       interactiveTaskDrafts,
+      newVideoCreationDraft,
+      videoCreationDrafts,
+      videoCreationAssetSelections,
       workflowMessageDrafts,
       hasSelectedTask,
       setSelectedTaskId,
@@ -111,6 +142,9 @@ export const useCreatorStore = defineStore(
       clearNewInteractiveTaskDraft,
       setInteractiveTaskDraft,
       clearInteractiveTaskDraft,
+      setVideoCreationDraft,
+      clearVideoCreationDraft,
+      setVideoCreationAssets,
       setWorkflowMessageDraft,
       clearWorkflowMessageDraft,
     }
@@ -125,6 +159,9 @@ export const useCreatorStore = defineStore(
         'activeInteractiveTaskId',
         'newInteractiveTaskDraft',
         'interactiveTaskDrafts',
+        'newVideoCreationDraft',
+        'videoCreationDrafts',
+        'videoCreationAssetSelections',
         'workflowMessageDrafts',
       ],
     },

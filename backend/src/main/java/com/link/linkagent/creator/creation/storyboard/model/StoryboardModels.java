@@ -80,7 +80,26 @@ public final class StoryboardModels {
             return text.toString();
         }
     }
-    public record Candidate(@NotNull @Size(min=1,max=48) List<@NotNull @Valid Scene> scenes) { }
+    public record Candidate(@NotNull @Size(min=1,max=48) List<@NotNull @Valid Scene> scenes,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
+            @Size(max=8) List<@NotBlank @Size(max=240) String> creativeChoices,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
+            @Size(max=8) List<@NotBlank @Size(max=240) String> reviewNotes,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            @Valid DraftSettings draftSettings) {
+        public Candidate(List<Scene> scenes) { this(scenes,List.of(),List.of(),null); }
+        public Candidate(List<Scene> scenes,List<String> creativeChoices,List<String> reviewNotes) { this(scenes,creativeChoices,reviewNotes,null); }
+        public Candidate {
+            creativeChoices=creativeChoices==null?List.of():List.copyOf(creativeChoices);
+            reviewNotes=reviewNotes==null?List.of():List.copyOf(reviewNotes);
+        }
+    }
+    /** 初稿的声音、配乐和时长由本轮创作选择确定，用户不必先填写简报。 */
+    public record DraftSettings(
+            @NotBlank @Pattern(regexp="TTS|USER_NARRATION|SOURCE|NO_DIALOGUE|MIXED") String dialogueMode,
+            @NotBlank @Pattern(regexp="USER_PROVIDED|FICTION") String contentKind,
+            @Min(1000) @Max(180000) long targetDurationMs,
+            @Valid BackgroundMusic backgroundMusic,@Valid Ambience ambience) { }
     public record Save(@NotNull @Min(0) Long expectedWorkspaceRevision,
             @NotBlank @Pattern(regexp="[A-Za-z0-9_-]{1,64}") String briefId,
             @Pattern(regexp="[A-Za-z0-9_-]{1,64}") String parentStoryboardId,

@@ -47,7 +47,14 @@ public class StoryboardPersistence {
         this.assets=assets;this.codec=codec;this.json=json;this.prices=prices;this.generator=generator;this.rates=rates;
     }
     public Brief saveBrief(String task,String owner,String key,BriefInput input) {
-        codec.valid(input);lock(task,owner);String hash=codec.hash(input);var old=mapper.briefByKey(task,owner,key);
+        return saveBriefWithContext(task,owner,key,input,null);
+    }
+    /** 初稿保留用户原话、历史反馈与上一版工程，创作选择不冒充用户已经确认的要求。 */
+    public Brief saveDraftBrief(String task,String owner,String key,BriefInput input,ObjectNode draftContext) {
+        return saveBriefWithContext(task,owner,key,input,draftContext);
+    }
+    private Brief saveBriefWithContext(String task,String owner,String key,BriefInput input,ObjectNode draftContext) {
+        codec.valid(input);lock(task,owner);String hash=draftContext==null?codec.hash(input):codec.hash(Map.of("input",input,"draft",draftContext));var old=mapper.briefByKey(task,owner,key);
         if(old.isPresent()){same(hash,old.get().requestHash());return old.get();}
         idle(task,owner,input.expectedWorkspaceRevision());var selected=snapshotAssets(task,owner,input.assetIds());
         if(input.backgroundMusic()!=null){
@@ -72,6 +79,7 @@ public class StoryboardPersistence {
         for(var m:tasks.listMaterialsByTaskId(task)) if(m.getContent()!=null && !m.getContent().isBlank())
             materials.addObject().put("sourceId","material:"+m.getId()).put("kind",m.getMaterialType()).put("content",m.getContent()).put("sha256",StoryboardCodec.digest(m.getContent()));
         source.set("publishing",mapper.publishing(task,owner).map(codec::read).orElse(json.nullNode()));
+        if(draftContext!=null)source.set("draft",draftContext);
         if(codec.write(source).getBytes(StandardCharsets.UTF_8).length>48*1024)throw conflict("输入材料过长，请先整理本条视频要使用的文稿");
         var brief=new Brief(id(),task,owner,next(mapper.briefRevision(task,owner)),key,hash,codec.write(document),codec.write(source),null);
         mapper.insertBrief(brief);bump(task,owner,input.expectedWorkspaceRevision());return mapper.brief(task,owner,brief.briefId()).orElseThrow();
@@ -146,10 +154,38 @@ public class StoryboardPersistence {
                 || !job.runId().equals(runs.workspace(job.taskId(),job.ownerId()).orElseThrow().activeRunId()))throw conflict("准备运行已取消或执行权失效");
         var brief=brief(job.taskId(),job.ownerId(),job.briefId());
         if(brief.revision()!=mapper.briefRevision(job.taskId(),job.ownerId()))throw conflict("准备依据已变化");
+        brief=applyDraftSettings(job,brief,candidate,frozen);
         var board=saveBoard(brief,candidate,frozen,"run-"+job.runId(),job.requestHash(),null,job.runId(),true);
         if(mapper.result(job.runId(),board.storyboardId())!=1)throw conflict("本运行已保存其他结果");
         runtime.complete(job.taskId(),job.ownerId(),job.runId(),lease.leaseOwner(),lease.leaseGeneration(),codec.write(Map.of("storyboardId",board.storyboardId(),"documentHash",board.documentHash())));
         return board;
+    }
+    private Brief applyDraftSettings(Job job,Brief brief,Candidate candidate,List<Asset> frozen) {
+        var settings=candidate.draftSettings();
+        if(settings==null)return brief;
+        codec.valid(candidate);
+        var source=codec.read(brief.sourceJson()).path("draft");
+        if(!source.isObject())throw conflict("已手动确认的简报不能由模型重新选择制作方式");
+        if(Set.of("TTS","MIXED").contains(settings.dialogueMode())
+                && candidate.scenes().stream().anyMatch(s->"TTS".equals(s.audioMode())) && !source.path("voiceAvailable").asBoolean())
+            throw conflict("本次初稿没有可用的配音能力，请使用已有声音或无配音方案");
+        for(Object bed:List.of(settings.backgroundMusic()==null?"":settings.backgroundMusic(),settings.ambience()==null?"":settings.ambience())) {
+            String assetId=bed instanceof BackgroundMusic music?music.assetId():bed instanceof Ambience ambience?ambience.assetId():null;
+            if(assetId!=null && frozen.stream().noneMatch(a->assetId.equals(a.assetId()) && "MUSIC".equals(a.kind())))
+                throw conflict("本版配乐只能使用用户已提供且准备完成的音频");
+        }
+        if(settings.backgroundMusic()!=null && settings.ambience()!=null && settings.backgroundMusic().assetId().equals(settings.ambience().assetId()))
+            throw conflict("同一音频不能同时作为配乐和环境声");
+        var document=(ObjectNode)codec.read(brief.documentJson());
+        document.put("dialogueMode",settings.dialogueMode()).put("contentKind",settings.contentKind()).put("targetDurationMs",settings.targetDurationMs());
+        document.set("backgroundMusic",json.valueToTree(settings.backgroundMusic()));document.set("ambience",json.valueToTree(settings.ambience()));
+        var validation=document.deepCopy();validation.put("expectedWorkspaceRevision",0);
+        codec.valid(codec.decode(validation,BriefInput.class));
+        // 原始简报和用户原话保留；模型选择只形成新的版本，不能就地改写用户输入。
+        if(codec.hash(codec.read(brief.documentJson())).equals(codec.hash(document)))return brief;
+        var revised=new Brief(id(),brief.taskId(),brief.ownerId(),next(mapper.briefRevision(brief.taskId(),brief.ownerId())),
+                "draft-choice-"+job.runId(),codec.hash(settings),codec.write(document),brief.sourceJson(),null);
+        mapper.insertBrief(revised);return revised;
     }
     /**
      * 配音运行保存字幕对齐后的新版本：只接受本运行实际生成的配音素材，失败时不覆盖父版本。

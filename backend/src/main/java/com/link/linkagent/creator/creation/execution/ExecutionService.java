@@ -161,7 +161,7 @@ public class ExecutionService {
         } else if(!estimate.videoSceneIds().isEmpty()) {
             stage="VIDEO";run=video.generate(task,owner,key+"-video",e.storyboardId(),
                     new VideoModels.Generate(snapshot.workspaceRevision(),remaining,"SELECTED",false,estimate.videoSceneIds())).runId();
-        } else if(!"SAMPLE".equals(e.kind())) {
+        } else if(!Set.of("SAMPLE","DRAFT").contains(e.kind())) {
             stage="FULL";
             run=automatic.start(task,owner,key+"-full",snapshot.workspaceRevision(),
                     new AutomaticProductionRequest(e.publishingSessionId(),e.publishingResultId(),e.baseVersionId(),
@@ -169,7 +169,7 @@ public class ExecutionService {
         } else {
             stage="SAMPLE";
             var request=codec.read("{}").deepCopy();
-            ((com.fasterxml.jackson.databind.node.ObjectNode)request).put("purpose","SAMPLE").put("executionId",id).put("storyboardId",e.storyboardId());
+            ((com.fasterxml.jackson.databind.node.ObjectNode)request).put("purpose",e.kind()).put("executionId",id).put("storyboardId",e.storyboardId());
             run=runtime.startPreparation(task,owner,"PREPARE",key+"-sample",snapshot.workspaceRevision(),codec.write(request),remaining).runId();
         }
         executions.link(id,run,stage);
@@ -198,7 +198,7 @@ public class ExecutionService {
         var names=executions.generationOutputs(id,lease.leaseGeneration()).stream().map(Output::fileName).collect(java.util.stream.Collectors.toSet());
         if(!names.equals(Set.of("video.mp4","subtitles.srt","cover.png","frame-start.png","frame-middle.png","frame-end.png","render.log","manifest.json")))
             throw conflict("样片缺少本次尝试的完整产物清单，不能标为完成");
-        runtime.complete(task,owner,lease.runId(),worker,lease.leaseGeneration(),codec.write(Map.of("executionId",id,"sample",true,"published",false)));
+        runtime.complete(task,owner,lease.runId(),worker,lease.leaseGeneration(),codec.write(Map.of("executionId",id,"sample","SAMPLE".equals(e.kind()),"draft","DRAFT".equals(e.kind()),"published",false)));
         executions.adopt(id,lease.leaseGeneration());
         update(e,"COMPLETED","COMPLETED",e.storyboardId(),lease.runId(),runtime.snapshot(task,owner).workspaceRevision(),null);
     }
@@ -206,10 +206,10 @@ public class ExecutionService {
     public List<String> sceneIds(Execution e) {var ids=new ArrayList<String>();codec.read(e.sceneIdsJson()).forEach(n->ids.add(n.asText()));return List.copyOf(ids);}
     private boolean cancelledSample(Execution e) {
         if("SAMPLE".equals(e.stage()))return true;
-        if(!"SAMPLE".equals(e.kind()) || !"CANCEL_REQUESTED".equals(e.stage()))return false;
+        if(!Set.of("SAMPLE","DRAFT").contains(e.kind()) || !"CANCEL_REQUESTED".equals(e.stage()))return false;
         // 旧记录可能已丢失阶段；只按冻结的样片用途补收尾，不能把配音或视频准备误当样片。
         return runs.run(e.taskId(),e.ownerId(),e.currentRunId())
-                .map(run->"SAMPLE".equals(codec.read(run.requestJson()).path("purpose").asText())).orElse(false);
+                .map(run->e.kind().equals(codec.read(run.requestJson()).path("purpose").asText())).orElse(false);
     }
     private void waitForUser(Execution e,String code) {update(e,"WAITING_USER",e.stage(),e.storyboardId(),e.currentRunId(),e.expectedWorkspaceRevision(),code);}
     private void update(Execution e,String status,String stage,String board,String run,long revision,String error) {
@@ -219,7 +219,7 @@ public class ExecutionService {
         var run=e.currentRunId()==null?null:runtime.getRun(e.taskId(),e.ownerId(),e.currentRunId());
         var link=e.currentRunId()==null?null:links.find(e.currentRunId()).orElse(null);
         var pkg=e.currentRunId()==null?null:packages.find(e.currentRunId()).orElse(null);
-        boolean preview="SAMPLE".equals(e.kind())?!executions.outputs(e.executionId()).isEmpty():link!=null;
+        boolean preview=Set.of("SAMPLE","DRAFT").contains(e.kind())?!executions.outputs(e.executionId()).isEmpty():link!=null;
         return new View(e.executionId(),e.kind(),e.status(),e.stage(),e.storyboardId(),sceneIds(e),e.maxAdditionalCostCny(),
                 executions.costs(e.executionId()),run,link==null?null:link.versionId(),preview,
                 pkg!=null && "READY".equals(pkg.status()) && link!=null && link.versionId().equals(pkg.versionId()),e.errorCode(),

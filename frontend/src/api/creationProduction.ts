@@ -1,5 +1,6 @@
 import { get, post, patch, del } from './http'
 import type { Runtime, Brief, BriefDocument, Storyboard, Scene, CreationAsset, Preparation, ExecutionEstimate, Execution, SignedRead, Timing, RevisionProposal } from '@/types/creationProduction'
+import type { VideoDraft, VideoDraftWorkspace, VideoDraftRequest } from '@/types/creationProduction'
 
 const root = (task: string) => `/creator/tasks/${encodeURIComponent(task)}/creation`
 const assets = (task: string) => `/creator/tasks/${encodeURIComponent(task)}/assets`
@@ -39,3 +40,6 @@ export const applyTiming = (task: string, board: string, expectedWorkspaceRevisi
 export const importSubtitles = (task: string, board: string, expectedWorkspaceRevision: number, sceneId: string, srt: string, key: string) => post<Storyboard>(`${root(task)}/storyboards/${id(board)}/subtitles:import`, { expectedWorkspaceRevision, sceneId, srt }, options(key))
 export const proposeRevision = (task: string, expectedWorkspaceRevision: number, storyboardId: string, instruction: string, key: string) => post<RevisionProposal>(`${root(task)}/revisions:propose`, { expectedWorkspaceRevision, storyboardId, instruction }, options(key))
 export const applyRevision = (task: string, proposal: RevisionProposal) => post<Storyboard>(`${root(task)}/revisions/${id(proposal.proposalId!)}:apply`, { expectedWorkspaceRevision: proposal.workspaceRevision })
+export const readVideoDrafts = (task: string) => get<VideoDraftWorkspace>(`${root(task)}/drafts`)
+export const startVideoDraft = (task: string, input: VideoDraftRequest, key: string) => post<VideoDraft>(`${root(task)}/drafts`, input, options(key))
+export const cancelVideoDraft = (task: string, draft: string) => post<VideoDraft>(`${root(task)}/drafts/${id(draft)}:cancel`)
