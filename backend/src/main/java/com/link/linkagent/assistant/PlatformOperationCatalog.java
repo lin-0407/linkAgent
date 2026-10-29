@@ -232,7 +232,7 @@ public class PlatformOperationCatalog {
             case "tasks.deleteTask" -> "按原业务规则删除指定任务，请先核对任务名称和已有结果";
             case "maintenance.purge" -> "按指定范围清理案例和相关索引，请核对清理条件";
             case "collection.start" -> "启动后台采集，访问B站公开数据并保存案例；可在后续操作中停止";
-            case "models.saveConfig" -> "修改后续模型调用配置；密钥仅通过专用输入框提交，按原配置服务加密保存";
+            case "models.saveConfig" -> "仅保存配置，不自动切换当前文本模型；在设置页显式选择后生效，Embedding继续使用部署配置；密钥仅通过专用输入框提交并加密保存";
             case "tasks.updateTask" -> "只修改列出的字段，未提供的稿件保留；显式空值会清除对应字段。材料变化会使旧发布方案需要重新生成";
             case "creative.confirmOption", "workflow.confirmPrePublishSuggestion" -> "确认指定发布方案并推进后续创作；请先阅读该方案内容";
             default -> "调用原业务服务并保存或修改数据；生成、分析、试映、连通性测试等操作可能产生模型或外部服务费用";

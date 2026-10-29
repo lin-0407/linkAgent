@@ -30,8 +30,7 @@ class ClipRendererTest(unittest.TestCase):
         cls.make_video(cls.media / "portrait.mp4", "160x320")
         cls.make_video(cls.media / "no-audio.mp4", audio=False)
         cls.make_video(cls.media / "delayed.mp4", delay=True)
-        subprocess.run(["ffmpeg", "-v", "error", "-i", str(cls.media / "source.mp4"), "-c", "copy",
-                        "-metadata:s:v:0", "rotate=90", "-y", str(cls.media / "rotated.mp4")], check=True, capture_output=True, timeout=15)
+        cls.make_rotated_video(cls.media / "source.mp4", cls.media / "rotated.mp4")
         subprocess.run(["ffmpeg", "-v", "error", "-i", str(cls.media / "source.mp4"), "-c", "copy", "-output_ts_offset", "2",
                         "-y", str(cls.media / "offset.mp4")], check=True, capture_output=True, timeout=15)
         subprocess.run(["ffmpeg", "-v", "error", "-i", str(cls.media / "source.mp4"), "-c:v", "copy", "-af", "atrim=duration=1",
@@ -50,9 +49,25 @@ class ClipRendererTest(unittest.TestCase):
                        check=True, capture_output=True, timeout=15)
         for source, rotated in (("wide.mp4", "rotated-wide.mp4"), ("anamorphic.mp4", "anamorphic-rotated.mp4"),
                                 ("extreme-sar.mp4", "rotated-extreme-sar.mp4")):
-            subprocess.run(["ffmpeg", "-v", "error", "-i", str(cls.media / source), "-c", "copy",
-                            "-metadata:s:v:0", "rotate=90", "-y", str(cls.media / rotated)],
-                           check=True, capture_output=True, timeout=15)
+            cls.make_rotated_video(cls.media / source, cls.media / rotated)
+
+    @classmethod
+    def make_rotated_video(cls, source, target):
+        help_text = subprocess.run(["ffmpeg", "-hide_banner", "-h", "full"], check=True,
+                                   capture_output=True, text=True, timeout=15).stdout
+        # 新版 FFmpeg 的 rotate 标签未必生成矩阵；旧版本则继续使用其支持的写法。
+        if "-display_rotation" in help_text:
+            command = ["ffmpeg", "-v", "error", "-display_rotation", "90", "-i", str(source), "-c", "copy"]
+        else:
+            command = ["ffmpeg", "-v", "error", "-i", str(source), "-c", "copy", "-metadata:s:v:0", "rotate=90"]
+        subprocess.run(command + ["-y", str(target)], check=True, capture_output=True, timeout=15)
+        metadata = json.loads(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                                             "-show_streams", "-of", "json", str(target)],
+                                            check=True, capture_output=True, text=True, timeout=15).stdout)
+        matrices = [side for side in metadata["streams"][0].get("side_data_list", [])
+                    if side.get("side_data_type") == "Display Matrix"]
+        if not any(float(side.get("rotation", 0)) % 360 == 90 and side.get("displaymatrix") for side in matrices):
+            raise AssertionError(f"旋转测试夹具没有有效的 90 度 Display Matrix: {target}: {metadata}")
 
     @classmethod
     def tearDownClass(cls):

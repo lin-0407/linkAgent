@@ -27,7 +27,16 @@ public class StrictFunctionCallingClient {
     private final StrictFunctionCallingProperties properties;
     private final DeepSeekThinkingOptionsFactory thinkingOptionsFactory;
     private volatile ChatClient chatClient;
+    private volatile ChatClient multiAgentClient;
+    @org.springframework.beans.factory.annotation.Value("${agent.multi.worker-timeout-seconds:120}")
+    private long multiAgentTimeoutSeconds = 120;
     private volatile long disabledUntilNanos;
+    private RuntimeTextModelClient runtimeTextModel;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void configureRuntimeTextModel(RuntimeTextModelClient runtimeTextModel) {
+        this.runtimeTextModel = runtimeTextModel;
+    }
 
     public StrictFunctionCallingClient(StrictFunctionCallingProperties properties,
                                        DeepSeekThinkingOptionsFactory thinkingOptionsFactory) {
@@ -36,6 +45,11 @@ public class StrictFunctionCallingClient {
     }
 
     public boolean isEnabled() {
+        if (runtimeTextModel != null) {
+            var selected = runtimeTextModel.active();
+            if (selected.isPresent()) return properties.isEnabled() && selected.get().supportsStrict()
+                    && System.nanoTime() >= disabledUntilNanos;
+        }
         return properties.isConfigured() && System.nanoTime() >= disabledUntilNanos;
     }
 
@@ -46,7 +60,7 @@ public class StrictFunctionCallingClient {
      * 因此 LLMService 需要据此选择请求形状（见 {@code LLMService#structuredResultToolChoice}）。
      */
     public boolean isThinkingEnabled() {
-        return thinkingOptionsFactory.isThinkingEnabled(properties.getModel());
+        return thinkingOptionsFactory.isThinkingEnabled(currentModelName());
     }
 
     public ChatResponse call(String systemPrompt,
@@ -68,6 +82,7 @@ public class StrictFunctionCallingClient {
                              Object toolChoice,
                              boolean disableThinking,
                              Integer maxTokens) {
+        com.link.linkagent.core.multi.MultiAgentExecutionContext.check();
         if (!isEnabled()) {
             throw new IllegalStateException("严格 Function Calling 未完成配置");
         }
@@ -101,7 +116,7 @@ public class StrictFunctionCallingClient {
                                    Object toolChoice,
                                    boolean disableThinking,
                                    Integer maxTokens) {
-        OpenAiChatOptions options = thinkingOptionsFactory.optionsForModel(properties.getModel());
+        OpenAiChatOptions options = thinkingOptionsFactory.optionsForModel(currentModelName());
         if (disableThinking) {
             // Spring AI 1.1.4 不会把 AssistantMessage 中的 reasoning_content 写回下一轮请求，
             // 多轮工具调用若继续开启思考会违反 DeepSeek 协议，因此该场景显式关闭；
@@ -120,6 +135,12 @@ public class StrictFunctionCallingClient {
     }
 
     private ChatClient client() {
+        if (runtimeTextModel != null) {
+            var selected = runtimeTextModel.client(false,
+                    com.link.linkagent.core.multi.MultiAgentExecutionContext.active(), true);
+            if (selected.isPresent()) return selected.get();
+        }
+        if (com.link.linkagent.core.multi.MultiAgentExecutionContext.active()) return multiAgentClient();
         ChatClient current = chatClient;
         if (current != null) {
             return current;
@@ -141,6 +162,34 @@ public class StrictFunctionCallingClient {
                 chatClient = ChatClient.create(model);
             }
             return chatClient;
+        }
+    }
+
+    private String currentModelName() {
+        return runtimeTextModel == null ? properties.getModel()
+                : runtimeTextModel.active().map(RuntimeTextModelClient.TextConfig::modelName).orElse(properties.getModel());
+    }
+
+    private ChatClient multiAgentClient() {
+        ChatClient current = multiAgentClient;
+        if (current != null) return current;
+        synchronized (this) {
+            if (multiAgentClient == null) {
+                // 多 Agent 请求可能在服务端已执行，严格输出也只允许发送一次。
+                var http = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(10)).build();
+                var factory = new JdkClientHttpRequestFactory(http);
+                factory.setReadTimeout(java.time.Duration.ofSeconds(Math.max(1, multiAgentTimeoutSeconds)));
+                OpenAiApi api = OpenAiApi.builder().baseUrl(properties.getBaseUrl())
+                        .completionsPath(properties.getCompletionsPath()).apiKey(properties.getApiKey())
+                        .restClientBuilder(RestClient.builder().requestFactory(factory))
+                        .responseErrorHandler(new org.springframework.web.client.DefaultResponseErrorHandler()).build();
+                OpenAiChatModel model = OpenAiChatModel.builder().openAiApi(api)
+                        .defaultOptions(thinkingOptionsFactory.optionsForModel(properties.getModel()))
+                        .retryTemplate(org.springframework.retry.support.RetryTemplate.builder().maxAttempts(1).noBackoff().build())
+                        .build();
+                multiAgentClient = ChatClient.create(model);
+            }
+            return multiAgentClient;
         }
     }
 }

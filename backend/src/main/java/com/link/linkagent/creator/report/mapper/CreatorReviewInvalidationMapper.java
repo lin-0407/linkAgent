@@ -46,7 +46,7 @@ public interface CreatorReviewInvalidationMapper {
             SET is_deleted = 1,
                 update_time = CURRENT_TIMESTAMP
             WHERE source_task_id = #{taskId}
-              AND source_report_id NOT LIKE 'ADOPTION_FEEDBACK_%'
+              AND LEFT(source_report_id, 18) <> 'ADOPTION_FEEDBACK_'
               AND is_deleted = 0
             """)
     int invalidateGeneratedPreference(@Param("taskId") String taskId);

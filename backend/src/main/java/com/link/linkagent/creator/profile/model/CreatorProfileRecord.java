@@ -14,6 +14,7 @@ public class CreatorProfileRecord {
     private String styleTags;
     private String toneGuide;
     private String audienceView;
+    private long lastProcessedEventId;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 
@@ -55,6 +56,14 @@ public class CreatorProfileRecord {
 
     public void setAudienceView(String audienceView) {
         this.audienceView = audienceView;
+    }
+
+    public long getLastProcessedEventId() {
+        return lastProcessedEventId;
+    }
+
+    public void setLastProcessedEventId(long lastProcessedEventId) {
+        this.lastProcessedEventId = lastProcessedEventId;
     }
 
     public LocalDateTime getCreateTime() {

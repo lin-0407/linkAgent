@@ -11,6 +11,7 @@ import com.link.linkagent.dto.SessionListItem;
 import com.link.linkagent.dto.SessionMessageItem;
 import com.link.linkagent.core.AgentExecutor;
 import com.link.linkagent.memory.ConversationSessionMapper;
+import com.link.linkagent.memory.ConversationHistory;
 import com.link.linkagent.memory.MemoryMessage;
 import com.link.linkagent.memory.ShortTermMemory;
 import jakarta.validation.Valid;
@@ -60,6 +61,7 @@ public class AgentController {
     private final ShortTermMemory shortTermMemory;
     /** 会话消息表：摘要检查点持久化在这里，历史接口要把最近一条摘要补在短期记忆之前。 */
     private final ConversationSessionMapper conversationSessionMapper;
+    private final ConversationHistory conversationHistory;
     private final PlatformAssistantContextService assistantContext;
 
     @Autowired
@@ -69,6 +71,7 @@ public class AgentController {
         this.agentExecutor = agentExecutor;
         this.shortTermMemory = shortTermMemory;
         this.conversationSessionMapper = conversationSessionMapper;
+        this.conversationHistory = new ConversationHistory(conversationSessionMapper, shortTermMemory);
         this.assistantContext = assistantContext;
     }
 
@@ -201,8 +204,9 @@ public class AgentController {
      */
     @GetMapping("/sessions")
     public List<SessionListItem> sessions(@RequestParam(required=false) String taskId,
-                                         @RequestParam(defaultValue="false") boolean assistant) {
-        return shortTermMemory.listSessions().stream()
+                                         @RequestParam(defaultValue="false") boolean assistant,
+                                         @RequestParam(required=false) String userId) {
+        return conversationHistory.listSessions(resolveUserId(userId)).stream()
                 .filter(item -> !assistant || item.sessionId().startsWith(assistantContext.sessionPrefix(taskId)))
                 .map(item -> new SessionListItem(item.sessionId(), item.preview(), item.messageCount()))
                 .toList();
@@ -238,19 +242,15 @@ public class AgentController {
      * @return 会话消息历史列表
      */
     @GetMapping("/sessions/{sessionId}")
-    public List<SessionMessageItem> sessionMessages(@org.springframework.web.bind.annotation.PathVariable String sessionId) {
+    public List<SessionMessageItem> sessionMessages(@org.springframework.web.bind.annotation.PathVariable String sessionId,
+                                                   @RequestParam(required=false) String userId) {
         List<SessionMessageItem> items = new ArrayList<>();
-        // 与 DSH 的压缩语义一致：被压缩的原文留在消息表里，对话视图只展示「摘要检查点 + 摘要之后保留的消息」。
-        // 读摘要失败不能连累整段历史：短期记忆才是主展示内容，数据库抖动时降级为只显示它。
-        try {
-            conversationSessionMapper.findLatestSummary(sessionId)
-                    .ifPresent(summary -> items.add(new SessionMessageItem(
-                            summary.getRole(), summary.getContent(), summary.getTokenCount())));
-        } catch (Exception exception) {
-            log.warn("读取摘要检查点失败，本次历史不展示摘要块，sessionId={}, error={}",
-                    sessionId, exception.getMessage());
+        ConversationHistory.Snapshot history = conversationHistory.load(sessionId, resolveUserId(userId));
+        if (history.summary() != null) {
+            var summary = history.summary();
+            items.add(new SessionMessageItem(summary.getRole(), summary.getContent(), summary.getTokenCount()));
         }
-        shortTermMemory.getMessages(sessionId).stream()
+        history.messages().stream()
                 // 工具调用/结果消息是模型上下文的一部分（原生协议成对存储），不是给人看的对话内容：
                 // 调用消息正文为空、结果消息是原始工具输出，直接展示会在会话历史里冒出空气泡和「用户口吻」的工具日志。
                 // 真实执行过程已由流式 steps 事件实时展示，历史视图保持原来的 user/assistant/summary 语义。
@@ -258,6 +258,10 @@ public class AgentController {
                 .map(this::toMessageItem)
                 .forEach(items::add);
         return items;
+    }
+
+    private String resolveUserId(String userId) {
+        return userId == null || userId.isBlank() ? "default" : userId.trim();
     }
 
     /**

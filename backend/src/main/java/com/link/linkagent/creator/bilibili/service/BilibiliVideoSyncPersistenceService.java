@@ -11,6 +11,7 @@ import com.link.linkagent.creator.bilibili.model.TaskVideoBindingRecord;
 import com.link.linkagent.creator.media.workflow.CreatorMediaWorkflowGateService;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -62,6 +63,13 @@ public class BilibiliVideoSyncPersistenceService {
     public BilibiliVideoSyncResponse persist(BilibiliAccountRecord account,
                                              BilibiliVideoSyncPayload payload,
                                              List<TaskVideoBindingRecord> bindings) {
+        BilibiliAccountRecord currentAccount = bilibiliMapper.lockAccountById(account.getAccountId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT,
+                        "同步期间账号绑定已变化，请重新同步"));
+        if (!Objects.equals(account.getBilibiliUid(), currentAccount.getBilibiliUid())
+                || !Objects.equals(account.getUserId(), currentAccount.getUserId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "同步期间账号绑定已变化，请重新同步");
+        }
         Set<String> warningSet = new LinkedHashSet<>();
         for (String warning : payload.warnings()) {
             if (TextUtil.hasText(warning)) {
@@ -132,6 +140,7 @@ public class BilibiliVideoSyncPersistenceService {
                 : account.getAvatarUrl();
         bilibiliMapper.updateAccountSyncResult(
                 account.getAccountId(),
+                account.getBilibiliUid(),
                 nickname,
                 avatarUrl,
                 "ACTIVE",

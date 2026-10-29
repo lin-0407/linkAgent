@@ -143,6 +143,8 @@ public interface MediaProcessingMapper {
             FROM creator_media_processing_job
             WHERE status = 'QUEUED'
               AND is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_task t WHERE t.task_id=creator_media_processing_job.task_id
+                  AND t.user_id=creator_media_processing_job.owner_id AND t.is_deleted=0)
             ORDER BY create_time ASC, id ASC
             LIMIT 1
             """)
@@ -231,6 +233,8 @@ public interface MediaProcessingMapper {
               AND status = 'QUEUED'
               AND attempt_count < #{maxAttempts}
               AND is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_task t WHERE t.task_id=creator_media_processing_job.task_id
+                  AND t.user_id=creator_media_processing_job.owner_id AND t.is_deleted=0)
             """)
     int claimJob(@Param("jobId") String jobId,
                  @Param("leaseOwner") String leaseOwner,

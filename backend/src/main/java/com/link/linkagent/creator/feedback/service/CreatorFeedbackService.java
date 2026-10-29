@@ -645,7 +645,7 @@ public class CreatorFeedbackService {
      * @return 项目根目录 Path
      * @throws ResponseStatusException 500 找不到脚本
      */
-    private Path resolveProjectRoot() {
+    Path resolveProjectRoot() {
         for (Path candidate : collectProjectRootCandidates()) {
             Path cursor = candidate;
             while (cursor != null) {
@@ -685,9 +685,9 @@ public class CreatorFeedbackService {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "评论弹幕输出目录不在项目根目录下");
         }
         try {
-            // 后端固定写入项目根目录 export，避免页面参数影响服务端文件写入位置。
+            // 每次采集独享目录，避免同一 BV 的并发请求覆盖彼此的样本；返回路径仍可供用户查看。
             Files.createDirectories(outputDir);
-            return outputDir;
+            return Files.createTempDirectory(outputDir, "fetch-");
         } catch (IOException exception) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "创建评论弹幕输出目录失败");
         }

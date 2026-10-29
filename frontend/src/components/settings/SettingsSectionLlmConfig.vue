@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { errorText } from '@/utils/error'
 import { useAssistantBusinessRefresh } from '@/composables/useAssistantBusinessRefresh'
 import { CircleCheck, CircleX } from '@lucide/vue'
 import {
   deleteLlmConfig,
+  activateTextLlmConfig,
+  getCurrentTextModel,
   listLlmConfigs,
   saveLlmConfig,
   testLlmConnectivity,
+  useEnvironmentTextModel,
 } from '@/api/settings'
 import type {
   UserLlmConfigRecord,
+  CurrentTextModel,
   UserLlmConfigSavePayload,
   UserLlmConfigTestResult,
 } from '@/types/settings'
@@ -24,7 +28,7 @@ const emit = defineEmits<{
   toggleSection: []
 }>()
 useAssistantBusinessRefresh(['models.'], () => {
-  if (props.loadOnOpen && !editingLlmConfig.value && !llmConfigSaving.value) return loadLlmConfigs()
+  if (props.loadOnOpen && !editingLlmConfig.value && !llmConfigBusy.value) return loadLlmConfigs()
 })
 
 const llmConfigs = ref<UserLlmConfigRecord[]>([])
@@ -32,6 +36,12 @@ const llmConfigLoading = ref(false)
 const llmConfigError = ref('')
 const llmConfigSaving = ref('')
 const llmConfigTesting = ref('')
+const llmConfigActivating = ref('')
+const llmConfigNotice = ref('')
+const currentTextModel = ref<CurrentTextModel | null>(null)
+const testedConfigId = ref('')
+const llmConfigBusy = computed(() => Boolean(llmConfigLoading.value || llmConfigSaving.value
+  || llmConfigTesting.value || llmConfigActivating.value))
 
 const editingLlmConfig = ref<{
   configId: string
@@ -57,7 +67,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 }
 
 watch(() => props.loadOnOpen, (shouldLoad) => {
-  if (shouldLoad && llmConfigs.value.length === 0 && !llmConfigLoading.value) {
+  if (shouldLoad && !editingLlmConfig.value && !llmConfigBusy.value) {
     void loadLlmConfigs()
   }
 }, { immediate: true })
@@ -66,15 +76,21 @@ async function loadLlmConfigs() {
   llmConfigLoading.value = true
   llmConfigError.value = ''
   try {
-    llmConfigs.value = await listLlmConfigs()
+    const [configs, current] = await Promise.all([listLlmConfigs(), getCurrentTextModel()])
+    llmConfigs.value = configs
+    currentTextModel.value = current
+    return true
   } catch (e) {
     llmConfigError.value = errorText(e, '操作失败，请稍后重试')
+    return false
   } finally {
     llmConfigLoading.value = false
   }
 }
 
 function startEditConfig(config: UserLlmConfigRecord) {
+  if (llmConfigBusy.value) return
+  llmConfigNotice.value = ''
   editingLlmConfig.value = {
     configId: config.configId,
     provider: config.provider,
@@ -91,6 +107,8 @@ function startEditConfig(config: UserLlmConfigRecord) {
 }
 
 function startNewConfig() {
+  if (llmConfigBusy.value) return
+  llmConfigNotice.value = ''
   editingLlmConfig.value = {
     configId: '',
     provider: 'DEEPSEEK',
@@ -115,9 +133,10 @@ function cancelEditConfig() {
 
 async function saveLlmConfigForm() {
   const form = editingLlmConfig.value
-  if (!form || !form.provider) return
+  if (!form || !form.provider || llmConfigBusy.value) return
   llmConfigSaving.value = form.provider
   llmConfigError.value = ''
+  llmConfigNotice.value = ''
   try {
     const payload: UserLlmConfigSavePayload = {
       provider: form.provider,
@@ -128,9 +147,14 @@ async function saveLlmConfigForm() {
       embeddingApiKey: form.embeddingApiKey.trim() || undefined,
       embeddingModelName: form.embeddingModelName.trim() || undefined,
     }
-    await saveLlmConfig(payload)
+    const saved = await saveLlmConfig(payload)
+    llmConfigs.value = [...llmConfigs.value.filter(config => config.configId !== saved.configId), saved]
+    if (saved.activeForText) currentTextModel.value = null
     cancelEditConfig()
     await loadLlmConfigs()
+    llmConfigNotice.value = saved.activeForText
+      ? '已保存当前文本模型的参数，后续调用使用更新后的配置。'
+      : '配置已保存。点击“设为当前文本模型”后切换后续文本调用。'
   } catch (e) {
     llmConfigError.value = errorText(e, '操作失败，请稍后重试')
   } finally {
@@ -138,24 +162,68 @@ async function saveLlmConfigForm() {
   }
 }
 
-async function removeLlmConfig(configId: string, provider: string) {
-  if (!confirm(`确定要删除「${PROVIDER_LABELS[provider] ?? provider}」的 API 配置吗？`)) return
+async function removeLlmConfig(config: UserLlmConfigRecord) {
+  if (llmConfigBusy.value) return
+  const { configId, provider } = config
+  const fallback = config.activeForText ? '删除后，后续文本调用将使用环境配置。' : ''
+  if (!confirm(`确定要删除「${PROVIDER_LABELS[provider] ?? provider}」的 API 配置吗？${fallback}`)) return
   llmConfigSaving.value = provider
   llmConfigError.value = ''
+  llmConfigNotice.value = ''
   try {
     await deleteLlmConfig(configId)
+    llmConfigs.value = llmConfigs.value.filter(item => item.configId !== configId)
+    if (config.activeForText) currentTextModel.value = null
     await loadLlmConfigs()
+    llmConfigNotice.value = config.activeForText ? '已删除配置，当前文本模型已恢复为环境配置。' : '配置已删除。'
   } catch (e) {
     llmConfigError.value = errorText(e, '操作失败，请稍后重试')
   } finally {
     llmConfigSaving.value = ''
+  }
+}
+
+async function activateConfig(config: UserLlmConfigRecord) {
+  if (llmConfigBusy.value || editingLlmConfig.value || config.activeForText || !config.llmApiKeyMasked) return
+  llmConfigActivating.value = config.configId
+  llmConfigError.value = ''
+  llmConfigNotice.value = ''
+  try {
+    const active = await activateTextLlmConfig(config.configId)
+    llmConfigs.value = llmConfigs.value.map(item => item.configId === active.configId
+      ? active : { ...item, activeForText: false })
+    currentTextModel.value = null
+    if (await loadLlmConfigs()) llmConfigNotice.value = '当前文本模型已切换，后续文本调用使用所选配置。'
+  } catch (e) {
+    llmConfigError.value = errorText(e, '切换文本模型失败')
+  } finally {
+    llmConfigActivating.value = ''
+  }
+}
+
+async function selectEnvironmentModel() {
+  if (llmConfigBusy.value || editingLlmConfig.value || currentTextModel.value?.source !== 'SAVED_CONFIG') return
+  llmConfigActivating.value = 'environment'
+  llmConfigError.value = ''
+  llmConfigNotice.value = ''
+  try {
+    await useEnvironmentTextModel()
+    llmConfigs.value = llmConfigs.value.map(item => ({ ...item, activeForText: false }))
+    currentTextModel.value = null
+    if (await loadLlmConfigs()) llmConfigNotice.value = '当前文本模型已恢复为环境配置，已保存配置均保留。'
+  } catch (e) {
+    llmConfigError.value = errorText(e, '恢复环境配置失败')
+  } finally {
+    llmConfigActivating.value = ''
   }
 }
 
 async function testConfigConnectivity(configId: string) {
+  if (llmConfigBusy.value) return
   llmConfigTesting.value = configId
   llmConfigError.value = ''
   llmTestResult.value = null
+  testedConfigId.value = configId
   try {
     llmTestResult.value = await testLlmConnectivity(configId)
   } catch (e) {
@@ -184,7 +252,7 @@ async function testConfigConnectivity(configId: string) {
       <button
         type="button"
         class="creator-secondary-action creator-mini-button"
-        :disabled="llmConfigLoading"
+        :disabled="llmConfigBusy"
         @click.stop="loadLlmConfigs"
       >
         {{ llmConfigLoading ? '加载中…' : llmConfigs.length ? '刷新' : '加载配置' }}
@@ -196,6 +264,27 @@ async function testConfigConnectivity(configId: string) {
         <strong>操作失败</strong>
         <span>{{ llmConfigError }}</span>
       </div>
+
+      <div class="llm-current-selection" aria-live="polite">
+        <template v-if="currentTextModel">
+          <strong>当前文本模型：{{ currentTextModel.source === 'ENVIRONMENT'
+            ? '环境配置' : PROVIDER_LABELS[currentTextModel.provider ?? ''] ?? currentTextModel.provider ?? '已保存配置' }}</strong>
+          <dl class="llm-config-fields">
+            <dt>模型</dt><dd>{{ currentTextModel.modelName }}</dd>
+            <dt>端点</dt><dd :title="currentTextModel.baseUrl">{{ currentTextModel.baseUrl }}</dd>
+          </dl>
+          <button
+            v-if="currentTextModel.source === 'SAVED_CONFIG'"
+            type="button"
+            class="creator-secondary-action creator-mini-button"
+            :disabled="llmConfigBusy || !!editingLlmConfig"
+            @click="selectEnvironmentModel"
+          >使用环境配置</button>
+        </template>
+        <span v-else class="creator-muted">{{ llmConfigLoading ? '正在读取当前文本模型…' : '当前文本模型信息未加载，请刷新。' }}</span>
+      </div>
+      <p class="creator-muted">保存不会自动切换当前文本模型。Embedding 仍使用部署配置。</p>
+      <p v-if="llmConfigNotice" class="creator-muted" role="status">{{ llmConfigNotice }}</p>
 
       <p
         v-if="llmConfigs.length === 0 && !llmConfigLoading && !editingLlmConfig"
@@ -217,7 +306,14 @@ async function testConfigConnectivity(configId: string) {
                 <button
                   type="button"
                   class="creator-secondary-action creator-mini-button"
-                  :disabled="llmConfigTesting === cfg.configId"
+                  :disabled="llmConfigBusy || !!editingLlmConfig || cfg.activeForText || !cfg.llmApiKeyMasked"
+                  :title="!cfg.llmApiKeyMasked ? '请先保存 LLM API Key；仅有 Embedding 配置不能设为文本模型' : undefined"
+                  @click="activateConfig(cfg)"
+                >{{ cfg.activeForText ? '当前文本模型' : llmConfigActivating === cfg.configId ? '切换中…' : '设为当前文本模型' }}</button>
+                <button
+                  type="button"
+                  class="creator-secondary-action creator-mini-button"
+                  :disabled="llmConfigBusy || !!editingLlmConfig"
                   @click="testConfigConnectivity(cfg.configId)"
                 >
                   {{ llmConfigTesting === cfg.configId ? '测试中…' : '测试连接' }}
@@ -225,6 +321,7 @@ async function testConfigConnectivity(configId: string) {
                 <button
                   type="button"
                   class="creator-secondary-action creator-mini-button"
+                  :disabled="llmConfigBusy || !!editingLlmConfig"
                   @click="startEditConfig(cfg)"
                 >
                   编辑
@@ -232,8 +329,8 @@ async function testConfigConnectivity(configId: string) {
                 <button
                   type="button"
                   class="creator-secondary-action creator-mini-button"
-                  :disabled="llmConfigSaving === cfg.provider"
-                  @click="removeLlmConfig(cfg.configId, cfg.provider)"
+                  :disabled="llmConfigBusy || !!editingLlmConfig"
+                  @click="removeLlmConfig(cfg)"
                 >
                   删除
                 </button>
@@ -241,7 +338,7 @@ async function testConfigConnectivity(configId: string) {
             </div>
 
             <div
-              v-if="llmTestResult && llmConfigTesting !== cfg.configId"
+              v-if="llmTestResult && testedConfigId === cfg.configId && llmConfigTesting !== cfg.configId"
               class="llm-config-test-result"
               :class="llmTestResult.success ? 'success' : 'failed'"
             >
@@ -285,6 +382,7 @@ async function testConfigConnectivity(configId: string) {
 
           <div v-else class="llm-config-form">
             <strong>{{ PROVIDER_LABELS[cfg.provider] ?? cfg.provider }}</strong>
+            <p v-if="cfg.activeForText" class="creator-muted">当前文本模型。保存后，后续调用使用更新后的参数。</p>
 
             <label class="llm-config-field">
               <span>LLM Base URL</span>
@@ -368,6 +466,7 @@ async function testConfigConnectivity(configId: string) {
               <button
                 type="button"
                 class="creator-secondary-action creator-mini-button"
+                :disabled="llmConfigBusy"
                 @click="cancelEditConfig"
               >
                 取消
@@ -375,7 +474,7 @@ async function testConfigConnectivity(configId: string) {
               <button
                 type="button"
                 class="creator-primary-button creator-mini-button"
-                :disabled="llmConfigSaving === cfg.provider"
+                :disabled="llmConfigBusy"
                 @click="saveLlmConfigForm"
               >
                 {{ llmConfigSaving === cfg.provider ? '保存中…' : '保存' }}
@@ -484,6 +583,7 @@ async function testConfigConnectivity(configId: string) {
             <button
               type="button"
               class="creator-secondary-action creator-mini-button"
+              :disabled="llmConfigBusy"
               @click="cancelEditConfig"
             >
               取消
@@ -491,7 +591,7 @@ async function testConfigConnectivity(configId: string) {
             <button
               type="button"
               class="creator-primary-button creator-mini-button"
-              :disabled="llmConfigSaving === editingLlmConfig!.provider"
+              :disabled="llmConfigBusy"
               @click="saveLlmConfigForm"
             >
               {{ llmConfigSaving === editingLlmConfig!.provider ? '保存中…' : '保存' }}
@@ -504,6 +604,7 @@ async function testConfigConnectivity(configId: string) {
         v-if="!editingLlmConfig"
         type="button"
         class="creator-secondary-action"
+        :disabled="llmConfigBusy"
         @click="startNewConfig"
       >
         + 添加新配置
@@ -534,6 +635,16 @@ async function testConfigConnectivity(configId: string) {
 
 .settings-section-toggle:hover {
   color: var(--accent);
+}
+
+.settings-section-heading > .creator-secondary-action {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.settings-section-title {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .settings-section-toggle h3 {
@@ -579,6 +690,27 @@ async function testConfigConnectivity(configId: string) {
   margin-bottom: var(--s3);
 }
 
+.llm-current-selection {
+  display: grid;
+  gap: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.llm-current-selection > button {
+  justify-self: start;
+}
+
+.llm-current-selection .llm-config-fields {
+  grid-template-columns: 65px minmax(0, 1fr);
+}
+
+.llm-current-selection .llm-config-fields dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .llm-config-card {
   padding: var(--s3);
   background: var(--surface);
@@ -592,6 +724,7 @@ async function testConfigConnectivity(configId: string) {
   align-items: center;
   gap: var(--s3);
   margin-bottom: var(--s2);
+  flex-wrap: wrap;
 }
 
 .llm-config-card-head strong {
@@ -603,6 +736,7 @@ async function testConfigConnectivity(configId: string) {
 .llm-config-card-actions {
   display: flex;
   gap: var(--s1);
+  flex-wrap: wrap;
 }
 
 .llm-config-test-result {
@@ -717,5 +851,11 @@ async function testConfigConnectivity(configId: string) {
   justify-content: flex-end;
   gap: var(--s2);
   margin-top: var(--s1);
+}
+
+@media (max-width: 480px) {
+  .llm-config-fields {
+    grid-template-columns: 85px minmax(0, 1fr);
+  }
 }
 </style>

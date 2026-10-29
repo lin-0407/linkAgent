@@ -83,6 +83,41 @@ public class LLMService {
 
     /** Spring AI 的正式 ChatClient；文本、指定模型和旧结构化回退共用，strict 请求使用独立 Beta 客户端。 */
     private final ChatClient chatClient;
+    private ChatClient multiAgentClient;
+    private RuntimeTextModelClient runtimeTextModel;
+
+    @Autowired
+    public void configureRuntimeTextModel(RuntimeTextModelClient runtimeTextModel) {
+        this.runtimeTextModel = runtimeTextModel;
+    }
+
+    @Autowired
+    void configureMultiAgentClient(org.springframework.ai.openai.OpenAiChatModel model,
+                                   org.springframework.ai.openai.api.OpenAiApi api,
+                                   org.springframework.web.client.RestClient.Builder rest,
+                                   @org.springframework.beans.factory.annotation.Value("${agent.multi.worker-timeout-seconds:120}") long timeoutSeconds) {
+        // SDK 和 HTTP 客户端都可能重发请求，多 Agent 单独使用一次请求的客户端。
+        var http = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(10)).build();
+        var requestFactory = new org.springframework.http.client.JdkClientHttpRequestFactory(http);
+        requestFactory.setReadTimeout(java.time.Duration.ofSeconds(Math.max(1, timeoutSeconds)));
+        var singleApi = api.mutate().restClientBuilder(rest.clone().requestFactory(requestFactory))
+                .responseErrorHandler(new org.springframework.web.client.DefaultResponseErrorHandler()).build();
+        var singleModel = model.mutate().openAiApi(singleApi).retryTemplate(
+                org.springframework.retry.support.RetryTemplate.builder().maxAttempts(1).noBackoff().build()).build();
+        multiAgentClient = ChatClient.create(singleModel);
+    }
+
+    private ChatClient currentClient() {
+        com.link.linkagent.core.multi.MultiAgentExecutionContext.check();
+        if (runtimeTextModel != null) {
+            var selected = runtimeTextModel.client(false,
+                    com.link.linkagent.core.multi.MultiAgentExecutionContext.active(), false);
+            if (selected.isPresent()) return selected.get();
+        }
+        if (!com.link.linkagent.core.multi.MultiAgentExecutionContext.active()) return chatClient;
+        if (multiAgentClient == null) throw new IllegalStateException("多 Agent 模型客户端未初始化");
+        return multiAgentClient;
+    }
 
     /** Prompt 长度限制配置：在调用模型前短路超限请求，避免产生无效 Token 消耗。 */
     private final LlmCallGuardProperties guardProperties;
@@ -236,11 +271,12 @@ public class LLMService {
      * @throws RuntimeException 主 Provider 失败且无备用 Provider 可用（或备用链全挂）
      */
     public LlmCallResult chatWithUsage(String systemPrompt, String userMessage) {
+        com.link.linkagent.core.multi.MultiAgentExecutionContext.check();
         validatePromptLength(systemPrompt, userMessage);
         long startNanos = System.nanoTime();
         try {
             OpenAiChatOptions options = defaultThinkingOptions();
-            ChatResponse chatResponse = chatClient
+            ChatResponse chatResponse = currentClient()
                     .prompt()
                     .system(systemPrompt)
                     .user(userMessage)
@@ -257,6 +293,8 @@ public class LLMService {
         } catch (RuntimeException exception) {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
             recordTextFailure(null, elapsedMs, exception);
+            // 节点失败可能只是响应丢失，不能在多 Agent 内隐式切到备用供应商再次付费。
+            if (com.link.linkagent.core.multi.MultiAgentExecutionContext.active()) throw exception;
             // 方案四：主 Provider 失败时尝试备用 Provider 回退链
             if (llmProviderManager != null && llmProviderManager.hasAvailableProvider()) {
                 log.warn("主 LLM Provider 调用失败，尝试备用 Provider 回退链：{}", exception.getMessage());
@@ -292,22 +330,23 @@ public class LLMService {
      */
     public String chatWithModel(String modelName, String systemPrompt, String userMessage) {
         validatePromptLength(systemPrompt, userMessage);
+        String selectedModelName = effectiveModelName(modelName);
         long startNanos = System.nanoTime();
         try {
-            ChatResponse chatResponse = chatClient
+            ChatResponse chatResponse = currentClient()
                     .prompt()
                     .system(systemPrompt)
                     .user(userMessage)
-                    .options(thinkingOptions(modelName))
+                    .options(thinkingOptions(selectedModelName))
                     .call()
                     .chatResponse();
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
             LlmCallResult result = toCallResult(chatResponse, elapsedMs);
-            recordTextSuccess(result, modelName);
+            recordTextSuccess(result, selectedModelName);
             return result.content();
         } catch (RuntimeException exception) {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
-            recordTextFailure(modelName, elapsedMs, exception);
+            recordTextFailure(selectedModelName, elapsedMs, exception);
             throw exception;
         }
     }
@@ -433,6 +472,7 @@ public class LLMService {
     public <T> StructuredCallResult<T> chatStructuredWithUsage(String systemPrompt, List<Message> messages,
                                                                Class<T> type, boolean disableThinking,
                                                                Integer maxTokens) {
+        com.link.linkagent.core.multi.MultiAgentExecutionContext.check();
         String messageText = messages == null ? "" : messages.stream()
                 .map(Message::getText)
                 .filter(Objects::nonNull)
@@ -442,6 +482,7 @@ public class LLMService {
             try {
                 return chatStructuredStrictWithUsage(systemPrompt, messages, type, disableThinking, maxTokens);
             } catch (RuntimeException strictException) {
+                if (com.link.linkagent.core.multi.MultiAgentExecutionContext.active()) throw strictException;
                 // strict 目前依赖 DeepSeek Beta；端点异常或业务校验未通过时回旧链路，不能让结构化能力整体中断。
                 log.warn("严格结构化调用未获得有效结果，回退 json_object：{}", strictException.getMessage());
             }
@@ -474,6 +515,7 @@ public class LLMService {
         RuntimeException lastError = null;
 
         for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
+            com.link.linkagent.core.multi.MultiAgentExecutionContext.check();
             long startNanos = System.nanoTime();
             ChatResponse chatResponse;
             try {
@@ -517,6 +559,7 @@ public class LLMService {
                             callResult.totalTokens(), elapsedMs);
                 }
                 recordTextFailure(callResult.modelName(), elapsedMs, validationException);
+                if (com.link.linkagent.core.multi.MultiAgentExecutionContext.active()) throw validationException;
                 lastError = validationException;
                 log.warn("严格结构化输出第 {}/{} 次业务校验失败：{}",
                         attempt, STRUCTURED_MAX_ATTEMPTS, validationException.getMessage());
@@ -542,9 +585,10 @@ public class LLMService {
         String structuredUserMessage = appendStructuredFormat(userMessage, outputConverter.getFormat());
         RuntimeException lastError = null;
         for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
+            com.link.linkagent.core.multi.MultiAgentExecutionContext.check();
             long startNanos = System.nanoTime();
             try {
-                ChatResponse chatResponse = chatClient
+                ChatResponse chatResponse = currentClient()
                         .prompt()
                         .system(systemPrompt)
                         .user(structuredUserMessage)
@@ -565,6 +609,7 @@ public class LLMService {
             } catch (RuntimeException ex) {
                 long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
                 recordTextFailure(null, elapsedMs, ex);
+                if (com.link.linkagent.core.multi.MultiAgentExecutionContext.active()) throw ex;
                 // json_object 只保证语法、不保证字段，偶发字段不符或空内容时重试；保留最后一次异常向上抛
                 lastError = ex;
                 log.warn("结构化输出第 {}/{} 次解析失败：{}", attempt, STRUCTURED_MAX_ATTEMPTS, ex.getMessage());
@@ -599,9 +644,10 @@ public class LLMService {
         requestMessages.add(new UserMessage(outputConverter.getFormat()));
         RuntimeException lastError = null;
         for (int attempt = 1; attempt <= STRUCTURED_MAX_ATTEMPTS; attempt++) {
+            com.link.linkagent.core.multi.MultiAgentExecutionContext.check();
             long startNanos = System.nanoTime();
             try {
-                ChatResponse chatResponse = chatClient
+                ChatResponse chatResponse = currentClient()
                         .prompt()
                         .system(systemPrompt)
                         .messages(requestMessages)
@@ -622,6 +668,7 @@ public class LLMService {
             } catch (RuntimeException ex) {
                 long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
                 recordTextFailure(null, elapsedMs, ex);
+                if (com.link.linkagent.core.multi.MultiAgentExecutionContext.active()) throw ex;
                 lastError = ex;
                 log.warn("结构化输出第 {}/{} 次解析失败：{}", attempt, STRUCTURED_MAX_ATTEMPTS, ex.getMessage());
             }
@@ -730,7 +777,7 @@ public class LLMService {
      */
     private ChatResponse sendReplayRequest(ChatRequestEnvelope envelope, List<Message> messages,
                                            Integer maxOutputTokens) {
-        if (envelope.strictTransport()) {
+        if (envelope.strictTransport() && isStrictFunctionCallingEnabled()) {
             Integer maxTokens = maxOutputTokens != null ? maxOutputTokens : envelope.maxTokens();
             return strictFunctionCallingClient.call(
                     envelope.systemPrompt(),
@@ -742,11 +789,20 @@ public class LLMService {
             );
         }
         // options 为 null 表示真实请求没显式覆盖选项（走 ChatClient 默认），重放时同样不传 options。
-        ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
+        ChatClient.ChatClientRequestSpec spec = currentClient().prompt()
                 .system(envelope.systemPrompt())
                 .messages(messages == null ? List.of() : messages);
-        if (envelope.options() != null) {
-            org.springframework.ai.openai.OpenAiChatOptions replayOptions = envelope.options().copy();
+        OpenAiChatOptions replayOptions = envelope.options() == null ? null : envelope.options().copy();
+        if (envelope.strictTransport()) {
+            // 切换到普通兼容供应商后，旧 strict 信封仍走当前端点，不能再次使用旧 Beta 密钥。
+            replayOptions = defaultThinkingOptions();
+            replayOptions.setTools(envelope.tools());
+            replayOptions.setToolChoice(envelope.toolChoice());
+            replayOptions.setInternalToolExecutionEnabled(false);
+            replayOptions.setParallelToolCalls(false);
+        }
+        if (runtimeTextModel != null) replayOptions = runtimeTextModel.adaptOptions(replayOptions);
+        if (replayOptions != null) {
             if (maxOutputTokens != null) {
                 replayOptions.setMaxTokens(maxOutputTokens);
             }
@@ -889,7 +945,7 @@ public class LLMService {
 
         long startNanos = System.nanoTime();
         try {
-            Flux<ChatResponse> flux = chatClient.prompt()
+            Flux<ChatResponse> flux = currentClient().prompt()
                     .system(systemPrompt == null ? "" : systemPrompt)
                     .messages(messages == null ? List.of() : messages)
                     .options(options)
@@ -956,7 +1012,8 @@ public class LLMService {
     /** 组装思考选项：disableThinking 为真时显式关闭，与严格链路保持同一套写法。 */
     private OpenAiChatOptions thinkingOptions(boolean disableThinking) {
         OpenAiChatOptions options = defaultThinkingOptions();
-        if (disableThinking) {
+        if (disableThinking && (runtimeTextModel == null || runtimeTextModel.active().isEmpty()
+                || DeepSeekThinkingProperties.isDeepSeekFlashModel(effectiveModelName(null)))) {
             options.setExtraBody(Map.of("thinking", Map.of("type", "disabled")));
             options.setReasoningEffort(null);
         }
@@ -1434,18 +1491,24 @@ public class LLMService {
     }
 
     private OpenAiChatOptions defaultThinkingOptions() {
-        return deepSeekThinkingOptionsFactory == null
+        OpenAiChatOptions options = deepSeekThinkingOptionsFactory == null
                 ? OpenAiChatOptions.builder().build()
                 : deepSeekThinkingOptionsFactory.optionsForDefaultModel();
+        return runtimeTextModel == null ? options : runtimeTextModel.adaptOptions(options);
     }
 
     private OpenAiChatOptions thinkingOptions(String modelName) {
-        return deepSeekThinkingOptionsFactory == null
+        OpenAiChatOptions options = deepSeekThinkingOptionsFactory == null
                 ? OpenAiChatOptions.builder().model(modelName).build()
                 : deepSeekThinkingOptionsFactory.optionsForModel(modelName);
+        return runtimeTextModel == null ? options : runtimeTextModel.adaptOptions(options);
     }
 
     private String effectiveModelName(String modelName) {
+        if (runtimeTextModel != null) {
+            var selected = runtimeTextModel.active();
+            if (selected.isPresent()) return selected.get().modelName();
+        }
         return deepSeekThinkingOptionsFactory == null
                 ? modelName
                 : deepSeekThinkingOptionsFactory.effectiveModelName(modelName);

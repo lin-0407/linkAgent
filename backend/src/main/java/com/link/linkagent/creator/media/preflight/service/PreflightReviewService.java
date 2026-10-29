@@ -483,7 +483,7 @@ public class PreflightReviewService {
                 review.reviewId(), review.taskId(), review.versionId(), review.status(), review.currentStep(),
                 review.progressPercent(), review.eventSequence(), Boolean.TRUE.equals(review.cancelRequested()),
                 review.attemptCount(), review.maxAttempts(), review.reviewFocus(), review.executiveSummary(),
-                review.estimatedCostUsd(), review.actualCostUsd(), review.usageSeconds(), review.currency(),
+                review.estimatedCostUsd(), mapper.sumActualCost(review.reviewId()), review.usageSeconds(), review.currency(),
                 review.errorCode(), review.errorMessage(), review.startedAt(), review.completedAt(),
                 review.createTime(), review.updateTime(), steps, evidence, issues,
                 audienceScreenings, editTasks

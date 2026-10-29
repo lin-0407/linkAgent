@@ -3,10 +3,46 @@ package com.link.linkagent.memory;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ShortTermMemoryTest {
+
+    @Test
+    void snapshotCompactionPreservesConcurrentAppendsAndReportsOnlyTrimmedBoundary() throws Exception {
+        ShortTermMemory memory = new ShortTermMemory(new InMemoryShortTermMemoryStore());
+        memory.append("compaction-race", "Human", "已摘要的问题", 1L);
+        memory.append("compaction-race", "AI", "保留的回答", 2L);
+        var snapshot = memory.getRecentMessages("compaction-race");
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newSingleThreadExecutor()) {
+            var appended = pool.submit(() -> {
+                start.await();
+                for (long id = 3; id <= 1002; id++) memory.append("compaction-race", "Human", "新消息" + id, id);
+                return null;
+            });
+            start.countDown();
+            assertThat(memory.keepRecentMessages("compaction-race", snapshot, 1, null)).isEqualTo(1);
+            appended.get(5, TimeUnit.SECONDS);
+        }
+        assertThat(memory.getRecentMessages("compaction-race")).hasSize(1001)
+                .extracting(MemoryMessage::messageId).containsExactlyElementsOf(
+                        java.util.stream.LongStream.rangeClosed(2, 1002).boxed().toList());
+    }
+
+    @Test
+    void snapshotCompactionDeletesOnlySnapshotOccurrencesOfIdenticalTemporaryMessages() {
+        ShortTermMemory memory = new ShortTermMemory(new InMemoryShortTermMemoryStore());
+        memory.append("temporary", "Human", "重复临时消息");
+        var snapshot = memory.getRecentMessages("temporary");
+        memory.append("temporary", "Human", "重复临时消息");
+        assertThat(memory.keepRecentMessages("temporary", snapshot, 0, null)).isZero();
+        assertThat(memory.getRecentMessages("temporary")).singleElement()
+                .extracting(MemoryMessage::content).isEqualTo("重复临时消息");
+    }
 
     @Test
     void shouldKeepRecentMessagesInAppendOrder() {

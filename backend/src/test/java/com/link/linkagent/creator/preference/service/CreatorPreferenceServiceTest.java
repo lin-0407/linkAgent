@@ -98,5 +98,15 @@ class CreatorPreferenceServiceTest {
         public List<CreatorPreferenceRecord> listAdoptionFeedbackByUserId(String userId, int limit) {
             return List.of();
         }
+
+        @Override
+        public int invalidateOtherReportPreferences(String userId, String taskId, String reportId) {
+            return 0;
+        }
+
+        @Override
+        public List<CreatorPreferenceRecord> listReportPreferencesByUserId(String userId, int limit) {
+            return listByUserId(userId, limit);
+        }
     }
 }

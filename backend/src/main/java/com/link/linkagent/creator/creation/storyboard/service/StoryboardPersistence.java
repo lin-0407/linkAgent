@@ -143,7 +143,8 @@ public class StoryboardPersistence {
                 .add(prices.getTextOutputUsdPerMillionTokens().multiply(BigDecimal.valueOf(4096)))
                 .multiply(rate).divide(new BigDecimal("1000000"),6,RoundingMode.CEILING)
                 .max(new BigDecimal("0.000001"));
-        request.putObject("price").put("model",generator.modelName()).put("usdToCny",rate).put("inputUsdPerMillion",prices.getTextInputUsdPerMillionTokens()).put("outputUsdPerMillion",prices.getTextOutputUsdPerMillionTokens()).put("maxOutputTokens",4096).put("inputTokenUpperBound",inputUpper).put("reservationCny",reservation).put("basis","CONFIGURED_ESTIMATE");
+        var textConfiguration=generator.configuration();
+        request.putObject("price").put("model",textConfiguration.modelName()).put("textConfigurationFingerprint",textConfiguration.fingerprint()).put("usdToCny",rate).put("inputUsdPerMillion",prices.getTextInputUsdPerMillionTokens()).put("outputUsdPerMillion",prices.getTextOutputUsdPerMillionTokens()).put("maxOutputTokens",4096).put("inputTokenUpperBound",inputUpper).put("reservationCny",reservation).put("basis","CONFIGURED_ESTIMATE");
         String payload=codec.write(request);if(payload.getBytes(StandardCharsets.UTF_8).length>60*1024)throw conflict("本次材料与素材元数据过多，请缩小准备范围");
         return request;
     }

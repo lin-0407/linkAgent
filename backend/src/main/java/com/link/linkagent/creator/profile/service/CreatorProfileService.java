@@ -14,7 +14,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -193,9 +192,8 @@ public class CreatorProfileService {
      * 为什么更新失败不抛异常：本次跳过，下次事件累积到阈值后再重试，
      * 保证单次 LLM 调用异常不会让画像永久停滞。
      * <p>
-     * 算法：以画像记录的上次更新时间（update_time）为起点，统计该时间之后的新事件数。
-     * 为什么用 update_time 而非独立计数器：update_time 是数据库原生的行级字段，
-     * 不需要额外维护一个"自上次更新以来事件数"的状态列，避免了并发更新时的竞态问题。
+     * 使用持久化事件 ID 水位统计新事件，更新前通过数据库领取避免并发重复消费。
+     * 水位只跟随本次成功解析的事件批次推进，与画像内容是否发生变化无关。
      *
      * @param userId 创作者标识
      */
@@ -205,11 +203,7 @@ public class CreatorProfileService {
         if (profile == null) {
             return;
         }
-        // 以画像上次更新时间为起点，统计这之后的新事件数
-        // 为什么用 update_time 而非独立计数器字段：update_time 与画像更新事务原子化，
-        // 不需要担心"计数重置了但画像没更新"的不一致问题
-        LocalDateTime sinceTime = profile.getUpdateTime();
-        int newEventCount = eventMapper.countNewEvents(normalizedUserId, sinceTime);
+        int newEventCount = eventMapper.countNewEvents(normalizedUserId, profile.getLastProcessedEventId());
         if (newEventCount < EVENT_TRIGGER_THRESHOLD) {
             return;
         }
@@ -337,8 +331,12 @@ public class CreatorProfileService {
                     userPrompt
             );
             // LLM 返回 JSON 格式：{ "styleTags": [...], "toneGuide": "...", "audienceView": "..." }
-            // parseProfileOutput 内部有容错解析逻辑，解析失败时保留字段旧值
-            parseProfileOutput(profile, rawOutput);
+            // 解析失败不保存半套画像，初始画像降级为空占位
+            if (!parseProfileOutput(profile, rawOutput)) {
+                profile.setStyleTags("[]");
+                profile.setToneGuide("");
+                profile.setAudienceView("");
+            }
         } catch (Exception e) {
             log.warn("LLM 初始画像生成失败，创建空画像占位：userId={}", userId, e);
             // LLM 失败时静默降级为空占位：用户仍可正常使用系统，画像在后续事件驱动下逐步填充。
@@ -357,7 +355,7 @@ public class CreatorProfileService {
      * <p>
      * 算法流程：
      * <ol>
-     *   <li>查询用户最近的 {@value #RECENT_EVENTS_LIMIT} 条事件</li>
+     *   <li>按 ID 查询最多 {@value #RECENT_EVENTS_LIMIT} 条未处理事件</li>
      *   <li>将事件摘要 + 当前画像拼接为 user prompt，让 LLM 判断是否需要调整画像</li>
      *   <li>LLM 返回更新后的 JSON，解析并写回数据库</li>
      * </ol>
@@ -373,35 +371,48 @@ public class CreatorProfileService {
      * @param currentProfile 当前画像记录（内存对象，会被原地修改后写回数据库）
      */
     private void updateProfileFromEvents(String userId, CreatorProfileRecord currentProfile) {
-        List<CreatorEventRecord> recentEvents = eventMapper.listRecentByCreator(userId, RECENT_EVENTS_LIMIT);
-        if (recentEvents.isEmpty()) {
+        String token = UUID.randomUUID().toString();
+        long afterId = currentProfile.getLastProcessedEventId();
+        if (profileMapper.tryClaimRefresh(userId, afterId, token) == 0) {
             return;
         }
-        // 将事件列表格式化为 "[事件类型] payload (taskId=xxx)" 的文本摘要。
-        // 选择这种紧凑格式而非完整 JSON：减少 LLM prompt 的 token 消耗，
-        // 让 LLM 聚焦于事件类型和内容本身的语义，而非元数据结构。
-        String eventsSummary = recentEvents.stream()
-                .map(e -> "[" + e.getEventType() + "] "
-                        + (TextUtil.hasText(e.getPayload()) ? e.getPayload() : "无详情")
-                        + " (taskId=" + e.getTaskId() + ")")
-                .collect(Collectors.joining("\n"));
-
-        String currentProfileText = buildCurrentProfileText(currentProfile);
-        String userPrompt = promptService.render("creator_profile.update.user", Map.of(
-                "currentProfile", currentProfileText,
-                "recentEvents", eventsSummary
-        ));
         try {
-            String rawOutput = llmService.chat(
-                    promptService.get("creator_profile.update.system"),
-                    userPrompt
-            );
-            parseProfileOutput(currentProfile, rawOutput);
-            profileMapper.update(currentProfile);
-        } catch (Exception e) {
-            log.warn("LLM 画像增量更新失败：userId={}", userId, e);
-            // 异常不抛——画像更新失败不应阻塞主流程。
-            // 即使本次更新失败，下次事件累积到阈值后仍会触发重试。
+            List<CreatorEventRecord> recentEvents = eventMapper.listUnprocessedByCreator(userId, afterId, RECENT_EVENTS_LIMIT);
+            if (recentEvents.isEmpty()) {
+                return;
+            }
+            // 将事件列表格式化为 "[事件类型] payload (taskId=xxx)" 的文本摘要。
+            // 选择这种紧凑格式而非完整 JSON：减少 LLM prompt 的 token 消耗，
+            // 让 LLM 聚焦于事件类型和内容本身的语义，而非元数据结构。
+            String eventsSummary = recentEvents.stream()
+                    .map(e -> "[" + e.getEventType() + "] "
+                            + (TextUtil.hasText(e.getPayload()) ? e.getPayload() : "无详情")
+                            + " (taskId=" + e.getTaskId() + ")")
+                    .collect(Collectors.joining("\n"));
+
+            String currentProfileText = buildCurrentProfileText(currentProfile);
+            String userPrompt = promptService.render("creator_profile.update.user", Map.of(
+                    "currentProfile", currentProfileText,
+                    "recentEvents", eventsSummary
+            ));
+            try {
+                String rawOutput = llmService.chat(
+                        promptService.get("creator_profile.update.system"),
+                        userPrompt
+                );
+                if (!parseProfileOutput(currentProfile, rawOutput)) {
+                    return;
+                }
+                // 不能用模型返回时的最新事件 ID，否则会吞掉模型执行期间新写入、尚未分析的事件。
+                currentProfile.setLastProcessedEventId(recentEvents.get(recentEvents.size() - 1).getId());
+                profileMapper.update(currentProfile, token);
+            } catch (Exception e) {
+                log.warn("LLM 画像增量更新失败：userId={}", userId, e);
+                // 异常不抛——画像更新失败不应阻塞主流程。
+                // 即使本次更新失败，下次事件累积到阈值后仍会触发重试。
+            }
+        } finally {
+            profileMapper.releaseRefresh(userId, token);
         }
     }
 
@@ -420,42 +431,42 @@ public class CreatorProfileService {
      * 容错策略：
      * <ul>
      *   <li>兼容 LLM 输出包裹在 Markdown 代码块（\`\`\`json ... \`\`\`）中的情况——先 strip 掉代码块标记再解析</li>
-     *   <li>三个字段分别尝试解析，缺失的字段不做赋值——保留画像对象上的旧值</li>
-     *   <li>整体解析失败时记 warn 日志并保留旧值——不因一次 LLM 输出格式异常就清掉整个画像</li>
+     *   <li>检查完整对象以及三个字段的类型，全部通过后才替换画像内容</li>
+     *   <li>解析失败时保留旧值并返回 false，让调用方保留事件水位以便重试</li>
      * </ul>
-     * 为什么对三个字段分别 try/不整体回滚：LLM 输出可能部分字段有效、部分字段格式异常。
-     * 例如 styleTags 解析成功但 audienceView 的 JSON 错误——此时应保留能用的部分，
-     * 而不是因为一个字段的问题丢弃全部三个字段的更新。
      *
      * @param profile   画像记录（会被原地修改，填充解析出的字段值）
      * @param rawOutput LLM 的原始输出文本
      */
-    private void parseProfileOutput(CreatorProfileRecord profile, String rawOutput) {
+    private boolean parseProfileOutput(CreatorProfileRecord profile, String rawOutput) {
         try {
-            String jsonText = rawOutput;
-            // 兼容 LLM 输出可能包裹在 markdown 代码块中的情况。
-            // 为什么这里用 replaceAll 而非 StringUtils.strip：LLM 可能在 json 前后附加
-            // 任意文本（如 "好的，这是创作者画像：```json\n..."），strip 只能去掉首尾空白，
-            // 需要用 replaceAll 移除 ```json 和 ``` 标记。
-            if (jsonText.contains("```")) {
-                jsonText = jsonText.replaceAll("```json\\s*", "")
-                        .replaceAll("```\\s*", "")
-                        .trim();
+            String jsonText = rawOutput == null ? "" : rawOutput.trim();
+            if (jsonText.startsWith("```")) {
+                jsonText = jsonText.replaceFirst("^```(?:json)?\\s*", "")
+                        .replaceFirst("\\s*```$", "").trim();
             }
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(jsonText);
-            // 对三个字段分别判存在性，缺字段不赋值——保留旧值
-            if (root.has("styleTags")) {
-                profile.setStyleTags(objectMapper.writeValueAsString(root.get("styleTags")));
+            if (root == null || !root.isObject()
+                    || !root.path("styleTags").isArray()
+                    || !root.path("toneGuide").isTextual()
+                    || !root.path("audienceView").isTextual()) {
+                log.warn("画像 JSON 缺少有效画像字段，保留旧值");
+                return false;
             }
-            if (root.has("toneGuide") && !root.get("toneGuide").isNull()) {
-                profile.setToneGuide(root.get("toneGuide").asText());
+            for (var tag : root.get("styleTags")) {
+                if (!tag.isTextual()) {
+                    log.warn("画像风格标签必须为字符串，保留旧值");
+                    return false;
+                }
             }
-            if (root.has("audienceView") && !root.get("audienceView").isNull()) {
-                profile.setAudienceView(root.get("audienceView").asText());
-            }
+            // 全部字段通过检查后再赋值，避免部分无效输出把画像改成半套内容。
+            profile.setStyleTags(objectMapper.writeValueAsString(root.get("styleTags")));
+            profile.setToneGuide(root.get("toneGuide").asText());
+            profile.setAudienceView(root.get("audienceView").asText());
+            return true;
         } catch (Exception e) {
-            // JSON 解析失败仅记日志，不抛异常——保留画像旧值
             log.warn("画像 JSON 解析失败，保留旧值：{}", e.getMessage());
+            return false;
         }
     }
 

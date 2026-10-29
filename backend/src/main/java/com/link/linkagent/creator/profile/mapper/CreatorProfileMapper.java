@@ -22,6 +22,7 @@ public interface CreatorProfileMapper {
                    style_tags,
                    tone_guide,
                    audience_view,
+                   last_processed_event_id,
                    create_time,
                    update_time
             FROM creator_profile
@@ -34,6 +35,7 @@ public interface CreatorProfileMapper {
             @Result(column = "style_tags", property = "styleTags"),
             @Result(column = "tone_guide", property = "toneGuide"),
             @Result(column = "audience_view", property = "audienceView"),
+            @Result(column = "last_processed_event_id", property = "lastProcessedEventId"),
             @Result(column = "create_time", property = "createTime"),
             @Result(column = "update_time", property = "updateTime")
     })
@@ -59,16 +61,38 @@ public interface CreatorProfileMapper {
     int insert(CreatorProfileRecord record);
 
     /**
-     * 更新画像内容。
-     * 只更新三个核心字段，update_time 由数据库 ON UPDATE CURRENT_TIMESTAMP 自动刷新。
+     * 内容和事件水位一次提交；令牌过期后迟到的旧模型结果不能覆盖新领取者。
      */
     @Update("""
             UPDATE creator_profile
-            SET style_tags   = #{styleTags},
-                tone_guide   = #{toneGuide},
-                audience_view = #{audienceView}
-            WHERE creator_id = #{creatorId}
+            SET style_tags = #{record.styleTags},
+                tone_guide = #{record.toneGuide},
+                audience_view = #{record.audienceView},
+                last_processed_event_id = #{record.lastProcessedEventId},
+                refresh_token = NULL,
+                refresh_started_at = NULL,
+                update_time = CURRENT_TIMESTAMP
+            WHERE creator_id = #{record.creatorId}
+              AND refresh_token = #{token}
               AND is_deleted = 0
             """)
-    int update(CreatorProfileRecord record);
+    int update(@Param("record") CreatorProfileRecord record, @Param("token") String token);
+
+    /** 领取时校验水位，阻止并发检查重复调用模型；十分钟后可接替已退出进程的领取。 */
+    @Update("""
+            UPDATE creator_profile
+            SET refresh_token = #{token}, refresh_started_at = CURRENT_TIMESTAMP
+            WHERE creator_id = #{creatorId} AND is_deleted = 0
+              AND last_processed_event_id = #{afterId}
+              AND (refresh_token IS NULL OR refresh_started_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE))
+            """)
+    int tryClaimRefresh(@Param("creatorId") String creatorId, @Param("afterId") long afterId,
+                        @Param("token") String token);
+
+    @Update("""
+            UPDATE creator_profile
+            SET refresh_token = NULL, refresh_started_at = NULL
+            WHERE creator_id = #{creatorId} AND refresh_token = #{token}
+            """)
+    int releaseRefresh(@Param("creatorId") String creatorId, @Param("token") String token);
 }

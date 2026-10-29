@@ -13,7 +13,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.ServletRequestBindingException;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
@@ -44,6 +48,43 @@ import java.util.Set;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    /** 缺少必需请求头、参数绑定失败应提示调用方修正请求，避免被兜底处理器误判为服务故障。 */
+    @ExceptionHandler(ServletRequestBindingException.class)
+    public ResponseEntity<?> handleRequestBinding(ServletRequestBindingException exception,
+                                                 HttpServletRequest request) {
+        String message = exception instanceof MissingRequestHeaderException missingHeader
+                ? "缺少必需请求头：" + missingHeader.getHeaderName()
+                : "请求参数缺失或绑定失败，请检查必需参数。";
+        if (isEventStreamRequest(request)) {
+            return ResponseEntity.badRequest().build();
+        }
+        return ResponseEntity.badRequest()
+                .body(new ApiErrorResponse(HttpStatus.BAD_REQUEST.value(), message, request.getRequestURI()));
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<?> handleArgumentTypeMismatch(MethodArgumentTypeMismatchException exception,
+                                                       HttpServletRequest request) {
+        if (isEventStreamRequest(request)) {
+            return ResponseEntity.badRequest().build();
+        }
+        return ResponseEntity.badRequest().body(new ApiErrorResponse(HttpStatus.BAD_REQUEST.value(),
+                "请求参数 " + exception.getName() + " 的类型不正确。", request.getRequestURI()));
+    }
+
+    /** 保留 Spring 的 415 状态和支持的媒体类型提示，让客户端能按接口要求重发。 */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<?> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException exception,
+                                                      HttpServletRequest request) {
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .headers(exception.getHeaders());
+        if (isEventStreamRequest(request)) {
+            return response.build();
+        }
+        return response.body(new ApiErrorResponse(HttpStatus.UNSUPPORTED_MEDIA_TYPE.value(),
+                "请求媒体类型不受支持，请使用接口要求的 Content-Type。", request.getRequestURI()));
+    }
 
     /**
      * 处理 {@link ResponseStatusException}（Spring 5 引入的携带 HTTP 状态码的通用异常）。

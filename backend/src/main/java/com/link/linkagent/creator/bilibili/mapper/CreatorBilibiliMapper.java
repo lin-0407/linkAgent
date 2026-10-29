@@ -96,6 +96,17 @@ public interface CreatorBilibiliMapper {
     })
     Optional<BilibiliAccountRecord> findAccountByUserId(@Param("userId") String userId);
 
+    /** 外部同步完成后锁定账号，确保校验 UID 到结果落库之间不能换绑。 */
+    @Select("""
+            SELECT id, account_id, user_id, bilibili_uid, nickname, avatar_url, bind_status,
+                   last_sync_time, last_sync_error, create_time, update_time
+            FROM creator_bilibili_account
+            WHERE account_id = #{accountId} AND is_deleted = 0
+            FOR UPDATE
+            """)
+    @ResultMap("BilibiliAccountRecordMap")
+    Optional<BilibiliAccountRecord> lockAccountById(@Param("accountId") String accountId);
+
     /**
      * 更新账号的同步结果。
      * 同步成功时更新昵称、头像和时间，失败时保留旧公开资料并更新错误信息和状态。
@@ -110,9 +121,11 @@ public interface CreatorBilibiliMapper {
                 last_sync_error = #{lastSyncError},
                 update_time = CURRENT_TIMESTAMP
             WHERE account_id = #{accountId}
+              AND bilibili_uid = #{expectedBilibiliUid}
               AND is_deleted = 0
             """)
     int updateAccountSyncResult(@Param("accountId") String accountId,
+                                @Param("expectedBilibiliUid") String expectedBilibiliUid,
                                 @Param("nickname") String nickname,
                                 @Param("avatarUrl") String avatarUrl,
                                 @Param("bindStatus") String bindStatus,

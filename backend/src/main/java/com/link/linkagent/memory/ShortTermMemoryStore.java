@@ -20,6 +20,12 @@ public interface ShortTermMemoryStore {
 
     void replaceMessages(String sessionId, List<MemoryMessage> messages);
 
+    /** 原子合并恢复原文和并发追加尾部，按落库消息 ID 去重，保留没有落库 ID 的临时消息。 */
+    void mergeRestoredMessages(String sessionId, List<MemoryMessage> messages);
+
+    /** 只删除本次摘要快照覆盖的消息，并发追加的消息不在删除集合中。 */
+    void removeSnapshotMessages(String sessionId, List<MemoryMessage> messages);
+
     List<SessionInfo> listSessions();
 
     List<MemoryMessage> getMessages(String sessionId);

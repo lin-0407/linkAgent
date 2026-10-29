@@ -7,6 +7,8 @@ import com.link.linkagent.creator.media.upload.model.DraftVideoStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 
@@ -34,6 +36,16 @@ public class DraftVideoProbeRecoveryService {
         return DraftVideoStatus.PROBING.name().equals(draft.status())
                 && draft.updateTime() != null
                 && draft.updateTime().isBefore(staleBefore());
+    }
+
+    @Transactional
+    public void claim(String taskId, String ownerId, String versionId, String probeAttemptId) {
+        // 领取和删除共用任务行锁；事务只包住受理，不在外部探测期间持锁。
+        mediaUploadMapper.lockMediaTask(taskId, ownerId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "创作任务不存在"));
+        if (mediaUploadMapper.claimDraftVideoProbe(taskId, ownerId, versionId, probeAttemptId) != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前成片正在探测或状态已变化，请刷新后重试");
+        }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

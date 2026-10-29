@@ -21,5 +21,6 @@ public record UserLlmConfigResponse(
         String embeddingApiKeyMasked,
         String embeddingModelName,
         LocalDateTime createTime,
-        LocalDateTime updateTime
+        LocalDateTime updateTime,
+        boolean activeForText
 ) {}

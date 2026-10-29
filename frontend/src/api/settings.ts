@@ -1,5 +1,6 @@
 import type {
   ConnectivityCheckResult,
+  CurrentTextModel,
   SettingsStatus,
   UserLlmConfigRecord,
   UserLlmConfigSavePayload,
@@ -36,6 +37,23 @@ export function refreshBillingRate() {
 /** 列出用户的所有 LLM/Embedding 配置 */
 export function listLlmConfigs(userId?: string) {
   return get<UserLlmConfigRecord[]>('/settings/llm-config', {
+    params: userId ? { userId } : undefined,
+  })
+}
+
+export function getCurrentTextModel() {
+  return get<CurrentTextModel>('/settings/llm-config/current-text')
+}
+
+/** 显式切换后续文本调用；保存配置与选择配置分开。 */
+export function activateTextLlmConfig(configId: string, userId?: string) {
+  return post<UserLlmConfigRecord>(`/settings/llm-config/${encodeURIComponent(configId)}/activate`, undefined, {
+    params: userId ? { userId } : undefined,
+  })
+}
+
+export function useEnvironmentTextModel(userId?: string) {
+  return post<void>('/settings/llm-config/use-environment', undefined, {
     params: userId ? { userId } : undefined,
   })
 }

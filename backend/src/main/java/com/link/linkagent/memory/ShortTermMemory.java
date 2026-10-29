@@ -57,6 +57,10 @@ public class ShortTermMemory {
         return memoryStore.getRecentMessages(sessionId);
     }
 
+    public void mergeRestoredMessages(String sessionId, List<MemoryMessage> messages) {
+        memoryStore.mergeRestoredMessages(sessionId, messages);
+    }
+
     /**
      * 向指定会话追加一条消息。
      * <p>
@@ -127,11 +131,16 @@ public class ShortTermMemory {
      * @param cursorMessageId      长期记忆游标（已抽取到的最大消息 id），为 null 表示不做游标判断
      */
     public void keepRecentMessages(String sessionId, int retainedMessageCount, Long cursorMessageId) {
-        List<MemoryMessage> messages = memoryStore.getRecentMessages(sessionId);
+        keepRecentMessages(sessionId, memoryStore.getRecentMessages(sessionId), retainedMessageCount, cursorMessageId);
+    }
+
+    /** 恢复后的上下文可能比旧缓存完整，摘要和裁剪使用同一快照；返回已裁前缀中最大的落库 ID。 */
+    public long keepRecentMessages(String sessionId, List<MemoryMessage> messages,
+                                   int retainedMessageCount, Long cursorMessageId) {
         // 防止负值配置：若 retainedMessageCount 为负，取 0 语义为「清空所有消息」
         int safeRetainedMessageCount = Math.max(0, retainedMessageCount);
         if (messages.isEmpty()) {
-            return;
+            return 0;
         }
         // 只按条数保留的裁剪起点：从末尾往前保留 safeRetainedMessageCount 条
         int byCountFromIndex = Math.max(0, messages.size() - safeRetainedMessageCount);
@@ -139,13 +148,11 @@ public class ShortTermMemory {
         int byCursorFromIndex = firstMessageNotCoveredByCursor(messages, cursorMessageId);
         // 两个条件取更靠前的位置：既满足保留条数，也满足游标没走到的消息一条不删
         int fromIndex = Math.min(byCountFromIndex, byCursorFromIndex);
-        if (fromIndex >= messages.size()) {
-            // 全部消息都不该保留，清空
-            memoryStore.replaceMessages(sessionId, List.of());
-            return;
-        }
-        // subList(fromIndex, size()) 取尾部：保证丢弃的是最旧的、已被摘要覆盖且已被提取的消息
-        memoryStore.replaceMessages(sessionId, messages.subList(fromIndex, messages.size()));
+        List<MemoryMessage> removed = messages.subList(0, fromIndex);
+        // 摘要可能耗时数分钟，不能用旧快照替换整个列表，把这期间追加的轮次一并删掉。
+        memoryStore.removeSnapshotMessages(sessionId, removed);
+        return removed.stream().map(MemoryMessage::messageId).filter(java.util.Objects::nonNull)
+                .mapToLong(Long::longValue).max().orElse(0);
     }
 
     /**

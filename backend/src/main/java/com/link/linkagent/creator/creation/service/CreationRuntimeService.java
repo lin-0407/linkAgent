@@ -89,7 +89,9 @@ public class CreationRuntimeService {
     public Snapshot snapshot(String taskId, String ownerId) {
         requireTask(taskId, ownerId);
         var current = mapper.workspace(taskId, ownerId);
-        if (current.isEmpty()) return new Snapshot(false, -1, null, null, false, "CREATION_RUNTIME_ONLY");
+        // 执行器能力来自部署配置，新任务尚未建立工作区也可以受理首版。
+        boolean available=renderer!=null && worker!=null && renderer.isEnabled() && worker.isEnabled();
+        if (current.isEmpty()) return new Snapshot(false, -1, null, null, available, "CREATION_RUNTIME_ONLY");
         var value = current.get();
         RunView active = value.activeRunId() == null ? null : RunView.from(run(taskId, ownerId, value.activeRunId()));
         Budget budget = null;
@@ -100,7 +102,6 @@ public class CreationRuntimeService {
                     blocked(totals) || totals.occupied().compareTo(value.budgetLimitCny()) >= 0);
         }
         // 可受理制作不代表本条内容已就绪，更不代表初始化预算就允许扣费。
-        boolean available=renderer!=null && worker!=null && renderer.isEnabled() && worker.isEnabled();
         return new Snapshot(budget != null, value.workspaceRevision(), budget, active, available, "CREATION_RUNTIME_ONLY");
     }
 

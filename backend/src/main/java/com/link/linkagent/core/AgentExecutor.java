@@ -12,6 +12,7 @@ import com.link.linkagent.llm.ToolCallingCallResult;
 import com.link.linkagent.llm.usage.LlmUsageContext;
 import com.link.linkagent.memory.AgentTraceMapper;
 import com.link.linkagent.memory.ConversationSessionMapper;
+import com.link.linkagent.memory.ConversationHistory;
 import com.link.linkagent.memory.LongTermMemory;
 import com.link.linkagent.core.multi.MultiAgentOrchestrator;
 import com.link.linkagent.core.plan.PlanAndExecuteAgent;
@@ -90,6 +91,7 @@ public class AgentExecutor {
     private final MultiAgentOrchestrator multiAgentOrchestrator;
     private final AgentTraceMapper agentTraceMapper;
     private final ConversationSessionMapper conversationSessionMapper;
+    private final ConversationHistory conversationHistory;
 
     /** 本地 token 计量器；单测构造器不注入时为 null，此时跳过压缩判断。 */
     private final TokenCounter tokenCounter;
@@ -272,6 +274,7 @@ public class AgentExecutor {
         this.multiAgentOrchestrator = multiAgentOrchestrator;
         this.agentTraceMapper = agentTraceMapper;
         this.conversationSessionMapper = conversationSessionMapper;
+        this.conversationHistory = new ConversationHistory(conversationSessionMapper, shortTermMemory);
         this.tokenCounter = tokenCounter;
         this.toolResultCompressor = toolResultCompressor;
         this.summaryFactExtractor = summaryFactExtractor;
@@ -334,6 +337,7 @@ public class AgentExecutor {
         requestContext=TextUtil.trimToDefault(requestContext, "");
         String resolvedSessionId = resolveSessionId(sessionId);
         String resolvedUserId = resolveUserId(userId);
+        conversationHistory.checkOwner(resolvedSessionId, resolvedUserId);
         AgentPersistenceContext persistenceContext = startAgentTrace(resolvedSessionId, resolvedUserId, userMessage);
         // 采集本轮第一次真实请求的信封；压缩会发生在下一轮组装上下文时，届时用它重放前缀。
         // 计划执行模式成功时本函数会提前返回，那种轮次没有可复用的真实对话请求，作用域留到计划模式之后再开启。
@@ -823,7 +827,8 @@ public class AgentExecutor {
      */
     private ContextAssembly buildConversationContext(String sessionId, String userId, String userMessage,
                                                      boolean longTermMemoryEnabled) {
-        List<MemoryMessage> recentMessages = shortTermMemory.getRecentMessages(sessionId);
+        ConversationHistory.Snapshot history = conversationHistory.load(sessionId, userId);
+        List<MemoryMessage> recentMessages = history.messages();
         if (longTermMemoryEnabled && recentMessages.isEmpty()) {
             // 首次读取必须先等旧历史写入完成，否则预算尾部中的真实事件会在新会话里不可见。
             longTermMemoryExtractionCoordinator.completeHistoryBeforeFirstRead(userId, sessionId);
@@ -833,7 +838,8 @@ public class AgentExecutor {
         List<LongTermMemoryRecord> longTermMemories = longTermMemoryEnabled
                 ? longTermMemory.retrieveForContext(userId, userMessage)
                 : List.of();
-        AssembledContext assembled = assembleContext(sessionId, userId, recentMessages, userMessage, null, longTermMemories);
+        AssembledContext assembled = assembleContext(sessionId, userId, recentMessages, userMessage,
+                history.ignoreLegacySummary() ? "" : null, longTermMemories);
         String context = assembled.text();
         String currentSummary = assembled.summary();
         if (tokenCounter == null) {
@@ -870,7 +876,9 @@ public class AgentExecutor {
         // 摘要调用尽量复用上一轮真实请求的前缀：25 万 token 只有与上一轮请求逐字节一致时才会命中缓存，
         // 自己另拼一份摘要 prompt 等于每轮冷启动一次（2026-10 缓存命中率优化）。
         SummaryReplayPrefix replay = buildReplayPrefix(sessionId, currentSummary, compressibleMessages);
-        String summary = summaryMemory.summarize(sessionId, compressibleMessages, replay);
+        String summary = history.ignoreLegacySummary()
+                ? summaryMemory.summarize(sessionId, compressibleMessages, replay, "")
+                : summaryMemory.summarize(sessionId, compressibleMessages, replay);
         if (TextUtil.isBlank(summary)) {
             // 摘要没通过（生成失败或复核不通过）时事实点也不落库：原文仍保留在短期记忆里，
             // 下一轮会重新抽取，现在写入只会让同一批消息重复进长期记忆。
@@ -895,7 +903,8 @@ public class AgentExecutor {
         }
         // 摘要评测没有长期记忆可依赖，被压缩的消息只剩摘要一个载体，尾部同样按 token 预算保留；
         // 生产路径还要按游标保住尚未提取的消息（A6 / D6）。
-        shortTermMemory.keepRecentMessages(sessionId, retainedCount, trimCursor);
+        long removedThroughMessageId = shortTermMemory.keepRecentMessages(
+                sessionId, recentMessages, retainedCount, trimCursor);
         // 重拼时必须显式带上刚生成的摘要：检查点要等压缩后的计量结果才能写库，
         // 此刻 getSummary 读库拿到的还是上一版摘要，不传新摘要模型就看不到刚被压缩掉的历史（2026-09-19 联调实测）。
         List<MemoryMessage> remainingMessages = shortTermMemory.getRecentMessages(sessionId);
@@ -904,7 +913,11 @@ public class AgentExecutor {
         String compressed = compressedContext.text();
         int compressedTokens = tokenCounter.count(compressed);
         // 摘要同时写进会话历史（role=summary 的检查点）：刷新页面或重启后端后，仍然能看到"这里压缩过"和摘要正文。
-        summaryMemory.recordCompactionCheckpoint(sessionId, userId, summary, compressibleCount, tokens, compressedTokens);
+        Long previousBoundary = ConversationHistory.compressedThrough(history.summary());
+        long compressedThroughMessageId = Math.max(previousBoundary == null ? 0 : previousBoundary,
+                removedThroughMessageId);
+        summaryMemory.recordCompactionCheckpoint(sessionId, userId, summary, compressibleCount, tokens,
+                compressedTokens, compressedThroughMessageId);
         // 压缩成功：清掉失败冷却记录，下次到阈值正常触发。
         compactionFailureTokens.remove(sessionId);
         log.info("上下文已按 token 压缩，sessionId={}, 压缩前={} token, 压缩后={} token, 摘要前缀复用={}",
@@ -1907,6 +1920,7 @@ public class AgentExecutor {
         try {
             resolvedSessionId = resolveSessionId(sessionId);
             resolvedUserId = resolveUserId(userId);
+            conversationHistory.checkOwner(resolvedSessionId, resolvedUserId);
             persistenceContext = startAgentTrace(resolvedSessionId, resolvedUserId, userMessage);
 
             // 容器检测到对端断开（用户点停止、刷新、关页面）时同步置位，让这一轮尽早停止写记忆（F2）。

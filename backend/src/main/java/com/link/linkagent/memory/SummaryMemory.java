@@ -254,11 +254,16 @@ public class SummaryMemory {
      * @return 通过复核的新摘要文本；功能关闭、消息为空、生成或复核失败时返回 null（调用方据此决定不裁剪）
      */
     public String summarize(String sessionId, List<MemoryMessage> messages, SummaryReplayPrefix replay) {
+        return summarize(sessionId, messages, replay, null);
+    }
+
+    public String summarize(String sessionId, List<MemoryMessage> messages, SummaryReplayPrefix replay,
+                            String existingSummaryOverride) {
         if (!isSummaryMemoryEnabled() || messages == null || messages.isEmpty()) {
             return null;
         }
         // 上一版摘要只在这里读一次：摘要生成和复核必须用同一份基准，否则核对的是两个不同的事实集合。
-        String existingSummary = getSummary(sessionId);
+        String existingSummary = existingSummaryOverride == null ? getSummary(sessionId) : existingSummaryOverride;
         SummaryGeneration generation = generate(sessionId, existingSummary, messages, List.of(), replay);
         if (generation == null) {
             return null;
@@ -578,6 +583,11 @@ public class SummaryMemory {
      */
     public void recordCompactionCheckpoint(String sessionId, String userId, String summary, int compressedMessageCount,
                                            int tokensBefore, int tokensAfter) {
+        recordCompactionCheckpoint(sessionId, userId, summary, compressedMessageCount, tokensBefore, tokensAfter, null);
+    }
+
+    public void recordCompactionCheckpoint(String sessionId, String userId, String summary, int compressedMessageCount,
+                                           int tokensBefore, int tokensAfter, Long compressedThroughMessageId) {
         if (TextUtil.isBlank(summary)) {
             return;
         }
@@ -593,6 +603,10 @@ public class SummaryMemory {
             record.setRole(SUMMARY_MESSAGE_ROLE);
             record.setContent(normalized);
             record.setTokenCount(Math.max(0, tokensBefore - tokensAfter));
+            // 边界写在摘要行的内部元数据中；保留尾部可能早于摘要入库，不能用摘要自身 id 恢复。
+            if (compressedThroughMessageId != null) {
+                record.setToolArguments("{\"compressedThroughMessageId\":" + compressedThroughMessageId + "}");
+            }
             record.setCreateTime(LocalDateTime.now());
             conversationSessionMapper.insertMessage(record);
             log.info("摘要检查点已写入会话历史，sessionId={}, 压缩 {} 条消息, 释放 {} token",

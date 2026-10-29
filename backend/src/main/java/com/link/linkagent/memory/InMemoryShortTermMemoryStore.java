@@ -8,6 +8,8 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,8 +47,51 @@ public class InMemoryShortTermMemoryStore implements ShortTermMemoryStore {
 
     @Override
     public void replaceMessages(String sessionId, List<MemoryMessage> messages) {
-        Deque<MemoryMessage> newMessages = new ArrayDeque<>(messages);
-        sessionMessages.put(sessionId, newMessages);
+        Deque<MemoryMessage> current = sessionMessages.computeIfAbsent(sessionId, key -> new ArrayDeque<>());
+        // 保留同一个锁对象，避免恢复或追加持有被替换的旧 Deque，写入后却不再可见。
+        synchronized (current) {
+            current.clear();
+            current.addAll(messages);
+        }
+    }
+
+    @Override
+    public void mergeRestoredMessages(String sessionId, List<MemoryMessage> messages) {
+        Deque<MemoryMessage> current = sessionMessages.computeIfAbsent(sessionId, key -> new ArrayDeque<>());
+        synchronized (current) {
+            List<MemoryMessage> merged = new ArrayList<>();
+            var ids = new HashSet<Long>();
+            for (MemoryMessage message : messages) {
+                if (message.messageId() == null || ids.add(message.messageId())) merged.add(message);
+            }
+            for (MemoryMessage message : current) {
+                if (message.messageId() == null || ids.add(message.messageId())) merged.add(message);
+            }
+            current.clear();
+            current.addAll(merged);
+        }
+    }
+
+    @Override
+    public void removeSnapshotMessages(String sessionId, List<MemoryMessage> messages) {
+        Deque<MemoryMessage> current = sessionMessages.get(sessionId);
+        if (current == null || messages.isEmpty()) return;
+        var ids = new HashSet<Long>();
+        var anonymous = new HashMap<MemoryMessage, Integer>();
+        for (MemoryMessage message : messages) {
+            if (message.messageId() != null) ids.add(message.messageId());
+            else anonymous.merge(message, 1, Integer::sum);
+        }
+        synchronized (current) {
+            current.removeIf(message -> {
+                if (message.messageId() != null) return ids.contains(message.messageId());
+                int count = anonymous.getOrDefault(message, 0);
+                if (count == 0) return false;
+                // 相同的未落库消息可能又追加了一次，只删除快照中的次数。
+                anonymous.put(message, count - 1);
+                return true;
+            });
+        }
     }
 
     @Override

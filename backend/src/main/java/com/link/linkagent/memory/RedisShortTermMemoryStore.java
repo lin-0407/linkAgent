@@ -54,6 +54,48 @@ public class RedisShortTermMemoryStore implements ShortTermMemoryStore {
 
     private final StringRedisTemplate redisTemplate;
 
+    private static final RedisScript<Long> RESTORE_MESSAGES_SCRIPT = new DefaultRedisScript<>("""
+            local merged = {}
+            local ids = {}
+            local function add(value)
+              local id = string.match(value, '^(%d+)\\t')
+              if id == nil or ids[id] == nil then
+                merged[#merged + 1] = value
+                if id ~= nil then ids[id] = true end
+              end
+            end
+            for i = 1, #ARGV do add(ARGV[i]) end
+            local cached = redis.call('LRANGE', KEYS[1], 0, -1)
+            for i = 1, #cached do add(cached[i]) end
+            redis.call('DEL', KEYS[1])
+            for i = 1, #merged do redis.call('RPUSH', KEYS[1], merged[i]) end
+            return #merged
+            """, Long.class);
+
+    private static final RedisScript<Long> REMOVE_SNAPSHOT_MESSAGES_SCRIPT = new DefaultRedisScript<>("""
+            local ids = {}
+            local anonymous = {}
+            for i = 1, #ARGV do
+              local id = string.match(ARGV[i], '^(%d+)\\t')
+              if id ~= nil then ids[id] = true
+              else anonymous[ARGV[i]] = (anonymous[ARGV[i]] or 0) + 1 end
+            end
+            local kept = {}
+            local cached = redis.call('LRANGE', KEYS[1], 0, -1)
+            for i = 1, #cached do
+              local value = cached[i]
+              local id = string.match(value, '^(%d+)\\t')
+              if id ~= nil then
+                if ids[id] == nil then kept[#kept + 1] = value end
+              elseif (anonymous[value] or 0) > 0 then
+                anonymous[value] = anonymous[value] - 1
+              else kept[#kept + 1] = value end
+            end
+            redis.call('DEL', KEYS[1])
+            for i = 1, #kept do redis.call('RPUSH', KEYS[1], kept[i]) end
+            return #kept
+            """, Long.class);
+
     public RedisShortTermMemoryStore(StringRedisTemplate redisTemplate) {
         this.redisTemplate = redisTemplate;
     }
@@ -84,6 +126,19 @@ public class RedisShortTermMemoryStore implements ShortTermMemoryStore {
                 .map(this::serialize)
                 .toArray();
         redisTemplate.execute(REPLACE_MESSAGES_SCRIPT, List.of(key), values);
+    }
+
+    @Override
+    public void mergeRestoredMessages(String sessionId, List<MemoryMessage> messages) {
+        redisTemplate.execute(RESTORE_MESSAGES_SCRIPT, List.of(buildKey(sessionId)),
+                messages.stream().map(this::serialize).toArray());
+    }
+
+    @Override
+    public void removeSnapshotMessages(String sessionId, List<MemoryMessage> messages) {
+        if (messages.isEmpty()) return;
+        redisTemplate.execute(REMOVE_SNAPSHOT_MESSAGES_SCRIPT, List.of(buildKey(sessionId)),
+                messages.stream().map(this::serialize).toArray());
     }
 
     @Override

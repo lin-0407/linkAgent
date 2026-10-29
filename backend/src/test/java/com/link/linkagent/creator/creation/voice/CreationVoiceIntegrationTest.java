@@ -177,6 +177,8 @@ class CreationVoiceIntegrationTest {
         });
         generator = mock(StoryboardTextGenerator.class);
         when(generator.modelName()).thenReturn("configured-test-text-model");
+        when(generator.configuration()).thenReturn(new StoryboardTextGenerator.Configuration(
+                "configured-test-text-model", "isolated-voice-text-provider"));
         storyboards = tx(new StoryboardPersistence(boards, media, tasks, runs, workspace, runtime,
                 new CreationAssetService(session.getMapper(CreationAssetMapper.class),
                         tx(new CreationAssetPersistence(session.getMapper(CreationAssetMapper.class))),

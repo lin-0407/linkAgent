@@ -116,6 +116,7 @@ public class PreflightVideoAnalysisService {
         if (estimate == null) estimate = chargeGate.upperBound("MEDIA_VIDEO");
         String chargeKey = "video-" + review.reviewId() + "-" + callId;
         boolean sent = false;
+        boolean accounted = false;
         try {
             var charge = chargeGate.reserve(review.reviewId(), "MEDIA_VIDEO", chargeKey,
                     estimate, "视频理解 " + properties.getPreflight().getVideoModel());
@@ -127,6 +128,11 @@ public class PreflightVideoAnalysisService {
             VideoUnderstandingProvider.AnalysisResult providerResult = provider.analyze(
                     videoUrl, buildPrompt(review, preview.durationMs(), existingEvidence)
             );
+            BigDecimal actualCost = actualVideoCost(providerResult.inputTokens(), providerResult.outputTokens());
+            if (actualCost == null) chargeGate.unknown(review.reviewId(), chargeKey);
+            else chargeGate.settle(review.reviewId(), chargeKey, actualCost, "video-" + callId);
+            accounted = true;
+            mapper.recordCallUsage(callId, providerResult.inputTokens(), providerResult.outputTokens(), actualCost);
             ParsedAnalysis parsed = parse(providerResult.content(), preview.durationMs(), existingEvidence);
             mapper.deleteIssuesByReview(review.reviewId());
             mapper.deleteEvidenceByStep(review.reviewId(), step.stepId());
@@ -155,18 +161,16 @@ public class PreflightVideoAnalysisService {
                 }
                 issueCount++;
             }
-            BigDecimal actualCost = actualVideoCost(providerResult.inputTokens(), providerResult.outputTokens());
             if (mapper.completeVideoCall(callId, providerResult.inputTokens(), providerResult.outputTokens(),
                     actualCost, issueCount) != 1) {
                 throw new VideoAnalysisException("视频理解用量保存失败");
             }
-            if (actualCost == null) chargeGate.unknown(review.reviewId(), chargeKey);
-            else chargeGate.settle(review.reviewId(), chargeKey, actualCost, "video-" + callId);
             return new Result(parsed.executiveSummary(), issueCount, actualCost);
         } catch (RuntimeException exception) {
+            if (!sent) mapper.recordCallUsage(callId, null, null, BigDecimal.ZERO);
             mapper.failVideoCall(callId, "VIDEO_ANALYSIS_FAILED", truncate(exception.getMessage()));
             // 只有真正发出过请求才可能是未知费用；未发送的预留由运行收尾释放。
-            if (sent) chargeGate.unknown(review.reviewId(), chargeKey);
+            if (sent && !accounted) chargeGate.unknown(review.reviewId(), chargeKey);
             throw exception instanceof VideoAnalysisException
                     ? exception : new VideoAnalysisException("视频理解调用失败", exception);
         }

@@ -232,9 +232,9 @@ public class KnowledgeReferenceFetchService {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "案例库采集输出目录不在项目根目录下");
         }
         try {
-            // 固定写入项目根 export 目录，避免请求参数影响服务端写入位置。
+            // 同一 BV 的完整采集和元数据刷新也会并发，必须各自读取本次进程独享的产物。
             Files.createDirectories(outputDir);
-            return outputDir;
+            return Files.createTempDirectory(outputDir, "fetch-");
         } catch (IOException exception) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "创建案例库采集输出目录失败");
         }

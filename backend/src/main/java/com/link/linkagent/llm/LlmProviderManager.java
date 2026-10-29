@@ -127,11 +127,7 @@ public class LlmProviderManager {
      *       响应格式异常等——这些是 Provider 的 bug，冷却没有意义）。</li>
      * </ul>
      * <p>
-     * <b>Token 用量缺失说明</b>
-     * 当前直接通过 RestClient 调用 OpenAI 兼容 API，解析响应中的 content 和 model 字段，
-     * 但没有解析响应中的 usage 部分（token 用量）。返回的 LlmCallResult 的 token 字段均为 null。
-     * 这是因为回退链是"备用路径"，不需要成本统计的精确度与主路径一致——
-     * 先保证可用性，后续再补充 usage 解析。
+     * 备用响应与主响应使用相同的用量口径；供应商未返回的字段保留 null，不能冒充零费用。
      *
      * @param systemPrompt 系统提示词
      * @param userMessage 用户输入文本
@@ -156,9 +152,17 @@ public class LlmProviderManager {
                 JsonNode root = objectMapper.readTree(responseBody);
                 String content = extractContent(root);
                 String modelName = extractModelName(root, provider.getModel());
+                JsonNode usage = root.path("usage");
+                Integer promptTokens = tokenValue(usage.path("prompt_tokens"));
+                Integer completionTokens = tokenValue(usage.path("completion_tokens"));
+                Integer totalTokens = tokenValue(usage.path("total_tokens"));
+                Integer cachedTokens = tokenValue(usage.path("prompt_tokens_details").path("cached_tokens"));
+                if (cachedTokens == null) cachedTokens = tokenValue(usage.path("prompt_cache_hit_tokens"));
+                JsonNode finishReason = root.path("choices").path(0).path("finish_reason");
 
                 log.info("备用 Provider {} 调用成功，耗时 {}ms", provider.getName(), elapsedMs);
-                return new LlmCallResult(content, modelName, null, null, null, elapsedMs);
+                return new LlmCallResult(content, modelName, promptTokens, completionTokens, totalTokens,
+                        cachedTokens, finishReason.isTextual() ? finishReason.textValue() : null, elapsedMs);
             } catch (RestClientException e) {
                 // HTTP 层异常（网络不通、超时等）
                 log.warn("备用 Provider {} 调用失败（网络/HTTP异常）：{}", provider.getName(), e.getMessage());
@@ -181,6 +185,11 @@ public class LlmProviderManager {
             message += "，最后一次异常：" + lastException.getMessage();
         }
         throw new AllProvidersFailedException(message, lastException);
+    }
+
+    private Integer tokenValue(JsonNode value) {
+        return value.isIntegralNumber() && value.canConvertToInt() && value.intValue() >= 0
+                ? value.intValue() : null;
     }
 
     /**

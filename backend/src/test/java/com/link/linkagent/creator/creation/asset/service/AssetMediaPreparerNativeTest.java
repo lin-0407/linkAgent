@@ -113,7 +113,23 @@ class AssetMediaPreparerNativeTest {
     @Test void rotationMetadataBecomesUprightPixels() throws Exception {
         Path base = directory.resolve("base.mp4"), source = directory.resolve("rotated.mov");
         ffmpeg("-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30:duration=0.5", "-c:v", "libx264", "-an", base.toString());
-        ffmpeg("-i", base.toString(), "-c", "copy", "-metadata:s:v:0", "rotate=90", source.toString());
+        Path help = directory.resolve("ffmpeg-help.txt");
+        runFixtureTool("ffmpeg", help, "-hide_banner", "-h", "full");
+        if (Files.readString(help).contains("-display_rotation")) {
+            ffmpeg("-display_rotation", "90", "-i", base.toString(), "-c", "copy", source.toString());
+        } else {
+            ffmpeg("-i", base.toString(), "-c", "copy", "-metadata:s:v:0", "rotate=90", source.toString());
+        }
+        Path probe = directory.resolve("rotation-fixture.json");
+        runFixtureTool("ffprobe", probe, "-v", "error", "-select_streams", "v:0", "-show_streams", "-of", "json", source.toString());
+        var stream = new ObjectMapper().readTree(Files.readString(probe)).path("streams").get(0);
+        boolean hasRotation = false;
+        for (var side : stream.path("side_data_list")) {
+            if ("Display Matrix".equals(side.path("side_data_type").asText())
+                    && Math.floorMod(side.path("rotation").asInt(), 360) == 90
+                    && !side.path("displaymatrix").asText().isBlank()) hasRotation = true;
+        }
+        assertTrue(hasRotation, "测试输入必须先确认带有真实的 90 度 Display Matrix：" + stream);
         var result = preparer().prepare(source, output(), "VIDEO_CLIP", () -> false);
         assertEquals(90, result.width()); assertEquals(160, result.height());
         for (var side : result.normalizedMetadata().path("streams").get(0).path("side_data_list")) assertEquals(0, side.path("rotation").asInt());
@@ -170,6 +186,16 @@ class AssetMediaPreparerNativeTest {
         try {
             assertTrue(process.waitFor(30, TimeUnit.SECONDS), "生成原生测试素材超时");
             assertEquals(0, process.exitValue(), () -> { try { return Files.readString(log); } catch (Exception e) { return e.toString(); } });
+        } finally { if (process.isAlive()) process.destroyForcibly(); }
+    }
+
+    private void runFixtureTool(String executable, Path output, String... arguments) throws Exception {
+        List<String> command = new ArrayList<>(List.of(executable));
+        command.addAll(List.of(arguments));
+        Process process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile()).start();
+        try {
+            assertTrue(process.waitFor(30, TimeUnit.SECONDS), "检查原生测试夹具超时");
+            assertEquals(0, process.exitValue(), () -> { try { return Files.readString(output); } catch (Exception e) { return e.toString(); } });
         } finally { if (process.isAlive()) process.destroyForcibly(); }
     }
 }

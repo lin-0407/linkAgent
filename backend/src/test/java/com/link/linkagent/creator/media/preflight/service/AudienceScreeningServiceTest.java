@@ -108,6 +108,8 @@ class AudienceScreeningServiceTest {
                 .isInstanceOf(AudienceScreeningService.AudienceScreeningException.class);
         verify(single,times(1)).generate(anyString(),anyString(),eq(4096));org.mockito.Mockito.verifyNoInteractions(llm);
         verify(gate).settle(eq("review-1"),anyString(),eq(new BigDecimal("0.001")),anyString());
+        verify(mapper).recordCallUsage(anyString(),eq(120L),eq(40L),eq(new BigDecimal("0.001")));
+        verify(gate,org.mockito.Mockito.never()).unknown(anyString(),anyString());
         verify(mapper,org.mockito.Mockito.never()).insertAudienceScreening(any());
     }
 

@@ -75,7 +75,9 @@ public class StoryboardWorker implements AutoCloseable {
         String key="storyboard:"+run.runId();Future<StoryboardTextGenerator.Raw> future=null;
         try{
             JsonNode request=codec.read(run.requestJson()),price=request.path("price");
-            if(!"STORYBOARD".equals(request.path("purpose").asText()) || !generator.modelName().equals(price.path("model").asText()))throw new IllegalStateException("MODEL_CHANGED");
+            String expectedTextConfiguration=price.path("textConfigurationFingerprint").asText();
+            if(!"STORYBOARD".equals(request.path("purpose").asText()) || expectedTextConfiguration.isBlank())throw new IllegalStateException("MODEL_CHANGED");
+            var preparedTextCall=generator.prepare(expectedTextConfiguration);
             var old=runtime.findCharge(run.taskId(),run.ownerId(),run.runId(),key);
             if(old.isPresent())throw new IllegalStateException(old.get().sentAt()==null?"PREVIOUS_ATTEMPT_NOT_SENT":"PREVIOUS_CALL_UNCERTAIN");
             BigDecimal reservation=price.path("reservationCny").decimalValue();
@@ -88,7 +90,7 @@ public class StoryboardWorker implements AutoCloseable {
             String prompt=prompt();String input=codec.write(request.path("context"));
             future=calls.submit(()->{
                 try(var ignored=LlmUsageContext.open(run.taskId(),"故事板准备")){
-                    var raw=generator.generate(prompt,input,price.path("maxOutputTokens").asInt());
+                    var raw=preparedTextCall.generate(prompt,input,price.path("maxOutputTokens").asInt());
                     settle(run,key,price,raw);return raw;
                 }
             });
@@ -102,11 +104,13 @@ public class StoryboardWorker implements AutoCloseable {
             persistence.finish(job,run,candidate,frozen);
         }catch(Exception ex){
             if(future!=null && !future.isDone())future.cancel(true);
+            String code=ex instanceof IllegalStateException && "MODEL_CHANGED".equals(ex.getMessage())
+                    ? "STORYBOARD_MODEL_CHANGED" : "STORYBOARD_PREPARATION_FAILED";
             try{
                 var charge=runtime.findCharge(run.taskId(),run.ownerId(),run.runId(),key);if(charge.isPresent() && charge.get().sentAt()!=null)runtime.markUnknown(run.taskId(),run.ownerId(),key);
                 var now=runtime.getRun(run.taskId(),run.ownerId(),run.runId());
                 if("CANCEL_REQUESTED".equals(now.status()))runtime.acknowledgeCancellation(run.taskId(),run.ownerId(),run.runId(),worker,run.leaseGeneration());
-                else if(!stopping.get() && !lost.get())runtime.fail(run.taskId(),run.ownerId(),run.runId(),worker,run.leaseGeneration(),"STORYBOARD_PREPARATION_FAILED");
+                else if(!stopping.get() && !lost.get())runtime.fail(run.taskId(),run.ownerId(),run.runId(),worker,run.leaseGeneration(),code);
             }catch(RuntimeException fence){log.info("故事板结果等待原运行收尾，运行={}",run.runId());}
             if(ex instanceof InterruptedException)Thread.currentThread().interrupt();
         }finally{pulse.cancel(false);}

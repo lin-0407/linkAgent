@@ -41,7 +41,6 @@ public interface UserLlmConfigMapper {
                 #{createTime}, #{updateTime}
             )
             ON DUPLICATE KEY UPDATE
-                config_id = VALUES(config_id),
                 llm_base_url = VALUES(llm_base_url),
                 llm_api_key_enc = IF(VALUES(llm_api_key_enc) IS NULL, llm_api_key_enc, VALUES(llm_api_key_enc)),
                 llm_model_name = VALUES(llm_model_name),
@@ -77,6 +76,17 @@ public interface UserLlmConfigMapper {
             LIMIT 1
             """)
     Optional<UserLlmConfigRecord> findByConfigId(@Param("configId") String configId);
+
+    @Select("""
+            SELECT id, config_id, user_id, provider,
+                   llm_base_url, llm_api_key_enc, llm_model_name,
+                   embedding_base_url, embedding_api_key_enc, embedding_model_name,
+                   create_time, update_time, is_deleted
+            FROM user_llm_config
+            WHERE user_id = #{userId} AND provider = #{provider} AND is_deleted = 0
+            LIMIT 1
+            """)
+    Optional<UserLlmConfigRecord> findByUserAndProvider(@Param("userId") String userId, @Param("provider") String provider);
 
     @Update("""
             UPDATE user_llm_config

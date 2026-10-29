@@ -8,6 +8,7 @@ import org.apache.ibatis.annotations.Result;
 import org.apache.ibatis.annotations.ResultMap;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 import java.util.Optional;
@@ -70,4 +71,12 @@ public interface RuntimeSettingMapper {
     int upsert(@Param("settingKey") String settingKey,
                @Param("settingValue") String settingValue,
                @Param("description") String description);
+
+    /** 只清除仍指向被删除配置的选择，不能覆盖并发选中的另一份配置。 */
+    @Update("""
+            UPDATE app_runtime_setting SET setting_value = ''
+            WHERE setting_key = #{settingKey} AND setting_value = #{expectedValue} AND is_deleted = 0
+            """)
+    int clearIfMatches(@Param("settingKey") String settingKey,
+                       @Param("expectedValue") String expectedValue);
 }

@@ -76,46 +76,51 @@ public class AudienceScreeningService {
         // 文本模型没有供应商账单，先按保守上界预留，拿到真实 token 后按配置单价结算。
         String chargeKey = "text-" + review.reviewId() + "-" + callId;
         boolean sent = false;
+        boolean accounted = false;
         // Worker 没有 HTTP 请求上下文，需显式把文本用量归到当前创作任务。
         try (LlmUsageContext.UsageScope ignored = LlmUsageContext.open(review.taskId(), "AI观众试映")) {
             var charge = chargeGate.reserve(review.reviewId(), "MEDIA_TEXT_SCREENING", chargeKey,
                     chargeGate.upperBound("MEDIA_TEXT_SCREENING"), "观众试映 " + PROMPT_VERSION);
             if (!charge.markSent()) throw new AudienceScreeningException("观众试映调用已发送，不能重复提交");
             sent = true;
-            StructuredCallResult<AudienceOutput> call;
-            if(singleAttempt!=null && charge!=MediaCallChargeGate.NONE)
-                call=singleAttempt(review,callId,chargeKey,userPrompt(review,issues,evidence));
-            else call = llmService.chatStructuredWithUsage(systemPrompt(), userPrompt(review, issues, evidence), AudienceOutput.class);
+            StructuredCallResult<AudienceOutput> call = null;
+            com.link.linkagent.creator.creation.storyboard.service.StoryboardTextGenerator.Raw raw = null;
+            if(singleAttempt!=null && charge!=MediaCallChargeGate.NONE) {
+                var format=new org.springframework.ai.converter.BeanOutputConverter<>(AudienceOutput.class).getFormat();
+                raw=singleAttempt.generate(systemPrompt()+"\n"+format,userPrompt(review,issues,evidence),4096);
+            } else call = llmService.chatStructuredWithUsage(systemPrompt(), userPrompt(review, issues, evidence), AudienceOutput.class);
+            Integer inputTokens=raw==null?call.promptTokens():raw.inputTokens();
+            Integer outputTokens=raw==null?call.completionTokens():raw.outputTokens();
+            Long inputUsage=inputTokens==null?null:inputTokens.longValue();
+            Long outputUsage=outputTokens==null?null:outputTokens.longValue();
+            BigDecimal cost=chargeGate.estimateTextCost(inputUsage,outputUsage);
+            if(cost==null)chargeGate.unknown(review.reviewId(),chargeKey);
+            else chargeGate.settle(review.reviewId(),chargeKey,cost,"text-"+callId);
+            accounted=true;
+            // 用量先写入媒体账本，结构或持久化失败不能抹掉已经发生的文本费用。
+            mapper.recordCallUsage(callId,inputUsage,outputUsage,cost);
+            if(raw!=null)call=parseSingleAttempt(raw);
             List<ValidatedPersona> personas = validate(call.entity(), issues, evidence);
             persist(review.reviewId(), personas, issues, call.entity());
             if (mapper.completeTextScreeningCall(callId, call.promptTokens(), call.completionTokens(),
                     personas.size()) != 1) {
                 throw new AudienceScreeningException("观众试映用量保存失败");
             }
-            BigDecimal cost = chargeGate.estimateTextCost(
-                    call.promptTokens() == null ? null : call.promptTokens().longValue(),
-                    call.completionTokens() == null ? null : call.completionTokens().longValue());
-            if (cost == null) chargeGate.unknown(review.reviewId(), chargeKey);
-            else chargeGate.settle(review.reviewId(), chargeKey, cost, "text-" + callId);
             return new Result(personas.size(), call.promptTokens(), call.completionTokens());
         } catch (RuntimeException exception) {
+            if (!sent) mapper.recordCallUsage(callId, null, null, BigDecimal.ZERO);
             mapper.failTextScreeningCall(callId, "AUDIENCE_SCREENING_FAILED", "观众试映未完成，请查看任务状态与用量记录后处理");
-            if (sent) chargeGate.unknown(review.reviewId(), chargeKey);
+            if (sent && !accounted) chargeGate.unknown(review.reviewId(), chargeKey);
             throw exception instanceof AudienceScreeningException
                     ? exception : new AudienceScreeningException("三类观众试映生成失败", exception);
         }
     }
 
-    private StructuredCallResult<AudienceOutput> singleAttempt(PreflightReviewRecord review,String callId,String chargeKey,String input) {
-        var format=new org.springframework.ai.converter.BeanOutputConverter<>(AudienceOutput.class).getFormat();
-        var raw=singleAttempt.generate(systemPrompt()+"\n"+format,input,4096);
-        // 有用量的无效结构也是真实收费结果，先结算，不能在解析失败后伪装成未知或自动再发请求。
-        var cost=chargeGate.estimateTextCost(raw.inputTokens()==null?null:raw.inputTokens().longValue(),raw.outputTokens()==null?null:raw.outputTokens().longValue());
-        if(cost==null)chargeGate.unknown(review.reviewId(),chargeKey);
-        else chargeGate.settle(review.reviewId(),chargeKey,cost,"text-"+callId);
+    private StructuredCallResult<AudienceOutput> parseSingleAttempt(com.link.linkagent.creator.creation.storyboard.service.StoryboardTextGenerator.Raw raw) {
         try {
+            // 已付费的单次结果不能再因为代码块包裹或前后解释而作废：先取最外层 JSON 再严格校验字段。
             var entity=objectMapper.readerFor(AudienceOutput.class).with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                    .with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readValue(raw.content());
+                    .readValue(com.link.linkagent.util.LlmJsonUtil.extractJsonObject(raw.content()));
             Integer total=raw.inputTokens()==null || raw.outputTokens()==null?null:Math.addExact(raw.inputTokens(),raw.outputTokens());
             return new StructuredCallResult<>((AudienceOutput)entity,raw.inputTokens(),raw.outputTokens(),total,0L);
         } catch(Exception error){throw new AudienceScreeningException("观众试映结果格式无效，已保留本次用量，不自动重新付费");}

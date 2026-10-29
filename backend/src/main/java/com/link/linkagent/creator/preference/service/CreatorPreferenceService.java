@@ -10,6 +10,7 @@ import com.link.linkagent.creator.task.model.CreatorTaskRecord;
 import com.link.linkagent.util.NumberUtil;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,7 +36,7 @@ import java.util.UUID;
  *             写入偏好表。此类记录带 sourceReportId，可追溯到具体复盘报告。</li>
  *         <li>用户反馈：用户对 AI 建议的采用/拒绝/修改后采用，由
  *             {@link #recordAdoptionFeedback} 写入偏好表。此类记录以
- *             "ADOPTION_FEEDBACK_" 前缀标识，无 sourceReportId。</li>
+ *             "ADOPTION_FEEDBACK_" 前缀标识独立来源，不对应真实复盘报告。</li>
  *       </ul></li>
  *   <li><b>只沉淀已解析的报告</b>：{@link #saveFromReport} 只处理 PARSED 状态的报告，
  *       避免把 LLM 解析失败的原始文本（可能是乱码或不完整 JSON）误当成偏好带入后续任务。</li>
@@ -91,10 +92,15 @@ public class CreatorPreferenceService {
      * @param taskRecord   当前任务记录，提供 userId 和 taskId 用于关联
      * @param reportRecord 已生成的复盘报告记录，从中提取 creatorPreferenceInsight
      */
+    @Transactional
     public void saveFromReport(CreatorTaskRecord taskRecord, CreatorReportRecord reportRecord) {
-        if (taskRecord == null
-                || reportRecord == null
-                || !"PARSED".equals(reportRecord.getParseStatus())
+        if (taskRecord == null || reportRecord == null) {
+            return;
+        }
+        // 重新生成报告后，旧洞察不能继续冒充当前结果；用户反馈不受报告变化影响。
+        creatorPreferenceMapper.invalidateOtherReportPreferences(normalizeUserId(taskRecord.getUserId()),
+                taskRecord.getTaskId(), reportRecord.getReportId());
+        if (!"PARSED".equals(reportRecord.getParseStatus())
                 || !hasPreferenceContent(reportRecord.getCreatorPreferenceInsight())) {
             return;
         }
@@ -151,11 +157,13 @@ public class CreatorPreferenceService {
      * @return 偏好上下文字符串；无历史记录时返回 "暂无历史创作者偏好"
      */
     public String buildPromptContext(String userId) {
-        List<CreatorPreferenceRecord> records = creatorPreferenceMapper.listByUserId(
+        List<CreatorPreferenceRecord> records = creatorPreferenceMapper.listReportPreferencesByUserId(
                 normalizeUserId(userId),
                 PROMPT_HISTORY_LIMIT
         );
-        if (records.isEmpty()) {
+        List<CreatorPreferenceRecord> feedbackRecords = creatorPreferenceMapper.listAdoptionFeedbackByUserId(
+                normalizeUserId(userId), PROMPT_HISTORY_LIMIT);
+        if (records.isEmpty() && feedbackRecords.isEmpty()) {
             return "暂无历史创作者偏好";
         }
 
@@ -174,10 +182,6 @@ public class CreatorPreferenceService {
 
         // 第二段：追加采用/拒绝反馈记录（用户主动确认的真实行为），让 AI 了解用户实际偏好什么风格
         // 反馈记录的权重逻辑上高于复盘推测，因为它代表用户真实的选择而非 LLM 的猜测
-        List<CreatorPreferenceRecord> feedbackRecords = creatorPreferenceMapper.listAdoptionFeedbackByUserId(
-                normalizeUserId(userId),
-                PROMPT_HISTORY_LIMIT
-        );
         if (!feedbackRecords.isEmpty()) {
             builder.append("\n你的标题风格偏好（基于历史采用/拒绝记录）：\n");
             for (int index = 0; index < feedbackRecords.size(); index++) {
@@ -207,8 +211,8 @@ public class CreatorPreferenceService {
      * <ul>
      *   <li>与复盘沉淀记录使用不同的 Mapper 方法和 sourceReportId 标记区分：
      *       复盘记录走 {@code creatorPreferenceMapper.upsert}，反馈记录走
-     *       {@code creatorPreferenceMapper.upsertAdoptionFeedback}，两者分表/分索引存储。</li>
-     *   <li>sourceReportId 使用 "ADOPTION_FEEDBACK_" + preferenceType 格式标记，
+     *       {@code creatorPreferenceMapper.upsertAdoptionFeedback}，两者按来源标识独立存储。</li>
+     *   <li>sourceReportId 使用 "ADOPTION_FEEDBACK_" + preferenceType + 本次反馈 UUID 格式标记，
      *       而非真实 reportId。这样在查询时可以按前缀过滤反馈记录，也能区分具体反馈类型。</li>
      *   <li>preferenceContent 以 "[ADOPTED/MODIFIED/REJECTED] 描述" 格式存储，
      *       在 buildPromptContext 中直接拼接展示，无需二次解析。</li>
@@ -227,9 +231,8 @@ public class CreatorPreferenceService {
         record.setPreferenceId(UUID.randomUUID().toString());
         record.setUserId(normalizeUserId(userId));
         record.setSourceTaskId(taskId);
-        // 采用/拒绝反馈没有真实的 sourceReportId，使用 "ADOPTION_FEEDBACK_" + 类型 作为标记
-        // 该标记在查询层用于区分常规偏好记录和反馈记录，并按类型过滤
-        record.setSourceReportId("ADOPTION_FEEDBACK_" + preferenceType);
+        // 每次反馈独立留存，同一任务的后续反馈不能覆盖之前的选择或复盘洞察。
+        record.setSourceReportId("ADOPTION_FEEDBACK_" + preferenceType + "_" + record.getPreferenceId());
         record.setPreferenceContent("[" + preferenceType + "] " + description.trim());
         creatorPreferenceMapper.upsertAdoptionFeedback(record);
     }

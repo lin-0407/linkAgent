@@ -31,7 +31,7 @@ class PlatformOperationCatalogTest {
     @Test void everyRegisteredBusinessOperationMustResolveRealMethodAndDescribeParameters() {
         assertThat(catalog.index()).hasSizeGreaterThan(100);
         for (var entry:catalog.index()) assertThat(catalog.describe(entry.get("id")).parameters().path("type").asText()).isEqualTo("object");
-        assertThat(catalog.describe("creative.createInteractiveTask").parameters().at("/properties/request/properties/idea/minLength").asInt()).isEqualTo(10);
+        assertThat(catalog.describe("creative.createInteractiveTask").parameters().at("/properties/request/properties/idea/minLength").asInt()).isZero();
         assertThat(catalog.describe("blueprint.create").parameters().at("/properties/request/properties/videoCategory/enum").size()).isPositive();
         assertThat(catalog.describe("creative.uploadContextDocuments").interaction()).isEqualTo("FILES");
         assertThat(catalog.describe("models.saveConfig").parameters().at("/properties/request/properties/llmApiKey/writeOnly").asBoolean()).isTrue();
@@ -45,7 +45,8 @@ class PlatformOperationCatalogTest {
     @Test void validationMustApplyExistingDtoAndHttpParameterRulesBeforeInvocation() throws Exception {
         assertThatThrownBy(() -> catalog.validate("tasks.createTask",json.readTree("{}"),false)).hasMessageContaining("缺少请求参数");
         assertThatThrownBy(() -> catalog.validate("tasks.createTask",json.readTree("{\"request\":{\"taskName\":\"空任务\"}}"),false)).isInstanceOf(ConstraintViolationException.class);
-        assertThatThrownBy(() -> catalog.validate("creative.createInteractiveTask",json.readTree("{\"request\":{\"idea\":\"太短\"}}"),false)).isInstanceOf(ConstraintViolationException.class);
+        assertThatCode(() -> catalog.validate("creative.createInteractiveTask",json.readTree("{\"request\":{\"idea\":\"月\"}}"),false)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> catalog.validate("creative.createInteractiveTask",json.readTree("{\"request\":{\"idea\":\" \"}}"),false)).isInstanceOf(ConstraintViolationException.class);
         assertThatThrownBy(() -> catalog.validate("tasks.getTask",json.readTree("{\"taskId\":\"t\",\"sql\":\"delete\"}"),false)).hasMessageContaining("不接受参数");
         verifyNoInteractions(tasks);
     }

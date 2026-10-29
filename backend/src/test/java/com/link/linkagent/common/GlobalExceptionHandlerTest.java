@@ -11,15 +11,53 @@ import org.springframework.web.context.request.async.AsyncRequestNotUsableExcept
 import org.springframework.web.method.annotation.ExceptionHandlerMethodResolver;
 import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 class GlobalExceptionHandlerTest {
 
     private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
+
+    @Test
+    void shouldPreserveClientErrorStatusDuringActualMvcBinding() throws Exception {
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new RequestBindingController())
+                .setControllerAdvice(handler).build();
+
+        mvc.perform(get("/binding/header"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("message").value("缺少必需请求头：Idempotency-Key"));
+        mvc.perform(get("/binding/limit").param("limit", "abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("message").value("请求参数 limit 的类型不正确。"));
+        mvc.perform(post("/binding/body").contentType(MediaType.APPLICATION_XML).content("<body/>"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(header().string("Accept", MediaType.APPLICATION_JSON_VALUE));
+        mvc.perform(get("/binding/header").accept(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(status().isBadRequest()).andExpect(content().string(""));
+        mvc.perform(get("/binding/limit").param("limit", "abc").accept(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(status().isBadRequest()).andExpect(content().string(""));
+        mvc.perform(post("/binding/body").contentType(MediaType.APPLICATION_XML)
+                        .accept(MediaType.TEXT_EVENT_STREAM).content("<body/>"))
+                .andExpect(status().isUnsupportedMediaType()).andExpect(content().string(""));
+    }
+
+    @RestController
+    static class RequestBindingController {
+        @GetMapping("/binding/header")
+        String header(@RequestHeader("Idempotency-Key") String key) { return key; }
+        @GetMapping("/binding/limit")
+        int limit(@RequestParam("limit") int limit) { return limit; }
+        @PostMapping(value = "/binding/body", consumes = MediaType.APPLICATION_JSON_VALUE)
+        String body(@RequestBody String body) { return body; }
+    }
 
     @Test
     void shouldHandleDisconnectedAsyncResponseWithoutFallingBackToServerError() {

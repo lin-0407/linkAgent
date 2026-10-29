@@ -159,6 +159,7 @@ class DraftVideoProbeServiceTest {
                                            FfprobeMediaProbeService ffprobeService) {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.setEnabled(true);
+        when(mapper.lockMediaTask("task-1", "default")).thenReturn(java.util.Optional.of("task-1"));
         return new DraftVideoProbeService(
                 properties,
                 storageService,

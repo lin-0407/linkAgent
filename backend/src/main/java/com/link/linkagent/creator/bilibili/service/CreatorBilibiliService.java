@@ -185,6 +185,7 @@ public class CreatorBilibiliService {
         try {
             bilibiliMapper.updateAccountSyncResult(
                     account.getAccountId(),
+                    account.getBilibiliUid(),
                     account.getNickname(),
                     account.getAvatarUrl(),
                     "SYNC_FAILED",

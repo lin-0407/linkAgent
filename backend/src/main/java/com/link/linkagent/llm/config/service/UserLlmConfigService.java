@@ -2,6 +2,7 @@ package com.link.linkagent.llm.config.service;
 
 import com.link.linkagent.common.AesGcmUtil;
 import com.link.linkagent.llm.DeepSeekThinkingOptionsFactory;
+import com.link.linkagent.llm.RuntimeTextModelClient;
 import com.link.linkagent.llm.config.mapper.UserLlmConfigMapper;
 import com.link.linkagent.llm.config.model.UserLlmConfigRecord;
 import com.link.linkagent.llm.config.model.UserLlmConfigResponse;
@@ -46,6 +47,12 @@ public class UserLlmConfigService {
     private final String aesKey;
 
     private final UserLlmConfigMapper mapper;
+    private RuntimeTextModelClient runtimeTextModel;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void configureRuntimeTextModel(RuntimeTextModelClient runtimeTextModel) {
+        this.runtimeTextModel = runtimeTextModel;
+    }
 
     /**
      * 系统默认 LLM Base URL（来自 spring.ai.openai.base-url），
@@ -126,7 +133,7 @@ public class UserLlmConfigService {
         mapper.upsert(record);
 
         // 回读确认（拿到 upsert 后的持久化数据，包括已有 Key 的密文）
-        return mapper.findByConfigId(record.getConfigId())
+        return mapper.findByUserAndProvider(resolvedUserId, record.getProvider())
                 .map(this::toResponse)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
                         "配置保存后无法回读，请检查数据库连接"));
@@ -147,6 +154,21 @@ public class UserLlmConfigService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "配置不存在或已删除（configId=" + configId + "）");
         }
+        if (runtimeTextModel != null) runtimeTextModel.forgetDeletedConfig(configId);
+    }
+
+    public UserLlmConfigResponse activateTextConfig(String userId, String configId) {
+        runtimeTextModel.activate(userId, configId);
+        return mapper.findByConfigId(configId).map(this::toResponse)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "配置不存在"));
+    }
+
+    public void useEnvironment(String userId) {
+        runtimeTextModel.useEnvironment(userId);
+    }
+
+    public RuntimeTextModelClient.CurrentTextModel currentTextModel() {
+        return runtimeTextModel.current();
     }
 
     /**
@@ -256,7 +278,8 @@ public class UserLlmConfigService {
                 maskKey(record.getEmbeddingApiKeyEnc()),
                 record.getEmbeddingModelName(),
                 record.getCreateTime(),
-                record.getUpdateTime()
+                record.getUpdateTime(),
+                runtimeTextModel != null && record.getConfigId().equals(runtimeTextModel.activeConfigId())
         );
     }
 

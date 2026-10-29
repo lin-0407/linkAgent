@@ -6,6 +6,7 @@ import com.link.linkagent.llm.usage.LlmApiCallRecord;
 import com.link.linkagent.llm.usage.LlmApiUsageMapper;
 import com.link.linkagent.llm.usage.LlmApiUsageService;
 import com.link.linkagent.llm.usage.LlmUsageContext;
+import com.link.linkagent.llm.RuntimeTextModelClient;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -23,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
@@ -31,6 +33,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /** 使用本机 HTTP 假供应商核对真实请求次数和参数，不产生任何外部调用。 */
 class StoryboardTextGeneratorTest {
@@ -170,6 +173,32 @@ class StoryboardTextGeneratorTest {
             assertThat(raw.content()).isNullOrEmpty();
             assertThat(endpoint.requests).hasSize(1);
             verify(mapper, times(1)).insert(org.mockito.ArgumentMatchers.any());
+        }
+    }
+
+    @Test
+    void queuedAuthorizationRejectsChangedProviderAndPreparedCallKeepsAuthorizedSnapshot() throws Exception {
+        try (Endpoint first = new Endpoint(200, success("first", true));
+             Endpoint second = new Endpoint(200, success("second", true))) {
+            var firstModel = first.model(OpenAiChatOptions.builder().model("same-model").build());
+            var secondModel = second.model(OpenAiChatOptions.builder().model("same-model").build());
+            var selected = new AtomicReference<>(new RuntimeTextModelClient.ModelSnapshot(firstModel, "first-provider", false));
+            var runtime = mock(RuntimeTextModelClient.class);
+            when(runtime.snapshot(true, false, false)).thenAnswer(ignored -> selected.get());
+            var generator = first.generator(firstModel, mock(LlmApiUsageMapper.class));
+            generator.configureRuntimeTextModel(runtime);
+            String approved = generator.configurationFingerprint();
+            var prepared = generator.prepare(approved);
+            selected.set(new RuntimeTextModelClient.ModelSnapshot(secondModel, "second-provider", false));
+            assertThatThrownBy(() -> generator.prepare(approved)).hasMessage("MODEL_CHANGED");
+            assertThatThrownBy(() -> generator.generate("系统", "简报", 256, approved)).hasMessage("MODEL_CHANGED");
+            assertThat(first.requests).isEmpty();
+            assertThat(second.requests).isEmpty();
+            assertThat(prepared.generate("系统", "简报", 256).content()).isEqualTo("first");
+            assertThat(first.requests).hasSize(1);
+            assertThat(second.requests).isEmpty();
+            assertThat(generator.generate("系统", "简报", 256, generator.configurationFingerprint()).content()).isEqualTo("second");
+            assertThat(second.requests).hasSize(1);
         }
     }
 

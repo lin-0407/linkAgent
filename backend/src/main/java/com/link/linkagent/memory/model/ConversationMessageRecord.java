@@ -31,7 +31,8 @@ public class ConversationMessageRecord {
     /**
      * assistant 工具调用参数摘要（≤300 字）。
      * <p>
-     * 只有 tool_call 消息有值，tool 结果消息为 null；用它和 tool 结果行区分开。
+     * tool_call 消息用它和 tool 结果行区分开；summary 行复用此字段保存内部压缩边界元数据，
+     * 不能把摘要行转换为工具调用消息。
      */
     private String toolArguments;
     private Integer tokenCount;

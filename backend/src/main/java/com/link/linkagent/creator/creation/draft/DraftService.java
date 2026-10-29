@@ -68,7 +68,8 @@ public class DraftService {
         var snapshot=runtime.snapshot(task,owner);
         if(snapshot.workspaceRevision()!=input.expectedWorkspaceRevision() || snapshot.activeRun()!=null)throw conflict("工作区已变化或仍在制作，请刷新后重试");
         if(!snapshot.executionAvailable())throw conflict("自动制作执行器尚未启用，请先完成部署配置");
-        if(!snapshot.initialized())snapshot=runtime.initialize(task,owner,"draft-budget-"+key,snapshot.workspaceRevision(),input.budgetLimitCny());
+        // 内部命名空间用摘要隔离，外部合法的128字符键不能因追加前缀而越界。
+        if(!snapshot.initialized())snapshot=runtime.initialize(task,owner,"draft-budget-"+codec.hash(key),snapshot.workspaceRevision(),input.budgetLimitCny());
         else if(snapshot.budget().limitCny().compareTo(input.budgetLimitCny())!=0)
             snapshot=runtime.updateBudget(task,owner,snapshot.workspaceRevision(),input.budgetLimitCny());
         if(snapshot.budget().paidCallsBlocked())throw conflict("预算已用尽或存在待核实费用，请先处理费用后再制作");

@@ -174,6 +174,20 @@ class PreflightVideoAnalysisServiceTest {
         return fixture(response,1200L,180L,MediaCallChargeGate.NOOP);
     }
 
+    @Test void malformedContentKeepsKnownUsageAndDoesNotBlockTheBudgetAsUnknown() {
+        var gate=mock(MediaCallChargeGate.class);
+        when(gate.upperBound("MEDIA_VIDEO")).thenReturn(new BigDecimal("0.30"));
+        when(gate.reserve(anyString(),anyString(),anyString(),any(),anyString())).thenReturn(()->true);
+        var fixture=fixture("not-json",1200L,180L,gate);
+        assertThatThrownBy(()->fixture.service.analyze(review(),step()))
+                .isInstanceOf(PreflightVideoAnalysisService.VideoAnalysisException.class);
+        verify(fixture.mapper).recordCallUsage("call-1",1200L,180L,new BigDecimal("0.00043092"));
+        verify(gate).settle(eq("review-1"),anyString(),eq(new BigDecimal("0.00043092")),anyString());
+        verify(gate,never()).unknown(anyString(),anyString());
+        verify(fixture.mapper).failVideoCall(eq("call-1"),eq("VIDEO_ANALYSIS_FAILED"),anyString());
+        verify(fixture.mapper,never()).insertIssue(any());
+    }
+
     private Fixture fixture(String response,Long input,Long output,MediaCallChargeGate gate) {
         CreatorMediaProperties properties = new CreatorMediaProperties();
         properties.getPreflight().setDashScopeApiKey("test-key");

@@ -161,6 +161,12 @@ public class PreflightReviewWorker {
             handleRetryableFailure(reviewId, leaseOwner, exception);
         } finally {
             heartbeat.cancel(true);
+            try {
+                // 失败和取消也会产生真实费用，收尾同步金额，不能只在成功推进时汇总。
+                mapper.refreshActualCost(reviewId);
+            } catch (RuntimeException exception) {
+                log.warn("试映费用汇总更新失败 reviewId={}", reviewId, exception);
+            }
             busy.set(false);
         }
     }
@@ -416,10 +422,8 @@ public class PreflightReviewWorker {
 
     private BigDecimal currentCost(String reviewId) {
         BigDecimal total = mapper.sumActualCost(reviewId);
-        if (total == null || total.signum() == 0) {
-            total = mapper.findReviewInternal(reviewId).map(PreflightReviewRecord::actualCostUsd).orElse(null);
-        }
-        return total == null ? BigDecimal.ZERO.setScale(8) : total.setScale(8, RoundingMode.HALF_UP);
+        // 任一调用费用未知时，总费用也未知，不能用旧的部分合计或零覆盖它。
+        return total == null ? null : total.setScale(8, RoundingMode.HALF_UP);
     }
 
     private BigDecimal asrCost(Long usageSeconds) {

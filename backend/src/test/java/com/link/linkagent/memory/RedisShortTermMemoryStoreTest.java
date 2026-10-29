@@ -16,6 +16,9 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -96,6 +99,62 @@ class RedisShortTermMemoryStoreTest {
         } finally {
             connection.close();
         }
+    }
+
+    @Test
+    void shouldAtomicallyMergeRestoredHistoryWithExistingTailAndDeduplicateIds() {
+        List<MemoryMessage> restored = List.of(new MemoryMessage("Human", "旧问题", 1L),
+                new MemoryMessage("AI", "旧回答", 2L));
+        store.mergeRestoredMessages("restore-session", restored);
+        assertThat(store.getRecentMessages("restore-session")).isEqualTo(restored);
+        store.append("restore-session", new MemoryMessage("Human", "新问题", 3L));
+        store.mergeRestoredMessages("restore-session", restored);
+        assertThat(store.getRecentMessages("restore-session"))
+                .extracting(MemoryMessage::messageId).containsExactly(1L, 2L, 3L);
+    }
+
+    @Test
+    void shouldKeepConcurrentAppendWhenCacheBecameNonemptyDuringDatabaseRead() {
+        store.append("restore-race", new MemoryMessage("Human", "新问题", 3L));
+        store.append("restore-race", new MemoryMessage("Human", "未落库临时消息"));
+        var restored = List.of(new MemoryMessage("Human", "早期问题", 1L),
+                new MemoryMessage("AI", "早期回答", 2L), new MemoryMessage("Human", "新问题", 3L));
+        store.mergeRestoredMessages("restore-race", restored);
+        store.mergeRestoredMessages("restore-race", restored);
+        assertThat(store.getRecentMessages("restore-race")).extracting(MemoryMessage::content)
+                .containsExactly("早期问题", "早期回答", "新问题", "未落库临时消息");
+    }
+
+    @Test
+    void shouldPreserveRealConcurrentAppendsWhileCompactingSnapshot() throws Exception {
+        var memory = new ShortTermMemory(store);
+        memory.append("compaction-race", "Human", "已摘要问题", 1L);
+        memory.append("compaction-race", "AI", "保留回答", 2L);
+        var snapshot = memory.getRecentMessages("compaction-race");
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newSingleThreadExecutor()) {
+            var appended = pool.submit(() -> {
+                start.await();
+                for (long id = 3; id <= 202; id++) memory.append("compaction-race", "Human", "新消息" + id, id);
+                return null;
+            });
+            start.countDown();
+            assertThat(memory.keepRecentMessages("compaction-race", snapshot, 1, null)).isEqualTo(1);
+            appended.get(10, TimeUnit.SECONDS);
+        }
+        assertThat(memory.getRecentMessages("compaction-race")).hasSize(201)
+                .extracting(MemoryMessage::messageId).containsExactlyElementsOf(
+                        java.util.stream.LongStream.rangeClosed(2, 202).boxed().toList());
+    }
+
+    @Test
+    void shouldRemoveOnlyCompactedOccurrencesOfIdenticalUnpersistedMessages() {
+        var memory = new ShortTermMemory(store);
+        memory.append("anonymous", "Human", "相同临时消息");
+        var snapshot = memory.getRecentMessages("anonymous");
+        memory.append("anonymous", "Human", "相同临时消息");
+        memory.keepRecentMessages("anonymous", snapshot, 0, null);
+        assertThat(memory.getRecentMessages("anonymous")).hasSize(1);
     }
 
     @Test

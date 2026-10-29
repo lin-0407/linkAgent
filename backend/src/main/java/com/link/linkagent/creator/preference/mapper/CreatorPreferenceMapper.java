@@ -7,7 +7,7 @@ import java.util.List;
 
 /**
  * 创作者长期偏好访问层。
- * 当前按用户和来源任务保存快照，避免同一期复盘重复生成时堆积重复偏好。
+ * 按用户、来源任务和来源记录保存，避免反馈历史与复盘快照竞争同一行。
  */
 @Mapper
 public interface CreatorPreferenceMapper {
@@ -65,10 +65,40 @@ public interface CreatorPreferenceMapper {
     })
     List<CreatorPreferenceRecord> listByUserId(@Param("userId") String userId, @Param("limit") int limit);
 
+    /** 旧复盘仍可追溯，但只有最新报告对应的洞察继续参与偏好上下文。 */
+    @Update("""
+            UPDATE creator_preference
+            SET is_deleted = 1, update_time = CURRENT_TIMESTAMP
+            WHERE user_id = #{userId}
+              AND source_task_id = #{taskId}
+              AND source_report_id <> #{reportId}
+              AND LEFT(source_report_id, 18) <> 'ADOPTION_FEEDBACK_'
+              AND is_deleted = 0
+            """)
+    int invalidateOtherReportPreferences(@Param("userId") String userId,
+                                         @Param("taskId") String taskId,
+                                         @Param("reportId") String reportId);
+
+    @Select("""
+            SELECT preference.id, preference.preference_id, preference.user_id,
+                   preference.source_task_id, task.task_name AS source_task_name,
+                   preference.source_report_id, preference.preference_content,
+                   preference.create_time, preference.update_time
+            FROM creator_preference preference
+            LEFT JOIN creator_task task ON task.task_id = preference.source_task_id
+            WHERE preference.user_id = #{userId}
+              AND preference.is_deleted = 0
+              AND LEFT(preference.source_report_id, 18) <> 'ADOPTION_FEEDBACK_'
+            ORDER BY preference.update_time DESC, preference.id DESC
+            LIMIT #{limit}
+            """)
+    @ResultMap("CreatorPreferenceRecordMap")
+    List<CreatorPreferenceRecord> listReportPreferencesByUserId(@Param("userId") String userId,
+                                                               @Param("limit") int limit);
+
     /**
      * 插入采用/拒绝反馈记录。
-     * 使用 INSERT ... ON DUPLICATE KEY UPDATE 保证同一来源的反馈只保留最新一条，
-     * 避免用户反复确认同一条建议时堆积重复偏好。
+     * 每次反馈使用独立来源标识，保留同任务多次采用和拒绝的历史。
      */
     @Insert("""
             INSERT INTO creator_preference (
@@ -86,6 +116,7 @@ public interface CreatorPreferenceMapper {
                 #{preferenceContent}
             )
             ON DUPLICATE KEY UPDATE
+                source_report_id = VALUES(source_report_id),
                 preference_content = VALUES(preference_content),
                 is_deleted = 0,
                 update_time = CURRENT_TIMESTAMP
@@ -110,7 +141,7 @@ public interface CreatorPreferenceMapper {
             LEFT JOIN creator_task task ON task.task_id = preference.source_task_id
             WHERE preference.user_id = #{userId}
               AND preference.is_deleted = 0
-              AND preference.source_report_id LIKE 'ADOPTION_FEEDBACK_%'
+              AND LEFT(preference.source_report_id, 18) = 'ADOPTION_FEEDBACK_'
             ORDER BY preference.update_time DESC, preference.id DESC
             LIMIT #{limit}
             """)

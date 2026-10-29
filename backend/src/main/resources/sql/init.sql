@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS t_conversation_message
     content     LONGTEXT    NOT NULL COMMENT '消息内容；role=summary 时是摘要正文；assistant 工具调用消息为空串（调用信息在 tool_name/tool_arguments 列）',
     tool_name   VARCHAR(64)          DEFAULT NULL COMMENT '工具名称（assistant 工具调用与 tool 结果消息都有值）',
     tool_call_id VARCHAR(64)         DEFAULT NULL COMMENT '原生协议工具调用 id：assistant 的 tool_call 消息与 tool 结果消息共用一个值，普通消息为 NULL',
-    tool_arguments TEXT              DEFAULT NULL COMMENT 'assistant 工具调用参数摘要（≤300 字）；tool 结果消息和普通消息为 NULL',
+    tool_arguments TEXT              DEFAULT NULL COMMENT 'assistant 工具调用参数摘要（≤300 字）；摘要行保存压缩边界，tool 结果消息和普通消息为 NULL',
     token_count INT         NOT NULL DEFAULT 0 COMMENT '本条消息消耗的 token 数；role=summary 时记录本次压缩释放的 token 数',
     create_time DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     is_deleted  TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除',
@@ -510,17 +510,27 @@ CREATE TABLE IF NOT EXISTS creator_preference
     preference_id      VARCHAR(64) NOT NULL COMMENT '创作者偏好快照唯一标识（UUID）',
     user_id            VARCHAR(64) NOT NULL DEFAULT 'default' COMMENT '用户标识，用于隔离不同创作者的长期偏好',
     source_task_id     VARCHAR(64) NOT NULL COMMENT '来源创作任务 ID，用于追溯偏好来自哪一期复盘',
-    source_report_id   VARCHAR(64) NOT NULL COMMENT '来源复盘报告 ID，用于报告重新生成后更新偏好内容',
-    preference_content TEXT        NOT NULL COMMENT '创作者偏好洞察 JSON，由复盘报告提炼并在下一期发布前优化中作为参考',
+    source_report_id   VARCHAR(64) NOT NULL COMMENT '来源记录标识：复盘报告 ID 或带 UUID 的采用反馈标记',
+    preference_content TEXT        NOT NULL COMMENT '复盘提炼的偏好洞察或用户采用反馈，供后续创作参考',
     create_time        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     is_deleted         TINYINT     NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
     UNIQUE KEY uk_preference_id (preference_id),
-    UNIQUE KEY uk_user_source_task (user_id, source_task_id),
+    UNIQUE KEY uk_user_task_source (user_id, source_task_id, source_report_id),
     KEY idx_user_update_time (user_id, update_time)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '创作者长期偏好表';
+
+-- 旧表按任务唯一会让人工反馈覆盖复盘；按完整来源去重，反馈 UUID 保留每次用户选择。
+SET @preference_ddl = (SELECT IF(COUNT(*) > 0,
+    'ALTER TABLE creator_preference DROP INDEX uk_user_source_task, ADD UNIQUE KEY uk_user_task_source (user_id, source_task_id, source_report_id)',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.STATISTICS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'creator_preference' AND INDEX_NAME = 'uk_user_source_task');
+PREPARE preference_stmt FROM @preference_ddl;
+EXECUTE preference_stmt;
+DEALLOCATE PREPARE preference_stmt;
 
 -- ------------------------------------------------------------
 -- 13.2 创作者视频类型语境词条表
@@ -849,12 +859,7 @@ CREATE TABLE IF NOT EXISTS llm_prompt_template
   DEFAULT CHARSET = utf8mb4
   COMMENT = 'LLM 提示词模板表';
 
--- 历史库可能已将 UTF-8 字节按 latin1 写入，形成截图中的“ä½ ”类可逆乱码。
--- 先还原这些正文，能保留用户在乱码基础上继续补充的有效内容；含替换字符等不可逆数据仍由后续种子兜底覆盖。
-UPDATE llm_prompt_template
-SET content = CONVERT(CAST(CONVERT(content USING latin1) AS BINARY) USING utf8mb4)
-WHERE REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆');
-
+-- 初始化仅按已知旧模板的完整指纹升级正文；合法单字符无法证明乱码，不自动转码或覆盖人工内容。
 -- 创作想法对齐提示词：主 Agent 负责理解和提问，审查 Agent 只标记偏离，不参与改写。
 INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
 VALUES
@@ -866,8 +871,7 @@ VALUES
      '偏离审查 Agent：只返回是否偏离、用户原话和偏离原因')
 ON DUPLICATE KEY UPDATE
     content = IF(
-        REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆')
-        OR (prompt_key = 'creator_alignment.main.system' AND SHA2(content, 256) = '0dfd22fa9f66c90af64e77d75bd859395bebd00e92db007b5493298b4997bbf4')
+        (prompt_key = 'creator_alignment.main.system' AND SHA2(content, 256) = '0dfd22fa9f66c90af64e77d75bd859395bebd00e92db007b5493298b4997bbf4')
         OR (prompt_key = 'creator_alignment.review.system' AND SHA2(content, 256) = 'e1d17a2250a0f81576d7ffd4b36442399a3ec33006d97b4767cc24ad1a81d67b'),
         VALUES(content),
         content
@@ -903,8 +907,7 @@ VALUES
      'Agent 答案审查器：检查最终回答完整性、矛盾和引用缺失')
 ON DUPLICATE KEY UPDATE
     content = IF(
-        REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆')
-        OR (prompt_key = 'agent_plan_execute_planner.system' AND SHA2(content, 256) = 'b4ff3502cdb88dd3aa7ff1678d2c46c1d99092d50e9c9856f48572848d1e34ca')
+        (prompt_key = 'agent_plan_execute_planner.system' AND SHA2(content, 256) = 'b4ff3502cdb88dd3aa7ff1678d2c46c1d99092d50e9c9856f48572848d1e34ca')
         OR (prompt_key = 'agent_plan_execute_replanner.system' AND SHA2(content, 256) = '5236bf0e914591e806fa3d5486f9b496ae65e227973a428ba8844bae8cffb88c')
         OR (prompt_key = 'agent_plan_execute_synthesizer.system' AND SHA2(content, 256) = '037782790b728fa919e7baaebca6915d0da6bcdbdaacc24918d8350f1b68e1f9')
         OR (prompt_key = 'agent_multi_planner.system' AND SHA2(content, 256) = 'f5adbba36ee9b3b286b53d3b0239083b7f4ff19da5a352084e1133098edfb86a')
@@ -1014,6 +1017,9 @@ CREATE TABLE IF NOT EXISTS creator_profile
     style_tags    JSON                  DEFAULT NULL COMMENT '风格标签 JSON 数组，如 ["理性分析型", "冷幽默", "数据驱动"]',
     tone_guide    TEXT                  DEFAULT NULL COMMENT '语气指南，描述标题句式偏好、排斥的表达方式、标签数量倾向等',
     audience_view TEXT                  DEFAULT NULL COMMENT '受众认知，描述核心观众画像和内容偏好',
+    last_processed_event_id BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '最近成功消费的事件 ID，只推进模型实际分析的批次',
+    refresh_token VARCHAR(64) DEFAULT NULL COMMENT '画像刷新领取令牌，阻止并发重复消费和迟到覆盖',
+    refresh_started_at DATETIME DEFAULT NULL COMMENT '刷新领取时间，进程退出后允许超时接替',
     create_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     update_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '画像最后更新时间',
     is_deleted    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=正常，1=已删除',
@@ -1021,6 +1027,34 @@ CREATE TABLE IF NOT EXISTS creator_profile
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COMMENT = '创作者画像表';
+
+-- 旧库升级采用独立事件水位，不再依赖内容相同时不会变化的 update_time。
+SET @profile_ddl = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_profile ADD COLUMN last_processed_event_id BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT ''最近成功消费的事件 ID，只推进模型实际分析的批次''',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'creator_profile' AND COLUMN_NAME = 'last_processed_event_id');
+PREPARE profile_stmt FROM @profile_ddl;
+EXECUTE profile_stmt;
+DEALLOCATE PREPARE profile_stmt;
+
+SET @profile_ddl = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_profile ADD COLUMN refresh_token VARCHAR(64) DEFAULT NULL COMMENT ''画像刷新领取令牌，阻止并发重复消费和迟到覆盖''',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'creator_profile' AND COLUMN_NAME = 'refresh_token');
+PREPARE profile_stmt FROM @profile_ddl;
+EXECUTE profile_stmt;
+DEALLOCATE PREPARE profile_stmt;
+
+SET @profile_ddl = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE creator_profile ADD COLUMN refresh_started_at DATETIME DEFAULT NULL COMMENT ''刷新领取时间，进程退出后允许超时接替''',
+    'SELECT 1 AS ok'
+) FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'creator_profile' AND COLUMN_NAME = 'refresh_started_at');
+PREPARE profile_stmt FROM @profile_ddl;
+EXECUTE profile_stmt;
+DEALLOCATE PREPARE profile_stmt;
 
 -- 创作者画像种子提示词：初始画像生成和增量更新
 INSERT INTO llm_prompt_template (prompt_key, prompt_type, scene, content, description)
@@ -1038,7 +1072,7 @@ VALUES
      '当前画像：\n{currentProfile}\n\n最近创作事件（按时间倒序）：\n{recentEvents}\n\n请基于这些事件增量更新画像。只修改需要调整的部分，保留仍然适用的旧特征。',
      '创作者画像增量更新用户提示词，currentProfile 为当前画像文本，recentEvents 为最近事件列表')
 ON DUPLICATE KEY UPDATE
-    content = IF(REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆'), VALUES(content), content),
+    content = content,
     prompt_type = VALUES(prompt_type),
     scene = VALUES(scene),
     description = VALUES(description),
@@ -1054,7 +1088,7 @@ VALUES
      '任务：{taskName}\n视频类型：{videoType}\n待补全字段：{fieldType}\n\n任务全局上下文：\n{globalContext}\n\n请为【{fieldType}】生成补全建议。',
      '字段自动补全用户提示词，fieldType=字段中文名，globalContext=任务上下文')
 ON DUPLICATE KEY UPDATE
-    content = IF(REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆'), VALUES(content), content),
+    content = content,
     prompt_type = VALUES(prompt_type),
     scene = VALUES(scene),
     description = VALUES(description),
@@ -1074,8 +1108,7 @@ VALUES
       'Agent Executor 原生 strict Function Calling 模式；失败时回退结构化 ReAct')
 ON DUPLICATE KEY UPDATE
     content = IF(
-        REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆')
-        OR (prompt_key = 'agent_executor.system' AND SHA2(content, 256) = '40c1b87ea340553ca0f768fc6afdd2306388823c7aaf8e1d127fc9db0d6dfb8f')
+        (prompt_key = 'agent_executor.system' AND SHA2(content, 256) = '40c1b87ea340553ca0f768fc6afdd2306388823c7aaf8e1d127fc9db0d6dfb8f')
         OR (prompt_key = 'agent_executor_structured.system' AND SHA2(content, 256) = 'ebdab7113d8a6000d26da60444c42570b4d6033f5699b37047b341244e54253c'),
         VALUES(content),
         content
@@ -1302,8 +1335,7 @@ importance：1 到 100 的整数。80 分以上表示丢了会明显影响后续
      '复盘报告用户提示词：包含发布后视频指标、反馈、竞品结果和历史复盘')
 ON DUPLICATE KEY UPDATE
     content = IF(
-        REGEXP_LIKE(content, '�|[?]{3,}|Ã|Â|ä|å|æ|ç|鍙|涓|瀹|鐨|銆')
-        OR (
+        (
             prompt_key = 'feedback_analyze.system'
             AND content LIKE '%输出结构清晰的 Markdown 报告%'
         )
@@ -2928,7 +2960,7 @@ WHERE TABLE_SCHEMA = 'link_agent' AND TABLE_NAME = 't_conversation_message' AND 
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 原生协议工具调用配对字段：assistant 的 tool_call 与 tool 结果用同一个 tool_call_id 配对，
--- tool_arguments 只给调用消息存参数摘要；长期记忆增量查询靠 tool_call_id 排除工具调用行。
+-- tool_arguments 给调用消息存参数摘要、给摘要行存压缩边界；长期记忆增量查询靠 tool_call_id 排除工具调用行。
 SET @sql = (SELECT IF(COUNT(*) = 0,
     'ALTER TABLE t_conversation_message ADD COLUMN tool_call_id VARCHAR(64) DEFAULT NULL COMMENT ''原生协议工具调用 id：assistant 的 tool_call 消息与 tool 结果消息共用一个值，普通消息为 NULL'' AFTER tool_name',
     'SELECT 1 AS ok'
@@ -2937,7 +2969,7 @@ WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_conversation_message' AND CO
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @sql = (SELECT IF(COUNT(*) = 0,
-    'ALTER TABLE t_conversation_message ADD COLUMN tool_arguments TEXT DEFAULT NULL COMMENT ''assistant 工具调用参数摘要（≤300 字）；tool 结果消息和普通消息为 NULL'' AFTER tool_call_id',
+    'ALTER TABLE t_conversation_message ADD COLUMN tool_arguments TEXT DEFAULT NULL COMMENT ''assistant 工具调用参数摘要（≤300 字）；摘要行保存压缩边界，tool 结果消息和普通消息为 NULL'' AFTER tool_call_id',
     'SELECT 1 AS ok'
 ) FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_conversation_message' AND COLUMN_NAME = 'tool_arguments');

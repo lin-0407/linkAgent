@@ -8,6 +8,8 @@ import com.link.linkagent.creator.evaluation.model.CreatorEvalResultCreateReques
 import com.link.linkagent.creator.evaluation.model.CreatorEvalResultRecord;
 import com.link.linkagent.creator.evaluation.model.CreatorEvalResultResponse;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.LinkedHashMap;
@@ -19,6 +21,28 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CreatorEvaluationServiceTest {
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{this is not JSON}", "{\"key\":}", "{\"one\":1} {\"two\":2}", "普通输出", "[1,2]"})
+    void shouldKeepMalformedOrNonObjectOutputAsRawOnly(String output) {
+        FakeCreatorEvaluationMapper mapper = new FakeCreatorEvaluationMapper();
+        mapper.cases.put("case-1", createCaseRecord("case-1", "FEEDBACK", "task-1"));
+        var response = new CreatorEvaluationService(mapper).recordResult("case-1",
+                createResultRequest("FEEDBACK", output, null, 10, 15));
+        assertThat(response.parseStatus()).isEqualTo("RAW_ONLY");
+        assertThat(response.rawOutput()).isEqualTo(output);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "{\"key\":{\"nested\":true}}", "```json\n{\"summary\":\"ok\"}\n```", "说明：{\"summary\":\"ok\"}"})
+    void shouldParseRealJsonObjectsIncludingWrappedLlmOutput(String output) {
+        FakeCreatorEvaluationMapper mapper = new FakeCreatorEvaluationMapper();
+        mapper.cases.put("case-1", createCaseRecord("case-1", "FEEDBACK", "task-1"));
+        var response = new CreatorEvaluationService(mapper).recordResult("case-1",
+                createResultRequest("FEEDBACK", output, null, 10, 15));
+        assertThat(response.parseStatus()).isEqualTo("PARSED");
+        assertThat(response.rawOutput()).isEqualTo(output);
+    }
 
     @Test
     void shouldCreateCaseWithDefaultUserAndTrimInput() {

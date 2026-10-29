@@ -36,7 +36,7 @@ public interface CreatorEventMapper {
     int insert(CreatorEventRecord record);
 
     /**
-     * 查询指定用户自某时间点以来的新事件数。
+     * 查询指定用户尚未处理的新事件数，避免秒级时间戳丢掉同秒事件。
      * 用于判断是否达到画像更新的触发阈值。
      */
     @Select("""
@@ -44,9 +44,9 @@ public interface CreatorEventMapper {
             FROM creator_event
             WHERE creator_id = #{creatorId}
               AND is_deleted = 0
-              AND created_at > #{since}
+              AND id > #{afterId}
             """)
-    int countNewEvents(@Param("creatorId") String creatorId, @Param("since") java.time.LocalDateTime since);
+    int countNewEvents(@Param("creatorId") String creatorId, @Param("afterId") long afterId);
 
     /**
      * 查询指定用户最近的事件列表，用于 LLM 增量更新画像。
@@ -76,4 +76,17 @@ public interface CreatorEventMapper {
             @Result(column = "created_at", property = "createdAt")
     })
     List<CreatorEventRecord> listRecentByCreator(@Param("creatorId") String creatorId, @Param("limit") int limit);
+
+    /** 按 ID 顺序分批消费；只推进实际送进模型的事件，积压和分析期间新增的事件留给下次。 */
+    @Select("""
+            SELECT id, event_id, creator_id, event_type, task_id, payload, created_at
+            FROM creator_event
+            WHERE creator_id = #{creatorId} AND is_deleted = 0 AND id > #{afterId}
+            ORDER BY id ASC
+            LIMIT #{limit}
+            """)
+    @org.apache.ibatis.annotations.ResultMap("CreatorEventRecordMap")
+    List<CreatorEventRecord> listUnprocessedByCreator(@Param("creatorId") String creatorId,
+                                                     @Param("afterId") long afterId,
+                                                     @Param("limit") int limit);
 }

@@ -27,7 +27,6 @@ public interface ConversationSessionMapper {
                 #{sessionId}, #{userId}, #{title}, #{status}, #{createTime}, #{updateTime}
             )
             ON DUPLICATE KEY UPDATE
-                user_id = VALUES(user_id),
                 title = IF(title = '', VALUES(title), title),
                 status = VALUES(status),
                 update_time = VALUES(update_time),
@@ -59,7 +58,13 @@ public interface ConversationSessionMapper {
                                                        @Param("limit") int limit);
 
     @Select("""
-            SELECT id, session_id, role, content, tool_name, tool_call_id, tool_arguments, token_count, create_time, is_deleted
+            SELECT id, session_id, user_id, title, status, create_time, update_time, is_deleted
+            FROM t_conversation_session WHERE session_id = #{sessionId} AND is_deleted = 0
+            """)
+    Optional<ConversationSessionRecord> findSessionById(@Param("sessionId") String sessionId);
+
+    @Select("""
+            SELECT id, session_id, user_id, role, content, tool_name, tool_call_id, tool_arguments, token_count, create_time, is_deleted
             FROM t_conversation_message
             WHERE session_id = #{sessionId}
               AND is_deleted = 0
@@ -134,7 +139,7 @@ public interface ConversationSessionMapper {
      * 会话恢复时用它还原模型上下文，前端历史展示也用它。被压缩的原文仍在同表保留，只是不再进入模型上下文。
      */
     @Select("""
-            SELECT id, session_id, role, content, tool_name, token_count, create_time, is_deleted
+            SELECT id, session_id, user_id, role, content, tool_name, tool_arguments, token_count, create_time, is_deleted
             FROM t_conversation_message
             WHERE session_id = #{sessionId}
               AND role = 'summary'

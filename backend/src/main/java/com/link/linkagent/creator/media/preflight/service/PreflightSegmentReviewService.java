@@ -126,6 +126,7 @@ public class PreflightSegmentReviewService {
         int reviewedCount = 0;
         int failedCount = 0;
         BigDecimal totalCost = BigDecimal.ZERO;
+        boolean unknownCost = false;
         try {
             deleteTree(workDir);
             Files.createDirectories(workDir);
@@ -138,6 +139,7 @@ public class PreflightSegmentReviewService {
                 String callId = callIdSupplier.get();
                 boolean uploaded = false;
                 boolean sent = false;
+                boolean accounted = false;
                 String chargeKey = "segment-" + review.reviewId() + "-" + callId;
                 try {
                     cutClip(previewFile, clip, range);
@@ -164,18 +166,27 @@ public class PreflightSegmentReviewService {
                             properties.getPreflight().getSegmentReviewModel(),
                             properties.getPreflight().getSegmentReviewFps()
                     );
+                    BigDecimal cost = actualCost(providerResult.inputTokens(), providerResult.outputTokens());
+                    if (cost == null) {
+                        unknownCost = true;
+                        chargeGate.unknown(review.reviewId(), chargeKey);
+                    }
+                    else chargeGate.settle(review.reviewId(), chargeKey, cost, "segment-" + callId);
+                    accounted = true;
+                    mapper.recordCallUsage(callId, providerResult.inputTokens(), providerResult.outputTokens(), cost);
+                    totalCost = totalCost.add(cost == null ? BigDecimal.ZERO : cost);
                     ParsedReview parsed = parse(providerResult.content());
                     persistReview(review, step, issue, range, parsed);
-                    BigDecimal cost = actualCost(providerResult.inputTokens(), providerResult.outputTokens());
                     mapper.completeVideoCall(callId, providerResult.inputTokens(), providerResult.outputTokens(), cost, 1);
-                    if (cost == null) chargeGate.unknown(review.reviewId(), chargeKey);
-                    else chargeGate.settle(review.reviewId(), chargeKey, cost, "segment-" + callId);
-                    totalCost = totalCost.add(cost == null ? BigDecimal.ZERO : cost);
                     reviewedCount++;
                 } catch (RuntimeException | IOException exception) {
+                    if (!sent) mapper.recordCallUsage(callId, null, null, BigDecimal.ZERO);
                     mapper.failVideoCall(callId, "SEGMENT_REVIEW_FAILED", truncate(exception.getMessage()));
                     // 只有发出过请求才可能是未知费用；未发送的预留随运行收尾释放。
-                    if (sent) chargeGate.unknown(review.reviewId(), chargeKey);
+                    if (sent && !accounted) {
+                        unknownCost = true;
+                        chargeGate.unknown(review.reviewId(), chargeKey);
+                    }
                     failedCount++;
                     log.warn("重点片段复核降级 reviewId={} issueId={}", review.reviewId(), issue.issueId(), exception);
                 } finally {
@@ -201,7 +212,7 @@ public class PreflightSegmentReviewService {
             deleteTree(workDir);
         }
         return new Result(candidates.size(), reviewedCount, failedCount,
-                totalCost.setScale(8, RoundingMode.HALF_UP));
+                unknownCost ? null : totalCost.setScale(8, RoundingMode.HALF_UP));
     }
 
     private void persistReview(PreflightReviewRecord review,

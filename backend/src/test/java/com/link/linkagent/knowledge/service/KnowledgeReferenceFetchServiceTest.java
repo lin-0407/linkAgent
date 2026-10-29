@@ -3,9 +3,12 @@ package com.link.linkagent.knowledge.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.link.linkagent.knowledge.mapper.KnowledgeReferenceVideoMapper;
 import com.link.linkagent.knowledge.model.ReferenceVideoImportRequest;
+import com.link.linkagent.knowledge.model.ReferenceVideoFetchImportRequest;
 import com.link.linkagent.knowledge.model.ReferenceVideoRecord;
 import com.link.linkagent.knowledge.model.ReferenceVideoResponse;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -14,9 +17,13 @@ import java.io.IOException;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -29,11 +36,76 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 class KnowledgeReferenceFetchServiceTest {
 
     @TempDir
     Path temporaryDirectory;
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void shouldKeepConcurrentSameBvFetchesInIndependentDirectories(boolean metadataOnly) throws Exception {
+        Path scripts = Files.createDirectories(temporaryDirectory.resolve("scripts"));
+        Files.writeString(scripts.resolve("bilibili_reference_fetcher.py"), """
+                import json, sys, time
+                from pathlib import Path
+                args = sys.argv
+                root = Path(__file__).resolve().parent.parent
+                out = Path(args[args.index('--output-dir') + 1])
+                category = args[args.index('--category') + 1] if '--category' in args else 'B'
+                def wait_for(path):
+                    until = time.monotonic() + 10
+                    while not path.exists():
+                        if time.monotonic() > until: raise RuntimeError('采集并发测试等待超时')
+                        time.sleep(.01)
+                if category == 'B': wait_for(root / 'A.written')
+                payload = {'category': category, 'videos': [{'bvId': args[2], 'title': category}]}
+                (out / (args[2] + '_reference.json')).write_text(json.dumps(payload), encoding='utf-8')
+                (root / (category + '.written')).write_text(str(out), encoding='utf-8')
+                if category == 'A':
+                    wait_for(root / 'B.written')
+                    time.sleep(.2)
+                """);
+        KnowledgeReferenceVideoService importer = mock(KnowledgeReferenceVideoService.class);
+        var imported = new ConcurrentHashMap<String, ReferenceVideoImportRequest>();
+        when(importer.importReferenceVideos(any())).thenAnswer(call -> {
+            ReferenceVideoImportRequest request = call.getArgument(0);
+            imported.put(Thread.currentThread().getName(), request);
+            return null;
+        });
+        KnowledgeReferenceFetchService service = new KnowledgeReferenceFetchService(importer, null, new ObjectMapper()) {
+            @Override Path resolveProjectRoot() { return temporaryDirectory; }
+        };
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> {
+                Thread.currentThread().setName("request-A");
+                return service.fetchAndImport(new ReferenceVideoFetchImportRequest("BV1234567890", null, "A"));
+            });
+            var second = executor.submit(() -> {
+                Thread.currentThread().setName("request-B");
+                return metadataOnly ? service.fetchPublicMetadata("BV1234567890")
+                        : service.fetchAndImport(new ReferenceVideoFetchImportRequest("BV1234567890", null, "B"));
+            });
+            first.get(20, TimeUnit.SECONDS);
+            Object secondResult = second.get(20, TimeUnit.SECONDS);
+            assertThat(imported.get("request-A").category()).isEqualTo("A");
+            if (metadataOnly) {
+                assertThat(((ReferenceVideoImportRequest.VideoItem) secondResult).title()).isEqualTo("B");
+                assertThat(imported).hasSize(1);
+            } else {
+                assertThat(imported.get("request-B").category()).isEqualTo("B");
+            }
+            Path firstDirectory = Path.of(Files.readString(temporaryDirectory.resolve("A.written")));
+            Path secondDirectory = Path.of(Files.readString(temporaryDirectory.resolve("B.written")));
+            assertThat(firstDirectory).isNotEqualTo(secondDirectory);
+            assertThat(firstDirectory.getParent()).isEqualTo(temporaryDirectory.resolve("export/bilibili_reference"));
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(15, TimeUnit.SECONDS);
+        }
+    }
 
     @Test
     void shouldResolveRelativeScriptPathInsideJarFileSystem() throws IOException {

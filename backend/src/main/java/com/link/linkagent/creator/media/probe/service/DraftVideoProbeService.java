@@ -129,14 +129,12 @@ public class DraftVideoProbeService {
 
     private String claimProbe(DraftVideoRecord draft) {
         String probeAttemptId = UUID.randomUUID().toString();
-        if (mediaUploadMapper.claimDraftVideoProbe(
+        probeRecoveryService.claim(
                 draft.taskId(),
                 draft.ownerId(),
                 draft.versionId(),
                 probeAttemptId
-        ) != 1) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "当前成片正在探测或状态已变化，请刷新后重试");
-        }
+        );
         return probeAttemptId;
     }
 

@@ -1,5 +1,9 @@
 package com.link.linkagent.creator.evaluation.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import com.link.linkagent.creator.evaluation.mapper.CreatorEvaluationMapper;
 import com.link.linkagent.creator.evaluation.model.CreatorEvalCaseCreateRequest;
 import com.link.linkagent.creator.evaluation.model.CreatorEvalCaseRecord;
@@ -9,6 +13,7 @@ import com.link.linkagent.creator.evaluation.model.CreatorEvalResultCreateReques
 import com.link.linkagent.creator.evaluation.model.CreatorEvalResultRecord;
 import com.link.linkagent.creator.evaluation.model.CreatorEvalResultResponse;
 import com.link.linkagent.util.NumberUtil;
+import com.link.linkagent.util.LlmJsonUtil;
 import com.link.linkagent.util.TextUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -70,8 +75,10 @@ public class CreatorEvaluationService {
     private static final String RUN_STATUS_SUCCESS = "SUCCESS";
     /** 评测运行状态：失败（通过 failureReason 字段记录具体原因） */
     private static final String RUN_STATUS_FAILED = "FAILED";
-    /** AI 输出已被成功解析为结构化 JSON（至少以 { 开头 } 结尾） */
+    /** AI 输出已被成功解析为 JSON 对象，不代表业务内容质量通过。 */
     private static final String PARSE_STATUS_PARSED = "PARSED";
+    private static final ObjectReader OUTPUT_JSON_READER = new ObjectMapper().reader()
+            .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     /** AI 输出未被结构化解板解析，仅保留原始文本 */
     private static final String PARSE_STATUS_RAW_ONLY = "RAW_ONLY";
 
@@ -442,33 +449,14 @@ public class CreatorEvaluationService {
         return tokenCount == null || tokenCount <= 0 ? null : tokenCount;
     }
 
-    /**
-     * 自动解析 AI 输出的结构化状态。
-     * <p>
-     * 判断逻辑：以 { 开头且以 } 结尾 → PARSED（视为合法 JSON）；
-     * 否则 → RAW_ONLY（可能是纯文本输出，或 JSON 被 markdown 代码块包裹）。
-     * <p>
-     * 为什么只做首尾判断而不是完整 JSON 解析？完整解析代价高（大文本的 parse 可能抛异常），
-     * 且首尾判断对绝大多数情况已足够——AI 输出的 JSON 要么完整正确，
-     * 要么完全不是 JSON（如纯文本错误描述）。真正的 JSON 格式错误（如缺少逗号）
-     * 是少数情况，可在后续解析失败时回溯修正。
-     * <p>
-     * 设计权衡：RAW_ONLY 的数据不丢弃、也不强行解析——保留原始输出，
-     * 后续可以改进解析器后重新解析历史数据而不需要重新运行昂贵的 AI 评估。
-     *
-     * @param rawOutput AI 的原始输出文本
-     * @return PARSED 或 RAW_ONLY
-     */
+    /** 先按已有 LLM 输出规则提取对象，再真正解析；解析失败时仍保留原文供人工评测。 */
     private String resolveParseStatus(String rawOutput) {
-        if (TextUtil.isBlank(rawOutput)) {
+        try {
+            String json = LlmJsonUtil.extractJsonObject(rawOutput);
+            return OUTPUT_JSON_READER.readTree(json).isObject() ? PARSE_STATUS_PARSED : PARSE_STATUS_RAW_ONLY;
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
             return PARSE_STATUS_RAW_ONLY;
         }
-        String normalized = rawOutput.trim();
-        // 简单首尾判断：{ ... } 视为合法 JSON，省去完整 parse 的开销
-        if (normalized.startsWith("{") && normalized.endsWith("}")) {
-            return PARSE_STATUS_PARSED;
-        }
-        return PARSE_STATUS_RAW_ONLY;
     }
 
     /**

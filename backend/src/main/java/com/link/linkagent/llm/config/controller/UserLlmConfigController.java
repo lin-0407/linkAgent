@@ -3,6 +3,7 @@ package com.link.linkagent.llm.config.controller;
 import com.link.linkagent.llm.config.model.UserLlmConfigResponse;
 import com.link.linkagent.llm.config.model.UserLlmConfigSaveRequest;
 import com.link.linkagent.llm.config.service.UserLlmConfigService;
+import com.link.linkagent.llm.RuntimeTextModelClient;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -15,6 +16,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.http.HttpStatus;
 
 import java.util.List;
 import java.util.Map;
@@ -59,6 +62,24 @@ public class UserLlmConfigController {
             @Size(max = 64, message = "用户ID长度不能超过64个字符")
             String userId) {
         return service.listConfigs(userId);
+    }
+
+    @GetMapping("/current-text")
+    public RuntimeTextModelClient.CurrentTextModel currentTextModel() {
+        return service.currentTextModel();
+    }
+
+    @PostMapping("/{configId}/activate")
+    public UserLlmConfigResponse activateTextConfig(
+            @PathVariable @NotBlank @Size(max = 64) String configId,
+            @RequestParam(required = false) @Size(max = 64) String userId) {
+        return service.activateTextConfig(userId, configId);
+    }
+
+    @PostMapping("/use-environment")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void useEnvironment(@RequestParam(required = false) @Size(max = 64) String userId) {
+        service.useEnvironment(userId);
     }
 
     /**

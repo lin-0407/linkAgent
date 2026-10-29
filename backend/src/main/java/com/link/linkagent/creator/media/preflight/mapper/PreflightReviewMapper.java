@@ -133,6 +133,8 @@ public interface PreflightReviewMapper {
     @Select("SELECT " + REVIEW_COLUMNS + " FROM creator_preflight_review "
             + "WHERE status IN ('QUEUED', 'RETRY_WAIT') "
             + "AND (next_run_at IS NULL OR next_run_at <= CURRENT_TIMESTAMP) "
+            + "AND EXISTS (SELECT 1 FROM creator_task t WHERE t.task_id=creator_preflight_review.task_id "
+            + "AND t.user_id=creator_preflight_review.owner_id AND t.is_deleted=0) "
             + "AND is_deleted = 0 ORDER BY create_time ASC, id ASC LIMIT 1")
     Optional<PreflightReviewRecord> findNextRunnableReview();
 
@@ -208,6 +210,8 @@ public interface PreflightReviewMapper {
               AND status IN ('QUEUED', 'RETRY_WAIT')
               AND (next_run_at IS NULL OR next_run_at <= CURRENT_TIMESTAMP)
               AND is_deleted = 0
+              AND EXISTS (SELECT 1 FROM creator_task t WHERE t.task_id=creator_preflight_review.task_id
+                  AND t.user_id=creator_preflight_review.owner_id AND t.is_deleted=0)
             """)
     int claimReview(@Param("reviewId") String reviewId,
                     @Param("leaseOwner") String leaseOwner,
@@ -391,6 +395,18 @@ public interface PreflightReviewMapper {
                     @Param("errorCode") String errorCode,
                     @Param("errorMessage") String errorMessage);
 
+    // 供应商用量和业务解析结果分开保存，解析失败仍保留实际发生的消耗。
+    @Update("""
+            UPDATE creator_media_api_call_log
+            SET input_tokens = #{inputTokens}, output_tokens = #{outputTokens},
+                actual_cost_usd = #{actualCostUsd}, update_time = CURRENT_TIMESTAMP
+            WHERE call_id = #{callId} AND is_deleted = 0
+            """)
+    int recordCallUsage(@Param("callId") String callId,
+                        @Param("inputTokens") Long inputTokens,
+                        @Param("outputTokens") Long outputTokens,
+                        @Param("actualCostUsd") BigDecimal actualCostUsd);
+
     @Update("""
             UPDATE creator_media_api_call_log
             SET status = 'SUCCESS', input_tokens = #{inputTokens}, output_tokens = #{outputTokens},
@@ -437,11 +453,26 @@ public interface PreflightReviewMapper {
                               @Param("errorMessage") String errorMessage);
 
     @Select("""
-            SELECT COALESCE(SUM(actual_cost_usd), 0)
+            SELECT CASE WHEN COUNT(*) = 0 THEN 0
+                        WHEN COUNT(actual_cost_usd) < COUNT(*) THEN NULL
+                        ELSE SUM(actual_cost_usd) END
             FROM creator_media_api_call_log
-            WHERE review_id = #{reviewId} AND status = 'SUCCESS' AND is_deleted = 0
+            WHERE review_id = #{reviewId} AND is_deleted = 0
             """)
     BigDecimal sumActualCost(@Param("reviewId") String reviewId);
+
+    @Update("""
+            UPDATE creator_preflight_review
+            SET actual_cost_usd = (
+                SELECT CASE WHEN COUNT(*) = 0 THEN 0
+                            WHEN COUNT(actual_cost_usd) < COUNT(*) THEN NULL
+                            ELSE SUM(actual_cost_usd) END
+                FROM creator_media_api_call_log
+                WHERE review_id = #{reviewId} AND is_deleted = 0
+            )
+            WHERE review_id = #{reviewId} AND is_deleted = 0
+            """)
+    int refreshActualCost(@Param("reviewId") String reviewId);
 
     @Update("""
             UPDATE creator_timeline_evidence

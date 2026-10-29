@@ -1,6 +1,7 @@
 package com.link.linkagent.creator.creation.storyboard.service;
 
 import com.link.linkagent.llm.DeepSeekThinkingProperties;
+import com.link.linkagent.llm.RuntimeTextModelClient;
 import com.link.linkagent.llm.usage.LlmApiUsageService;
 import com.link.linkagent.llm.usage.LlmUsageFields;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -29,6 +30,12 @@ public class StoryboardTextGenerator {
     private final OpenAiChatModel singleAttemptModel;
     private final LlmApiUsageService usageService;
     private final String modelName;
+    private RuntimeTextModelClient runtimeTextModel;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void configureRuntimeTextModel(RuntimeTextModelClient runtimeTextModel) {
+        this.runtimeTextModel = runtimeTextModel;
+    }
 
     public StoryboardTextGenerator(OpenAiChatModel configuredModel, OpenAiApi configuredApi,
                                    RestClient.Builder configuredRestClient, LlmApiUsageService usageService) {
@@ -55,13 +62,54 @@ public class StoryboardTextGenerator {
     }
 
     public String modelName() {
-        return modelName;
+        return runtimeTextModel == null ? modelName : runtimeTextModel.current().modelName();
+    }
+
+    public Configuration configuration() {
+        var snapshot = modelSnapshot();
+        return new Configuration(snapshot.model().getDefaultOptions().getModel(), snapshot.configurationFingerprint());
+    }
+
+    public String configurationFingerprint() {
+        return configuration().fingerprint();
+    }
+
+    private RuntimeTextModelClient.ModelSnapshot modelSnapshot() {
+        if (runtimeTextModel == null) {
+            // 手动构造的本地调用没有运行期选择，保留稳定的部署模型身份。
+            return new RuntimeTextModelClient.ModelSnapshot(singleAttemptModel,
+                    StoryboardCodec.digest("ENVIRONMENT\n" + modelName), true);
+        }
+        var selected = runtimeTextModel.snapshot(true, false, false);
+        return selected.environment()
+                ? new RuntimeTextModelClient.ModelSnapshot(singleAttemptModel, selected.configurationFingerprint(), true)
+                : selected;
     }
 
     public Raw generate(String system, String input, int maxOutputTokens) {
+        return generate(system, input, maxOutputTokens, modelSnapshot());
+    }
+
+    public Raw generate(String system, String input, int maxOutputTokens, String expectedFingerprint) {
+        return prepare(expectedFingerprint).generate(system, input, maxOutputTokens);
+    }
+
+    /** 在记账为已发送之前固定已授权的客户端，设置页切换只影响下一次准备。 */
+    public PreparedCall prepare(String expectedFingerprint) {
+        var snapshot = modelSnapshot();
+        if (expectedFingerprint == null || expectedFingerprint.isBlank()
+                || !expectedFingerprint.equals(snapshot.configurationFingerprint())) {
+            throw new IllegalStateException("MODEL_CHANGED");
+        }
+        return (system, input, maxOutputTokens) -> generate(system, input, maxOutputTokens, snapshot);
+    }
+
+    private Raw generate(String system, String input, int maxOutputTokens, RuntimeTextModelClient.ModelSnapshot snapshot) {
         if (system == null || system.isBlank() || input == null || input.isBlank() || maxOutputTokens <= 0) {
             throw new IllegalArgumentException("故事板文本和输出上限不能为空");
         }
+        OpenAiChatModel selectedModel = snapshot.model();
+        String modelName = selectedModel.getDefaultOptions().getModel();
         OpenAiChatOptions options = OpenAiChatOptions.builder().model(modelName).maxTokens(maxOutputTokens)
                 .N(1).internalToolExecutionEnabled(false).build();
         if (DeepSeekThinkingProperties.isDeepSeekFlashModel(modelName)) {
@@ -70,7 +118,7 @@ public class StoryboardTextGenerator {
         long started = System.nanoTime();
         final ChatResponse response;
         try {
-            response = singleAttemptModel.call(new Prompt(List.of(new SystemMessage(system), new UserMessage(input)), options));
+            response = selectedModel.call(new Prompt(List.of(new SystemMessage(system), new UserMessage(input)), options));
         } catch (RuntimeException exception) {
             // 供应商异常可能携带回显的请求头或提示词，不把原异常保存进任务日志或向上透传。
             IllegalStateException safe = new IllegalStateException("故事板文本调用失败，未自动重试");
@@ -99,5 +147,12 @@ public class StoryboardTextGenerator {
     }
 
     public record Raw(String content, Integer inputTokens, Integer outputTokens, String modelName) {
+    }
+
+    public record Configuration(String modelName, String fingerprint) {}
+
+    @FunctionalInterface
+    public interface PreparedCall {
+        Raw generate(String system, String input, int maxOutputTokens);
     }
 }

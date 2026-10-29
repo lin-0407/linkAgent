@@ -51,6 +51,7 @@ class CreatorBilibiliServiceTest {
         BilibiliVideoSyncProvider syncProvider = mock(BilibiliVideoSyncProvider.class);
         BilibiliVideoSyncPersistenceService persistenceService = mock(BilibiliVideoSyncPersistenceService.class);
         BilibiliAccountRecord account = account("default", "27058248");
+        when(bilibiliMapper.lockAccountById(account.getAccountId())).thenReturn(Optional.of(account));
         TaskVideoBindingRecord binding = binding(
                 "task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY");
         BilibiliVideoSyncPayload payload = syncPayload("27058248");
@@ -82,6 +83,7 @@ class CreatorBilibiliServiceTest {
         BilibiliVideoSyncPersistenceService persistenceService =
                 new BilibiliVideoSyncPersistenceService(bilibiliMapper, mediaWorkflowGateService);
         BilibiliAccountRecord account = account("default", "27058248");
+        when(bilibiliMapper.lockAccountById(account.getAccountId())).thenReturn(Optional.of(account));
         TaskVideoBindingRecord binding = binding(
                 "task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY");
 
@@ -104,6 +106,7 @@ class CreatorBilibiliServiceTest {
                 "binding-1", "BOUND", "BV归属校验通过");
         verify(bilibiliMapper).updateAccountSyncResult(
                 org.mockito.ArgumentMatchers.eq("account-1"),
+                org.mockito.ArgumentMatchers.eq("27058248"),
                 org.mockito.ArgumentMatchers.eq("测试账号"),
                 org.mockito.ArgumentMatchers.eq("https://i0.hdslb.com/bfs/face/avatar.jpg"),
                 org.mockito.ArgumentMatchers.eq("ACTIVE"),
@@ -125,6 +128,7 @@ class CreatorBilibiliServiceTest {
         BilibiliVideoSyncPersistenceService persistenceService =
                 new BilibiliVideoSyncPersistenceService(bilibiliMapper, mediaWorkflowGateService);
         BilibiliAccountRecord account = account("default", "27058248");
+        when(bilibiliMapper.lockAccountById(account.getAccountId())).thenReturn(Optional.of(account));
         TaskVideoBindingRecord binding = binding(
                 "task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY");
         doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "成片尚未通过媒体探测"))
@@ -159,6 +163,7 @@ class CreatorBilibiliServiceTest {
         BilibiliVideoSyncPersistenceService persistenceService =
                 new BilibiliVideoSyncPersistenceService(bilibiliMapper, mediaWorkflowGateService);
         BilibiliAccountRecord account = account("default", "27058248");
+        when(bilibiliMapper.lockAccountById(account.getAccountId())).thenReturn(Optional.of(account));
         TaskVideoBindingRecord binding = binding(
                 "task-1", "default", "27058248", "BV1xx411c7mD", "WAITING_VERIFY");
         BilibiliVideoVerificationResult verification = new BilibiliVideoVerificationResult(
@@ -197,6 +202,7 @@ class CreatorBilibiliServiceTest {
     void shouldBindAccountWhenNoExistingAccount() {
         CreatorBilibiliMapper bilibiliMapper = mock(CreatorBilibiliMapper.class);
         BilibiliAccountRecord account = account("default", "27058248");
+        when(bilibiliMapper.lockAccountById(account.getAccountId())).thenReturn(Optional.of(account));
         when(bilibiliMapper.findAccountByUserId("default"))
                 .thenReturn(Optional.empty(), Optional.of(account));
         CreatorBilibiliService service = service(bilibiliMapper, mock(CreatorTaskMapper.class));

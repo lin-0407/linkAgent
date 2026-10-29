@@ -57,7 +57,7 @@ public class ExecutionPlanner {
         this.textGenerator=textGenerator;
     }
     public String fingerprint(){return StoryboardCodec.digest((configuration==null?"test-config":configuration.fingerprint())+"\n"+
-        (textGenerator==null?"":textGenerator.modelName())+"\n"+media.getPreflight().getVideoModel()+"\n"+media.getPreflight().getAsrModel()+"\n"+media.getPreflight().getSegmentReviewModel()+"\n"+
+        (textGenerator==null?"":textGenerator.configurationFingerprint())+"\n"+media.getPreflight().getVideoModel()+"\n"+media.getPreflight().getAsrModel()+"\n"+media.getPreflight().getSegmentReviewModel()+"\n"+
         media.getPreflight().getSegmentReviewMaxCount()+"\n"+media.getProcessing().getAsrUsdPerSecond()+"\n"+
         prices.getVideoUsdUpperBound()+"\n"+prices.getTextScreeningUsdUpperBound()+"\n"+prices.getSegmentReviewUsdUpperBound()+"\n"+
         prices.getTextInputUsdPerMillionTokens()+"\n"+prices.getTextOutputUsdPerMillionTokens());}

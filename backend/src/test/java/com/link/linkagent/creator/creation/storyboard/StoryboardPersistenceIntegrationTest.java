@@ -149,6 +149,15 @@ class StoryboardPersistenceIntegrationTest {
     void boundaries() {
         generator = mock(StoryboardTextGenerator.class);
         when(generator.modelName()).thenReturn("configured-test-text-model");
+        when(generator.configuration()).thenAnswer(ignored -> new StoryboardTextGenerator.Configuration(
+                generator.modelName(), "isolated-text-provider-v1"));
+        when(generator.configurationFingerprint()).thenAnswer(ignored -> generator.configuration().fingerprint());
+        when(generator.prepare(anyString())).thenAnswer(invocation -> {
+            if (!invocation.<String>getArgument(0).equals(generator.configurationFingerprint())) {
+                throw new IllegalStateException("MODEL_CHANGED");
+            }
+            return (StoryboardTextGenerator.PreparedCall) generator::generate;
+        });
         prices = new CreationBillingProperties();
         persistence = service(mapper);
     }
@@ -693,6 +702,26 @@ class StoryboardPersistenceIntegrationTest {
         assertThat(codec.read(prompt.getValue()).path("assets").get(0).path("assetId").asText()).isEqualTo(asset);
         assertThat(codec.read(prompt.getValue()).path("sources").path("materials").get(0).path("sourceId").asText()).isEqualTo(materialId);
         assertThat(count("creator_creation_storyboard", task)).isEqualTo(1);
+    }
+
+    @Test
+    void changedProviderWithSameModelFailsBeforeReservationOrUnknownCost() {
+        String task = task("default");
+        var brief = persistence.saveBrief(task, "default", "provider-brief", brief(0, List.of()));
+        initialize(task);
+        var job = persistence.generate(task, "default", "provider-prepare", new Generate(revision(task), brief.briefId(), cny("2")));
+        org.mockito.Mockito.doReturn(new StoryboardTextGenerator.Configuration(
+                "configured-test-text-model", "isolated-text-provider-v2")).when(generator).configuration();
+        try (var worker = worker()) {
+            worker.process(job);
+        }
+        var failed = runs.run(task, "default", job.runId()).orElseThrow();
+        assertThat(failed.status()).isEqualTo("FAILED");
+        assertThat(failed.errorCode()).isEqualTo("STORYBOARD_MODEL_CHANGED");
+        assertThat(count("creator_creation_cost_entry", task)).isZero();
+        assertThat(runtime.snapshot(task, "default").budget().unknownCny()).isZero();
+        assertThat(runtime.snapshot(task, "default").budget().paidCallsBlocked()).isFalse();
+        verify(generator, never()).generate(anyString(), anyString(), anyInt());
     }
 
     @Test
@@ -1362,6 +1391,22 @@ class StoryboardPersistenceIntegrationTest {
     }
     private DraftModels.Start draftInput(String task,String base,String instruction) {
         return new DraftModels.Start(revision(task),base,instruction,cny("20"),5000,List.of());
+    }
+    @Test void firstDraftInitializesANewTaskAndAcceptsTheFullExternalKeyLength() {
+        String task=draftTask();
+        jdbc.update("DELETE FROM creator_creation_workspace WHERE task_id=?",task);
+        var service=draftService();
+        var snapshot=service.workspace(task,"default").runtime();
+        assertThat(snapshot.executionAvailable()).isTrue();
+        assertThat(snapshot.initialized()).isFalse();
+        assertThat(snapshot.workspaceRevision()).isEqualTo(-1);
+        var input=new DraftModels.Start(-1L,null,"",cny("20"),5000,List.of());
+        String key="k".repeat(128);
+        var first=service.start(task,"default",key,input);
+        assertThat(first.status()).isEqualTo("PREPARING");
+        assertThat(service.start(task,"default",key,input).draftId()).isEqualTo(first.draftId());
+        assertThat(service.workspace(task,"default").runtime().initialized()).isTrue();
+        assertThat(count("creator_creation_draft",task)).isEqualTo(1);
     }
     private DraftModels.View preparedDraft(String task,String key) {
         var service=draftService();var started=service.start(task,"default",key,draftInput(task,null,""));

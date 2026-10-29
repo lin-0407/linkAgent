@@ -73,6 +73,7 @@ export type UserLlmConfigRecord = {
   configId: string
   userId: string
   provider: UserLlmConfigProvider
+  activeForText: boolean
   llmBaseUrl: string | null
   /** 脱敏后的 LLM API Key，如 sk-****j8x2 */
   llmApiKeyMasked: string | null
@@ -83,6 +84,15 @@ export type UserLlmConfigRecord = {
   embeddingModelName: string | null
   createTime: string
   updateTime: string
+}
+
+/** 后续文本调用实际使用的模型和端点，不包含密钥。 */
+export type CurrentTextModel = {
+  configId: string | null
+  source: 'ENVIRONMENT' | 'SAVED_CONFIG'
+  provider: string | null
+  modelName: string
+  baseUrl: string
 }
 
 /** 保存用户 LLM 配置的请求参数 */

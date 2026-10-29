@@ -4,6 +4,7 @@ import com.link.linkagent.knowledge.config.KnowledgeRagProperties;
 import com.link.linkagent.knowledge.model.QueryEnhanceStrategy;
 import com.link.linkagent.knowledge.rag.HydeQueryTransformer;
 import com.link.linkagent.llm.DeepSeekThinkingOptionsFactory;
+import com.link.linkagent.llm.RuntimeTextModelClient;
 import com.link.linkagent.prompt.service.PromptService;
 import com.link.linkagent.util.TextUtil;
 import org.slf4j.Logger;
@@ -79,6 +80,12 @@ public class KnowledgeQueryEnhancer {
 
     /** 原始 Builder，用于每次查询按运行期设置创建带思考参数的独立组件。 */
     private final ChatClient.Builder chatClientBuilder;
+    private RuntimeTextModelClient runtimeTextModel;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void configureRuntimeTextModel(RuntimeTextModelClient runtimeTextModel) {
+        this.runtimeTextModel = runtimeTextModel;
+    }
 
     /** Multi-query 变体数量，组件按请求创建但配置保持固定。 */
     private final int multiQueryCount;
@@ -205,6 +212,12 @@ public class KnowledgeQueryEnhancer {
     }
 
     private ChatClient.Builder configuredBuilder() {
+        if (runtimeTextModel != null) {
+            var selected = runtimeTextModel.model(false, false, false);
+            if (selected.isPresent()) {
+                return ChatClient.builder(selected.get()).defaultOptions(runtimeTextModel.adaptOptions(null));
+            }
+        }
         return deepSeekThinkingOptionsFactory.configureDefaultBuilder(chatClientBuilder);
     }
 }

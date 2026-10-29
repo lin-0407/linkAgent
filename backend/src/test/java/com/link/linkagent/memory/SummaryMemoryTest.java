@@ -358,6 +358,11 @@ class SummaryMemoryTest {
         }
 
         @Override
+        public Optional<ConversationSessionRecord> findSessionById(String sessionId) {
+            return Optional.empty();
+        }
+
+        @Override
         public List<ConversationMessageRecord> listMessagesBySession(String sessionId) {
             return List.of();
         }

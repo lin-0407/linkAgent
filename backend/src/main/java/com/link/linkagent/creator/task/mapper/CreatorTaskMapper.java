@@ -68,6 +68,14 @@ public interface CreatorTaskMapper {
                 AND status IN ('ACTIVE','WAITING_USER','CANCEL_REQUESTED'))
             + (SELECT COUNT(*) FROM creator_creation_draft WHERE task_id=#{taskId} AND owner_id=#{ownerId}
                 AND status IN ('PREPARING','EXECUTING','CANCEL_REQUESTED'))
+            + (SELECT COUNT(*) FROM creator_media_upload WHERE task_id=#{taskId} AND owner_id=#{ownerId}
+                AND is_deleted=0 AND status IN ('CREATED','UPLOADING','VERIFYING'))
+            + (SELECT COUNT(*) FROM creator_draft_video WHERE task_id=#{taskId} AND owner_id=#{ownerId}
+                AND is_deleted=0 AND status='PROBING')
+            + (SELECT COUNT(*) FROM creator_media_processing_job WHERE task_id=#{taskId} AND owner_id=#{ownerId}
+                AND is_deleted=0 AND status IN ('QUEUED','RUNNING'))
+            + (SELECT COUNT(*) FROM creator_preflight_review WHERE task_id=#{taskId} AND owner_id=#{ownerId}
+                AND is_deleted=0 AND status IN ('QUEUED','RUNNING','RETRY_WAIT','CANCEL_REQUESTED'))
             """)
     int countDeletionBlockers(@Param("taskId") String taskId, @Param("ownerId") String ownerId);
 
